@@ -1,0 +1,18 @@
+[package]
+name = "libmir-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Backend-neutral scheduling, cache, and inference runtime for libmir"
+repository.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+blake3.workspace = true
+foundation = { package = "libmir-core", version = "0.1", path = "../core" }
+serde.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

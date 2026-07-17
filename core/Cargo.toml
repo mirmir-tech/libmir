@@ -1,0 +1,20 @@
+[package]
+name = "libmir-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Backend-neutral model and protocol contracts for libmir"
+repository.workspace = true
+
+[lib]
+name = "foundation"
+path = "src/lib.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

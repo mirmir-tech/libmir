@@ -1,0 +1,19 @@
+[package]
+name = "libmir-models"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Model discovery, tokenization, and generation policy for libmir"
+repository.workspace = true
+
+[dependencies]
+foundation = { package = "libmir-core", version = "0.1", path = "../core" }
+minijinja.workspace = true
+minijinja-contrib.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokenizers.workspace = true
+
+[lints]
+workspace = true

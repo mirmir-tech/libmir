@@ -1,0 +1,22 @@
+[package]
+name = "libmir-cuda"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CUDA inference backend for libmir"
+repository.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+foundation = { package = "libmir-core", version = "0.1", path = "../core" }
+mircuda.workspace = true
+models = { package = "libmir-models", version = "0.1", path = "../models" }
+runtime = { package = "libmir-runtime", version = "0.1", path = "../runtime" }
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+
+[lints]
+workspace = true

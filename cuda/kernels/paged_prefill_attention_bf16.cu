@@ -1,0 +1,93 @@
+#include <cuda_bf16.h>
+#include <cuda_fp8.h>
+
+__device__ float load_page(const unsigned char* pages, unsigned int index) {
+#ifdef LIBMIR_KV_FP8
+  __nv_fp8_e4m3 value;
+  value.__x = pages[index];
+  return float(value);
+#else
+  return __bfloat162float(reinterpret_cast<const __nv_bfloat16*>(pages)[index]);
+#endif
+}
+
+extern "C" __global__ void libmir_cuda_paged_prefill_attention_bf16(
+    const __nv_bfloat16* query, const unsigned char* key_pages,
+    const unsigned char* value_pages, const unsigned int* block_table,
+    __nv_bfloat16* output, unsigned int query_tokens,
+    unsigned int start_position, unsigned int block_count,
+    unsigned int block_size, unsigned int query_heads,
+    unsigned int kv_heads, unsigned int head_dim,
+    unsigned int value_head_dim, unsigned int window, float scale) {
+  const unsigned int query_token = blockIdx.x / query_heads;
+  const unsigned int query_head = blockIdx.x % query_heads;
+  if (query_token >= query_tokens) return;
+  const unsigned int lane = threadIdx.x;
+  const unsigned int kv_head = query_head / (query_heads / kv_heads);
+  const unsigned int context = start_position + query_token + 1;
+  const unsigned int first = window > 0 && context > window
+      ? context - window : 0;
+  float accumulators[2] = {0.0f, 0.0f};
+  __shared__ float warp_sums[8];
+  __shared__ float alpha;
+  __shared__ float beta;
+  __shared__ float denominator;
+  __shared__ float maximum;
+  if (lane == 0) {
+    denominator = 0.0f;
+    maximum = -3.402823466e+38F;
+  }
+  __syncthreads();
+
+  for (unsigned int token = first; token < context; ++token) {
+    const unsigned int logical_block = token / block_size;
+    if (logical_block >= block_count) return;
+    const unsigned int page_token =
+        block_table[logical_block] * block_size + token % block_size;
+    float dot = 0.0f;
+    for (unsigned int dimension = lane; dimension < head_dim;
+         dimension += blockDim.x) {
+      const unsigned int q_index =
+          (query_token * query_heads + query_head) * head_dim + dimension;
+      const unsigned int k_index =
+          (page_token * kv_heads + kv_head) * head_dim + dimension;
+      dot = fmaf(__bfloat162float(query[q_index]), load_page(key_pages, k_index), dot);
+    }
+    for (int offset = 16; offset > 0; offset >>= 1) {
+      dot += __shfl_down_sync(0xffffffffu, dot, offset);
+    }
+    if ((lane & 31u) == 0u) warp_sums[lane / 32u] = dot;
+    __syncthreads();
+    if (lane < 32u) {
+      float sum = lane < 8u ? warp_sums[lane] : 0.0f;
+      for (int offset = 16; offset > 0; offset >>= 1) {
+        sum += __shfl_down_sync(0xffffffffu, sum, offset);
+      }
+      if (lane == 0u) {
+        const float score = sum * scale;
+        const float next_maximum = fmaxf(maximum, score);
+        alpha = expf(maximum - next_maximum);
+        beta = expf(score - next_maximum);
+        denominator = denominator * alpha + beta;
+        maximum = next_maximum;
+      }
+    }
+    __syncthreads();
+    unsigned int local = 0;
+    for (unsigned int dimension = lane; dimension < value_head_dim;
+         dimension += blockDim.x, ++local) {
+      const unsigned int v_index =
+          (page_token * kv_heads + kv_head) * value_head_dim + dimension;
+      accumulators[local] = fmaf(accumulators[local], alpha,
+          load_page(value_pages, v_index) * beta);
+    }
+    __syncthreads();
+  }
+  unsigned int local = 0;
+  for (unsigned int dimension = lane; dimension < value_head_dim;
+       dimension += blockDim.x, ++local) {
+    const unsigned int out =
+        (query_token * query_heads + query_head) * value_head_dim + dimension;
+    output[out] = __float2bfloat16_rn(accumulators[local] / denominator);
+  }
+}

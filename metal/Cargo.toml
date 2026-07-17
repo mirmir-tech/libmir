@@ -1,0 +1,24 @@
+[package]
+name = "libmir-metal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Metal inference backend for libmir"
+repository.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+blake3.workspace = true
+foundation = { package = "libmir-core", version = "0.1", path = "../core" }
+models = { package = "libmir-models", version = "0.1", path = "../models" }
+mirtal.workspace = true
+runtime = { package = "libmir-runtime", version = "0.1", path = "../runtime" }
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

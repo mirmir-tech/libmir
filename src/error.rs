@@ -1,0 +1,50 @@
+use std::path::PathBuf;
+
+use thiserror::Error;
+
+/// Result type returned by the high-level libmir API.
+pub type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Debug, Error)]
+/// Error produced while inspecting, loading, or running a model.
+pub enum Error {
+    #[error("generation was cancelled")]
+    /// Generation stopped after its cancellation token was signalled.
+    Cancelled,
+    #[cfg(feature = "cuda")]
+    #[error("CUDA backend error: {0}")]
+    /// The CUDA backend rejected an operation.
+    Cuda(#[from] cuda::Error),
+    #[error("model error: {0}")]
+    /// Model metadata, tokenizer, or template processing failed.
+    Model(#[from] models::ModelsError),
+    #[error("runtime error: {0}")]
+    /// Backend-neutral runtime or cache processing failed.
+    Runtime(#[from] runtime::RuntimeError),
+    #[error("model path has no usable identifier: {0}")]
+    /// A stable model identifier could not be derived from this path.
+    ModelId(PathBuf),
+    #[error("required environment variable is not configured: {0}")]
+    /// A required backend environment variable was not configured.
+    MissingEnvironment(&'static str),
+    #[error("tokenized prompt cannot be empty")]
+    /// Prompt rendering produced no input tokens.
+    EmptyPrompt,
+    #[error("model is currently serving a request")]
+    /// An unload was requested while sessions or model clones still exist.
+    ModelInUse,
+    #[error(
+        "requested {requested} tokens exceeds model context {context} (prompt {prompt}, max_tokens {max_tokens})"
+    )]
+    /// Prompt and requested output exceed the model context window.
+    Context {
+        /// Total number of tokens requested.
+        requested: usize,
+        /// Maximum context length supported by the model.
+        context: usize,
+        /// Number of tokens in the prepared prompt.
+        prompt: usize,
+        /// Maximum number of output tokens requested.
+        max_tokens: usize,
+    },
+}
