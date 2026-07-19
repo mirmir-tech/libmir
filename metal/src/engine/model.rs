@@ -159,7 +159,7 @@ mod tests {
     fn write_safetensors(path: &Path) -> Result<()> {
         let mut header =
             r#"{"weight":{"dtype":"F32","shape":[1],"data_offsets":[0,4]}}"#.to_owned();
-        while header.len() % 8 != 0 {
+        while !header.len().is_multiple_of(8) {
             header.push(' ');
         }
         let mut data = u64::try_from(header.len())?.to_le_bytes().to_vec();

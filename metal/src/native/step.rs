@@ -98,7 +98,7 @@ fn deferred_token(
         stream,
         state,
         &sampled,
-        state.position,
+        state.model_position()?,
         sampling == SamplingLogits::None,
     )?;
     Ok(DeferredToken { sampled, next_logits })

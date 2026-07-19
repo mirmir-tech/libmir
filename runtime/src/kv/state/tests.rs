@@ -34,6 +34,27 @@ fn prefill_reuses_committed_prefix_blocks() -> Result<()> {
 }
 
 #[test]
+fn multimodal_prefill_never_reuses_or_publishes_token_only_prefixes() -> Result<()> {
+    let mut cache = KvCache::with_config(CacheConfig {
+        block_size: 2,
+        block_count: 4,
+        dtype: KvCacheDType::Auto,
+    });
+    let mut text = KvSessionState::new(Uuid::new_v4(), "gemma", 2);
+    text.prepare_prefill_in_place(&mut cache, &[1, 2])?;
+    assert_eq!(text.commit_ready_prefix_blocks(&mut cache)?, 1);
+
+    let mut image = KvSessionState::new(Uuid::new_v4(), "gemma", 2);
+    let prefill = image.prepare_uncached_prefill_in_place(&mut cache, &[1, 2])?;
+    assert_eq!(prefill.cached_tokens, 0);
+    assert_eq!(prefill.missing_tokens, 2);
+    assert_eq!(image.commit_ready_prefix_blocks(&mut cache)?, 0);
+    image.append_decode_in_place(&mut cache, 3)?;
+    assert_eq!(image.commit_ready_prefix_blocks(&mut cache)?, 0);
+    Ok(())
+}
+
+#[test]
 fn decode_append_allocates_only_on_block_boundary() -> Result<()> {
     let mut cache = KvCache::with_config(CacheConfig {
         block_size: 2,

@@ -1,8 +1,11 @@
 mod cache;
+mod descriptor;
 mod helpers;
 mod library;
 mod lifecycle;
 mod memory;
+mod vision;
+mod vision_limits;
 
 use std::{
     path::Path,
@@ -16,10 +19,12 @@ use foundation::{
 use models::{
     chat::{ChatPrompt, ChatTemplate},
     generation::{GenerationConfig, GenerationOverrides, GenerationSettings},
-    layout::{DecoderConfig, ModelLayout, ModelMetadata},
+    layout::{DecoderConfig, ImageProcessorConfig, ModelLayout, ModelMetadata, VisionConfig},
     tokenizer::{TextTokenizer, TokenizedPrompt},
+    weights::{TensorCatalog, TensorReadiness, VisionTensorSchema},
 };
 use runtime::{backend::ModelHandle, kv::KvCache};
+pub use vision::{IMAGE_PLACEHOLDER, PreparedVisionPrompt};
 
 use self::helpers::{model_id, validate_context};
 use crate::{Engine, Error, Result, RuntimeConfig, Session, scheduler::DecodeCoordinator};
@@ -32,6 +37,9 @@ pub struct ModelDescriptor {
     decoder: DecoderConfig,
     generation_config: GenerationConfig,
     generation: GenerationSettings,
+    vision: Option<VisionConfig>,
+    vision_readiness: Option<TensorReadiness>,
+    image_processor: Option<ImageProcessorConfig>,
     template: ChatTemplate,
     tokenizer: TextTokenizer,
 }
@@ -74,10 +82,25 @@ impl ModelDescriptor {
         let layout = ModelLayout::inspect(path)?;
         let metadata = ModelMetadata::from_layout(&layout)?;
         let generation_config = GenerationConfig::from_layout(&layout)?;
+        let vision = VisionConfig::from_layout(&layout)?;
+        let vision_readiness = if let Some(config) = vision.as_ref() {
+            let catalog = TensorCatalog::from_layout(&layout)?;
+            Some(VisionTensorSchema::discover(config).readiness(&catalog))
+        } else {
+            None
+        };
+        let image_processor = vision
+            .as_ref()
+            .map(|vision| ImageProcessorConfig::from_layout(&layout, vision.pipeline()))
+            .transpose()?
+            .flatten();
         Ok(Self {
             decoder: DecoderConfig::from_layout(&layout)?,
             generation: generation_config.resolve(overrides)?,
             generation_config,
+            vision,
+            vision_readiness,
+            image_processor,
             template: ChatTemplate::from_layout(&layout, &metadata.family)?,
             tokenizer: TextTokenizer::from_layout(&layout)?,
             layout,
@@ -134,48 +157,6 @@ impl ModelDescriptor {
             quantization: self.metadata.quantization.clone(),
             preferred_backends,
         })
-    }
-
-    #[must_use]
-    /// Returns the discovered paths and files that make up the model.
-    pub const fn layout(&self) -> &ModelLayout {
-        &self.layout
-    }
-
-    #[must_use]
-    /// Returns normalized model-family and context metadata.
-    pub const fn metadata(&self) -> &ModelMetadata {
-        &self.metadata
-    }
-
-    #[must_use]
-    /// Returns decoder dimensions and attention-layer configuration.
-    pub const fn decoder(&self) -> &DecoderConfig {
-        &self.decoder
-    }
-
-    #[must_use]
-    /// Returns the generation settings resolved during inspection.
-    pub const fn generation(&self) -> GenerationSettings {
-        self.generation
-    }
-
-    /// Resolves per-request overrides against the model generation
-    /// configuration.
-    pub fn resolve_generation(&self, overrides: GenerationOverrides) -> Result<GenerationSettings> {
-        Ok(self.generation_config.resolve(overrides)?)
-    }
-
-    #[must_use]
-    /// Returns the chat template selected for this model family.
-    pub const fn template(&self) -> &ChatTemplate {
-        &self.template
-    }
-
-    #[must_use]
-    /// Returns the tokenizer loaded from the model directory.
-    pub const fn tokenizer(&self) -> &TextTokenizer {
-        &self.tokenizer
     }
 }
 

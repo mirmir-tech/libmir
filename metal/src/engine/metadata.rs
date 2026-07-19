@@ -49,3 +49,17 @@ impl Array {
         elements.checked_mul(bytes_per_element).ok_or(Error::ShapeOverflow)
     }
 }
+
+impl Dtype {
+    pub(super) fn native(self) -> Result<mirtal::DType> {
+        match self {
+            Self::Bool => Ok(mirtal::DType::Bool),
+            Self::Uint32 => Ok(mirtal::DType::Uint32),
+            Self::Int32 => Ok(mirtal::DType::Int32),
+            Self::Float16 => Ok(mirtal::DType::Float16),
+            Self::Bfloat16 => Ok(mirtal::DType::Bfloat16),
+            Self::Float32 => Ok(mirtal::DType::Float32),
+            Self::Unknown => Err(Error::InvalidModel("unknown MLX dtype".into())),
+        }
+    }
+}

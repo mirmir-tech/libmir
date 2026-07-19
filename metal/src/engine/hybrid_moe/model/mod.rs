@@ -11,6 +11,8 @@ use crate::engine::{
     configure_expert_fusion, decode_graph,
 };
 
+mod prefill;
+
 #[derive(Debug)]
 pub struct HybridMoeModel {
     pub(super) layers: Vec<HybridMoeLayer>,
@@ -19,6 +21,7 @@ pub struct HybridMoeModel {
     pub(super) embedding: QuantizedEmbedding,
     pub(super) final_norm: Array,
     pub(super) embed_scale: f32,
+    pub(super) hidden_size: usize,
     pub(super) softcap: Option<f32>,
     expert_fusion: ExpertFusionDecision,
 }
@@ -67,6 +70,7 @@ impl HybridMoeModel {
             embedding,
             final_norm: tensors.get("language_model.model.norm.weight")?,
             embed_scale,
+            hidden_size: decoder.hidden_size,
             softcap: decoder
                 .final_logit_softcapping
                 .map(|value| value.to_string().parse())
@@ -122,65 +126,6 @@ impl HybridMoeModel {
             );
         }
         Ok(logits)
-    }
-
-    pub fn forward_prefill(
-        &self,
-        token_ids: &Array,
-        cache: &mut DecoderCache,
-        position: i32,
-        stream: &Stream,
-    ) -> Result<Array> {
-        self.forward_hidden(token_ids, cache, position, true, stream)
-    }
-
-    fn forward_hidden(
-        &self,
-        token_ids: &Array,
-        cache: &mut DecoderCache,
-        position: i32,
-        causal: bool,
-        stream: &Stream,
-    ) -> Result<Array> {
-        let profile_components = !causal && profile_components(stream);
-        let embedding_started = Instant::now();
-        let mut hidden = self.embedding.lookup(token_ids, stream)?;
-        hidden = hidden.multiply_scalar(self.embed_scale, stream)?;
-        if profile_components {
-            hidden.async_eval()?;
-            stream.synchronize()?;
-            tracing::debug!(
-                component = "embedding",
-                milliseconds = embedding_started.elapsed().as_secs_f64() * 1_000.0,
-                "MLX hybrid MoE component profile"
-            );
-        }
-        let profile = stream.config().diagnostics.profile_layers;
-        let evaluation_step = causal
-            .then_some(stream.config().diagnostics.prefill_evaluation_layers)
-            .flatten();
-        let layer_count = self.layers.len();
-        for (index, (layer, cache)) in
-            self.layers.iter().zip(cache.attention_caches_mut()?.iter_mut()).enumerate()
-        {
-            let started = Instant::now();
-            hidden = layer.forward_decode(&hidden, Some(cache), position, causal, stream)?;
-            let evaluate = profile
-                || evaluation_step
-                    .is_some_and(|step| (index + 1) % step == 0 || index + 1 == layer_count);
-            if evaluate {
-                hidden.async_eval()?;
-                stream.synchronize()?;
-            }
-            if profile {
-                tracing::debug!(
-                    layer = index,
-                    milliseconds = started.elapsed().as_secs_f64() * 1_000.0,
-                    "MLX hybrid MoE layer profile"
-                );
-            }
-        }
-        Ok(hidden)
     }
 
     fn logits(&self, hidden: &Array, apply_softcap: bool, stream: &Stream) -> Result<Array> {

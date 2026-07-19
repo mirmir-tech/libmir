@@ -52,15 +52,17 @@ impl NvFp4MoeLayerLoadConfig {
         let expert_intermediate = decoder
             .moe_intermediate_size
             .ok_or_else(|| unsupported("missing moe_intermediate_size"))?;
+        let mut attention = attention_config(
+            decoder,
+            layer,
+            self.cache,
+            self.max_sequence_blocks,
+            QkvNormalization::ALL,
+            crate::ProjectionFormat::Bf16,
+        )?;
+        attention.attention_scale = 1.0;
         Ok(DecodeMoeBlockConfig {
-            attention: attention_config(
-                decoder,
-                layer,
-                self.cache,
-                self.max_sequence_blocks,
-                QkvNormalization::ALL,
-                crate::ProjectionFormat::Bf16,
-            )?,
+            attention,
             dense_intermediate: decoder.intermediate_size,
             expert_intermediate,
             experts,

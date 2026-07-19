@@ -5,6 +5,17 @@ use crate::native::model::LoadedModel;
 
 pub(super) fn tensors(model: &LoadedModel) -> TraceTensors {
     let info = &model.info;
+    let readiness = info.vision_readiness.as_ref().map_or_else(
+        || format!("native {:?} execution plan loaded", info.plan.decoder),
+        |vision| {
+            format!(
+                "native {:?} text execution plan loaded; {:?} discovered; {}",
+                info.plan.decoder,
+                info.vision.as_ref().map(models::layout::VisionConfig::pipeline),
+                vision.summary()
+            )
+        },
+    );
     TraceTensors {
         tensor_count: info.tensor_count,
         native_tensor_count: info.tensor_count,
@@ -13,8 +24,12 @@ pub(super) fn tensors(model: &LoadedModel) -> TraceTensors {
         weight_bytes: info.weight_bytes,
         tokenizer: info.layout.has_tokenizer(),
         safetensors_index: info.layout.safetensors_index_path.is_some(),
-        readiness: format!("native {:?} execution plan loaded", info.plan.decoder),
-        missing: Vec::new(),
+        readiness,
+        missing: info
+            .vision_readiness
+            .as_ref()
+            .map(|vision| vision.missing.clone())
+            .unwrap_or_default(),
         native_dtypes: Vec::new(),
         finite_validation: runtime::trace::TraceFiniteValidation {
             mode: "deferred to MLX kernel execution".into(),

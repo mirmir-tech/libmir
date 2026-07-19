@@ -64,6 +64,7 @@ impl HybridMoeLayer {
                 cache: Some(cache),
                 position,
                 causal,
+                mask: None,
                 stream,
             },
         )?;

@@ -47,4 +47,16 @@ pub enum Error {
         /// Maximum number of output tokens requested.
         max_tokens: usize,
     },
+    #[error(
+        "vision input needs an estimated {required_bytes} byte attention buffer for {patch_tokens} patches, exceeding the configured {budget_bytes} byte budget; reduce image dimensions or raise the vision limit"
+    )]
+    /// Vision preprocessing could not satisfy the configured resource budget.
+    VisionResourceLimit {
+        /// Number of patch tokens presented to the vision transformer.
+        patch_tokens: usize,
+        /// Conservative size of one full attention score matrix.
+        required_bytes: u64,
+        /// Effective runtime attention budget.
+        budget_bytes: u64,
+    },
 }

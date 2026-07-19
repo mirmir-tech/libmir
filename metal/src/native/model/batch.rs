@@ -109,7 +109,7 @@ fn decode_states(
     let token_ids = Array::concatenate(&sampled_refs, 0, stream)?;
     let positions = states
         .iter()
-        .map(|(_, state)| i32::try_from(state.position))
+        .map(|(_, state)| state.model_position().and_then(|position| Ok(i32::try_from(position)?)))
         .collect::<std::result::Result<Vec<_>, _>>()?;
     let mut caches = states.iter_mut().map(|(_, state)| &mut state.cache).collect::<Vec<_>>();
     let logits = model.forward_packed_decode(&token_ids, &mut caches, &positions, stream)?;

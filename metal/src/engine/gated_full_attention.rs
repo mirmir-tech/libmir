@@ -1,11 +1,12 @@
-use models::layout::{AttentionOutput, DecoderConfig};
+use models::layout::{AttentionOutput, DecoderConfig, RotaryEmbeddingLayout};
 
 use super::{
     Array, Error, KvCache, ModelTensors, NormWeight, PagedContextMode, QuantizedLinear, Result,
-    RopeOptions, Stream, fused_gate_up::split_last, native_paged_attention_mode,
+    RopeOptions, Stream, attention::apply_mrope, fused_gate_up::split_last,
+    native_paged_attention_mode,
 };
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct GatedFullAttentionConfig {
     attention_heads: i32,
     key_value_heads: i32,
@@ -14,6 +15,7 @@ pub struct GatedFullAttentionConfig {
     rope_base: f32,
     attention_scale: f32,
     rms_norm_eps: f32,
+    rope_layout: RotaryEmbeddingLayout,
 }
 
 #[derive(Debug)]
@@ -43,12 +45,13 @@ impl GatedFullAttentionConfig {
             rope_base: decoder.rope_theta.unwrap_or(10_000.0).to_string().parse()?,
             attention_scale: head_dim.to_string().parse::<f32>()?.sqrt().recip(),
             rms_norm_eps: decoder.rms_norm_eps.to_string().parse()?,
+            rope_layout: decoder.rope_layout.clone(),
         };
         config.validate()?;
         Ok(config)
     }
 
-    fn validate(self) -> Result<()> {
+    fn validate(&self) -> Result<()> {
         if self.attention_heads <= 0
             || self.key_value_heads <= 0
             || self.head_dim <= 0
@@ -107,6 +110,20 @@ impl GatedFullAttention {
         causal: bool,
         stream: &Stream,
     ) -> Result<Array> {
+        self.forward_with_positions(input, cache, page_min_context, position, causal, None, stream)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn forward_with_positions(
+        &self,
+        input: &Array,
+        cache: &mut KvCache,
+        page_min_context: usize,
+        position: i32,
+        causal: bool,
+        positions: Option<&Array>,
+        stream: &Stream,
+    ) -> Result<Array> {
         let shape = input.shape()?;
         let batch = dimension(&shape, 0, "batch")?;
         let sequence = dimension(&shape, 1, "sequence")?;
@@ -120,14 +137,14 @@ impl GatedFullAttention {
         let (queries, gate) = split_last(&projected, usize::try_from(head_dim)?, stream)?;
         let gate = gate.reshape(&[batch, sequence, query_width], stream)?;
         let queries = self.query_norm.apply(&queries, self.config.rms_norm_eps, stream)?;
-        let queries = rope(&queries, self.config, position, stream)?;
+        let queries = rope(&queries, &self.config, position, positions, stream)?;
 
         let keys = self
             .key
             .forward(input, stream)?
             .reshape(&[batch, sequence, self.config.key_value_heads, head_dim], stream)?;
         let keys = self.key_norm.apply(&keys, self.config.rms_norm_eps, stream)?;
-        let keys = rope(&keys, self.config, position, stream)?;
+        let keys = rope(&keys, &self.config, position, positions, stream)?;
         let values = self
             .value
             .forward(input, stream)?
@@ -170,11 +187,23 @@ impl GatedFullAttention {
 
 fn rope(
     input: &Array,
-    config: GatedFullAttentionConfig,
+    config: &GatedFullAttentionConfig,
     position: i32,
+    positions: Option<&Array>,
     stream: &Stream,
 ) -> Result<Array> {
-    input.transpose(&[0, 2, 1, 3], stream)?.rope(
+    let input = input.transpose(&[0, 2, 1, 3], stream)?;
+    if let Some(positions) = positions {
+        return apply_mrope(
+            &input,
+            positions,
+            usize::try_from(config.rope_dimensions)?,
+            config.rope_base,
+            &config.rope_layout,
+            stream,
+        );
+    }
+    input.rope(
         RopeOptions {
             dimensions: config.rope_dimensions,
             traditional: false,
@@ -203,47 +232,5 @@ fn linear(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::engine::QuantizedArrays;
-
-    #[test]
-    fn executes_gated_grouped_query_attention_on_the_gpu_stream() -> Result<()> {
-        let stream = Stream::new_gpu()?;
-        let config = GatedFullAttentionConfig {
-            attention_heads: 1,
-            key_value_heads: 1,
-            head_dim: 64,
-            rope_dimensions: 64,
-            rope_base: 10_000.0,
-            attention_scale: 0.125,
-            rms_norm_eps: 1.0e-6,
-        };
-        let attention = GatedFullAttention {
-            config,
-            query: linear(128, &stream)?,
-            key: linear(64, &stream)?,
-            value: linear(64, &stream)?,
-            output: linear(64, &stream)?,
-            query_norm: NormWeight::from_weight(Array::from_f32(&vec![1.0; 64], &[64])?),
-            key_norm: NormWeight::from_weight(Array::from_f32(&vec![1.0; 64], &[64])?),
-        };
-        let input = Array::from_f32(&vec![0.0; 128], &[1, 2, 64])?;
-        let mut cache = KvCache::new(16)?;
-        let output = attention.forward(&input, &mut cache, 0, 0, true, &stream)?;
-
-        output.async_eval()?;
-        stream.synchronize()?;
-        assert_eq!(output.shape()?, vec![1, 2, 64]);
-        assert!(output.to_vec_f32()?.iter().all(|value| *value == 0.0));
-        assert_eq!(cache.offset()?, 2);
-        Ok(())
-    }
-
-    fn linear(output_width: i32, stream: &Stream) -> Result<QuantizedLinear> {
-        let dense =
-            Array::from_f32(&vec![0.0; usize::try_from(output_width * 64)?], &[output_width, 64])?;
-        let arrays: QuantizedArrays = dense.quantize(64, 4, stream)?;
-        Ok(QuantizedLinear::from_quantized(arrays, 64, 4))
-    }
-}
+#[path = "tests/gated_full_attention.rs"]
+mod tests;

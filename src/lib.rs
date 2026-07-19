@@ -12,7 +12,7 @@ mod scheduler;
 mod session;
 
 pub use cancellation::CancellationToken;
-pub use config::RuntimeConfig;
+pub use config::{RuntimeConfig, VisionRuntimeConfig};
 #[cfg(feature = "cuda")]
 pub use cuda::{
     AffineQuantizedBf16Linear, AffineQuantizedBf16Qmm, AffineQuantizedConfig,
@@ -40,7 +40,9 @@ pub use metal::{
     DenseBatchMode, FeatureToggle, FusionMode, MetalBatchConfig, MetalCacheConfig, MetalConfig,
     MetalDiagnosticsConfig, MetalFusionConfig,
 };
-pub use model::{Library, Model, ModelDescriptor, PreparedPrompt};
+pub use model::{
+    IMAGE_PLACEHOLDER, Library, Model, ModelDescriptor, PreparedPrompt, PreparedVisionPrompt,
+};
 pub use models::{
     self,
     generation::{GenerationChannel, GenerationOverrides, GenerationSettings, GenerationToken},

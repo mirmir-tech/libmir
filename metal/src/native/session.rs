@@ -4,16 +4,32 @@ use crate::engine::{Array, DecoderCache};
 pub(super) struct SessionState {
     pub(super) cache: DecoderCache,
     pub(super) position: usize,
+    pub(super) rope_position_delta: i32,
     pub(super) pending: Option<PendingDecode>,
 }
 
 impl SessionState {
     pub(super) const fn new(cache: DecoderCache) -> Self {
-        Self { cache, position: 0, pending: None }
+        Self {
+            cache,
+            position: 0,
+            rope_position_delta: 0,
+            pending: None,
+        }
     }
 
     pub(super) const fn from_prefix(cache: DecoderCache, position: usize) -> Self {
-        Self { cache, position, pending: None }
+        Self {
+            cache,
+            position,
+            rope_position_delta: 0,
+            pending: None,
+        }
+    }
+
+    pub(super) fn model_position(&self) -> crate::native::error::Result<usize> {
+        let position = i64::try_from(self.position)? + i64::from(self.rope_position_delta);
+        usize::try_from(position).map_err(Into::into)
     }
 }
 

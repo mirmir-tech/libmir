@@ -46,7 +46,7 @@ scheduler, sampling, and K/V policy usable without linking a platform runtime.
 
 ```toml
 [dependencies]
-libmir = { version = "0.1", features = ["metal"] }
+libmir = { version = "0.2.0", features = ["metal"] }
 ```
 
 Select CUDA instead with `default-features = false, features = ["cuda"]`. Both
@@ -101,7 +101,7 @@ From crates.io:
 
 ```toml
 [dependencies]
-libmir = { version = "0.1", features = ["metal"] }
+libmir = { version = "0.2.0", features = ["metal"] }
 ```
 
 ## Quick Start

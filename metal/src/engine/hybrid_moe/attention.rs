@@ -8,6 +8,7 @@ pub(super) struct DecodeContext<'a> {
     pub(super) cache: Option<&'a mut KvCache>,
     pub(super) position: i32,
     pub(super) causal: bool,
+    pub(super) mask: Option<&'a Array>,
     pub(super) stream: &'a Stream,
 }
 
@@ -19,7 +20,7 @@ pub(super) fn forward_decode(
     fused_key_value: Option<&FusedKeyValue>,
     context: DecodeContext<'_>,
 ) -> Result<Array> {
-    let DecodeContext { cache, position, causal, stream } = context;
+    let DecodeContext { cache, position, causal, mask, stream } = context;
     let sequence = input.shape()?.get(1).copied().ok_or_else(|| {
         crate::engine::Error::InvalidModel("attention input has no sequence axis".into())
     })?;
@@ -94,7 +95,7 @@ pub(super) fn forward_decode(
                     1.0,
                     stream,
                 )?
-            } else if let Some(mask) = context.mask.as_ref() {
+            } else if let Some(mask) = mask.or(context.mask.as_ref()) {
                 queries.masked_scaled_dot_product_attention(
                     &context.keys, &context.values, 1.0, mask, stream,
                 )?
@@ -104,7 +105,12 @@ pub(super) fn forward_decode(
                 )?
             }
         },
-        None => queries.scaled_dot_product_attention(&keys, &values, 1.0, causal, stream)?,
+        None => match mask {
+            Some(mask) => {
+                queries.masked_scaled_dot_product_attention(&keys, &values, 1.0, mask, stream)?
+            },
+            None => queries.scaled_dot_product_attention(&keys, &values, 1.0, causal, stream)?,
+        },
     };
     let output = output.transpose(&[0, 2, 1, 3], stream)?;
     let output_width = config.attention_heads * config.head_dim;

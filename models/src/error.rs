@@ -25,6 +25,8 @@ pub enum ModelsError {
     Io(#[from] std::io::Error),
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("image error: {0}")]
+    Image(#[from] image::ImageError),
     #[error("chat template error: {0}")]
     Template(#[from] minijinja::Error),
     #[error("tokenizer error: {0}")]

@@ -72,6 +72,18 @@ impl HybridMoeLayer {
         causal: bool,
         stream: &Stream,
     ) -> Result<Array> {
+        self.forward_with_mask(input, cache, position, causal, None, stream)
+    }
+
+    pub(super) fn forward_with_mask(
+        &self,
+        input: &Array,
+        cache: Option<&mut KvCache>,
+        position: i32,
+        causal: bool,
+        mask: Option<&Array>,
+        stream: &Stream,
+    ) -> Result<Array> {
         let profile = !causal && profile_components(stream);
         let attention_started = Instant::now();
         let normalized = self.weights.input_norm.apply(input, self.config.rms_norm_eps, stream)?;
@@ -81,7 +93,7 @@ impl HybridMoeLayer {
             self.config,
             self.fused_attention.as_ref(),
             self.fused_key_value.as_ref(),
-            DecodeContext { cache, position, causal, stream },
+            DecodeContext { cache, position, causal, mask, stream },
         )?;
         let attention =
             self.weights

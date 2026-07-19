@@ -57,6 +57,25 @@ impl Array {
         Self::from_native(stream.native().graph().slice(self.native(), start, stop)?)
     }
 
+    pub fn slice_update(
+        &self,
+        update: &Self,
+        start: &[usize],
+        stop: &[usize],
+        stream: &Stream,
+    ) -> Result<Self> {
+        Self::from_native(stream.native().graph().slice_update(
+            self.native(),
+            update.native(),
+            start,
+            stop,
+        )?)
+    }
+
+    pub(crate) fn take(&self, indices: &Self, axis: i32, stream: &Stream) -> Result<Self> {
+        Self::from_native(stream.native().graph().take(self.native(), indices.native(), axis)?)
+    }
+
     pub(super) const fn native(&self) -> &mirtal::Array {
         &self.native
     }

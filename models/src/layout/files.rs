@@ -58,7 +58,8 @@ impl ModelLayout {
         let kv_config_path = optional(root.join("kv_config.json"));
         let processor_config_path = optional(root.join("processor_config.json"));
         let preprocessor_config_path = optional(root.join("preprocessor_config.json"));
-        let video_processor_config_path = optional(root.join("video_processor_config.json"));
+        let video_processor_config_path = optional(root.join("video_processor_config.json"))
+            .or_else(|| optional(root.join("video_preprocessor_config.json")));
         let safetensors_index_path = optional(root.join("model.safetensors.index.json"));
         let weights = read_weights(&root, safetensors_index_path.as_deref())?;
 

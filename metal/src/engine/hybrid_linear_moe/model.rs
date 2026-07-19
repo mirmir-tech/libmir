@@ -17,6 +17,7 @@ pub struct HybridLinearMoeModel {
     pub(super) output: QuantizedLinear,
     pub(super) final_norm: NormWeight,
     pub(super) rms_norm_eps: f32,
+    pub(super) hidden_size: usize,
     expert_fusion: ExpertFusionDecision,
 }
 
@@ -63,6 +64,7 @@ impl HybridLinearMoeModel {
                 stream,
             )?,
             rms_norm_eps: decoder.rms_norm_eps.to_string().parse()?,
+            hidden_size: decoder.hidden_size,
             expert_fusion,
         })
     }
@@ -114,7 +116,20 @@ impl HybridLinearMoeModel {
         causal: bool,
         stream: &Stream,
     ) -> Result<Array> {
-        let mut hidden = self.embedding.lookup(token_ids, stream)?;
+        let hidden = self.embedding.lookup(token_ids, stream)?;
+        self.forward_embedded(hidden, cache, position, causal, None, stream)
+    }
+
+    pub(super) fn forward_embedded(
+        &self,
+        mut hidden: Array,
+        cache: &mut DecoderCache,
+        position: i32,
+        causal: bool,
+        positions: Option<&Array>,
+        stream: &Stream,
+    ) -> Result<Array> {
+        let sequence = hidden.shape()?.get(1).copied().unwrap_or_default();
         let profile = stream.config().diagnostics.profile_layers;
         let profile_graph = stream.config().diagnostics.profile_graph_build;
         let graph_started = Instant::now();
@@ -122,7 +137,8 @@ impl HybridLinearMoeModel {
         let mut full_graph = Duration::ZERO;
         for (index, layer) in self.layers.iter().enumerate() {
             let started = Instant::now();
-            hidden = layer.forward(&hidden, cache, position, causal, stream)?;
+            hidden = layer
+                .forward_with_positions(&hidden, cache, position, causal, positions, stream)?;
             if profile_graph {
                 match layer.attention_kind() {
                     "gated_delta" => linear_graph += started.elapsed(),
@@ -143,7 +159,7 @@ impl HybridLinearMoeModel {
         let output = self.final_norm.apply(&hidden, self.rms_norm_eps, stream)?;
         if profile_graph {
             tracing::debug!(
-                sequence = token_ids.shape()?.get(1).copied().unwrap_or_default(),
+                sequence,
                 total_ms = graph_started.elapsed().as_secs_f64() * 1_000.0,
                 gated_delta_ms = linear_graph.as_secs_f64() * 1_000.0,
                 gated_full_ms = full_graph.as_secs_f64() * 1_000.0,

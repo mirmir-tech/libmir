@@ -9,6 +9,7 @@ mod rope;
 mod router;
 mod sampling;
 mod sliding_cache;
+mod vision_primitives;
 
 #[test]
 fn executes_addition_on_explicit_gpu_stream() -> Result<()> {

@@ -124,6 +124,11 @@ impl TextTokenizer {
     }
 
     #[must_use]
+    pub fn token(&self, id: u32) -> Option<String> {
+        self.inner.id_to_token(id)
+    }
+
+    #[must_use]
     pub fn added_token_id(&self, token: &str) -> Option<u32> {
         self.added_tokens.get(token).copied()
     }

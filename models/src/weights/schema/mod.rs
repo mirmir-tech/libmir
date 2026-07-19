@@ -2,8 +2,9 @@ use crate::{layout::DecoderConfig, weights::TensorCatalog};
 
 mod layout;
 mod types;
+mod vision;
 
-pub use types::{DecoderTensorSchema, TensorReadiness, TensorRequirement};
+pub use types::{DecoderTensorSchema, TensorReadiness, TensorRequirement, VisionTensorSchema};
 
 impl DecoderTensorSchema {
     #[must_use]

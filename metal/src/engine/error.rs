@@ -27,6 +27,9 @@ pub enum Error {
     #[cfg(test)]
     #[error("benchmark output failed: {0}")]
     BenchmarkOutput(#[from] std::io::Error),
+    #[cfg(test)]
+    #[error("test fixture JSON failed: {0}")]
+    TestJson(#[from] serde_json::Error),
     #[error("shape {shape:?} contains {elements} elements, data contains {data}")]
     Shape {
         shape: Vec<i32>,

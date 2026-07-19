@@ -12,6 +12,11 @@ use runtime::{
 
 use crate::{CancellationToken, Model, ProgressEvent, Result};
 
+#[path = "generation/input.rs"]
+mod input;
+
+use input::PreparedGeneration;
+
 #[derive(Debug, Clone)]
 /// Completed generation, including separated reasoning, tokens, and timing
 /// metrics.
@@ -52,24 +57,49 @@ impl Model {
         token: &mut dyn FnMut(GenerationToken),
         cancellation: &CancellationToken,
     ) -> Result<GenerationOutput> {
+        self.generate_inner(request, None, progress, token, cancellation)
+    }
+
+    #[cfg(feature = "metal")]
+    /// Generates from one encoded image using the vision architecture declared
+    /// by the loaded checkpoint.
+    pub fn generate_image_cancellable(
+        &self,
+        request: &ChatCompletionRequest,
+        encoded_image: &[u8],
+        progress: &mut dyn FnMut(ProgressEvent),
+        token: &mut dyn FnMut(GenerationToken),
+        cancellation: &CancellationToken,
+    ) -> Result<GenerationOutput> {
+        self.generate_inner(request, Some(encoded_image), progress, token, cancellation)
+    }
+
+    fn generate_inner(
+        &self,
+        request: &ChatCompletionRequest,
+        encoded_image: Option<&[u8]>,
+        progress: &mut dyn FnMut(ProgressEvent),
+        token: &mut dyn FnMut(GenerationToken),
+        cancellation: &CancellationToken,
+    ) -> Result<GenerationOutput> {
         cancellation.check()?;
         let descriptor = self.descriptor();
         let settings = descriptor.resolve_generation(overrides(request))?;
-        let prepared = descriptor.prepare_with_settings(request, settings)?;
-        let prompt_tokens = prepared.tokens.token_ids.len();
+        let prepared = PreparedGeneration::prepare(self, request, settings, encoded_image)?;
+        let prompt_tokens = prepared.token_ids().len();
         let mut metrics = GenerationMetricsRecorder::new();
         metrics.record_prompt(Duration::ZERO, prompt_tokens);
         let tokenizer = descriptor.tokenizer();
-        let mut normalizer = OutputNormalizer::new(tokenizer, &prepared.prompt.text);
+        let mut normalizer = OutputNormalizer::new(tokenizer, prepared.prompt_text());
         let vocab_size = tokenizer.vocab_size().min(descriptor.decoder().vocab_size);
         let mut sampler = Sampler::new(sampler_config(settings, request.seed, vocab_size))?;
         let mut session = self.session();
         let sampling = request_sampling(settings, vocab_size, &mut sampler);
         let prefill_started = Instant::now();
-        let prefill = session.prefill(&prepared.tokens.token_ids, sampling, progress)?;
+        let prefill = prepared.prefill(&mut session, sampling, progress)?;
         cancellation.check()?;
         metrics.record_prefill(prefill_started.elapsed(), prompt_tokens);
-        let mut history = sampling.requires_history().then(|| prepared.tokens.token_ids.clone());
+        let mut history = sampling.requires_history().then(|| prepared.token_ids().to_vec());
         let mut next = choose(
             prefill.next_token,
             prefill.logits.as_ref(),
@@ -215,30 +245,5 @@ fn choose(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn keeps_greedy_selection_on_the_backend() {
-        let settings = GenerationSettings {
-            max_tokens: 16,
-            temperature: 0.0,
-            top_p: 1.0,
-            top_k: 0,
-            repetition_penalty: 1.0,
-        };
-        assert_eq!(sampling(settings, 32_000), SamplingLogits::None);
-    }
-
-    #[test]
-    fn uses_device_top_p_when_top_k_is_bounded() {
-        let settings = GenerationSettings {
-            max_tokens: 16,
-            temperature: 0.8,
-            top_p: 0.95,
-            top_k: 40,
-            repetition_penalty: 1.0,
-        };
-        assert!(matches!(sampling(settings, 32_000), SamplingLogits::Sample { .. }));
-    }
-}
+#[path = "generation/tests.rs"]
+mod tests;

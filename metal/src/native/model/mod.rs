@@ -3,8 +3,9 @@ use std::collections::HashMap;
 use foundation::model::ModelManifest;
 use models::{
     execution::ExecutionPlan,
-    layout::{DecoderConfig, ModelLayout, ModelMetadata},
+    layout::{DecoderConfig, ModelLayout, ModelMetadata, VisionConfig},
     tokenizer::TokenizerInfo,
+    weights::TensorReadiness,
 };
 use runtime::backend::SamplingLogits;
 use uuid::Uuid;
@@ -14,7 +15,9 @@ use super::{
     prefix::PrefixCache,
     session::SessionState,
 };
-use crate::engine::{Array, DecoderModel, MemoryStats, Stream};
+use crate::engine::{
+    Array, DecoderModel, MemoryStats, PooledVisionTower, SpatialMergeVisionTower, Stream,
+};
 
 mod batch;
 mod load;
@@ -31,6 +34,8 @@ pub(super) struct ModelInfo {
     pub layout: ModelLayout,
     pub metadata: ModelMetadata,
     pub decoder: DecoderConfig,
+    pub vision: Option<VisionConfig>,
+    pub vision_readiness: Option<TensorReadiness>,
     pub plan: ExecutionPlan,
     pub tensor_count: usize,
     pub weight_bytes: u64,
@@ -46,8 +51,15 @@ pub(super) struct LoadedModel {
     pub info: ModelInfo,
     pub(super) stream: Stream,
     pub(super) model: DecoderModel,
+    pub(super) vision_model: Option<LoadedVisionModel>,
     pub(super) prefixes: PrefixCache,
     pub(super) sessions: HashMap<Uuid, SessionState>,
+}
+
+#[derive(Debug)]
+pub(super) enum LoadedVisionModel {
+    PooledEncoder(PooledVisionTower),
+    SpatialMergeEncoder(SpatialMergeVisionTower),
 }
 
 #[derive(Debug)]
@@ -72,8 +84,8 @@ impl LoadedModel {
         if state.pending.is_some() {
             return super::step::decode_pending(model, stream, state, token, sampling);
         }
-        let logits =
-            super::step::forward_token(model, stream, state, token, state.position, false)?;
+        let position = state.model_position()?;
+        let logits = super::step::forward_token(model, stream, state, token, position, false)?;
         state.position += 1;
         Ok(NativeOutput::Logits(logits))
     }

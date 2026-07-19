@@ -3,6 +3,8 @@ use uuid::Uuid;
 use super::{BlockHash, BlockId, BlockTable, KvCache, KvWritePlan};
 use crate::error::{Result, RuntimeError};
 
+mod uncached;
+
 #[derive(Debug, Clone)]
 pub struct KvSessionState {
     session_id: Uuid,
@@ -11,6 +13,7 @@ pub struct KvSessionState {
     tokens: Vec<u32>,
     committed_blocks: usize,
     last_hash: Option<BlockHash>,
+    prefix_cacheable: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -55,6 +58,7 @@ impl KvSessionState {
             tokens: Vec::new(),
             committed_blocks: 0,
             last_hash: None,
+            prefix_cacheable: true,
         }
     }
 
@@ -81,6 +85,7 @@ impl KvSessionState {
         if !self.table.is_empty() {
             self.release(cache)?;
         }
+        self.prefix_cacheable = true;
         let probe = cache.probe_prefix_recorded(&self.model, prompt_tokens);
         let missing_blocks = probe.missing_tokens.div_ceil(cache.block_size());
         let allocated = cache.allocate_blocks(missing_blocks)?;
@@ -157,6 +162,9 @@ impl KvSessionState {
     }
 
     pub fn commit_ready_prefix_blocks(&mut self, cache: &mut KvCache) -> Result<usize> {
+        if !self.prefix_cacheable {
+            return Ok(0);
+        }
         let block_size = cache.block_size();
         let mut committed = 0;
         while self.committed_blocks < self.table.blocks().len() {
@@ -185,6 +193,7 @@ impl KvSessionState {
         self.tokens.clear();
         self.committed_blocks = 0;
         self.last_hash = None;
+        self.prefix_cacheable = true;
         Ok(released)
     }
 

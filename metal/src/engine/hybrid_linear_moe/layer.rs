@@ -69,12 +69,13 @@ impl HybridLinearMoeLayer {
         })
     }
 
-    pub(super) fn forward(
+    pub(super) fn forward_with_positions(
         &self,
         input: &Array,
         cache: &mut DecoderCache,
         position: i32,
         causal: bool,
+        positions: Option<&Array>,
         stream: &Stream,
     ) -> Result<Array> {
         let profile = stream.config().diagnostics.profile_components;
@@ -84,12 +85,13 @@ impl HybridLinearMoeLayer {
             Attention::Linear(layer) => {
                 layer.forward(&normalized, cache.gated_delta_state(self.index)?, stream)?
             },
-            Attention::Full(layer) => layer.forward(
+            Attention::Full(layer) => layer.forward_with_positions(
                 &normalized,
                 cache.full_attention_cache(self.index)?,
                 paged_attention_min_context(stream),
                 position,
                 causal,
+                positions,
                 stream,
             )?,
         };

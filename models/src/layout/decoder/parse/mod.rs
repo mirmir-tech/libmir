@@ -79,7 +79,7 @@ impl DecoderConfig {
                 .or(optional_bool(value, "tie_word_embeddings")?)
                 .unwrap_or(false),
             attention_k_eq_v: optional_bool(decoder, "attention_k_eq_v")?.unwrap_or(false),
-            attention_scale: attention_scale(value, decoder)?,
+            attention_scale: attention_scale(decoder)?,
             attention_output: features::attention_output(decoder)?,
             sliding_window: optional_usize(decoder, &["sliding_window"])?,
             linear_attention: features::linear_attention(decoder)?,
@@ -153,14 +153,6 @@ fn decoder_value(value: &Value) -> &Value {
         .unwrap_or(value)
 }
 
-fn attention_scale(root: &Value, decoder: &Value) -> Result<Option<f64>> {
-    let explicit = optional_f64(decoder, &["attention_scale", "attention_multiplier"])?;
-    if explicit.is_some() {
-        return Ok(explicit);
-    }
-    let model_type = decoder
-        .get("model_type")
-        .or_else(|| root.get("model_type"))
-        .and_then(Value::as_str);
-    Ok(matches!(model_type, Some("gemma4" | "gemma4_text")).then_some(1.0))
+fn attention_scale(decoder: &Value) -> Result<Option<f64>> {
+    optional_f64(decoder, &["attention_scale", "attention_multiplier"])
 }

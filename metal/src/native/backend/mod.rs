@@ -1,7 +1,9 @@
 mod batch;
 mod execution;
 mod load;
+mod pooled_vision;
 mod runtime;
+mod spatial_merge_vision;
 mod worker;
 
 use std::{

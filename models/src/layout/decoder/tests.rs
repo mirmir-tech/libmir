@@ -31,7 +31,7 @@ fn reads_common_decoder_fields() -> Result<()> {
 #[test]
 fn reads_nested_text_config() -> Result<()> {
     let value = json!({
-        "model_type": "gemma4",
+        "model_type": "unrelated_model_family",
         "tie_word_embeddings": true,
         "text_config": {
             "hidden_size": 2816,
@@ -44,6 +44,7 @@ fn reads_nested_text_config() -> Result<()> {
             "num_global_key_value_heads": 2,
             "vocab_size": 262_144,
             "attention_k_eq_v": true,
+            "attention_scale": 1.0,
             "sliding_window": 1024,
             "num_experts": 128,
             "top_k_experts": 8,

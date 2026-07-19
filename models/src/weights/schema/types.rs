@@ -10,6 +10,11 @@ pub struct DecoderTensorSchema {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VisionTensorSchema {
+    pub requirements: Vec<TensorRequirement>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TensorReadiness {
     pub required: usize,
     pub present: usize,

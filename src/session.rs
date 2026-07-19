@@ -4,6 +4,8 @@ use runtime::{
 };
 use uuid::Uuid;
 
+#[cfg(feature = "metal")]
+use crate::PreparedVisionPrompt;
 use crate::{Model, ProgressEvent, Result};
 
 /// Stateful low-level inference session with independent accelerator K/V state.
@@ -42,6 +44,48 @@ impl Session {
             .clone()
             .with_cache(|cache| Ok(self.state.commit_ready_prefix_blocks(cache)?))?;
         Ok(output)
+    }
+
+    #[cfg(feature = "metal")]
+    /// Prefills a prepared image prompt on Metal. Multimodal sessions
+    /// deliberately never publish reusable prefix-cache entries.
+    pub fn prefill_vision(
+        &mut self,
+        prepared: &PreparedVisionPrompt,
+        sampling: SamplingLogits,
+        progress: &mut dyn FnMut(ProgressEvent),
+    ) -> Result<PrefillOutput> {
+        let tokens = match prepared {
+            PreparedVisionPrompt::Pooled { tokens, .. } => &tokens.token_ids,
+            PreparedVisionPrompt::SpatialMerge { tokens, .. } => &tokens.token_ids,
+        };
+        let request = self.model.clone().with_cache(|cache| {
+            Ok(self.state.prepare_uncached_prefill_in_place(cache, tokens)?)
+        })?;
+        match prepared {
+            PreparedVisionPrompt::Pooled { tokens, image, .. } => {
+                Ok(self.model.engine().prefill_pooled_vision_with_progress(
+                    self.model.handle(),
+                    request.session_id,
+                    tokens,
+                    image,
+                    self.state.table(),
+                    sampling,
+                    progress,
+                )?)
+            },
+            PreparedVisionPrompt::SpatialMerge { tokens, image, .. } => {
+                Ok(self.model.engine().prefill_spatial_merge_vision_with_progress(
+                    self.model.handle(),
+                    request.session_id,
+                    tokens,
+                    image,
+                    self.state.table(),
+                    sampling,
+                    progress,
+                )?)
+            },
+        }
     }
 
     /// Appends one generated token and computes the following prediction.

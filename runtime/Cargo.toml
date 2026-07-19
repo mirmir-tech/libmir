@@ -9,7 +9,7 @@ repository.workspace = true
 [dependencies]
 async-trait.workspace = true
 blake3.workspace = true
-foundation = { package = "libmir-core", version = "0.1", path = "../core" }
+foundation = { package = "libmir-core", version = "0.2.0", path = "../core" }
 serde.workspace = true
 thiserror.workspace = true
 uuid.workspace = true

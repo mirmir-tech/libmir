@@ -4,6 +4,7 @@ mod compiled;
 mod decode_graph;
 mod decoder;
 mod decoder_cache;
+mod dense_linear;
 pub mod dense_swiglu;
 mod embedding;
 mod error;
@@ -20,6 +21,7 @@ pub mod hybrid_linear_moe;
 pub mod hybrid_moe;
 mod kernels;
 mod kv;
+mod layer_norm;
 mod linear;
 mod memory;
 mod metadata;
@@ -35,11 +37,13 @@ mod stream;
 mod tensors;
 #[cfg(test)]
 mod tests;
+pub mod vision;
 
 pub use array::Array;
-pub use attention::{PagedAttention, RopeOptions};
+pub use attention::{ImageTokenSpan, PagedAttention, RopeOptions, prefix_attention_mask};
 pub(crate) use decoder::DecoderModel;
 pub use decoder_cache::DecoderCache;
+pub use dense_linear::DenseLinear;
 pub use embedding::QuantizedEmbedding;
 pub use error::{Error, Result};
 pub(crate) use expert_fusion::{ExpertFusion, ExpertFusionDecision, configure_expert_fusion};
@@ -55,6 +59,7 @@ pub(crate) use kv::{
     NATIVE_PAGED_ATTENTION_MIN_CONTEXT, PagedContextMode, native_paged_attention_mode,
     paged_attention_enabled, paged_attention_min_context,
 };
+pub use layer_norm::LayerNorm;
 pub use linear::QuantizedLinear;
 pub(crate) use memory::{MemoryStats, configure_recommended_wired_limit, memory_stats};
 pub use metadata::Dtype;
@@ -67,6 +72,7 @@ pub(crate) use sampling::{DeviceSampling, sample, sample_u32};
 pub use shared_expert_moe::{SharedExpertMoe, SharedExpertMoeConfig};
 pub use stream::Stream;
 pub use tensors::TensorFile;
+pub use vision::{pooled::PooledVisionTower, spatial_merge::SpatialMergeVisionTower};
 
 pub fn version() -> Result<String> {
     Ok(mirtal::version()?)
