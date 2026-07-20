@@ -6,11 +6,11 @@ use crate::native::model::LoadedModel;
 pub(super) fn tensors(model: &LoadedModel) -> TraceTensors {
     let info = &model.info;
     let readiness = info.vision_readiness.as_ref().map_or_else(
-        || format!("native {:?} execution plan loaded", info.plan.decoder),
+        || format!("native {:?} task execution plan loaded", info.task_plan.task()),
         |vision| {
             format!(
                 "native {:?} text execution plan loaded; {:?} discovered; {}",
-                info.plan.decoder,
+                info.task_plan.task(),
                 info.vision.as_ref().map(models::layout::VisionConfig::pipeline),
                 vision.summary()
             )
@@ -41,13 +41,31 @@ pub(super) fn tensors(model: &LoadedModel) -> TraceTensors {
 
 pub(super) fn weights(model: &LoadedModel) -> TraceWeights {
     let info = &model.info;
-    match info.plan.decoder {
+    let Some(plan) = info.plan.as_ref() else {
+        let Some(encoder) = info.encoder.as_ref() else {
+            return unknown_weights();
+        };
+        return TraceWeights {
+            token_embeddings: "new.embeddings.word_embeddings".into(),
+            final_norm: "post-attention and post-MLP LayerNorm per encoder layer".into(),
+            output_head: "new.pooler.dense -> tanh -> classifier".into(),
+            output_tied: false,
+            layer_count: encoder.num_hidden_layers,
+            attention_layout: "packed QKV with bidirectional self-attention".into(),
+            mlp_layout: "packed gated exact-GELU feed-forward".into(),
+            linear_bias_count: encoder.num_hidden_layers.saturating_mul(4).saturating_add(2),
+        };
+    };
+    let Some(decoder) = info.decoder.as_ref() else {
+        return unknown_weights();
+    };
+    match plan.decoder {
         DecoderArchetype::HybridMoe => TraceWeights {
             token_embeddings: "language_model.model.embed_tokens".into(),
             final_norm: "language_model.model.norm.weight".into(),
             output_head: "language_model.model.embed_tokens.weight (tied)".into(),
             output_tied: true,
-            layer_count: info.decoder.num_hidden_layers,
+            layer_count: decoder.num_hidden_layers,
             attention_layout: "split Q/K/V; full layers share K/V".into(),
             mlp_layout: "dense GeGLU plus routed quantized MoE".into(),
             linear_bias_count: 0,
@@ -57,13 +75,13 @@ pub(super) fn weights(model: &LoadedModel) -> TraceWeights {
             final_norm: "language_model.model.norm.weight".into(),
             output_head: "language_model.lm_head.weight".into(),
             output_tied: false,
-            layer_count: info.decoder.num_hidden_layers,
+            layer_count: decoder.num_hidden_layers,
             attention_layout: "Gated Delta recurrence plus gated RMS-normalized GQA".into(),
             mlp_layout: "shared expert routed SwiGLU".into(),
             linear_bias_count: 0,
         },
         DecoderArchetype::DenseSwiGlu => {
-            let output_head = if info.decoder.tie_word_embeddings {
+            let output_head = if decoder.tie_word_embeddings {
                 "model.embed_tokens.weight (tied)"
             } else {
                 "lm_head.weight"
@@ -72,13 +90,26 @@ pub(super) fn weights(model: &LoadedModel) -> TraceWeights {
                 token_embeddings: "model.embed_tokens".into(),
                 final_norm: "model.norm.weight".into(),
                 output_head: output_head.into(),
-                output_tied: info.decoder.tie_word_embeddings,
-                layer_count: info.decoder.num_hidden_layers,
-                attention_layout: dense_attention_layout(info.plan.attention).into(),
+                output_tied: decoder.tie_word_embeddings,
+                layer_count: decoder.num_hidden_layers,
+                attention_layout: dense_attention_layout(plan.attention).into(),
                 mlp_layout: "dense SwiGLU".into(),
-                linear_bias_count: info.decoder.num_hidden_layers.saturating_mul(7),
+                linear_bias_count: decoder.num_hidden_layers.saturating_mul(7),
             }
         },
+    }
+}
+
+fn unknown_weights() -> TraceWeights {
+    TraceWeights {
+        token_embeddings: "unknown".into(),
+        final_norm: "unknown".into(),
+        output_head: "unknown".into(),
+        output_tied: false,
+        layer_count: 0,
+        attention_layout: "unknown".into(),
+        mlp_layout: "unknown".into(),
+        linear_bias_count: 0,
     }
 }
 

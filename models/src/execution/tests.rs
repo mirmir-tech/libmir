@@ -42,6 +42,33 @@ fn discovers_normalized_grouped_query_attention() -> Result<()> {
 }
 
 #[test]
+fn discovers_rootless_normalized_dense_layout_from_tensors() -> Result<()> {
+    let mut config = decoder();
+    config.tie_word_embeddings = true;
+    let names = [
+        "embed_tokens.weight",
+        "layers.0.self_attn.q_proj.weight",
+        "layers.0.self_attn.k_proj.weight",
+        "layers.0.self_attn.v_proj.weight",
+        "layers.0.self_attn.o_proj.weight",
+        "layers.0.self_attn.q_norm.weight",
+        "layers.0.self_attn.k_norm.weight",
+        "layers.0.input_layernorm.weight",
+        "layers.0.post_attention_layernorm.weight",
+        "layers.0.mlp.gate_proj.weight",
+        "layers.0.mlp.up_proj.weight",
+        "layers.0.mlp.down_proj.weight",
+        "norm.weight",
+    ];
+
+    let plan = ExecutionPlan::discover(&config, &catalog(&names))?;
+
+    assert_eq!(plan.decoder, DecoderArchetype::DenseSwiGlu);
+    assert_eq!(plan.attention, AttentionFeature::RmsNormalizedGroupedQuery);
+    Ok(())
+}
+
+#[test]
 fn rejects_hybrid_layout_when_features_do_not_match() {
     let error = ExecutionPlan::discover(&decoder(), &catalog(HYBRID_MOE_LAYOUT));
 

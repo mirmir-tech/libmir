@@ -10,9 +10,8 @@ use runtime::{
     sampling::{Sampler, SamplerConfig},
 };
 
-use crate::{CancellationToken, Model, ProgressEvent, Result};
+use crate::{CancellationToken, Error, Model, ProgressEvent, Result};
 
-#[path = "generation/input.rs"]
 mod input;
 
 use input::PreparedGeneration;
@@ -90,7 +89,11 @@ impl Model {
         metrics.record_prompt(Duration::ZERO, prompt_tokens);
         let tokenizer = descriptor.tokenizer();
         let mut normalizer = OutputNormalizer::new(tokenizer, prepared.prompt_text());
-        let vocab_size = tokenizer.vocab_size().min(descriptor.decoder().vocab_size);
+        let decoder = descriptor.decoder().ok_or(Error::TaskMismatch {
+            requested: "generation",
+            actual: "sequence scoring",
+        })?;
+        let vocab_size = tokenizer.vocab_size().min(decoder.vocab_size);
         let mut sampler = Sampler::new(sampler_config(settings, request.seed, vocab_size))?;
         let mut session = self.session();
         let sampling = request_sampling(settings, vocab_size, &mut sampler);
@@ -244,5 +247,4 @@ fn choose(
 }
 
 #[cfg(test)]
-#[path = "generation/tests.rs"]
 mod tests;

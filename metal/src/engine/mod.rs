@@ -4,6 +4,7 @@ mod compiled;
 mod decode_graph;
 mod decoder;
 mod decoder_cache;
+mod dense_embedding;
 mod dense_linear;
 pub mod dense_swiglu;
 mod embedding;
@@ -31,18 +32,21 @@ mod norm;
 mod quantized;
 mod sampling;
 mod scalar;
+mod sequence_scoring;
 mod shared_expert_moe;
 mod snapshot;
 mod stream;
 mod tensors;
 #[cfg(test)]
 mod tests;
+mod text_embedding;
 pub mod vision;
 
 pub use array::Array;
 pub use attention::{ImageTokenSpan, PagedAttention, RopeOptions, prefix_attention_mask};
 pub(crate) use decoder::DecoderModel;
 pub use decoder_cache::DecoderCache;
+pub use dense_embedding::DenseEmbedding;
 pub use dense_linear::DenseLinear;
 pub use embedding::QuantizedEmbedding;
 pub use error::{Error, Result};
@@ -69,9 +73,11 @@ pub(crate) use norm::NormWeight;
 pub use quantized::QuantizedArrays;
 pub use sampling::TopK;
 pub(crate) use sampling::{DeviceSampling, sample, sample_u32};
+pub use sequence_scoring::SequenceScoringModel;
 pub use shared_expert_moe::{SharedExpertMoe, SharedExpertMoeConfig};
 pub use stream::Stream;
 pub use tensors::TensorFile;
+pub use text_embedding::TextEmbeddingModel;
 pub use vision::{pooled::PooledVisionTower, spatial_merge::SpatialMergeVisionTower};
 
 pub fn version() -> Result<String> {

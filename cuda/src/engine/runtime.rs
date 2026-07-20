@@ -4,7 +4,8 @@ use runtime::{
     Result as RuntimeResult, RuntimeError,
     backend::{
         Backend, BackendCapability, BackendInfo, DecodeBatchOutput, DecodeBatchRequest,
-        DecodeOutput, DecodeRequest, GenerationRequest, ModelHandle, PrefillOutput, PrefillRequest,
+        DecodeOutput, DecodeRequest, EmbeddingOutput, EmbeddingRequest, GenerationRequest,
+        ModelHandle, PrefillOutput, PrefillRequest, SequenceScoringOutput, SequenceScoringRequest,
         TokenEvent,
     },
     trace::ModelTrace,
@@ -26,6 +27,8 @@ impl Backend for CudaEngine {
                 BackendCapability::PrefixCache,
                 BackendCapability::GraphCapture,
                 BackendCapability::ContinuousBatching,
+                BackendCapability::Embeddings,
+                BackendCapability::SequenceScoring,
                 BackendCapability::Quantization("ModelOpt NVFP4".into()),
                 BackendCapability::Quantization("affine Int4/Int8".into()),
             ],
@@ -53,6 +56,25 @@ impl Backend for CudaEngine {
 
     async fn decode_batch(&self, request: DecodeBatchRequest) -> RuntimeResult<DecodeBatchOutput> {
         Ok(self.decode_batch_tokens(&request)?)
+    }
+
+    async fn embed(&self, request: EmbeddingRequest) -> RuntimeResult<EmbeddingOutput> {
+        let prompt_tokens = request.inputs.iter().map(Vec::len).sum();
+        Ok(EmbeddingOutput {
+            embeddings: self.embed_tokens(&request.model, &request.inputs, request.dimensions)?,
+            prompt_tokens,
+        })
+    }
+
+    async fn score_sequences(
+        &self,
+        request: SequenceScoringRequest,
+    ) -> RuntimeResult<SequenceScoringOutput> {
+        let prompt_tokens = request.pairs.iter().map(Vec::len).sum();
+        Ok(SequenceScoringOutput {
+            scores: self.score_tokens(&request.model, &request.pairs)?,
+            prompt_tokens,
+        })
     }
 
     async fn generate(

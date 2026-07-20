@@ -1,5 +1,6 @@
 use models::{
     chat::ChatTemplate,
+    execution::{ModelTask, TaskExecutionPlan},
     generation::{GenerationOverrides, GenerationSettings},
     layout::{DecoderConfig, ImageProcessorConfig, ModelLayout, ModelMetadata, VisionConfig},
     tokenizer::TextTokenizer,
@@ -24,8 +25,20 @@ impl ModelDescriptor {
 
     #[must_use]
     /// Returns decoder dimensions and attention-layer configuration.
-    pub const fn decoder(&self) -> &DecoderConfig {
-        &self.decoder
+    pub const fn decoder(&self) -> Option<&DecoderConfig> {
+        self.decoder.as_ref()
+    }
+
+    #[must_use]
+    /// Returns the task and backbone contract discovered from checkpoint files.
+    pub const fn task_plan(&self) -> &TaskExecutionPlan {
+        &self.task_plan
+    }
+
+    #[must_use]
+    /// Returns the primary task exposed by this checkpoint.
+    pub fn task(&self) -> ModelTask {
+        self.task_plan.task()
     }
 
     #[must_use]

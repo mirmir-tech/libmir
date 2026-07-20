@@ -4,6 +4,10 @@ use crate::{
     weights::{DecoderTensorSchema, TensorCatalog},
 };
 
+mod task;
+
+pub use task::{EmbeddingTask, ModelTask, PoolingMode, SequenceScoringTask, TaskExecutionPlan};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecoderArchetype {
     HybridMoe,
@@ -88,7 +92,7 @@ fn has_all(tensors: &TensorCatalog, names: &[&str]) -> bool {
 }
 
 fn dense_swiglu_layout(decoder: &DecoderConfig, tensors: &TensorCatalog) -> bool {
-    has_all(tensors, DENSE_SWIGLU_LAYOUT)
+    dense_text_root(tensors).is_some()
         && (decoder.tie_word_embeddings || tensors.contains("lm_head.weight"))
 }
 
@@ -97,11 +101,27 @@ fn hybrid_linear_moe_layout(tensors: &TensorCatalog) -> bool {
 }
 
 fn dense_attention_feature(tensors: &TensorCatalog) -> AttentionFeature {
-    if has_all(tensors, DENSE_QK_NORM_LAYOUT) {
+    if ["model.layers.0", "layers.0"].into_iter().any(|root| {
+        tensors.contains(&format!("{root}.self_attn.q_norm.weight"))
+            && tensors.contains(&format!("{root}.self_attn.k_norm.weight"))
+    }) {
         AttentionFeature::RmsNormalizedGroupedQuery
     } else {
         AttentionFeature::GroupedQuery
     }
+}
+
+fn dense_text_root(tensors: &TensorCatalog) -> Option<&'static str> {
+    ["model.", ""].into_iter().find(|root| {
+        [
+            "embed_tokens.weight",
+            "layers.0.self_attn.q_proj.weight",
+            "layers.0.mlp.gate_proj.weight",
+            "norm.weight",
+        ]
+        .iter()
+        .all(|suffix| tensors.contains(&format!("{root}{suffix}")))
+    })
 }
 
 fn invalid(message: impl Into<String>) -> ModelsError {
@@ -119,12 +139,14 @@ const HYBRID_LINEAR_MOE_LAYOUT: &[&str] = &[
     "language_model.model.layers.0.mlp.switch_mlp.gate_proj.weight",
     "language_model.model.norm.weight",
 ];
+#[cfg(test)]
 const DENSE_SWIGLU_LAYOUT: &[&str] = &[
     "model.embed_tokens.weight",
     "model.layers.0.self_attn.q_proj.weight",
     "model.layers.0.mlp.gate_proj.weight",
     "model.norm.weight",
 ];
+#[cfg(test)]
 const DENSE_QK_NORM_LAYOUT: &[&str] =
     &["model.layers.0.self_attn.q_norm.weight", "model.layers.0.self_attn.k_norm.weight"];
 

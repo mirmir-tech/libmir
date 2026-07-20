@@ -1,10 +1,19 @@
-use crate::{layout::DecoderConfig, weights::TensorCatalog};
+use crate::{
+    layout::{DecoderConfig, EncoderConfig},
+    weights::TensorCatalog,
+};
 
+mod encoder;
 mod layout;
+mod text;
 mod types;
 mod vision;
 
-pub use types::{DecoderTensorSchema, TensorReadiness, TensorRequirement, VisionTensorSchema};
+pub use text::TextTensorLayout;
+pub use types::{
+    DecoderTensorSchema, EncoderTensorSchema, TensorReadiness, TensorRequirement,
+    VisionTensorSchema,
+};
 
 impl DecoderTensorSchema {
     #[must_use]
@@ -29,6 +38,18 @@ impl DecoderTensorSchema {
             present: self.requirements.len() - missing.len(),
             missing,
         }
+    }
+}
+
+impl EncoderTensorSchema {
+    #[must_use]
+    pub fn discover(config: &EncoderConfig, catalog: &TensorCatalog) -> Self {
+        encoder::discover(config, catalog)
+    }
+
+    #[must_use]
+    pub fn readiness(&self, catalog: &TensorCatalog) -> TensorReadiness {
+        readiness(&self.requirements, catalog)
     }
 }
 
@@ -67,5 +88,18 @@ impl TensorReadiness {
                 self.missing.len()
             )
         }
+    }
+}
+
+fn readiness(requirements: &[TensorRequirement], catalog: &TensorCatalog) -> TensorReadiness {
+    let missing: Vec<String> = requirements
+        .iter()
+        .filter(|requirement| !requirement.is_present(catalog))
+        .map(TensorRequirement::missing_label)
+        .collect();
+    TensorReadiness {
+        required: requirements.len(),
+        present: requirements.len() - missing.len(),
+        missing,
     }
 }

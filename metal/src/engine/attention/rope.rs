@@ -12,6 +12,25 @@ pub struct RopeOptions {
 }
 
 impl Array {
+    pub(crate) fn ntk_rope_frequencies(
+        rotary_dimensions: i32,
+        base: f32,
+        factor: f32,
+        stream: &Stream,
+    ) -> Result<Self> {
+        dimensions(rotary_dimensions)?;
+        positive(base, "base")?;
+        positive(factor, "factor")?;
+        let graph = stream.native().graph();
+        let dimensions = as_f32(rotary_dimensions)?;
+        let exponents = graph.arange(0.0, dimensions, 2.0, DType::Float32)?;
+        let exponents = graph.divide(&exponents, &scalar(graph, dimensions)?)?;
+        let adjusted_base = graph.multiply(&scalar(graph, base)?, &scalar(graph, factor)?)?;
+        let frequencies = graph.power(&adjusted_base, &exponents)?;
+        let correction = factor.powf(2.0 / dimensions);
+        Self::from_native(graph.multiply(&frequencies, &scalar(graph, correction)?)?)
+    }
+
     pub(crate) fn proportional_rope_frequencies(
         head_dim: i32,
         rope_dimensions: i32,

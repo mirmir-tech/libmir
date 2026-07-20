@@ -1,12 +1,14 @@
 use foundation::model::ModelManifest;
 use models::{
-    execution::{DecoderArchetype, ExecutionPlan},
+    execution::{DecoderArchetype, ExecutionPlan, TaskExecutionPlan},
     layout::{AttentionLayerType, DecoderConfig, ModelLayout, ModelMetadata, VisionConfig},
     tokenizer::{TextTokenizer, TokenizerInfo},
     weights::{TensorCatalog, TensorReadiness, VisionTensorSchema},
 };
 
-use super::{KV_CACHE_STEP, LoadedModel, LoadedVisionModel, ModelInfo, prefill_step};
+use super::{
+    KV_CACHE_STEP, LoadedExecution, LoadedModel, LoadedVisionModel, ModelInfo, prefill_step,
+};
 use crate::{
     MetalConfig, MetalProgressEvent,
     engine::{
@@ -36,23 +38,24 @@ impl LoadedModel {
     ) -> Result<Self> {
         let layout = ModelLayout::inspect(&manifest.path)?;
         let metadata = ModelMetadata::from_layout(&layout)?;
-        let decoder = DecoderConfig::from_layout(&layout)?;
         let catalog = TensorCatalog::from_layout(&layout)?;
-        let plan = ExecutionPlan::discover(&decoder, &catalog)?;
+        let task_plan = TaskExecutionPlan::discover(&layout, &catalog)?;
+        let (decoder, encoder, plan) = execution_metadata(&task_plan, &catalog)?;
         let vision = VisionConfig::from_layout(&layout)?;
-        validate_kv_storage(&decoder, vision.as_ref(), config.kv_cache.dtype)?;
+        if let Some(decoder) = decoder.as_ref()
+            && matches!(task_plan, TaskExecutionPlan::Generation { .. })
+        {
+            validate_kv_storage(decoder, vision.as_ref(), config.kv_cache.dtype)?;
+        }
         let vision_readiness = vision
             .as_ref()
             .map(|config| VisionTensorSchema::discover(config).readiness(&catalog));
-        if !plan.is_native_implemented() {
+        if plan.as_ref().is_some_and(|plan| !plan.is_native_implemented()) {
             return Err(Error::UnsupportedModel(
                 "native execution path for the detected hybrid linear MoE decoder is pending"
                     .into(),
             ));
         }
-        let group_size = metadata.quantization_group_size.ok_or_else(|| {
-            Error::UnsupportedModel("native quantized weights require group_size".into())
-        })?;
         let load_stream = Stream::new_cpu()?;
         let tensors = ModelTensors::load_layout_materialized_with_progress(
             &layout,
@@ -64,7 +67,35 @@ impl LoadedModel {
         let tensor_count = tensors.len();
         let stream = Stream::new_gpu_with_config(config)?;
         let _configured_wired_limit = configure_recommended_wired_limit()?;
-        let model = load_decoder_model(plan.decoder, &tensors, &decoder, group_size, &stream)?;
+        let execution = match &task_plan {
+            TaskExecutionPlan::Embedding { decoder, task, tensors: tensor_layout } => {
+                if task.pooling != models::execution::PoolingMode::LastToken || !task.normalize {
+                    return Err(Error::UnsupportedModel(
+                        "Metal embedding currently requires normalized last-token pooling".into(),
+                    ));
+                }
+                LoadedExecution::Embedding(crate::engine::TextEmbeddingModel::load(
+                    &tensors, decoder, tensor_layout, &stream,
+                )?)
+            },
+            TaskExecutionPlan::Generation { .. } => {
+                let group_size = metadata.quantization_group_size.ok_or_else(|| {
+                    Error::UnsupportedModel("native quantized weights require group_size".into())
+                })?;
+                let plan = plan.as_ref().ok_or_else(|| {
+                    Error::UnsupportedModel("generation execution plan is missing".into())
+                })?;
+                let decoder = decoder.as_ref().ok_or_else(|| {
+                    Error::UnsupportedModel("generation decoder config is missing".into())
+                })?;
+                LoadedExecution::Generation(load_decoder_model(
+                    plan.decoder, &tensors, decoder, group_size, &stream,
+                )?)
+            },
+            TaskExecutionPlan::SequenceScoring { encoder, .. } => LoadedExecution::SequenceScoring(
+                crate::engine::SequenceScoringModel::load(&tensors, encoder, &stream)?,
+            ),
+        };
         let vision_model = load_vision_model(
             vision.as_ref(),
             vision_readiness.as_ref().is_some_and(TensorReadiness::is_ready),
@@ -81,23 +112,47 @@ impl LoadedModel {
                 layout,
                 metadata,
                 decoder,
+                encoder,
                 vision,
                 vision_readiness,
                 plan,
+                task_plan,
                 tensor_count,
                 weight_bytes,
                 cache_step: KV_CACHE_STEP,
-                prefill_step: prefill_step(plan.decoder, stream.config().cache.prefill_step),
+                prefill_step: plan.as_ref().map_or(0, |plan| {
+                    prefill_step(plan.decoder, stream.config().cache.prefill_step)
+                }),
                 tokenizer,
                 tokenizer_error,
                 metal_memory,
             },
             stream,
-            model,
+            execution,
             vision_model,
             prefixes: PrefixCache::new(prefix_cache_entries),
             sessions: std::collections::HashMap::new(),
         })
+    }
+}
+
+fn execution_metadata(
+    task: &TaskExecutionPlan,
+    catalog: &TensorCatalog,
+) -> Result<(
+    Option<DecoderConfig>,
+    Option<models::layout::EncoderConfig>,
+    Option<ExecutionPlan>,
+)> {
+    match task {
+        TaskExecutionPlan::Generation { decoder }
+        | TaskExecutionPlan::Embedding { decoder, .. } => {
+            let plan = ExecutionPlan::discover(decoder, catalog)?;
+            Ok((Some(decoder.clone()), None, Some(plan)))
+        },
+        TaskExecutionPlan::SequenceScoring { encoder, .. } => {
+            Ok((None, Some(encoder.clone()), None))
+        },
     }
 }
 

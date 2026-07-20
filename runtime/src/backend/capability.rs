@@ -10,6 +10,8 @@ pub enum BackendCapability {
     Quantization(String),
     GraphCapture,
     ContinuousBatching,
+    Embeddings,
+    SequenceScoring,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

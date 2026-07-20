@@ -19,6 +19,7 @@ mod router;
 mod runtime;
 mod sampling;
 mod shared_moe;
+mod task;
 mod vision;
 
 use std::sync::Arc;
@@ -89,6 +90,7 @@ pub use shared_moe::{
     AffineSharedExpertMoeConfig, AffineSharedExpertMoeWeights, CudaAffineSharedExpertMoe,
     CudaAffineSharedExpertMoeExecution,
 };
+pub use task::{CudaSequenceScoringModel, CudaTextEmbeddingModel};
 pub use vision::{CudaPooledVisionTower, CudaSpatialMergeVisionTower};
 
 /// Initialized native CUDA backend resources.

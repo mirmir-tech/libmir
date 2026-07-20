@@ -3,11 +3,13 @@
 
 mod cancellation;
 mod config;
+mod embedding;
 mod engine;
 mod error;
 mod generation;
 mod memory;
 mod model;
+mod rerank;
 mod scheduler;
 mod session;
 
@@ -27,6 +29,7 @@ pub use cuda::{
     PrefillAttentionBf16, PrefillMoeBlockBf16, SelectedAffineGatedBf16Linear,
     SelectedAffinePairBf16Linear, SelectedAffineReduceBf16Linear, TensorUploadBatch,
 };
+pub use embedding::{EmbeddingOutput, EmbeddingRequest};
 pub use engine::Engine;
 pub use error::{Error, Result};
 pub use foundation::{
@@ -47,6 +50,7 @@ pub use models::{
     self,
     generation::{GenerationChannel, GenerationOverrides, GenerationSettings, GenerationToken},
 };
+pub use rerank::{RerankOutput, RerankRequest, RerankResult};
 pub use runtime::{
     self,
     backend::{BackendInfo, DecodeOutput, ModelHandle, PrefillOutput, SamplingLogits},

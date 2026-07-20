@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use foundation::model::ModelManifest;
 use models::{
-    execution::ExecutionPlan,
-    layout::{DecoderConfig, ModelLayout, ModelMetadata, VisionConfig},
+    execution::{ExecutionPlan, TaskExecutionPlan},
+    layout::{DecoderConfig, EncoderConfig, ModelLayout, ModelMetadata, VisionConfig},
     tokenizer::TokenizerInfo,
     weights::TensorReadiness,
 };
@@ -16,7 +16,8 @@ use super::{
     session::SessionState,
 };
 use crate::engine::{
-    Array, DecoderModel, MemoryStats, PooledVisionTower, SpatialMergeVisionTower, Stream,
+    Array, DecoderModel, MemoryStats, PooledVisionTower, SequenceScoringModel,
+    SpatialMergeVisionTower, Stream, TextEmbeddingModel,
 };
 
 mod batch;
@@ -33,10 +34,12 @@ pub(super) struct ModelInfo {
     pub manifest: ModelManifest,
     pub layout: ModelLayout,
     pub metadata: ModelMetadata,
-    pub decoder: DecoderConfig,
+    pub decoder: Option<DecoderConfig>,
+    pub encoder: Option<EncoderConfig>,
     pub vision: Option<VisionConfig>,
     pub vision_readiness: Option<TensorReadiness>,
-    pub plan: ExecutionPlan,
+    pub plan: Option<ExecutionPlan>,
+    pub task_plan: TaskExecutionPlan,
     pub tensor_count: usize,
     pub weight_bytes: u64,
     pub cache_step: usize,
@@ -50,10 +53,28 @@ pub(super) struct ModelInfo {
 pub(super) struct LoadedModel {
     pub info: ModelInfo,
     pub(super) stream: Stream,
-    pub(super) model: DecoderModel,
+    pub(super) execution: LoadedExecution,
     pub(super) vision_model: Option<LoadedVisionModel>,
     pub(super) prefixes: PrefixCache,
     pub(super) sessions: HashMap<Uuid, SessionState>,
+}
+
+#[derive(Debug)]
+pub(super) enum LoadedExecution {
+    Generation(DecoderModel),
+    Embedding(TextEmbeddingModel),
+    SequenceScoring(SequenceScoringModel),
+}
+
+impl LoadedExecution {
+    pub(super) fn decoder(&self) -> Result<&DecoderModel> {
+        match self {
+            Self::Generation(model) => Ok(model),
+            Self::Embedding(_) | Self::SequenceScoring(_) => {
+                Err(Error::UnsupportedModel("loaded task does not support generation".into()))
+            },
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -75,7 +96,7 @@ impl LoadedModel {
         token: u32,
         sampling: SamplingLogits,
     ) -> Result<NativeOutput> {
-        let model = &self.model;
+        let model = self.execution.decoder()?;
         let stream = &self.stream;
         let state = self.sessions.get_mut(&session).ok_or_else(|| Error::Session {
             model: self.info.manifest.id.clone(),
@@ -126,13 +147,32 @@ impl LoadedModel {
         &self.stream
     }
 
+    pub fn embed(&self, token_ids: &[u32], dimensions: usize) -> Result<Vec<f32>> {
+        let LoadedExecution::Embedding(model) = &self.execution else {
+            return Err(Error::UnsupportedModel("loaded task does not expose embeddings".into()));
+        };
+        Ok(model.embed(token_ids, dimensions, &self.stream)?)
+    }
+
+    pub fn score(&self, token_ids: &[u32]) -> Result<f32> {
+        let LoadedExecution::SequenceScoring(model) = &self.execution else {
+            return Err(Error::UnsupportedModel(
+                "loaded task does not expose sequence scores".into(),
+            ));
+        };
+        Ok(model.score(token_ids, &self.stream)?)
+    }
+
     #[must_use]
     pub(super) fn fusion_summary(&self) -> (usize, usize, usize, usize) {
-        self.model.fusion_summary()
+        self.execution.decoder().map_or((0, 0, 0, 0), DecoderModel::fusion_summary)
     }
 
     pub(super) fn expert_fusion_summary(&self) -> String {
-        self.model.expert_fusion_summary()
+        self.execution.decoder().map_or_else(
+            |_| "expert fusion is not applicable to this task".into(),
+            DecoderModel::expert_fusion_summary,
+        )
     }
 
     pub(super) fn prefill_chunk_len(&self, _position: usize, remaining: usize) -> usize {

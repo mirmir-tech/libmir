@@ -138,6 +138,31 @@ pub struct DecodeOutput {
     pub candidates: Option<CandidateLogitsTrace>,
 }
 
+#[derive(Debug, Clone)]
+pub struct EmbeddingRequest {
+    pub model: ModelHandle,
+    pub inputs: Vec<Vec<u32>>,
+    pub dimensions: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct EmbeddingOutput {
+    pub embeddings: Vec<Vec<f32>>,
+    pub prompt_tokens: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct SequenceScoringRequest {
+    pub model: ModelHandle,
+    pub pairs: Vec<Vec<u32>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SequenceScoringOutput {
+    pub scores: Vec<f32>,
+    pub prompt_tokens: usize,
+}
+
 #[async_trait]
 pub trait Backend: Send + Sync {
     #[must_use]
@@ -165,6 +190,21 @@ pub trait Backend: Send + Sync {
         Err(RuntimeError::BackendUnavailable(format!(
             "batched decode is not implemented for {}",
             request.model().backend
+        )))
+    }
+    async fn embed(&self, request: EmbeddingRequest) -> Result<EmbeddingOutput> {
+        Err(RuntimeError::BackendUnavailable(format!(
+            "embedding is not implemented for {}",
+            request.model.backend
+        )))
+    }
+    async fn score_sequences(
+        &self,
+        request: SequenceScoringRequest,
+    ) -> Result<SequenceScoringOutput> {
+        Err(RuntimeError::BackendUnavailable(format!(
+            "sequence scoring is not implemented for {}",
+            request.model.backend
         )))
     }
     async fn generate(

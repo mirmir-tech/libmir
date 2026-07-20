@@ -3,9 +3,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use tokenizers::Tokenizer;
+use tokenizers::{Tokenizer, TruncationParams, TruncationStrategy};
 
-use super::{bpe, metadata};
+use super::{bpe, metadata, policy::TokenizerPolicy, tokenized};
 use crate::{
     error::{ModelsError, Result},
     generation::GenerationConfig,
@@ -15,7 +15,15 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct TokenizedPrompt {
     pub token_ids: Vec<u32>,
+    pub type_ids: Vec<u32>,
+    pub attention_mask: Vec<u32>,
     pub bytes: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaddingSide {
+    Left,
+    Right,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,6 +32,10 @@ pub struct TokenizerInfo {
     pub kind: TokenizerKind,
     pub vocab_size: usize,
     pub stop_token_ids: Vec<u32>,
+    pub pad_token_id: Option<u32>,
+    pub padding_side: PaddingSide,
+    pub default_max_length: Option<usize>,
+    pub model_max_length: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +52,8 @@ pub struct TextTokenizer {
     added_tokens: BTreeMap<String, u32>,
     configured_stop_token_ids: Vec<u32>,
     eos_token_ids: Vec<u32>,
+    pad_token_id: Option<u32>,
+    policy: TokenizerPolicy,
 }
 
 impl TextTokenizer {
@@ -74,7 +88,9 @@ impl TextTokenizer {
             layout.added_tokens_path.as_deref(),
             layout.special_tokens_map_path.as_deref(),
         )?;
+        let policy = TokenizerPolicy::read(layout.tokenizer_config_path.as_deref())?;
         let added_tokens = metadata::inventory(&inner);
+        let pad_token_id = policy.pad_token.as_deref().and_then(|token| inner.token_to_id(token));
         Ok(Self {
             inner,
             path: path.to_path_buf(),
@@ -82,6 +98,8 @@ impl TextTokenizer {
             added_tokens,
             configured_stop_token_ids,
             eos_token_ids: metadata.eos_token_ids,
+            pad_token_id,
+            policy,
         })
     }
 
@@ -95,6 +113,8 @@ impl TextTokenizer {
             kind: TokenizerKind::TokenizerJson,
             configured_stop_token_ids: Vec::new(),
             eos_token_ids: Vec::new(),
+            pad_token_id: None,
+            policy: TokenizerPolicy::read(None)?,
         })
     }
 
@@ -108,10 +128,36 @@ impl TextTokenizer {
         add_special_tokens: bool,
     ) -> Result<TokenizedPrompt> {
         let encoding = self.inner.encode(text, add_special_tokens)?;
-        Ok(TokenizedPrompt {
-            token_ids: encoding.get_ids().to_vec(),
-            bytes: text.len(),
-        })
+        Ok(tokenized(&encoding, text.len()))
+    }
+
+    pub fn encode_with_limit(&self, text: &str, max_length: usize) -> Result<TokenizedPrompt> {
+        let tokenizer = self.with_limit(max_length)?;
+        Ok(tokenized(&tokenizer.encode(text, true)?, text.len()))
+    }
+
+    pub fn encode_pair(
+        &self,
+        first: &str,
+        second: &str,
+        max_length: usize,
+    ) -> Result<TokenizedPrompt> {
+        let tokenizer = self.with_limit(max_length)?;
+        Ok(tokenized(
+            &tokenizer.encode((first, second), true)?,
+            first.len().saturating_add(second.len()),
+        ))
+    }
+
+    fn with_limit(&self, max_length: usize) -> Result<Tokenizer> {
+        let mut tokenizer = self.inner.clone();
+        let _configured = tokenizer.with_truncation(Some(TruncationParams {
+            max_length,
+            strategy: TruncationStrategy::LongestFirst,
+            stride: 0,
+            direction: self.policy.truncation_direction,
+        }))?;
+        Ok(tokenizer)
     }
 
     pub fn decode(&self, token_ids: &[u32]) -> Result<String> {
@@ -172,6 +218,30 @@ impl TextTokenizer {
             kind: self.kind,
             vocab_size: self.vocab_size(),
             stop_token_ids: self.stop_token_ids(),
+            pad_token_id: self.pad_token_id,
+            padding_side: self.policy.padding_side,
+            default_max_length: self.policy.default_max_length,
+            model_max_length: self.policy.model_max_length,
         }
+    }
+
+    #[must_use]
+    pub const fn padding_side(&self) -> PaddingSide {
+        self.policy.padding_side
+    }
+
+    #[must_use]
+    pub const fn pad_token_id(&self) -> Option<u32> {
+        self.pad_token_id
+    }
+
+    #[must_use]
+    pub const fn default_max_length(&self) -> Option<usize> {
+        self.policy.default_max_length
+    }
+
+    #[must_use]
+    pub const fn model_max_length(&self) -> Option<usize> {
+        self.policy.model_max_length
     }
 }

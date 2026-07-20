@@ -81,7 +81,14 @@ fn preserves_hybrid_moe_greedy_sequence_after_128_token_prefill() -> Result<()> 
     };
     let mut ignored = |_event| {};
     let mut model = LoadedModel::load(&config.manifest(), &mut ignored)?;
-    let expected = expected_digest(model.info.plan.decoder)?;
+    let expected = expected_digest(
+        model
+            .info
+            .plan
+            .as_ref()
+            .ok_or_else(|| Error::Benchmark("context matrix requires a decoder model".into()))?
+            .decoder,
+    )?;
     let samples = collect_samples(&mut model, &config, GREEDY_VERIFY_CONTEXT, 0)?;
     assert_eq!(digest(&samples).as_bytes(), expected);
     Ok(())

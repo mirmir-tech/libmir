@@ -26,6 +26,7 @@ fn common_hf_schema(config: &DecoderConfig) -> DecoderTensorSchema {
             "token embeddings",
             &[
                 "model.embed_tokens.weight",
+                "embed_tokens.weight",
                 "language_model.model.embed_tokens.weight",
                 "model.language_model.embed_tokens.weight",
                 "transformer.embedding.word_embeddings.weight",
@@ -35,6 +36,7 @@ fn common_hf_schema(config: &DecoderConfig) -> DecoderTensorSchema {
             "final norm",
             &[
                 "model.norm.weight",
+                "norm.weight",
                 "language_model.model.norm.weight",
                 "model.language_model.norm.weight",
                 "model.final_layernorm.weight",
@@ -79,8 +81,10 @@ fn uses_fused_qkv_layout(catalog: &TensorCatalog) -> bool {
 }
 
 fn uses_qk_norm_layout(catalog: &TensorCatalog) -> bool {
-    catalog.contains("model.layers.0.self_attn.q_norm.weight")
-        && catalog.contains("model.layers.0.self_attn.k_norm.weight")
+    ["model.layers.0", "layers.0"].into_iter().any(|prefix| {
+        catalog.contains(&format!("{prefix}.self_attn.q_norm.weight"))
+            && catalog.contains(&format!("{prefix}.self_attn.k_norm.weight"))
+    })
 }
 
 fn push_common_layer(requirements: &mut Vec<TensorRequirement>, layer: usize, k_eq_v: bool) {
@@ -126,10 +130,9 @@ fn push_routed_moe_layer(requirements: &mut Vec<TensorRequirement>, layer: usize
 }
 
 fn push_qk_norm_layer(requirements: &mut Vec<TensorRequirement>, layer: usize) {
-    let prefix = format!("model.layers.{layer}.self_attn");
     requirements.extend([
-        one("attention q norm", format!("{prefix}.q_norm.weight")),
-        one("attention k norm", format!("{prefix}.k_norm.weight")),
+        common("attention q norm", prefixes(layer).refs(), "self_attn.q_norm.weight"),
+        common("attention k norm", prefixes(layer).refs(), "self_attn.k_norm.weight"),
     ]);
 }
 
@@ -145,10 +148,10 @@ fn push_glm_layer(requirements: &mut Vec<TensorRequirement>, layer: usize) {
     ]);
 }
 
-struct Prefixes([String; 3]);
+struct Prefixes([String; 4]);
 
 impl Prefixes {
-    fn refs(&self) -> [&str; 3] {
+    fn refs(&self) -> [&str; 4] {
         self.0.each_ref().map(String::as_str)
     }
 }
@@ -158,6 +161,7 @@ fn prefixes(layer: usize) -> Prefixes {
         format!("model.layers.{layer}"),
         format!("language_model.model.layers.{layer}"),
         format!("model.language_model.layers.{layer}"),
+        format!("layers.{layer}"),
     ])
 }
 
@@ -165,11 +169,11 @@ fn one(label: &str, name: String) -> TensorRequirement {
     TensorRequirement::any(label, vec![name])
 }
 
-fn common(label: &str, prefixes: [&str; 3], suffix: &str) -> TensorRequirement {
+fn common(label: &str, prefixes: [&str; 4], suffix: &str) -> TensorRequirement {
     TensorRequirement::any(label, prefixes.map(|prefix| format!("{prefix}.{suffix}")).to_vec())
 }
 
-fn common_pair(label: &str, prefixes: [&str; 3], first: &str, second: &str) -> TensorRequirement {
+fn common_pair(label: &str, prefixes: [&str; 4], first: &str, second: &str) -> TensorRequirement {
     let aliases = prefixes
         .into_iter()
         .flat_map(|prefix| [format!("{prefix}.{first}"), format!("{prefix}.{second}")])
@@ -177,7 +181,7 @@ fn common_pair(label: &str, prefixes: [&str; 3], first: &str, second: &str) -> T
     TensorRequirement::any(label, aliases)
 }
 
-fn expert(label: &str, prefixes: [&str; 3], projection: &str) -> TensorRequirement {
+fn expert(label: &str, prefixes: [&str; 4], projection: &str) -> TensorRequirement {
     let aliases = prefixes
         .into_iter()
         .flat_map(|prefix| {

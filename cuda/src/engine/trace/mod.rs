@@ -1,22 +1,22 @@
 use std::collections::BTreeMap;
 
-use models::{
-    layout::{AttentionLayerType, DecoderConfig},
-    tokenizer::TextTokenizer,
-};
+use models::tokenizer::TextTokenizer;
 use runtime::{
     backend::BackendInfo,
     kv::CacheConfig,
     trace::{
-        ModelTrace, TraceDTypeCount, TraceDecoder, TraceFiniteValidation, TraceKvCache, TraceModel,
-        TraceTensors, TraceTokenizer, TraceWeights,
+        ModelTrace, TraceDTypeCount, TraceFiniteValidation, TraceModel, TraceTensors,
+        TraceTokenizer,
     },
 };
 
 use super::model::LoadedModel;
 use crate::Result;
 
+mod description;
 mod execution;
+mod kv;
+use description::{attention_counts, execution as execution_trace, weights as weight_trace};
 use execution::{acceleration, actions, mlp_layout, warnings};
 
 pub(super) fn build(
@@ -24,7 +24,10 @@ pub(super) fn build(
     backend: BackendInfo,
     cache: CacheConfig,
 ) -> Result<ModelTrace> {
-    let (full_attention_layers, sliding_attention_layers) = attention_counts(&model.decoder);
+    let (full_attention_layers, sliding_attention_layers) = model.decoder.as_ref().map_or_else(
+        || (model.encoder.as_ref().map_or(0, |encoder| encoder.num_hidden_layers), 0),
+        attention_counts,
+    );
     let sessions = model.sessions()?.len();
     Ok(ModelTrace {
         model: TraceModel {
@@ -41,62 +44,19 @@ pub(super) fn build(
         },
         backend,
         acceleration: acceleration(model),
-        decoder: decoder_trace(&model.decoder, full_attention_layers, sliding_attention_layers),
+        decoder: execution_trace(
+            model.decoder.as_ref(),
+            model.encoder.as_ref(),
+            full_attention_layers,
+            sliding_attention_layers,
+        ),
         tokenizer: tokenizer_trace(model),
         tensors: tensor_trace(model),
-        weights: TraceWeights {
-            token_embeddings: "config-discovered BF16 embedding".into(),
-            final_norm: "config-discovered BF16 RMSNorm".into(),
-            output_head: "tied or independent checkpoint projection".into(),
-            output_tied: model.decoder.tie_word_embeddings,
-            layer_count: model.decoder.num_hidden_layers,
-            attention_layout: "fused QKV with causal paged GQA".into(),
-            mlp_layout: mlp_layout(model).into(),
-            linear_bias_count: 0,
-        },
-        kv_cache: TraceKvCache {
-            dtype: cache.dtype,
-            quant_mode: cache.dtype.quant_mode(),
-            scale_granularity: cache.dtype.scale_granularity(),
-            decode_attention: "native split-KV paged CUDA attention".into(),
-            block_size: Some(cache.block_size),
-            physical_page_key: "runtime BlockId".into(),
-            prefix_cache: true,
-            paged_attention: true,
-            paged_attention_min_context: Some(1),
-            entry_count: sessions,
-            cached_tokens: 0,
-            resident_token_slots: cache.block_size * cache.block_count as usize,
-        },
+        weights: weight_trace(model),
+        kv_cache: kv::build(model, cache, sessions),
         actions: actions(model, cache),
         warnings: warnings(model),
     })
-}
-
-fn decoder_trace(decoder: &DecoderConfig, full: usize, sliding: usize) -> TraceDecoder {
-    TraceDecoder {
-        layers: decoder.num_hidden_layers,
-        hidden_size: decoder.hidden_size,
-        intermediate_size: decoder.intermediate_size,
-        vocab_size: decoder.vocab_size,
-        attention_heads: decoder.num_attention_heads,
-        kv_heads: decoder.num_key_value_heads,
-        head_dim: decoder.head_dim,
-        global_head_dim: decoder.global_head_dim,
-        global_kv_heads: decoder.num_global_key_value_heads,
-        full_attention_layers: full,
-        sliding_attention_layers: sliding,
-        max_position_embeddings: decoder.max_position_embeddings,
-        rope_theta: decoder.rope_theta,
-        full_attention_rope_theta: decoder.full_attention_rope_theta,
-        sliding_attention_rope_theta: decoder.sliding_attention_rope_theta,
-        sliding_window: decoder.sliding_window,
-        num_experts: decoder.num_experts,
-        top_k_experts: decoder.top_k_experts,
-        moe_intermediate_size: decoder.moe_intermediate_size,
-        hidden_activation: decoder.hidden_activation.clone(),
-        final_logit_softcapping: decoder.final_logit_softcapping,
-    }
 }
 
 fn tokenizer_trace(model: &LoadedModel) -> TraceTokenizer {
@@ -129,11 +89,11 @@ fn tensor_trace(model: &LoadedModel) -> TraceTensors {
         entry.1 += tensor.shape.iter().product::<usize>();
     }
     let readiness = model.vision_readiness.as_ref().map_or_else(
-        || format!("native CUDA {:?} model loaded", model.plan.decoder),
+        || format!("native CUDA {:?} task loaded", model.task_plan.task()),
         |vision| {
             format!(
                 "native CUDA {:?} text model loaded; {:?} vision discovered; {}",
-                model.plan.decoder,
+                model.task_plan.task(),
                 model.vision.as_ref().map(models::layout::VisionConfig::pipeline),
                 vision.summary()
             )
@@ -163,12 +123,4 @@ fn tensor_trace(model: &LoadedModel) -> TraceTensors {
             checked_elements: 0,
         },
     }
-}
-
-fn attention_counts(decoder: &DecoderConfig) -> (usize, usize) {
-    decoder.layer_types.iter().fold((0, 0), |(full, sliding), layer| match layer {
-        AttentionLayerType::Full => (full + 1, sliding),
-        AttentionLayerType::Sliding => (full, sliding + 1),
-        AttentionLayerType::Linear => (full, sliding),
-    })
 }

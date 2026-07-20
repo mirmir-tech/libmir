@@ -76,6 +76,31 @@ impl MetalBackend {
         run()
     }
 
+    pub fn embed_tokens(
+        &self,
+        model: &ModelHandle,
+        inputs: &[Vec<u32>],
+        dimensions: usize,
+    ) -> std::result::Result<Vec<Vec<f32>>, RuntimeError> {
+        let lookup = model.id.clone();
+        let inputs = inputs.to_vec();
+        Ok(self.with_model(&lookup, move |loaded| {
+            inputs.iter().map(|tokens| loaded.embed(tokens, dimensions)).collect()
+        })?)
+    }
+
+    pub fn score_tokens(
+        &self,
+        model: &ModelHandle,
+        inputs: &[Vec<u32>],
+    ) -> std::result::Result<Vec<f32>, RuntimeError> {
+        let lookup = model.id.clone();
+        let inputs = inputs.to_vec();
+        Ok(self.with_model(&lookup, move |loaded| {
+            inputs.iter().map(|tokens| loaded.score(tokens)).collect()
+        })?)
+    }
+
     pub fn clear_prefix_cache(&self, model: &ModelHandle) -> std::result::Result<(), RuntimeError> {
         Ok(self.with_model(&model.id, move |loaded| {
             loaded.clear_prefix_cache();

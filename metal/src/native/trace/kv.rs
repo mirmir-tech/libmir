@@ -1,6 +1,6 @@
 use runtime::{kv::KvCacheDType, trace::TraceKvCache};
 
-use super::super::model::LoadedModel;
+use super::super::model::{LoadedExecution, LoadedModel};
 use crate::engine::NATIVE_PAGED_ATTENTION_MIN_CONTEXT;
 
 pub(super) fn build(
@@ -8,7 +8,23 @@ pub(super) fn build(
     paged_attention: bool,
     paged_attention_min_context: Option<usize>,
 ) -> TraceKvCache {
-    let decoder = &model.info.decoder;
+    let LoadedExecution::Generation(_) = &model.execution else {
+        return TraceKvCache {
+            dtype: KvCacheDType::BFloat16,
+            quant_mode: KvCacheDType::BFloat16.quant_mode(),
+            scale_granularity: KvCacheDType::BFloat16.scale_granularity(),
+            decode_attention: "not applicable to non-generative task execution".into(),
+            block_size: None,
+            physical_page_key: "not applicable".into(),
+            prefix_cache: false,
+            paged_attention: false,
+            paged_attention_min_context: None,
+            entry_count: 0,
+            cached_tokens: 0,
+            resident_token_slots: 0,
+        };
+    };
+    let decoder = model.info.decoder.as_ref();
     let configured_dtype = model.stream().config().kv_cache.dtype;
     let dtype = match configured_dtype {
         KvCacheDType::Auto => KvCacheDType::BFloat16,
@@ -43,7 +59,7 @@ pub(super) fn build(
         prefix_cache: model.prefix_cache_enabled(),
         paged_attention,
         paged_attention_min_context,
-        entry_count: decoder.num_hidden_layers,
+        entry_count: decoder.map_or(0, |decoder| decoder.num_hidden_layers),
         cached_tokens,
         resident_token_slots: cached_tokens,
     }

@@ -30,6 +30,14 @@ pub enum Error {
     #[error("tokenized prompt cannot be empty")]
     /// Prompt rendering produced no input tokens.
     EmptyPrompt,
+    #[error("model does not support the requested {requested} task; discovered {actual}")]
+    /// The caller selected an operation not exposed by the checkpoint contract.
+    TaskMismatch {
+        /// User-facing operation name.
+        requested: &'static str,
+        /// Discovered model task.
+        actual: &'static str,
+    },
     #[error("model is currently serving a request")]
     /// An unload was requested while sessions or model clones still exist.
     ModelInUse,

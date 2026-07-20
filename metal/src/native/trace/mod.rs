@@ -1,23 +1,21 @@
 mod description;
 mod kv;
+mod shape;
 
 use description::{tensors as tensor_trace, weights as weight_trace};
 use kv::build as build_kv_cache;
-use models::layout::{AttentionLayerType, DecoderConfig};
 use runtime::{
     backend::BackendInfo,
-    trace::{ModelTrace, TraceAction, TraceDecoder, TraceModel, TraceTokenizer},
+    trace::{ModelTrace, TraceAction, TraceModel, TraceTokenizer},
 };
 
-use super::model::LoadedModel;
+use super::model::{LoadedExecution, LoadedModel};
 use crate::engine::{
     NATIVE_PAGED_ATTENTION_MIN_CONTEXT, paged_attention_enabled, paged_attention_min_context,
 };
 
 pub(super) fn build(model: &LoadedModel, backend: BackendInfo) -> ModelTrace {
     let info = &model.info;
-    let decoder = &info.decoder;
-    let (full_attention_layers, sliding_attention_layers) = attention_counts(decoder);
     let paged_attention = paged_attention_enabled();
     let paged_attention_min_context =
         paged_attention.then(|| paged_attention_min_context(model.stream()));
@@ -40,29 +38,7 @@ pub(super) fn build(model: &LoadedModel, backend: BackendInfo) -> ModelTrace {
             "explicit GPU stream".into(),
             "MLX Metal graph kernels".into(),
         ],
-        decoder: TraceDecoder {
-            layers: decoder.num_hidden_layers,
-            hidden_size: decoder.hidden_size,
-            intermediate_size: decoder.intermediate_size,
-            vocab_size: decoder.vocab_size,
-            attention_heads: decoder.num_attention_heads,
-            kv_heads: decoder.num_key_value_heads,
-            head_dim: decoder.head_dim,
-            global_head_dim: decoder.global_head_dim,
-            global_kv_heads: decoder.num_global_key_value_heads,
-            full_attention_layers,
-            sliding_attention_layers,
-            max_position_embeddings: decoder.max_position_embeddings,
-            rope_theta: decoder.rope_theta,
-            full_attention_rope_theta: decoder.full_attention_rope_theta,
-            sliding_attention_rope_theta: decoder.sliding_attention_rope_theta,
-            sliding_window: decoder.sliding_window,
-            num_experts: decoder.num_experts,
-            top_k_experts: decoder.top_k_experts,
-            moe_intermediate_size: decoder.moe_intermediate_size,
-            hidden_activation: decoder.hidden_activation.clone(),
-            final_logit_softcapping: decoder.final_logit_softcapping,
-        },
+        decoder: shape::execution(info.decoder.as_ref(), info.encoder.as_ref()),
         tokenizer: tokenizer_trace(model),
         tensors: tensor_trace(model),
         weights: weight_trace(model),
@@ -71,6 +47,7 @@ pub(super) fn build(model: &LoadedModel, backend: BackendInfo) -> ModelTrace {
         warnings: warnings(model),
     }
 }
+
 pub(super) fn emit(trace: &ModelTrace) {
     tracing::debug!(
         model_id = %trace.model.id,
@@ -86,14 +63,6 @@ pub(super) fn emit(trace: &ModelTrace) {
     for warning in &trace.warnings {
         tracing::warn!(model_id = %trace.model.id, warning, "model trace warning");
     }
-}
-
-fn attention_counts(decoder: &DecoderConfig) -> (usize, usize) {
-    decoder.layer_types.iter().fold((0, 0), |(full, sliding), layer| match layer {
-        AttentionLayerType::Full => (full + 1, sliding),
-        AttentionLayerType::Linear => (full, sliding),
-        AttentionLayerType::Sliding => (full, sliding + 1),
-    })
 }
 
 fn tokenizer_trace(model: &LoadedModel) -> TraceTokenizer {
@@ -116,6 +85,9 @@ fn tokenizer_trace(model: &LoadedModel) -> TraceTokenizer {
 }
 
 fn actions(model: &LoadedModel) -> Vec<TraceAction> {
+    if !matches!(&model.execution, LoadedExecution::Generation(_)) {
+        return task_actions(model);
+    }
     let info = &model.info;
     let (fused_attention, fused_key_value, fused_gate_up, fused_expert_gate_up) =
         model.fusion_summary();
@@ -183,6 +155,33 @@ fn actions(model: &LoadedModel) -> Vec<TraceAction> {
     ]
 }
 
+fn task_actions(model: &LoadedModel) -> Vec<TraceAction> {
+    let execution = match &model.execution {
+        LoadedExecution::Embedding(_) => {
+            "causal text encoding, last-token pooling, dimension slicing, and L2 normalization"
+        },
+        LoadedExecution::SequenceScoring(_) => {
+            "bidirectional packed-QKV encoding, CLS pooling, and scalar classification"
+        },
+        LoadedExecution::Generation(_) => unreachable!(),
+    };
+    vec![
+        TraceAction::new(
+            "inspect",
+            format!(
+                "recognized {:?} from config, task modules, and tensor schema",
+                model.info.metadata.family
+            ),
+        ),
+        TraceAction::new(
+            "load",
+            format!("materialized {} MLX safetensors", model.info.tensor_count),
+        ),
+        TraceAction::new("execute", execution),
+        TraceAction::new("output", "copied only the final task result from Metal"),
+    ]
+}
+
 fn compiled_feed_forward_action() -> &'static str {
     "SwiGLU and GeGLU use compiled MLX kernels; persistent full feed-forward compilation is disabled"
 }
@@ -214,7 +213,7 @@ fn paged_attention_action(model: &LoadedModel) -> String {
 }
 
 fn warnings(model: &LoadedModel) -> Vec<String> {
-    let mut warnings = vec!["native backend uses one explicit MLX GPU stream".into()];
+    let mut warnings = Vec::new();
     if let Some(error) = &model.info.tokenizer_error {
         warnings.push(format!("tokenizer report unavailable: {error}"));
     }

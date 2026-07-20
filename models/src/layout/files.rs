@@ -25,6 +25,8 @@ pub struct ModelLayout {
     pub added_tokens_path: Option<PathBuf>,
     pub special_tokens_map_path: Option<PathBuf>,
     pub tokenizer_config_path: Option<PathBuf>,
+    pub modules_path: Option<PathBuf>,
+    pub sentence_transformers_config_path: Option<PathBuf>,
     pub generation_config_path: Option<PathBuf>,
     pub chat_template_path: Option<PathBuf>,
     pub kv_config_path: Option<PathBuf>,
@@ -53,6 +55,9 @@ impl ModelLayout {
         let added_tokens_path = optional(root.join("added_tokens.json"));
         let special_tokens_map_path = optional(root.join("special_tokens_map.json"));
         let tokenizer_config_path = optional(root.join("tokenizer_config.json"));
+        let modules_path = optional(root.join("modules.json"));
+        let sentence_transformers_config_path =
+            optional(root.join("config_sentence_transformers.json"));
         let generation_config_path = optional(root.join("generation_config.json"));
         let chat_template_path = optional(root.join("chat_template.jinja"));
         let kv_config_path = optional(root.join("kv_config.json"));
@@ -73,6 +78,8 @@ impl ModelLayout {
             added_tokens_path,
             special_tokens_map_path,
             tokenizer_config_path,
+            modules_path,
+            sentence_transformers_config_path,
             generation_config_path,
             chat_template_path,
             kv_config_path,

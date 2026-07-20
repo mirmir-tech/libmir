@@ -26,6 +26,7 @@ impl LoadedModel {
         sampling: SamplingLogits,
         progress: &mut dyn FnMut(MetalProgressEvent),
     ) -> Result<NativePrefill> {
+        let model = self.execution.decoder()?;
         let Some((&last, prefix)) = tokens.split_last() else {
             return Err(Error::EmptyPrompt);
         };
@@ -35,13 +36,13 @@ impl LoadedModel {
                 let position = state.position;
                 (state, position, position, Some(logits))
             } else {
-                (SessionState::new(self.model.new_cache(&self.stream)?), 0, 0, None)
+                (SessionState::new(model.new_cache(&self.stream)?), 0, 0, None)
             };
         let reserve = tokens.len().max(self.stream.config().cache.kv_reserve_tokens);
         state.cache.reserve(reserve)?;
         if position == tokens.len() {
             let logits = cached_logits.ok_or(Error::NoPrefixLogits)?;
-            let output = step::output(&self.model, &self.stream, &mut state, logits, sampling)?;
+            let output = step::output(model, &self.stream, &mut state, logits, sampling)?;
             self.sessions.insert(session, state);
             progress(MetalProgressEvent::prefill_tokens(tokens.len(), tokens.len()));
             return Ok(NativePrefill { output, prefix_cache_tokens });
@@ -52,7 +53,7 @@ impl LoadedModel {
         while !remaining.is_empty() {
             let count = self.prefill_chunk_len(position, remaining.len());
             let logits = step::forward_prefill(
-                &self.model,
+                model,
                 &self.stream,
                 &mut state,
                 &remaining[..count],
@@ -65,7 +66,7 @@ impl LoadedModel {
             progress(MetalProgressEvent::prefill_tokens(position, tokens.len()));
         }
         let logits = step::forward_token(
-            &self.model,
+            model,
             &self.stream,
             &mut state,
             last,
@@ -75,7 +76,7 @@ impl LoadedModel {
         state.position = tokens.len();
         self.prefixes.insert(&self.info.manifest.id, tokens, &state, &logits)?;
         progress(MetalProgressEvent::prefill_tokens(tokens.len(), tokens.len()));
-        let output = step::output(&self.model, &self.stream, &mut state, logits, sampling)?;
+        let output = step::output(model, &self.stream, &mut state, logits, sampling)?;
         self.sessions.insert(session, state);
         Ok(NativePrefill { output, prefix_cache_tokens })
     }
@@ -88,6 +89,7 @@ impl LoadedModel {
         sampling: SamplingLogits,
         progress: &mut dyn FnMut(MetalProgressEvent),
     ) -> Result<NativePrefill> {
+        let model = self.execution.decoder()?;
         let Some((&last, prefix)) = prompt.token_ids.split_last() else {
             return Err(Error::EmptyPrompt);
         };
@@ -101,7 +103,7 @@ impl LoadedModel {
                 "pooled vision tower is not loaded or its tensors are incomplete".into(),
             ));
         };
-        let crate::engine::DecoderModel::HybridMoe(decoder) = &self.model else {
+        let crate::engine::DecoderModel::HybridMoe(decoder) = model else {
             return Err(Error::UnsupportedModel(
                 "pooled vision Metal multimodal prefill currently requires the hybrid MoE decoder"
                     .into(),
@@ -123,7 +125,7 @@ impl LoadedModel {
         self.stream.synchronize()?;
         progress(MetalProgressEvent::prefill_tokens(prefix.len(), prompt.token_ids.len()));
         let logits = step::forward_token(
-            &self.model,
+            model,
             &self.stream,
             &mut state,
             last,
@@ -131,7 +133,7 @@ impl LoadedModel {
             sampling == SamplingLogits::None,
         )?;
         state.position = prompt.token_ids.len();
-        let output = step::output(&self.model, &self.stream, &mut state, logits, sampling)?;
+        let output = step::output(model, &self.stream, &mut state, logits, sampling)?;
         self.sessions.insert(session, state);
         progress(MetalProgressEvent::prefill_tokens(
             prompt.token_ids.len(),
@@ -148,6 +150,7 @@ impl LoadedModel {
         sampling: SamplingLogits,
         progress: &mut dyn FnMut(MetalProgressEvent),
     ) -> Result<NativePrefill> {
+        let model = self.execution.decoder()?;
         let Some((&last, prefix)) = prompt.token_ids.split_last() else {
             return Err(Error::EmptyPrompt);
         };
@@ -161,7 +164,7 @@ impl LoadedModel {
                 "spatial-merge vision tower is not loaded or its tensors are incomplete".into(),
             ));
         };
-        let crate::engine::DecoderModel::HybridLinearMoe(decoder) = &self.model else {
+        let crate::engine::DecoderModel::HybridLinearMoe(decoder) = model else {
             return Err(Error::UnsupportedModel(
                 "spatial-merge vision Metal multimodal prefill requires the hybrid linear MoE decoder".into(),
             ));
@@ -182,7 +185,7 @@ impl LoadedModel {
         state.position = prefix.len();
         let model_position = state.model_position()?;
         let logits = step::forward_token(
-            &self.model,
+            model,
             &self.stream,
             &mut state,
             last,
@@ -190,7 +193,7 @@ impl LoadedModel {
             sampling == SamplingLogits::None,
         )?;
         state.position = prompt.token_ids.len();
-        let output = step::output(&self.model, &self.stream, &mut state, logits, sampling)?;
+        let output = step::output(model, &self.stream, &mut state, logits, sampling)?;
         self.sessions.insert(session, state);
         progress(MetalProgressEvent::prefill_tokens(
             prompt.token_ids.len(),

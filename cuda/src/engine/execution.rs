@@ -24,7 +24,9 @@ impl CudaEngine {
             return Err(Error::InvalidDecoderKernel("CUDA prefill prompt is empty"));
         }
         let loaded = self.model(&request.model.id)?;
-        if loaded.plan.decoder == models::execution::DecoderArchetype::HybridLinearMoe {
+        if loaded.plan.as_ref().is_some_and(|plan| {
+            plan.decoder == models::execution::DecoderArchetype::HybridLinearMoe
+        }) {
             return self.prefill_hybrid(&loaded, request, progress);
         }
         let execution_started = Instant::now();

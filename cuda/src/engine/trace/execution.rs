@@ -1,10 +1,18 @@
 use foundation::model::Quantization;
-use models::execution::DecoderArchetype;
+use models::execution::{DecoderArchetype, TaskExecutionPlan};
 use runtime::{kv::CacheConfig, trace::TraceAction};
 
 use super::LoadedModel;
 
 pub(super) fn acceleration(model: &LoadedModel) -> Vec<String> {
+    if !matches!(&model.task_plan, TaskExecutionPlan::Generation { .. }) {
+        return vec![
+            "safe Rust mircuda execution gateway".into(),
+            "one explicit CUDA stream".into(),
+            model_kernels(model).into(),
+            "device-resident task output".into(),
+        ];
+    }
     let mut features = vec![
         "safe Rust mircuda execution gateway".into(),
         "one explicit CUDA stream".into(),
@@ -16,7 +24,10 @@ pub(super) fn acceleration(model: &LoadedModel) -> Vec<String> {
 }
 
 pub(super) fn mlp_layout(model: &LoadedModel) -> &'static str {
-    match (model.plan.decoder, dense_nvfp4(model)) {
+    let Some(plan) = model.plan.as_ref() else {
+        return "packed gated exact-GELU encoder feed-forward";
+    };
+    match (plan.decoder, dense_nvfp4(model)) {
         (DecoderArchetype::HybridMoe, _) => "dense gated MLP plus routed NVFP4 experts",
         (DecoderArchetype::DenseSwiGlu, true) => "native NVFP4 gate/up and down projections",
         (DecoderArchetype::DenseSwiGlu, false) => "paired BF16 gate/up plus BF16 down projection",
@@ -25,7 +36,10 @@ pub(super) fn mlp_layout(model: &LoadedModel) -> &'static str {
 }
 
 pub(super) fn warnings(model: &LoadedModel) -> Vec<String> {
-    match model.plan.decoder {
+    let Some(plan) = model.plan.as_ref() else {
+        return Vec::new();
+    };
+    match plan.decoder {
         DecoderArchetype::DenseSwiGlu => {
             vec!["CUDA dense continuous decode batching is not yet enabled".into()]
         },
@@ -37,6 +51,20 @@ pub(super) fn warnings(model: &LoadedModel) -> Vec<String> {
 }
 
 pub(super) fn actions(model: &LoadedModel, cache: CacheConfig) -> Vec<TraceAction> {
+    if !matches!(&model.task_plan, TaskExecutionPlan::Generation { .. }) {
+        return vec![
+            TraceAction::new(
+                "inspect",
+                format!("recognized {:?} from config and tensor schema", model.metadata.family),
+            ),
+            TraceAction::new(
+                "load",
+                format!("uploaded {} tensors directly from safetensors", model.catalog.len()),
+            ),
+            TraceAction::new("execute", model_kernels(model)),
+            TraceAction::new("output", "copied only the final task result from CUDA"),
+        ];
+    }
     vec![
         TraceAction::new(
             "inspect",
@@ -60,7 +88,13 @@ pub(super) fn actions(model: &LoadedModel, cache: CacheConfig) -> Vec<TraceActio
 }
 
 fn model_kernels(model: &LoadedModel) -> &'static str {
-    match (model.plan.decoder, dense_nvfp4(model)) {
+    if matches!(&model.task_plan, TaskExecutionPlan::Embedding { .. }) {
+        return "CUTLASS BF16 projections with causal attention and device L2 normalization";
+    }
+    let Some(plan) = model.plan.as_ref() else {
+        return "CUTLASS F16 encoder projections and native bidirectional attention";
+    };
+    match (plan.decoder, dense_nvfp4(model)) {
         (DecoderArchetype::HybridMoe, _) => "CUTLASS NVFP4 routed-MoE kernels",
         (DecoderArchetype::DenseSwiGlu, true) => "CUTLASS native NVFP4 dense SwiGLU kernels",
         (DecoderArchetype::DenseSwiGlu, false) => "CUTLASS BF16 dense SwiGLU kernels",
@@ -73,6 +107,9 @@ const fn decode_action(_model: &LoadedModel) -> &'static str {
 }
 
 fn dense_nvfp4(model: &LoadedModel) -> bool {
-    model.plan.decoder == DecoderArchetype::DenseSwiGlu
+    model
+        .plan
+        .as_ref()
+        .is_some_and(|plan| plan.decoder == DecoderArchetype::DenseSwiGlu)
         && matches!(&model.manifest.quantization, Quantization::NvFp4)
 }

@@ -48,6 +48,10 @@ impl Array {
         Self::from_native(graph.astype(&output, self.native().dtype()?)?)
     }
 
+    pub fn tanh(&self, stream: &Stream) -> Result<Self> {
+        Self::from_native(stream.native().graph().tanh(self.native())?)
+    }
+
     pub fn multiply_scalar(&self, scalar: f32, stream: &Stream) -> Result<Self> {
         let graph = stream.native().graph();
         let output = graph.multiply_scalar(self.native(), scalar)?;
@@ -78,6 +82,10 @@ impl Array {
 
     pub fn reduce_sum(&self, axis: i32, keepdims: bool, stream: &Stream) -> Result<Self> {
         Self::from_native(stream.native().graph().reduce_sum(self.native(), axis, keepdims)?)
+    }
+
+    pub fn l2_normalize(&self, axis: i32, epsilon: f32, stream: &Stream) -> Result<Self> {
+        Self::from_native(stream.native().graph().l2_normalize(self.native(), axis, epsilon)?)
     }
 
     pub fn clip(&self, minimum: &Self, maximum: &Self, stream: &Stream) -> Result<Self> {

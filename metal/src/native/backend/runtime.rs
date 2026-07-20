@@ -3,8 +3,9 @@ use foundation::model::ModelManifest;
 use runtime::{
     Result as RuntimeResult, RuntimeError,
     backend::{
-        Backend, BackendCapability, BackendInfo, DecodeOutput, DecodeRequest, GenerationRequest,
-        ModelHandle, PrefillOutput, PrefillRequest, TokenEvent,
+        Backend, BackendCapability, BackendInfo, DecodeOutput, DecodeRequest, EmbeddingOutput,
+        EmbeddingRequest, GenerationRequest, ModelHandle, PrefillOutput, PrefillRequest,
+        SequenceScoringOutput, SequenceScoringRequest, TokenEvent,
     },
     trace::ModelTrace,
 };
@@ -25,6 +26,8 @@ impl Backend for MetalBackend {
                 BackendCapability::Vision,
                 BackendCapability::PrefixCache,
                 BackendCapability::ContinuousBatching,
+                BackendCapability::Embeddings,
+                BackendCapability::SequenceScoring,
                 BackendCapability::Quantization("int4 affine weights".into()),
             ],
         }
@@ -59,6 +62,25 @@ impl Backend for MetalBackend {
             &request.block_table,
             request.sampling_logits,
         )?)
+    }
+
+    async fn embed(&self, request: EmbeddingRequest) -> RuntimeResult<EmbeddingOutput> {
+        let prompt_tokens = request.inputs.iter().map(Vec::len).sum();
+        Ok(EmbeddingOutput {
+            embeddings: self.embed_tokens(&request.model, &request.inputs, request.dimensions)?,
+            prompt_tokens,
+        })
+    }
+
+    async fn score_sequences(
+        &self,
+        request: SequenceScoringRequest,
+    ) -> RuntimeResult<SequenceScoringOutput> {
+        let prompt_tokens = request.pairs.iter().map(Vec::len).sum();
+        Ok(SequenceScoringOutput {
+            scores: self.score_tokens(&request.model, &request.pairs)?,
+            prompt_tokens,
+        })
     }
 
     async fn generate(

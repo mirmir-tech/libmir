@@ -3,7 +3,10 @@ mod hybrid_linear;
 mod schema;
 
 pub use catalog::{TensorCatalog, TensorInfo};
-pub use schema::{DecoderTensorSchema, TensorReadiness, TensorRequirement, VisionTensorSchema};
+pub use schema::{
+    DecoderTensorSchema, EncoderTensorSchema, TensorReadiness, TensorRequirement, TextTensorLayout,
+    VisionTensorSchema,
+};
 
 #[cfg(test)]
 mod tests {

@@ -7,6 +7,7 @@ mod affine;
 mod decoder;
 mod elementwise;
 mod embedding;
+mod encoder;
 mod gated_attention;
 mod gated_delta;
 mod geometry;
@@ -30,6 +31,7 @@ mod selected;
 mod sigmoid;
 #[cfg(test)]
 mod tests;
+mod text;
 mod vision;
 
 pub use affine::{
@@ -38,6 +40,9 @@ pub use affine::{
 pub use decoder::{RmsNorm, RmsNormUnit, Rope, RopeSpec};
 pub use elementwise::ElementwiseBf16;
 pub use embedding::Embedding;
+pub use encoder::{
+    EncoderAttentionF16, EncoderAttentionSpec, EncoderElementwiseF16, EncoderElementwiseSpec,
+};
 pub use gated_attention::GatedAttentionSplit;
 pub use gated_delta::{
     GatedDeltaConvolution, GatedDeltaConvolutionSpec, GatedDeltaLaunch, GatedDeltaRecurrence,
@@ -85,6 +90,7 @@ pub use selected::{
     SelectedNvFp4Reduce, SelectedNvFp4Spec,
 };
 pub use sigmoid::{SigmoidElementwiseBf16, SigmoidMultiplyBf16};
+pub use text::{L2NormalizeBf16, TextAttention, TextAttentionSpec};
 pub(crate) use vision::VisionEmbeddingSplice;
 pub use vision::{
     SpatialMergeKernels, VisionAttention, VisionAttentionSpec, VisionClip, VisionClipSpec,

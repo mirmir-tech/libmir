@@ -17,6 +17,7 @@ use foundation::{
 };
 use models::{
     chat::{ChatPrompt, ChatTemplate},
+    execution::{ModelTask, TaskExecutionPlan},
     generation::{GenerationConfig, GenerationOverrides, GenerationSettings},
     layout::{DecoderConfig, ImageProcessorConfig, ModelLayout, ModelMetadata, VisionConfig},
     tokenizer::{TextTokenizer, TokenizedPrompt},
@@ -33,7 +34,8 @@ use crate::{Engine, Error, Result, RuntimeConfig, Session, scheduler::DecodeCoor
 pub struct ModelDescriptor {
     layout: ModelLayout,
     metadata: ModelMetadata,
-    decoder: DecoderConfig,
+    decoder: Option<DecoderConfig>,
+    task_plan: TaskExecutionPlan,
     generation_config: GenerationConfig,
     generation: GenerationSettings,
     vision: Option<VisionConfig>,
@@ -81,20 +83,25 @@ impl ModelDescriptor {
         let layout = ModelLayout::inspect(path)?;
         let metadata = ModelMetadata::from_layout(&layout)?;
         let generation_config = GenerationConfig::from_layout(&layout)?;
-        let vision = VisionConfig::from_layout(&layout)?;
-        let vision_readiness = if let Some(config) = vision.as_ref() {
-            let catalog = TensorCatalog::from_layout(&layout)?;
-            Some(VisionTensorSchema::discover(config).readiness(&catalog))
-        } else {
-            None
+        let catalog = TensorCatalog::from_layout(&layout)?;
+        let task_plan = TaskExecutionPlan::discover(&layout, &catalog)?;
+        let decoder = match &task_plan {
+            TaskExecutionPlan::Generation { decoder }
+            | TaskExecutionPlan::Embedding { decoder, .. } => Some(decoder.clone()),
+            TaskExecutionPlan::SequenceScoring { .. } => None,
         };
+        let vision = VisionConfig::from_layout(&layout)?;
+        let vision_readiness = vision
+            .as_ref()
+            .map(|config| VisionTensorSchema::discover(config).readiness(&catalog));
         let image_processor = vision
             .as_ref()
             .map(|vision| ImageProcessorConfig::from_layout(&layout, vision.pipeline()))
             .transpose()?
             .flatten();
         Ok(Self {
-            decoder: DecoderConfig::from_layout(&layout)?,
+            decoder,
+            task_plan,
             generation: generation_config.resolve(overrides)?,
             generation_config,
             vision,
@@ -110,6 +117,9 @@ impl ModelDescriptor {
     /// Renders and tokenizes a request, validating it against the model context
     /// window.
     pub fn prepare(&self, request: &ChatCompletionRequest) -> Result<PreparedPrompt> {
+        if !matches!(self.task_plan.task(), ModelTask::Generation) {
+            return Err(task_mismatch("generation", &self.task_plan));
+        }
         self.prepare_with_settings(request, self.generation)
     }
 
@@ -157,6 +167,15 @@ impl ModelDescriptor {
             preferred_backends,
         })
     }
+}
+
+fn task_mismatch(requested: &'static str, task: &TaskExecutionPlan) -> Error {
+    let actual = match task.task() {
+        ModelTask::Generation => "generation",
+        ModelTask::Embedding(_) => "embedding",
+        ModelTask::SequenceScoring(_) => "sequence scoring",
+    };
+    Error::TaskMismatch { requested, actual }
 }
 
 impl Model {

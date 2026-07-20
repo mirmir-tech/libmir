@@ -23,7 +23,10 @@ pub struct DecodeInput {
 impl LoadedModel {
     pub(crate) fn can_decode_batch(&self, inputs: &[DecodeInput]) -> bool {
         inputs.len() > 1
-            && self.model.prefers_packed_decode(&self.stream)
+            && self
+                .execution
+                .decoder()
+                .is_ok_and(|model| model.prefers_packed_decode(&self.stream))
             && inputs.iter().all(|input| {
                 step::supports_device_token(input.sampling)
                     && self
@@ -36,7 +39,10 @@ impl LoadedModel {
     pub(crate) fn decode_batch(&mut self, inputs: &[DecodeInput]) -> Result<Vec<NativeOutput>> {
         self.validate_batch(inputs)?;
         let mut states = self.take_batch_states(inputs)?;
-        let result = decode_states(&self.model, &self.stream, inputs, &mut states);
+        let result = self
+            .execution
+            .decoder()
+            .and_then(|model| decode_states(model, &self.stream, inputs, &mut states));
         for (session, state) in states {
             self.sessions.insert(session, state);
         }

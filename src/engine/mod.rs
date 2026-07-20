@@ -3,6 +3,7 @@ mod batch;
 mod lifecycle;
 mod memory;
 mod select;
+mod tasks;
 #[cfg(any(feature = "cuda", feature = "metal"))]
 mod vision;
 

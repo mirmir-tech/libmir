@@ -52,10 +52,21 @@ impl CudaEngine {
             .forward_preprocessed_scheduled(image, &mut |step| submit_vision_step(&loaded, step))?;
         let expected_elements = image
             .soft_tokens
-            .checked_mul(loaded.decoder.hidden_size)
+            .checked_mul(
+                loaded
+                    .decoder
+                    .as_ref()
+                    .ok_or_else(|| Error::State("vision requires a decoder".into()))?
+                    .hidden_size,
+            )
             .ok_or(Error::InvalidVisionKernel("spatial-merge output size overflow"))?;
         if encoded.tokens != image.soft_tokens
-            || encoded.width != loaded.decoder.hidden_size
+            || encoded.width
+                != loaded
+                    .decoder
+                    .as_ref()
+                    .ok_or_else(|| Error::State("vision requires a decoder".into()))?
+                    .hidden_size
             || encoded.hidden.len() != expected_elements
         {
             return Err(Error::InvalidVisionKernel(
@@ -129,10 +140,21 @@ impl CudaEngine {
             .forward_preprocessed_scheduled(image, &mut |step| submit_vision_step(&loaded, step))?;
         let expected_elements = image
             .soft_tokens
-            .checked_mul(loaded.decoder.hidden_size)
+            .checked_mul(
+                loaded
+                    .decoder
+                    .as_ref()
+                    .ok_or_else(|| Error::State("vision requires a decoder".into()))?
+                    .hidden_size,
+            )
             .ok_or(Error::InvalidVisionKernel("spatial-merge output size overflow"))?;
         if encoded.tokens != image.soft_tokens
-            || encoded.width != loaded.decoder.hidden_size
+            || encoded.width
+                != loaded
+                    .decoder
+                    .as_ref()
+                    .ok_or_else(|| Error::State("vision requires a decoder".into()))?
+                    .hidden_size
             || encoded.hidden.len() != expected_elements
         {
             return Err(Error::InvalidVisionKernel(
