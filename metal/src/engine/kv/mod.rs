@@ -1,10 +1,12 @@
 mod contiguous;
+mod format;
 mod paged;
 mod policy;
 mod sliding;
 
 use std::sync::Arc;
 
+pub use format::KvPageFormat;
 pub use policy::{
     NATIVE_PAGED_ATTENTION_MIN_CONTEXT, native_paged_attention_mode, paged_attention_enabled,
     paged_attention_min_context,
@@ -25,6 +27,8 @@ pub struct KvContext {
 pub struct PagedKvContext {
     pub key_pages: Array,
     pub value_pages: Array,
+    pub key_scales: Option<Array>,
+    pub value_scales: Option<Array>,
     pub page_table: Array,
     pub page_dependency: Array,
     pub(crate) scratch: Arc<PagedAttentionScratch>,
@@ -46,6 +50,8 @@ impl PagedKvContext {
         PagedAttention {
             key_pages: &self.key_pages,
             value_pages: &self.value_pages,
+            key_scales: self.key_scales.as_ref(),
+            value_scales: self.value_scales.as_ref(),
             page_table: &self.page_table,
             page_dependency: &self.page_dependency,
             page_size: self.page_size,
@@ -81,22 +87,31 @@ impl KvCache {
     }
 
     pub fn new_paged(step: usize, page_size: usize) -> Result<Self> {
-        Self::new_with_options(step, None, Some(page_size))
+        Self::new_paged_with_format(step, page_size, KvPageFormat::Native)
+    }
+
+    pub(crate) fn new_paged_with_format(
+        step: usize,
+        page_size: usize,
+        format: KvPageFormat,
+    ) -> Result<Self> {
+        Self::new_with_options(step, None, Some((page_size, format)))
     }
 
     fn new_with_options(
         step: usize,
         max_context: Option<usize>,
-        page_size: Option<usize>,
+        page_storage: Option<(usize, KvPageFormat)>,
     ) -> Result<Self> {
-        if step == 0 || max_context == Some(0) || page_size == Some(0) {
+        if step == 0 || max_context == Some(0) || page_storage.is_some_and(|(size, _)| size == 0) {
             return Err(Error::InvalidModel("KV cache dimensions must be positive".into()));
         }
-        let reserve_tokens = usize::from(page_size.is_some()) * step;
+        let reserve_tokens = usize::from(page_storage.is_some()) * step;
         Ok(Self {
             keys: None,
             values: None,
-            pages: page_size.map(|size| paged::PagedStore::new(size, step, reserve_tokens)),
+            pages: page_storage
+                .map(|(size, format)| paged::PagedStore::new(size, step, reserve_tokens, format)),
             offset: 0,
             capacity: 0,
             write_index: 0,

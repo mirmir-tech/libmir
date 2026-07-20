@@ -1,6 +1,6 @@
 use models::layout::AttentionLayerType;
 
-use crate::engine::{Error, GatedDeltaState, KvCache, Result};
+use crate::engine::{Error, GatedDeltaState, KvCache, KvPageFormat, Result};
 
 #[derive(Debug)]
 pub(super) enum HybridLinearLayerCache {
@@ -11,6 +11,8 @@ pub(super) enum HybridLinearLayerCache {
 pub(super) fn new(
     layer_types: &[AttentionLayerType],
     step: usize,
+    format: KvPageFormat,
+    page_size: usize,
 ) -> Result<Vec<HybridLinearLayerCache>> {
     layer_types
         .iter()
@@ -18,9 +20,8 @@ pub(super) fn new(
             AttentionLayerType::Linear => {
                 GatedDeltaState::new().map(HybridLinearLayerCache::Linear)
             },
-            AttentionLayerType::Full => {
-                KvCache::new_paged(step, 16).map(HybridLinearLayerCache::Full)
-            },
+            AttentionLayerType::Full => KvCache::new_paged_with_format(step, page_size, format)
+                .map(HybridLinearLayerCache::Full),
             AttentionLayerType::Sliding => KvCache::new(step).map(HybridLinearLayerCache::Full),
         })
         .collect()

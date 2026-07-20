@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use super::{Arena, PagedStore, Storage, lock};
-use crate::engine::{Array, Error, Result, Stream};
+use crate::engine::{Array, Error, KvPageFormat, Result, Stream};
 
 pub(super) fn ensure(
     store: &mut PagedStore,
@@ -60,12 +60,27 @@ pub(super) fn ensure(
 fn create(store: &PagedStore, keys: &Array, needed: usize, stream: &Stream) -> Result<Storage> {
     let dimensions = keys.native().shape()?.dimensions().to_vec();
     let capacity = round(needed.max(store.reserve_pages), store.allocation_step);
-    let shape = mirtal::Shape::new([dimensions[1], capacity, store.page_size, dimensions[3]])?;
+    let packed_head_dim = store.format.packed_words(dimensions[3])?;
+    let shape = mirtal::Shape::new([dimensions[1], capacity, store.page_size, packed_head_dim])?;
     let graph = stream.native().graph();
-    let dtype = keys.native().dtype()?;
+    let dtype = match store.format {
+        KvPageFormat::Native => keys.native().dtype()?,
+        KvPageFormat::Int8PerTokenHead => mirtal::DType::Uint32,
+    };
+    let scale_shape = mirtal::Shape::new([dimensions[1], capacity, store.page_size])?;
+    let (key_scales, value_scales) = if store.format.quantized() {
+        (
+            Some(Array::from_native(graph.full(&scale_shape, 1.0, mirtal::DType::Float32)?)?),
+            Some(Array::from_native(graph.full(&scale_shape, 1.0, mirtal::DType::Float32)?)?),
+        )
+    } else {
+        (None, None)
+    };
     let arena = Arena {
         keys: Array::from_native(graph.full(&shape, 0.0, dtype)?)?,
         values: Array::from_native(graph.full(&shape, 0.0, dtype)?)?,
+        key_scales,
+        value_scales,
         capacity,
         page_size: store.page_size,
         kv_heads: dimensions[1],
@@ -90,7 +105,7 @@ fn ensure_free(arena: &mut Arena, step: usize, stream: &Stream) -> Result<()> {
         arena.kv_heads,
         capacity - arena.capacity,
         arena.page_size,
-        arena.head_dim,
+        arena.keys.native().shape()?.dimensions()[3],
     ])?;
     let graph = stream.native().graph();
     let dtype = arena.keys.native().dtype()?;
@@ -99,6 +114,7 @@ fn ensure_free(arena: &mut Arena, step: usize, stream: &Stream) -> Result<()> {
     arena.keys = Array::from_native(graph.concatenate(&[arena.keys.native(), &extra_keys], 1)?)?;
     arena.values =
         Array::from_native(graph.concatenate(&[arena.values.native(), &extra_values], 1)?)?;
+    grow_scales(arena, capacity, graph)?;
     arena.references.resize(capacity, 0);
     arena.capacity = capacity;
     Ok(())
@@ -116,10 +132,11 @@ fn allocate(arena: &mut Arena) -> Result<u32> {
 
 fn copy_page(arena: &mut Arena, source: usize, target: usize, stream: &Stream) -> Result<()> {
     let graph = stream.native().graph();
-    let stop = [arena.kv_heads, source + 1, arena.page_size, arena.head_dim];
+    let stored_dim = arena.keys.native().shape()?.dimensions()[3];
+    let stop = [arena.kv_heads, source + 1, arena.page_size, stored_dim];
     let keys = graph.slice(arena.keys.native(), &[0, source, 0, 0], &stop)?;
     let values = graph.slice(arena.values.native(), &[0, source, 0, 0], &stop)?;
-    let target_stop = [arena.kv_heads, target + 1, arena.page_size, arena.head_dim];
+    let target_stop = [arena.kv_heads, target + 1, arena.page_size, stored_dim];
     arena.keys = Array::from_native(graph.slice_update(
         arena.keys.native(),
         &keys,
@@ -132,6 +149,43 @@ fn copy_page(arena: &mut Arena, source: usize, target: usize, stream: &Stream) -
         &[0, target, 0, 0],
         &target_stop,
     )?)?;
+    copy_scales(arena, source, target, graph)?;
+    Ok(())
+}
+
+fn grow_scales(arena: &mut Arena, capacity: usize, graph: mirtal::Graph<'_>) -> Result<()> {
+    let shape = mirtal::Shape::new([arena.kv_heads, capacity - arena.capacity, arena.page_size])?;
+    for scales in [&mut arena.key_scales, &mut arena.value_scales] {
+        if let Some(current) = scales.take() {
+            let extra = graph.full(&shape, 1.0, mirtal::DType::Float32)?;
+            *scales = Some(Array::from_native(graph.concatenate(&[current.native(), &extra], 1)?)?);
+        }
+    }
+    Ok(())
+}
+
+fn copy_scales(
+    arena: &mut Arena,
+    source: usize,
+    target: usize,
+    graph: mirtal::Graph<'_>,
+) -> Result<()> {
+    for scales in [&mut arena.key_scales, &mut arena.value_scales] {
+        if let Some(current) = scales.take() {
+            let values = graph.slice(
+                current.native(),
+                &[0, source, 0],
+                &[arena.kv_heads, source + 1, arena.page_size],
+            )?;
+            let next = graph.slice_update(
+                current.native(),
+                &values,
+                &[0, target, 0],
+                &[arena.kv_heads, target + 1, arena.page_size],
+            )?;
+            *scales = Some(Array::from_native(next)?);
+        }
+    }
     Ok(())
 }
 

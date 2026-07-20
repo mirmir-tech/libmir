@@ -49,8 +49,13 @@ impl DenseSwiGluModel {
         })
     }
 
-    pub fn new_cache(&self) -> Result<DecoderCache> {
-        DecoderCache::new(&vec![None; self.layers.len()], self.cache_step)
+    pub fn new_cache(&self, stream: &Stream) -> Result<DecoderCache> {
+        DecoderCache::new_with_format(
+            &vec![None; self.layers.len()],
+            self.cache_step,
+            super::super::KvPageFormat::resolve(stream.config().kv_cache.dtype)?,
+            stream.config().kv_cache.block_size,
+        )
     }
 
     pub fn forward_decode(

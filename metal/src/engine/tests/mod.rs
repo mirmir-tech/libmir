@@ -5,6 +5,7 @@ mod gated_delta;
 mod page_write;
 mod paged_attention;
 mod paged_store;
+mod quantized_kv;
 mod rope;
 mod router;
 mod sampling;

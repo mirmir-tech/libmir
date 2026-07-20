@@ -69,8 +69,13 @@ impl HybridLinearMoeModel {
         })
     }
 
-    pub fn new_cache(&self) -> Result<DecoderCache> {
-        DecoderCache::new_hybrid_linear(&self.layer_types, self.cache_step)
+    pub fn new_cache(&self, stream: &Stream) -> Result<DecoderCache> {
+        DecoderCache::new_hybrid_linear_with_format(
+            &self.layer_types,
+            self.cache_step,
+            crate::engine::KvPageFormat::resolve(stream.config().kv_cache.dtype)?,
+            stream.config().kv_cache.block_size,
+        )
     }
 
     pub fn forward_decode(

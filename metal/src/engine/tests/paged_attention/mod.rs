@@ -22,6 +22,8 @@ fn paged_sdpa_matches_contiguous_gqa() -> Result<()> {
     let paged = PagedAttention {
         key_pages: &key_pages,
         value_pages: &value_pages,
+        key_scales: None,
+        value_scales: None,
         page_table: &page_table,
         page_dependency: &page_dependency,
         page_size: 2,
@@ -60,6 +62,8 @@ fn paged_sdpa_matches_gemma_global_attention_shape() -> Result<()> {
         PagedAttention {
             key_pages: &key_pages,
             value_pages: &value_pages,
+            key_scales: None,
+            value_scales: None,
             page_table: &page_table,
             page_dependency: &dependency,
             page_size: PAGE_SIZE,
@@ -102,6 +106,8 @@ fn paged_two_pass_matches_contiguous_attention() -> Result<()> {
     let paged = PagedAttention {
         key_pages: &key_pages,
         value_pages: &value_pages,
+        key_scales: None,
+        value_scales: None,
         page_table: &page_table,
         page_dependency: &dependency,
         page_size: 16,
@@ -114,6 +120,8 @@ fn paged_two_pass_matches_contiguous_attention() -> Result<()> {
         PagedAttention {
             key_pages: &key_pages,
             value_pages: &value_pages,
+            key_scales: None,
+            value_scales: None,
             page_table: &page_table,
             page_dependency: &dependency,
             page_size: 16,

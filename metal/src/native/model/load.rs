@@ -1,7 +1,7 @@
 use foundation::model::ModelManifest;
 use models::{
     execution::{DecoderArchetype, ExecutionPlan},
-    layout::{DecoderConfig, ModelLayout, ModelMetadata, VisionConfig},
+    layout::{AttentionLayerType, DecoderConfig, ModelLayout, ModelMetadata, VisionConfig},
     tokenizer::{TextTokenizer, TokenizerInfo},
     weights::{TensorCatalog, TensorReadiness, VisionTensorSchema},
 };
@@ -10,8 +10,8 @@ use super::{KV_CACHE_STEP, LoadedModel, LoadedVisionModel, ModelInfo, prefill_st
 use crate::{
     MetalConfig, MetalProgressEvent,
     engine::{
-        DecoderModel, ModelTensors, PooledVisionTower, SpatialMergeVisionTower, Stream,
-        configure_recommended_wired_limit, dense_swiglu::DenseSwiGluModel,
+        DecoderModel, KvPageFormat, ModelTensors, PooledVisionTower, SpatialMergeVisionTower,
+        Stream, configure_recommended_wired_limit, dense_swiglu::DenseSwiGluModel,
         hybrid_linear_moe::HybridLinearMoeModel, hybrid_moe::HybridMoeModel, memory_stats,
     },
     native::{
@@ -40,6 +40,7 @@ impl LoadedModel {
         let catalog = TensorCatalog::from_layout(&layout)?;
         let plan = ExecutionPlan::discover(&decoder, &catalog)?;
         let vision = VisionConfig::from_layout(&layout)?;
+        validate_kv_storage(&decoder, vision.as_ref(), config.kv_cache.dtype)?;
         let vision_readiness = vision
             .as_ref()
             .map(|config| VisionTensorSchema::discover(config).readiness(&catalog));
@@ -98,6 +99,39 @@ impl LoadedModel {
             sessions: std::collections::HashMap::new(),
         })
     }
+}
+
+fn validate_kv_storage(
+    decoder: &DecoderConfig,
+    vision: Option<&VisionConfig>,
+    dtype: runtime::kv::KvCacheDType,
+) -> Result<()> {
+    let format = KvPageFormat::resolve(dtype)?;
+    if !format.quantized() {
+        return Ok(());
+    }
+    if vision.is_some() {
+        return Err(Error::UnsupportedModel(
+            "INT8 Metal K/V does not yet support multimodal prefix masks".into(),
+        ));
+    }
+    if decoder.layer_types.contains(&AttentionLayerType::Sliding) {
+        return Err(Error::UnsupportedModel(
+            "INT8 Metal K/V does not yet support sliding-window layers".into(),
+        ));
+    }
+    for (index, layer) in decoder.layer_types.iter().enumerate() {
+        if *layer != AttentionLayerType::Linear
+            && (!decoder.layer_head_dim(index).is_multiple_of(4)
+                || decoder.layer_head_dim(index) > 512)
+        {
+            return Err(Error::UnsupportedModel(format!(
+                "INT8 Metal K/V requires attention head dimensions divisible by 4 and at most 512; layer {index} has {}",
+                decoder.layer_head_dim(index)
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn load_vision_model(

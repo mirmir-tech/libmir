@@ -1,7 +1,7 @@
 use models::layout::AttentionLayerType;
 
 use self::hybrid_cache::HybridLinearLayerCache;
-use super::{Error, GatedDeltaState, KvCache, Result};
+use super::{Error, GatedDeltaState, KvCache, KvPageFormat, Result};
 
 mod hybrid_cache;
 
@@ -18,11 +18,20 @@ enum CacheStorage {
 
 impl DecoderCache {
     pub fn new(cache_windows: &[Option<usize>], step: usize) -> Result<Self> {
+        Self::new_with_format(cache_windows, step, KvPageFormat::Native, 16)
+    }
+
+    pub(crate) fn new_with_format(
+        cache_windows: &[Option<usize>],
+        step: usize,
+        format: KvPageFormat,
+        page_size: usize,
+    ) -> Result<Self> {
         let caches = cache_windows
             .iter()
             .map(|window| {
                 if window.is_none() {
-                    KvCache::new_paged(step, 16)
+                    KvCache::new_paged_with_format(step, page_size, format)
                 } else {
                     KvCache::new_with_window(step, *window)
                 }
@@ -32,7 +41,16 @@ impl DecoderCache {
     }
 
     pub fn new_hybrid_linear(layer_types: &[AttentionLayerType], step: usize) -> Result<Self> {
-        let layers = hybrid_cache::new(layer_types, step)?;
+        Self::new_hybrid_linear_with_format(layer_types, step, KvPageFormat::Native, 16)
+    }
+
+    pub(crate) fn new_hybrid_linear_with_format(
+        layer_types: &[AttentionLayerType],
+        step: usize,
+        format: KvPageFormat,
+        page_size: usize,
+    ) -> Result<Self> {
+        let layers = hybrid_cache::new(layer_types, step, format, page_size)?;
         Ok(Self {
             storage: CacheStorage::HybridLinear(layers),
         })

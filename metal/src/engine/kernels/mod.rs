@@ -1,8 +1,10 @@
 mod gated_delta;
 mod page_write;
 mod paged_attention;
+mod quantized_kv;
 
 pub(super) use page_write::{PageWriteOptions, PreparedPageWrite};
+pub(super) use quantized_kv::{PreparedQuantizedPageWrite, QuantizedPageWriteOptions};
 
 use super::Result;
 
@@ -110,6 +112,7 @@ pub(super) struct Kernels {
     paged_attention_partial: mirtal::MetalLibrary,
     paged_attention_reduce: mirtal::MetalKernel<3, 1>,
     paged_kv: mirtal::MetalLibrary,
+    quantized_kv: quantized_kv::QuantizedKvKernels,
 }
 
 impl Kernels {
@@ -122,6 +125,7 @@ impl Kernels {
             paged_attention_partial: paged_attention_partial_library()?,
             paged_attention_reduce: paged_attention_reduce()?,
             paged_kv: paged_kv_library()?,
+            quantized_kv: quantized_kv::QuantizedKvKernels::new()?,
         })
     }
 }

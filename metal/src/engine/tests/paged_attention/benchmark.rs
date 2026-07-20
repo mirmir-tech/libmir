@@ -79,6 +79,8 @@ impl Inputs {
         PagedAttention {
             key_pages: &self.key_pages,
             value_pages: &self.value_pages,
+            key_scales: None,
+            value_scales: None,
             page_table: &self.page_table,
             page_dependency: &self.dependency,
             page_size: PAGE_SIZE,

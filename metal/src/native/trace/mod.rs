@@ -204,6 +204,9 @@ fn gated_delta_action(model: &LoadedModel) -> &'static str {
 }
 
 fn paged_attention_action(model: &LoadedModel) -> String {
+    if model.stream().config().kv_cache.dtype == runtime::kv::KvCacheDType::Int8PerTokenHead {
+        return "full-attention K/V uses packed INT8 pages with per-token/head scales and fused dequantization in native paged SDPA".into();
+    }
     let minimum = paged_attention_min_context(model.stream());
     format!(
         "full-attention K/V uses canonical head-major pages from {minimum} cached tokens; identity maps expose a zero-copy MLX SDPA view, fragmented COW maps use native paged SDPA immediately, and benchmarked identity shapes switch to native paged SDPA with per-cache scratch at {NATIVE_PAGED_ATTENTION_MIN_CONTEXT} tokens"
@@ -212,7 +215,6 @@ fn paged_attention_action(model: &LoadedModel) -> String {
 
 fn warnings(model: &LoadedModel) -> Vec<String> {
     let mut warnings = vec!["native backend uses one explicit MLX GPU stream".into()];
-    warnings.push("page-backed K/V is active; quantized K/V storage is not implemented".into());
     if let Some(error) = &model.info.tokenizer_error {
         warnings.push(format!("tokenizer report unavailable: {error}"));
     }

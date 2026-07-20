@@ -56,8 +56,8 @@ pub use gated_delta_layer::{GatedDeltaLayer, GatedDeltaLayerConfig};
 pub use gated_full_attention::{GatedFullAttention, GatedFullAttentionConfig};
 pub use kv::{KvCache, KvContext, PagedKvContext};
 pub(crate) use kv::{
-    NATIVE_PAGED_ATTENTION_MIN_CONTEXT, PagedContextMode, native_paged_attention_mode,
-    paged_attention_enabled, paged_attention_min_context,
+    KvPageFormat, NATIVE_PAGED_ATTENTION_MIN_CONTEXT, PagedContextMode,
+    native_paged_attention_mode, paged_attention_enabled, paged_attention_min_context,
 };
 pub use layer_norm::LayerNorm;
 pub use linear::QuantizedLinear;

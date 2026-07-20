@@ -18,8 +18,10 @@ pub(super) fn engine(config: &RuntimeConfig) -> Result<Engine> {
     reason = "all feature combinations expose one fallible engine constructor"
 )]
 pub(super) fn engine(config: &RuntimeConfig) -> Result<Engine> {
+    let mut metal = config.metal.clone();
+    metal.kv_cache = config.kv_cache;
     Ok(Engine {
-        inner: EngineInner::Metal(metal::MetalBackend::new(config.metal.clone())),
+        inner: EngineInner::Metal(metal::MetalBackend::try_new(metal)?),
     })
 }
 
@@ -29,8 +31,10 @@ pub(super) fn engine(config: &RuntimeConfig) -> Result<Engine> {
     reason = "all feature combinations expose one fallible engine constructor"
 )]
 pub(super) fn engine(config: &RuntimeConfig) -> Result<Engine> {
+    let mut metal = config.metal.clone();
+    metal.kv_cache = config.kv_cache;
     Ok(Engine {
-        inner: EngineInner::Metal(metal::MetalBackend::new(config.metal.clone())),
+        inner: EngineInner::Metal(metal::MetalBackend::try_new(metal)?),
     })
 }
 

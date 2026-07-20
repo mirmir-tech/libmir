@@ -6,7 +6,10 @@ use std::sync::{
 use super::{
     Result,
     compiled::CompiledGraphs,
-    kernels::{Kernels, PageWriteOptions, PreparedPageWrite},
+    kernels::{
+        Kernels, PageWriteOptions, PreparedPageWrite, PreparedQuantizedPageWrite,
+        QuantizedPageWriteOptions,
+    },
 };
 
 #[derive(Debug)]
@@ -110,6 +113,17 @@ impl Stream {
             .paged_attention(&self.native, inputs, scratch, page_size, context_tokens, scale)
     }
 
+    pub(super) fn quantized_paged_attention(
+        &self,
+        inputs: [&mirtal::Array; 7],
+        page_size: usize,
+        context_tokens: usize,
+        scale: f32,
+    ) -> Result<mirtal::Array> {
+        self.kernels
+            .quantized_paged_attention(&self.native, inputs, page_size, context_tokens, scale)
+    }
+
     pub(super) fn gated_delta_gates(
         &self,
         inputs: [&mirtal::Array; 4],
@@ -139,5 +153,14 @@ impl Stream {
         prepared: &mut PreparedPageWrite,
     ) -> Result<[mirtal::Array; 2]> {
         self.kernels.page_write(&self.native, inputs, options, prepared)
+    }
+
+    pub(super) fn quantized_page_write(
+        &self,
+        inputs: [&mirtal::Array; 7],
+        options: QuantizedPageWriteOptions,
+        prepared: &mut PreparedQuantizedPageWrite,
+    ) -> Result<[mirtal::Array; 4]> {
+        self.kernels.quantized_page_write(&self.native, inputs, options, prepared)
     }
 }

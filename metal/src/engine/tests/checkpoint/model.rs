@@ -13,7 +13,7 @@ fn executes_real_gemma_model_decode_logits() -> Result<()> {
     let tensors = ModelTensors::load(&root, &load_stream)?;
     let stream = Stream::new_gpu()?;
     let model = HybridMoeModel::load(&tensors, &decoder, 64, 16, &stream)?;
-    let mut cache = model.new_cache()?;
+    let mut cache = model.new_cache(&stream)?;
     let ids = Array::from_u32(&[1], &[1, 1])?;
     let logits = model.forward_decode(&ids, &mut cache, 0, &stream)?;
     logits.async_eval()?;
@@ -167,7 +167,7 @@ fn matches_token_decode_after_chunked_prefill() -> Result<()> {
     let tensors = ModelTensors::load(&root, &load_stream)?;
     let stream = Stream::new_gpu()?;
     let model = HybridMoeModel::load(&tensors, &decoder, 64, 16, &stream)?;
-    let mut cache = model.new_cache()?;
+    let mut cache = model.new_cache(&stream)?;
     let tokens = [1_u32, 2, 3];
     let mut token_logits = None;
     for (position, token) in tokens.iter().copied().enumerate() {

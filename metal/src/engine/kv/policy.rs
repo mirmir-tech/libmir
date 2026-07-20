@@ -7,7 +7,11 @@ pub const fn paged_attention_enabled() -> bool {
 }
 
 pub fn paged_attention_min_context(stream: &Stream) -> usize {
-    stream.config().cache.paged_attention_min_context
+    if stream.config().kv_cache.dtype == runtime::kv::KvCacheDType::Int8PerTokenHead {
+        0
+    } else {
+        stream.config().cache.paged_attention_min_context
+    }
 }
 
 pub fn native_paged_attention_mode(

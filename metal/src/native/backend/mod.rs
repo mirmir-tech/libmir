@@ -52,6 +52,14 @@ impl MetalBackend {
         }
     }
 
+    /// Creates a backend after validating the requested global K/V storage
+    /// format.
+    pub fn try_new(config: MetalConfig) -> std::result::Result<Self, RuntimeError> {
+        crate::engine::KvPageFormat::resolve(config.kv_cache.dtype)
+            .map_err(|error| RuntimeError::Backend(error.to_string()))?;
+        Ok(Self::new(config))
+    }
+
     pub fn set_profile_decode(&self, enabled: bool) {
         self.profile_decode.store(enabled, Ordering::Relaxed);
     }

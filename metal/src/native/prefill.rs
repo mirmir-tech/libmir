@@ -35,7 +35,7 @@ impl LoadedModel {
                 let position = state.position;
                 (state, position, position, Some(logits))
             } else {
-                (SessionState::new(self.model.new_cache()?), 0, 0, None)
+                (SessionState::new(self.model.new_cache(&self.stream)?), 0, 0, None)
             };
         let reserve = tokens.len().max(self.stream.config().cache.kv_reserve_tokens);
         state.cache.reserve(reserve)?;
@@ -107,7 +107,7 @@ impl LoadedModel {
                     .into(),
             ));
         };
-        let mut state = SessionState::new(decoder.new_cache()?);
+        let mut state = SessionState::new(decoder.new_cache(&self.stream)?);
         let reserve = prompt.token_ids.len().max(self.stream.config().cache.kv_reserve_tokens);
         state.cache.reserve(reserve)?;
         progress(MetalProgressEvent::prefill_tokens(0, prompt.token_ids.len()));
@@ -166,7 +166,7 @@ impl LoadedModel {
                 "spatial-merge vision Metal multimodal prefill requires the hybrid linear MoE decoder".into(),
             ));
         };
-        let mut state = SessionState::new(decoder.new_cache()?);
+        let mut state = SessionState::new(decoder.new_cache(&self.stream)?);
         state.rope_position_delta = prompt.position_delta;
         state
             .cache

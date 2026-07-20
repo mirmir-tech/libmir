@@ -5,6 +5,8 @@ use crate::engine::{Array, Result, Stream};
 pub struct PagedAttention<'a> {
     pub key_pages: &'a Array,
     pub value_pages: &'a Array,
+    pub key_scales: Option<&'a Array>,
+    pub value_scales: Option<&'a Array>,
     pub page_table: &'a Array,
     pub page_dependency: &'a Array,
     pub page_size: usize,
@@ -76,19 +78,40 @@ impl Array {
         scale: f32,
         stream: &Stream,
     ) -> Result<Self> {
-        Self::from_native(stream.paged_attention(
-            [
-                self.native(),
-                paged.key_pages.native(),
-                paged.value_pages.native(),
-                paged.page_table.native(),
-                paged.page_dependency.native(),
-            ],
-            scratch,
-            paged.page_size,
-            paged.context_tokens,
-            scale,
-        )?)?
-        .astype_like(self, stream)
+        let output = match (paged.key_scales, paged.value_scales) {
+            (Some(key_scales), Some(value_scales)) => stream.quantized_paged_attention(
+                [
+                    self.native(),
+                    paged.key_pages.native(),
+                    paged.value_pages.native(),
+                    key_scales.native(),
+                    value_scales.native(),
+                    paged.page_table.native(),
+                    paged.page_dependency.native(),
+                ],
+                paged.page_size,
+                paged.context_tokens,
+                scale,
+            )?,
+            (None, None) => stream.paged_attention(
+                [
+                    self.native(),
+                    paged.key_pages.native(),
+                    paged.value_pages.native(),
+                    paged.page_table.native(),
+                    paged.page_dependency.native(),
+                ],
+                scratch,
+                paged.page_size,
+                paged.context_tokens,
+                scale,
+            )?,
+            _ => {
+                return Err(crate::engine::Error::InvalidModel(
+                    "paged K/V scale arrays are incomplete".into(),
+                ));
+            },
+        };
+        Self::from_native(output)?.astype_like(self, stream)
     }
 }

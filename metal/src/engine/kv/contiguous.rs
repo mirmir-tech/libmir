@@ -97,11 +97,12 @@ fn page_context(
     stream: &Stream,
     mode: PagedContextMode,
 ) -> Result<KvContext> {
-    let native = match mode {
-        PagedContextMode::Native => true,
-        PagedContextMode::NativeIfFragmented => pages.fragmented(),
-        PagedContextMode::View | PagedContextMode::Both => false,
-    };
+    let native = pages.quantized()
+        || match mode {
+            PagedContextMode::Native => true,
+            PagedContextMode::NativeIfFragmented => pages.fragmented(),
+            PagedContextMode::View | PagedContextMode::Both => false,
+        };
     let (keys, values) = if native {
         (clone_required(update_keys)?, clone_required(update_values)?)
     } else {

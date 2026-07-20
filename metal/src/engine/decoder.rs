@@ -18,11 +18,11 @@ impl DecoderModel {
         }
     }
 
-    pub(crate) fn new_cache(&self) -> Result<DecoderCache> {
+    pub(crate) fn new_cache(&self, stream: &Stream) -> Result<DecoderCache> {
         match self {
-            Self::HybridMoe(model) => model.new_cache(),
-            Self::HybridLinearMoe(model) => model.new_cache(),
-            Self::DenseSwiGlu(model) => model.new_cache(),
+            Self::HybridMoe(model) => model.new_cache(stream),
+            Self::HybridLinearMoe(model) => model.new_cache(stream),
+            Self::DenseSwiGlu(model) => model.new_cache(stream),
         }
     }
 
