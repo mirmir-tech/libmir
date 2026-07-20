@@ -1,16 +1,16 @@
 use std::{fs, path::Path};
 
 use models::{
-    layout::{
-        ImageProcessorConfig, ModelLayout, SpatialMergeImageProcessorConfig,
-        SpatialMergeVisionConfig, VisionConfig,
-    },
+    layout::{SpatialMergeImageProcessorConfig, SpatialMergeVisionConfig},
     vision::SpatialMergePreprocessedImage,
 };
 use serde_json::{Map, Value, json};
 
 use super::{SpatialMergeVisionTower, rope::VisionRope};
-use crate::engine::{Array, Error, ModelTensors, Result, Stream};
+use crate::engine::{Array, ModelTensors, Result, Stream};
+
+#[path = "spatial_merge_real_comparison.rs"]
+mod real_comparison;
 
 #[test]
 fn vision_rope_rotates_the_complete_head_across_both_spatial_axes() -> Result<()> {
@@ -50,36 +50,6 @@ fn loads_and_executes_a_complete_synthetic_tower() -> Result<()> {
     let result = execute(&root);
     fs::remove_dir_all(root)?;
     result
-}
-
-#[test]
-#[ignore = "loads a real spatial-merge vision checkpoint; set MIRMIR_QWEN36_MODEL"]
-fn executes_a_real_spatial_merge_vision_tower() -> Result<()> {
-    let root = std::env::var_os("MIRMIR_QWEN36_MODEL")
-        .map(std::path::PathBuf::from)
-        .ok_or_else(|| Error::InvalidModel("MIRMIR_QWEN36_MODEL is unset".into()))?;
-    let layout = ModelLayout::inspect(&root)?;
-    let vision = VisionConfig::from_layout(&layout)?
-        .ok_or_else(|| Error::InvalidModel("checkpoint has no vision config".into()))?;
-    let processor = ImageProcessorConfig::from_layout(&layout, vision.pipeline())?
-        .ok_or_else(|| Error::InvalidModel("checkpoint has no image processor".into()))?;
-    let (VisionConfig::SpatialMergeEncoder(config), ImageProcessorConfig::SpatialMerge(processor)) =
-        (vision, processor)
-    else {
-        return Err(Error::InvalidModel("checkpoint is not spatial-merge vision".into()));
-    };
-    let rgb = (0..64 * 64 * 3)
-        .map(|index| u8::try_from(index % 251))
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    let image = processor.preprocess_rgb(&rgb, 64, 64)?;
-    let tensors = ModelTensors::load(&root, &Stream::new_cpu()?)?;
-    let stream = Stream::new_gpu()?;
-    let output = SpatialMergeVisionTower::load(&tensors, &config, &stream)?
-        .forward_preprocessed(&image, &stream)?;
-    let values = output.to_vec_f32_on_stream(&stream)?;
-    assert_eq!(output.shape()?, [1, i32::try_from(image.soft_tokens)?, 2048]);
-    assert!(values.iter().all(|value| value.is_finite()));
-    Ok(())
 }
 
 fn execute(root: &Path) -> Result<()> {

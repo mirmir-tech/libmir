@@ -14,6 +14,7 @@ cuda_export!(PrefillAttentionKernel = "libmir_cuda_paged_prefill_attention_bf16"
     output: &mut DeviceBuffer<bf16>, query_tokens: u32, start_position: u32,
     block_count: u32, block_size: u32, query_heads: u32, kv_heads: u32,
     head_dim: u32, value_head_dim: u32, window: u32, scale: f32,
+    image_start: u32, image_end: u32,
 ));
 
 #[derive(Clone, Debug)]
@@ -44,6 +45,7 @@ impl PagedPrefillAttention {
         block_count: usize,
         window: Option<usize>,
         scale: f32,
+        image: Option<(usize, usize)>,
     ) -> Result<()> {
         let query_width = product(self.spec.query_heads, self.spec.head_dim)?;
         let output_width = product(self.spec.query_heads, self.spec.value_head_dim)?;
@@ -59,10 +61,12 @@ impl PagedPrefillAttention {
             || block_count > self.spec.max_blocks
             || context > capacity
             || !scale.is_finite()
+            || image.is_some_and(|(start, end)| start >= end || end > context)
         {
             return Err(Error::InvalidPagedKv("invalid prefill attention geometry"));
         }
         let blocks = product(query_tokens, self.spec.query_heads)?;
+        let (image_start, image_end) = image.unwrap_or((0, 0));
         Ok(self.kernel.launch(
             stream,
             LaunchConfig {
@@ -86,6 +90,8 @@ impl PagedPrefillAttention {
                 narrow(self.spec.value_head_dim)?,
                 narrow(window.unwrap_or(0))?,
                 scale,
+                narrow(image_start)?,
+                narrow(image_end)?,
             ),
         )?)
     }

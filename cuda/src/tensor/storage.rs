@@ -79,6 +79,15 @@ impl CudaTensor {
         }
     }
 
+    /// Returns half-precision storage without copying when the dtype matches.
+    #[must_use]
+    pub fn as_f16(&self) -> Option<&DeviceBuffer<f16>> {
+        match &self.storage {
+            TensorStorage::F16(buffer) => Some(buffer),
+            _ => None,
+        }
+    }
+
     /// Returns packed U32 storage without copying when the dtype matches.
     #[must_use]
     pub fn as_u32(&self) -> Option<&DeviceBuffer<u32>> {

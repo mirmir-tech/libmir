@@ -35,4 +35,14 @@ impl PrefillTokenBuffer {
     pub(super) const fn device(&self) -> &DeviceBuffer<u32> {
         &self.device
     }
+
+    pub(super) fn ensure_capacity(&mut self, backend: &CudaBackend, capacity: usize) -> Result<()> {
+        if capacity <= self.capacity {
+            return Ok(());
+        }
+        self.device = backend.inner.pool.allocate(&backend.inner.stream, capacity)?;
+        self.staging = backend.inner.context.allocate_pinned(capacity)?;
+        self.capacity = capacity;
+        Ok(())
+    }
 }

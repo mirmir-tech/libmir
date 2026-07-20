@@ -1,5 +1,8 @@
 use mircuda::{DeviceBuffer, Stream, bf16};
 
+mod affine;
+pub use affine::AffineRouterBf16;
+
 use super::{CudaBackend, linear::Bf16Fp32Linear};
 use crate::{
     CudaTensor, Error, Result,

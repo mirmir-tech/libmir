@@ -53,6 +53,7 @@ pub struct SelectedAffineGatedSpec {
     pub matrix: AffineGemvSpec,
     pub expert_count: usize,
     pub selected_count: usize,
+    pub tokens: usize,
     pub activation: GatedActivation,
 }
 
@@ -63,13 +64,25 @@ impl SelectedAffineGatedSpec {
         selected_count: usize,
         activation: GatedActivation,
     ) -> Result<Self> {
-        if expert_count == 0 || selected_count == 0 || selected_count > expert_count {
+        Self::new_batch(matrix, expert_count, selected_count, 1, activation)
+    }
+
+    pub const fn new_batch(
+        matrix: AffineGemvSpec,
+        expert_count: usize,
+        selected_count: usize,
+        tokens: usize,
+        activation: GatedActivation,
+    ) -> Result<Self> {
+        if expert_count == 0 || selected_count == 0 || selected_count > expert_count || tokens == 0
+        {
             return Err(Error::InvalidQuantizedGemv("invalid selected expert count"));
         }
         Ok(Self {
             matrix,
             expert_count,
             selected_count,
+            tokens,
             activation,
         })
     }
@@ -124,7 +137,7 @@ impl SelectedAffineGated {
             grid: (
                 narrow(matrix.output_features.div_ceil(8))?,
                 narrow(self.spec.selected_count)?,
-                1,
+                narrow(self.spec.tokens)?,
             ),
             block: (32, 8, 1),
             shared_memory_bytes: 0,
@@ -152,8 +165,12 @@ impl SelectedAffineGated {
         let layout = matrix.layout()?;
         let packed = product(layout.packed_per_matrix, self.spec.expert_count)?;
         let grouped = product(layout.groups_per_matrix, self.spec.expert_count)?;
-        require("input", matrix.input_features, launch.input.len())?;
-        require("selected experts", self.spec.selected_count, launch.selected.len())?;
+        require("input", product(matrix.input_features, self.spec.tokens)?, launch.input.len())?;
+        require(
+            "selected experts",
+            product(self.spec.selected_count, self.spec.tokens)?,
+            launch.selected.len(),
+        )?;
         for (name, actual) in
             [("gate weight", launch.gate_weight.len()), ("up weight", launch.up_weight.len())]
         {
@@ -169,7 +186,7 @@ impl SelectedAffineGated {
         }
         require(
             "gated output",
-            product(matrix.output_features, self.spec.selected_count)?,
+            product(product(matrix.output_features, self.spec.selected_count)?, self.spec.tokens)?,
             launch.output.len(),
         )
     }

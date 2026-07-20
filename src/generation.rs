@@ -60,7 +60,6 @@ impl Model {
         self.generate_inner(request, None, progress, token, cancellation)
     }
 
-    #[cfg(feature = "metal")]
     /// Generates from one encoded image using the vision architecture declared
     /// by the loaded checkpoint.
     pub fn generate_image_cancellable(

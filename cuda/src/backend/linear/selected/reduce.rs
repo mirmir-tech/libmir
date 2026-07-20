@@ -23,7 +23,18 @@ impl SelectedAffineReduceBf16Linear {
         expert_count: usize,
         selected_count: usize,
     ) -> Result<Self> {
-        let spec = SelectedAffineReduceSpec::new(matrix, expert_count, selected_count)?;
+        Self::new_batch(backend, matrix, expert_count, selected_count, 1)
+    }
+
+    pub(in crate::backend) fn new_batch(
+        backend: &CudaBackend,
+        matrix: AffineGemvSpec,
+        expert_count: usize,
+        selected_count: usize,
+        tokens: usize,
+    ) -> Result<Self> {
+        let spec =
+            SelectedAffineReduceSpec::new_batch(matrix, expert_count, selected_count, tokens)?;
         Ok(Self {
             operation: SelectedAffineReduce::compile(&backend.inner.compiler, spec)?,
             stream: backend.inner.stream.clone(),
@@ -61,8 +72,14 @@ impl SelectedAffineReduceBf16Linear {
     }
 
     /// Elements required by the reduced hidden-state output.
-    #[must_use]
-    pub const fn output_elements(&self) -> usize {
-        self.operation.spec().matrix.output_features
+    pub fn output_elements(&self) -> Result<usize> {
+        let spec = self.operation.spec();
+        spec.matrix.output_features.checked_mul(spec.tokens).ok_or_else(|| {
+            crate::Error::InvalidTensorSize {
+                name: "selected reduced output".into(),
+                expected: usize::MAX,
+                actual: 0,
+            }
+        })
     }
 }

@@ -113,7 +113,7 @@ impl CudaMoeModelSession {
         chunk_len(remaining, self.prefill_tokens.capacity())
     }
 
-    fn validate_prefill(
+    pub(in crate::backend::model::session) fn validate_prefill(
         &self,
         tokens: &[u32],
         write_offset: usize,

@@ -193,6 +193,20 @@ impl SessionLayer {
         start_position: usize,
         tokens: usize,
     ) -> Result<()> {
+        self.execute_prefill_masked(input, output, write_plan, table, start_position, tokens, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn execute_prefill_masked(
+        &mut self,
+        input: &DeviceBuffer<bf16>,
+        output: &mut DeviceBuffer<bf16>,
+        write_plan: &KvWritePlan,
+        table: &BlockTable,
+        start_position: usize,
+        tokens: usize,
+        image: Option<crate::backend::attention::ImageAttentionSpan>,
+    ) -> Result<()> {
         match self {
             Self::Moe(layer) => {
                 let decode = layer.decode.as_mut().ok_or(Error::InvalidDecoderKernel(
@@ -202,9 +216,17 @@ impl SessionLayer {
                     .prefill
                     .get_mut(&tokens)
                     .ok_or(Error::InvalidDecoderKernel("missing CUDA prefill plan"))?;
-                decode.execute_prefill(prefill, input, write_plan, table, start_position, output)
+                decode.execute_prefill_masked(
+                    prefill, input, write_plan, table, start_position, output, image,
+                )
             },
             Self::Dense(layer) => {
+                if image.is_some() {
+                    return Err(Error::UnsupportedVisionContract(
+                        "bidirectional pooled-image prefill requires a CUDA hybrid-MoE decoder"
+                            .into(),
+                    ));
+                }
                 let weights = layer.template.weights();
                 let decode = layer.decode.as_mut().ok_or(Error::InvalidDecoderKernel(
                     "CUDA prefill executor belongs to model graph",

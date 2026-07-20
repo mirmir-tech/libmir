@@ -28,9 +28,12 @@ __device__ __forceinline__ void libmir_cuda_selected_affine_gated_bf16_impl(
   constexpr unsigned int words_per_thread = values_per_thread / values_per_word;
   const unsigned int row = blockIdx.x * 8u + threadIdx.y;
   const unsigned int slot = blockIdx.y;
+  const unsigned int token = blockIdx.z;
   if (row >= output_features) return;
-  const unsigned int expert = selected[slot];
-  const unsigned int output_index = slot * output_features + row;
+  input += token * input_features;
+  const unsigned int selected_index = token * gridDim.y + slot;
+  const unsigned int expert = selected[selected_index];
+  const unsigned int output_index = selected_index * output_features + row;
   if (expert >= expert_count) {
     if (threadIdx.x == 0) output[output_index] = 0;
     return;

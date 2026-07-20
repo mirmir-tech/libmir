@@ -57,7 +57,9 @@ impl CudaEngine {
         let mut offset = 0;
         while offset < request.sequences().len() {
             let remaining = request.sequences().len() - offset;
-            if let Some(rows) = runner.batches.largest_at_most(remaining) {
+            if let Some(rows) =
+                runner.batches.as_ref().and_then(|batches| batches.largest_at_most(remaining))
+            {
                 outputs.extend(
                     self.execute_bucket(&mut runner, &request.sequences()[offset..offset + rows])?,
                 );
@@ -86,7 +88,11 @@ impl CudaEngine {
         let tokens = sequences.iter().map(|item| item.token_id).collect::<Vec<_>>();
         let tables = sequences.iter().map(|item| &item.block_table).collect::<Vec<_>>();
         let policies = sequences.iter().map(|item| item.sampling_logits).collect::<Vec<_>>();
-        let bucket = runner.batches.get_mut(rows)?;
+        let bucket = runner
+            .batches
+            .as_mut()
+            .ok_or(Error::InvalidDecoderKernel("CUDA model has no decode batches"))?
+            .get_mut(rows)?;
         bucket.decode(&tokens, &tables)?;
         let history = policies.iter().any(|policy| policy.requires_history());
         let logits = history.then(|| self.backend.read_logits(bucket.logits()?)).transpose()?;

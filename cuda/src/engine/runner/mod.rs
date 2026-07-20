@@ -167,29 +167,4 @@ impl<T> Drop for RunnerGuard<'_, T> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{QueueState, WorkClass};
-
-    #[test]
-    fn decode_overtakes_prefill_until_burst_limit() {
-        let mut state = QueueState::default();
-        let prefill = state.enqueue(WorkClass::Prefill);
-        let decode = state.enqueue(WorkClass::Decode);
-        assert!(state.can_admit(WorkClass::Decode, decode, 2));
-        assert!(!state.can_admit(WorkClass::Prefill, prefill, 2));
-        state.admit(WorkClass::Decode);
-        state.active = false;
-        let second_decode = state.enqueue(WorkClass::Decode);
-        assert!(state.can_admit(WorkClass::Decode, second_decode, 2));
-    }
-
-    #[test]
-    fn prefill_runs_after_decode_burst() {
-        let mut state = QueueState::default();
-        let prefill = state.enqueue(WorkClass::Prefill);
-        state.decode_streak = 2;
-        let decode = state.enqueue(WorkClass::Decode);
-        assert!(state.can_admit(WorkClass::Prefill, prefill, 2));
-        assert!(!state.can_admit(WorkClass::Decode, decode, 2));
-    }
-}
+mod tests;

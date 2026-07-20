@@ -2,7 +2,10 @@ use mircuda::{DeviceBuffer, bf16};
 use runtime::kv::{BlockTable, KvWritePlan};
 
 use super::PrefillMoeBlockBf16;
-use crate::{DecodeMoeBlockBf16, DecodeMoeBlockWeights, Result, backend::block::scalar};
+use crate::{
+    DecodeMoeBlockBf16, DecodeMoeBlockWeights, Result,
+    backend::{attention::ImageAttentionSpan, block::scalar},
+};
 
 impl PrefillMoeBlockBf16 {
     #[allow(clippy::too_many_arguments)]
@@ -16,7 +19,22 @@ impl PrefillMoeBlockBf16 {
         start_position: usize,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
-        self.attention.execute(
+        self.execute_masked(state, input, weights, write_plan, table, start_position, output, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::backend) fn execute_masked(
+        &mut self,
+        state: &mut DecodeMoeBlockBf16,
+        input: &DeviceBuffer<bf16>,
+        weights: DecodeMoeBlockWeights<'_>,
+        write_plan: &KvWritePlan,
+        table: &BlockTable,
+        start_position: usize,
+        output: &mut DeviceBuffer<bf16>,
+        image: Option<ImageAttentionSpan>,
+    ) -> Result<()> {
+        self.attention.execute_masked(
             &mut state.attention,
             input,
             weights.attention,
@@ -24,6 +42,7 @@ impl PrefillMoeBlockBf16 {
             table,
             start_position,
             &mut self.scratch.attention,
+            image,
         )?;
         self.post_attention_norm.execute(
             &self.scratch.attention,

@@ -5,6 +5,7 @@ pub enum BackendCapability {
     Prefill,
     Decode,
     Streaming,
+    Vision,
     PrefixCache,
     Quantization(String),
     GraphCapture,

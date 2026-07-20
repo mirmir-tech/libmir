@@ -18,15 +18,19 @@ extern "C" __global__ void libmir_cuda_paged_prefill_attention_bf16(
     unsigned int start_position, unsigned int block_count,
     unsigned int block_size, unsigned int query_heads,
     unsigned int kv_heads, unsigned int head_dim,
-    unsigned int value_head_dim, unsigned int window, float scale) {
+    unsigned int value_head_dim, unsigned int window, float scale,
+    unsigned int image_start, unsigned int image_end) {
   const unsigned int query_token = blockIdx.x / query_heads;
   const unsigned int query_head = blockIdx.x % query_heads;
   if (query_token >= query_tokens) return;
   const unsigned int lane = threadIdx.x;
   const unsigned int kv_head = query_head / (query_heads / kv_heads);
-  const unsigned int context = start_position + query_token + 1;
-  const unsigned int first = window > 0 && context > window
-      ? context - window : 0;
+  const unsigned int query_position = start_position + query_token;
+  const bool image_query = query_position >= image_start && query_position < image_end;
+  const unsigned int context = image_query ? image_end : query_position + 1;
+  const unsigned int causal_context = query_position + 1;
+  const unsigned int first = window > 0 && causal_context > window
+      ? causal_context - window : 0;
   float accumulators[2] = {0.0f, 0.0f};
   __shared__ float warp_sums[8];
   __shared__ float alpha;

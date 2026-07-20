@@ -2,10 +2,10 @@ mod backend;
 mod batch;
 mod lifecycle;
 mod memory;
-#[cfg(feature = "metal")]
+#[cfg(any(feature = "cuda", feature = "metal"))]
 mod pooled_vision;
 mod select;
-#[cfg(feature = "metal")]
+#[cfg(any(feature = "cuda", feature = "metal"))]
 mod spatial_merge_vision;
 
 #[cfg(feature = "cuda")]

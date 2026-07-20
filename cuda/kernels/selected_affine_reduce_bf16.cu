@@ -19,7 +19,12 @@ __device__ __forceinline__ void libmir_cuda_selected_affine_reduce_bf16_impl(
   constexpr unsigned int words_per_thread = values_per_thread / values_per_word;
   constexpr unsigned int mask = (1u << bits) - 1u;
   const unsigned int row = blockIdx.x * 8u + threadIdx.y;
+  const unsigned int token = blockIdx.y;
   if (row >= output_features) return;
+  input += token * selected_count * input_features;
+  selected += token * selected_count;
+  routing_weights += token * selected_count;
+  output += token * output_features;
   const unsigned int words_per_row = input_features / values_per_word;
   const unsigned int groups_per_row = input_features / group_size;
   float reduced = 0.0f;

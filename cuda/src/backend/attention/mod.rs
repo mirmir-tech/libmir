@@ -27,6 +27,7 @@ pub use config::{DecodeAttentionConfig, DecodeAttentionWeights, DecodeQkvWeights
 pub use graph::CapturedDecodeAttentionBf16;
 use output::AttentionOutputProjection;
 pub use output::DecodeAttentionOutputWeight;
+pub(in crate::backend) use prefill::ImageAttentionSpan;
 pub use prefill::PrefillAttentionBf16;
 use qkv::{AttentionQkvProjection, QkvProjectionBuffers};
 

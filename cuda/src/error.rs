@@ -20,6 +20,9 @@ pub enum Error {
     /// ABI.
     #[error(transparent)]
     IntegerConversion(#[from] std::num::TryFromIntError),
+    /// A finite model scalar cannot be represented by a native kernel scalar.
+    #[error(transparent)]
+    FloatConversion(#[from] std::num::ParseFloatError),
     /// The configured CUDA device ordinal is unavailable.
     #[error("CUDA device ordinal {0} is unavailable")]
     DeviceUnavailable(usize),
@@ -72,6 +75,9 @@ pub enum Error {
     /// A normalization or rotary operation has invalid fixed geometry.
     #[error("invalid CUDA decoder kernel: {0}")]
     InvalidDecoderKernel(&'static str),
+    /// A fixed-shape vision primitive received invalid geometry or storage.
+    #[error("invalid CUDA vision kernel: {0}")]
+    InvalidVisionKernel(&'static str),
     /// The model-level CUDA execution planner rejected a request.
     #[error("invalid CUDA execution plan: {0}")]
     InvalidExecutionPlan(&'static str),
@@ -85,6 +91,9 @@ pub enum Error {
     /// capability set.
     #[error("unsupported CUDA decoder layer: {0}")]
     UnsupportedDecoderLayer(String),
+    /// A structurally discovered vision contract has no complete CUDA path.
+    #[error("unsupported CUDA vision contract: {0}")]
+    UnsupportedVisionContract(String),
     /// The model/session registry cannot be accessed consistently.
     #[error("CUDA inference state failed: {0}")]
     State(String),

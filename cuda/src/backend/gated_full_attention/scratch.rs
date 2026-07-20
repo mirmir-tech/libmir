@@ -1,0 +1,44 @@
+use mircuda::{DeviceBuffer, bf16};
+
+use super::{AffineGatedFullAttentionConfig, checked};
+use crate::{CudaBackend, Result};
+
+#[derive(Debug)]
+pub(super) struct GatedAttentionScratch {
+    pub(super) query_projected: DeviceBuffer<bf16>,
+    pub(super) query: DeviceBuffer<bf16>,
+    pub(super) gate: DeviceBuffer<bf16>,
+    pub(super) normalized_query: DeviceBuffer<bf16>,
+    pub(super) rotated_query: DeviceBuffer<bf16>,
+    pub(super) key: DeviceBuffer<bf16>,
+    pub(super) normalized_key: DeviceBuffer<bf16>,
+    pub(super) rotated_key: DeviceBuffer<bf16>,
+    pub(super) value: DeviceBuffer<bf16>,
+    pub(super) attended: DeviceBuffer<bf16>,
+    pub(super) gated: DeviceBuffer<bf16>,
+}
+
+impl GatedAttentionScratch {
+    pub(super) fn new(
+        backend: &CudaBackend,
+        config: AffineGatedFullAttentionConfig,
+        tokens: usize,
+    ) -> Result<Self> {
+        let query = checked(tokens, config.query_width()?)?;
+        let key_value = checked(tokens, config.key_value_width()?)?;
+        let allocate = |elements| backend.inner.pool.allocate(&backend.inner.stream, elements);
+        Ok(Self {
+            query_projected: allocate(checked(query, 2)?)?,
+            query: allocate(query)?,
+            gate: allocate(query)?,
+            normalized_query: allocate(query)?,
+            rotated_query: allocate(query)?,
+            key: allocate(key_value)?,
+            normalized_key: allocate(key_value)?,
+            rotated_key: allocate(key_value)?,
+            value: allocate(key_value)?,
+            attended: allocate(query)?,
+            gated: allocate(query)?,
+        })
+    }
+}

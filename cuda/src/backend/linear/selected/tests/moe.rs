@@ -50,7 +50,7 @@ fn check_moe(bits: usize) -> Result<()> {
         let mut output = backend
             .inner
             .pool
-            .allocate_zeroed::<bf16>(&backend.inner.stream, reduce.output_elements())?;
+            .allocate_zeroed::<bf16>(&backend.inner.stream, reduce.output_elements()?)?;
         gated.execute(&input, &selected, pair, &mut intermediate)?;
         reduce.execute(&intermediate, &selected, &routing, down, &mut output)?;
         let mut host = backend.inner.context.allocate_pinned::<bf16>(HIDDEN)?;

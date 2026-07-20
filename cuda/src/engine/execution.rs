@@ -10,9 +10,9 @@ use runtime::{
 
 use super::{
     CudaEngine,
-    model::{DeviceToken, ModelRunner},
+    model::{DeviceToken, ModelExecution, ModelRunner},
 };
-use crate::{CudaMoeModelSession, Error, Result};
+use crate::{CudaHybridLinearModelSession, CudaMoeModelSession, Error, Result};
 
 impl CudaEngine {
     pub fn prefill_with_progress(
@@ -24,6 +24,9 @@ impl CudaEngine {
             return Err(Error::InvalidDecoderKernel("CUDA prefill prompt is empty"));
         }
         let loaded = self.model(&request.model.id)?;
+        if loaded.plan.decoder == models::execution::DecoderArchetype::HybridLinearMoe {
+            return self.prefill_hybrid(&loaded, request, progress);
+        }
         let execution_started = Instant::now();
         let mut runner_wait = Duration::ZERO;
         let mut consumed = 0;
@@ -33,21 +36,20 @@ impl CudaEngine {
         while consumed < request.prompt_tokens.len() {
             let lock_started = Instant::now();
             let mut runner = loaded.prefill_runner()?;
+            let ModelExecution::Standard(model) = &mut runner.execution else {
+                return Err(Error::State("CUDA runner archetype changed during prefill".into()));
+            };
+            let model = model.as_mut();
             runner_wait += lock_started.elapsed();
             let remaining = &request.prompt_tokens[consumed..];
-            let count = runner.model.prefill_chunk_len(remaining.len());
+            let count = model.prefill_chunk_len(remaining.len());
             step_table.set_token_len(consumed + count);
-            runner.model.prefill_chunk(
-                request.session_id,
-                &remaining[..count],
-                consumed,
-                &step_table,
-            )?;
+            model.prefill_chunk(request.session_id, &remaining[..count], consumed, &step_table)?;
             consumed += count;
             chunks += 1;
             if consumed == request.prompt_tokens.len() {
-                runner.model.finish_prefill(count, request.sampling_logits)?;
-                let completed = self.output(&mut runner.model, request.sampling_logits)?;
+                model.finish_prefill(count, request.sampling_logits)?;
+                let completed = self.output(model, request.sampling_logits)?;
                 runner.selected =
                     completed.token.map(|token| DeviceToken { session: request.session_id, token });
                 loaded.register_session(request.session_id)?;
@@ -95,35 +97,46 @@ impl CudaEngine {
             session: request.session_id,
             token: request.token_id,
         };
+        if let ModelExecution::Hybrid(hybrid) = &mut runner.execution {
+            let session = hybrid
+                .sessions
+                .get_mut(&request.session_id)
+                .ok_or_else(|| Error::State("hybrid CUDA session is not initialized".into()))?;
+            session.decode(request.session_id, request.token_id, &request.block_table)?;
+            let output = self.output_hybrid(session, request.sampling_logits)?;
+            runner.selected =
+                output.token.map(|token| DeviceToken { session: request.session_id, token });
+            return Ok(decode_output(output));
+        }
+        let ModelExecution::Standard(model) = &mut runner.execution else {
+            return Err(Error::State("invalid CUDA runner execution state".into()));
+        };
+        let model = model.as_mut();
         if runner.selected == Some(selected) {
-            runner.model.decode_sampled_for_sampling(
+            model.decode_sampled_for_sampling(
                 request.session_id,
                 &request.block_table,
                 request.sampling_logits,
             )?;
         } else {
-            runner.model.decode_for_sampling(
+            model.decode_for_sampling(
                 request.session_id,
                 request.token_id,
                 &request.block_table,
                 request.sampling_logits,
             )?;
         }
-        let output = self.output(&mut runner.model, request.sampling_logits)?;
+        let output = self.output(model, request.sampling_logits)?;
         runner.selected =
             output.token.map(|token| DeviceToken { session: request.session_id, token });
-        Ok(DecodeOutput {
-            event: TokenEvent {
-                token_id: output.token,
-                text: "cuda.decode=device-token-pipeline".into(),
-                finished: false,
-            },
-            logits: output.logits,
-            candidates: None,
-        })
+        Ok(decode_output(output))
     }
 
-    fn output(&self, session: &mut CudaMoeModelSession, policy: SamplingLogits) -> Result<Output> {
+    pub(super) fn output(
+        &self,
+        session: &mut CudaMoeModelSession,
+        policy: SamplingLogits,
+    ) -> Result<Output> {
         if device_sampling(policy) {
             let selected = session.sample(policy)?;
             return Ok(Output {
@@ -140,11 +153,57 @@ impl CudaEngine {
             }),
         })
     }
+
+    pub(super) fn output_hybrid(
+        &self,
+        session: &mut CudaHybridLinearModelSession,
+        policy: SamplingLogits,
+    ) -> Result<Output> {
+        if device_sampling(policy) {
+            let selected = session.sample(policy)?;
+            return Ok(Output {
+                token: Some(self.backend.read_token(selected)?),
+                logits: None,
+            });
+        }
+        output_logits(&self.backend, session.logits())
+    }
+
+    fn prefill_hybrid(
+        &self,
+        loaded: &super::model::LoadedModel,
+        request: &PrefillRequest,
+        progress: &mut dyn FnMut(ProgressEvent),
+    ) -> Result<PrefillOutput> {
+        let mut runner = loaded.prefill_runner()?;
+        let ModelExecution::Hybrid(hybrid) = &mut runner.execution else {
+            return Err(Error::State("hybrid execution plan has a standard runner".into()));
+        };
+        let mut session = hybrid.template.instantiate()?;
+        session.prefill(request.session_id, &request.prompt_tokens, &request.block_table)?;
+        let output = self.output_hybrid(&mut session, request.sampling_logits)?;
+        hybrid.sessions.insert(request.session_id, session);
+        runner.selected =
+            output.token.map(|token| DeviceToken { session: request.session_id, token });
+        drop(runner);
+        loaded.register_session(request.session_id)?;
+        progress(ProgressEvent::prefill_tokens(
+            request.prompt_tokens.len(),
+            request.prompt_tokens.len(),
+        ));
+        Ok(PrefillOutput {
+            accepted_tokens: request.prompt_tokens.len(),
+            next_token: output.token,
+            trace: Some("cuda.prefill=hybrid-linear-full-device-state".into()),
+            logits: output.logits,
+            candidates: None,
+        })
+    }
 }
 
-struct Output {
-    token: Option<u32>,
-    logits: Option<LogitsTrace>,
+pub(super) struct Output {
+    pub(super) token: Option<u32>,
+    pub(super) logits: Option<LogitsTrace>,
 }
 
 pub(super) const fn device_sampling(policy: SamplingLogits) -> bool {
@@ -152,4 +211,30 @@ pub(super) const fn device_sampling(policy: SamplingLogits) -> bool {
         policy,
         SamplingLogits::None | SamplingLogits::SampleTopK { .. } | SamplingLogits::Sample { .. }
     )
+}
+
+fn output_logits(
+    backend: &crate::CudaBackend,
+    logits: &mircuda::DeviceBuffer<mircuda::bf16>,
+) -> Result<Output> {
+    let values = backend.read_logits(logits)?;
+    Ok(Output {
+        token: None,
+        logits: Some(LogitsTrace {
+            shape: vec![1, 1, i32::try_from(values.len())?],
+            values,
+        }),
+    })
+}
+
+fn decode_output(output: Output) -> DecodeOutput {
+    DecodeOutput {
+        event: TokenEvent {
+            token_id: output.token,
+            text: "cuda.decode=device-token-pipeline".into(),
+            finished: false,
+        },
+        logits: output.logits,
+        candidates: None,
+    }
 }

@@ -2,13 +2,13 @@ use foundation::protocol::ChatCompletionRequest;
 use models::generation::GenerationSettings;
 use runtime::backend::{PrefillOutput, SamplingLogits};
 
-#[cfg(feature = "metal")]
+#[cfg(any(feature = "cuda", feature = "metal"))]
 use crate::PreparedVisionPrompt;
 use crate::{Model, PreparedPrompt, ProgressEvent, Result, Session};
 
 pub(super) enum PreparedGeneration {
     Text(PreparedPrompt),
-    #[cfg(feature = "metal")]
+    #[cfg(any(feature = "cuda", feature = "metal"))]
     Vision(PreparedVisionPrompt),
 }
 
@@ -22,13 +22,13 @@ impl PreparedGeneration {
         let Some(encoded_image) = encoded_image else {
             return Ok(Self::Text(model.descriptor().prepare_with_settings(request, settings)?));
         };
-        #[cfg(feature = "metal")]
+        #[cfg(any(feature = "cuda", feature = "metal"))]
         {
             Ok(Self::Vision(
                 model.prepare_image_with_settings(request, encoded_image, settings)?,
             ))
         }
-        #[cfg(not(feature = "metal"))]
+        #[cfg(not(any(feature = "cuda", feature = "metal")))]
         {
             let _ = encoded_image;
             Err(models::ModelsError::InvalidConfig(
@@ -41,9 +41,9 @@ impl PreparedGeneration {
     pub(super) fn token_ids(&self) -> &[u32] {
         match self {
             Self::Text(prepared) => &prepared.tokens.token_ids,
-            #[cfg(feature = "metal")]
+            #[cfg(any(feature = "cuda", feature = "metal"))]
             Self::Vision(PreparedVisionPrompt::Pooled { tokens, .. }) => &tokens.token_ids,
-            #[cfg(feature = "metal")]
+            #[cfg(any(feature = "cuda", feature = "metal"))]
             Self::Vision(PreparedVisionPrompt::SpatialMerge { tokens, .. }) => &tokens.token_ids,
         }
     }
@@ -51,7 +51,7 @@ impl PreparedGeneration {
     pub(super) fn prompt_text(&self) -> &str {
         match self {
             Self::Text(prepared) => &prepared.prompt.text,
-            #[cfg(feature = "metal")]
+            #[cfg(any(feature = "cuda", feature = "metal"))]
             Self::Vision(
                 PreparedVisionPrompt::Pooled { prompt, .. }
                 | PreparedVisionPrompt::SpatialMerge { prompt, .. },
@@ -67,7 +67,7 @@ impl PreparedGeneration {
     ) -> Result<PrefillOutput> {
         match self {
             Self::Text(prepared) => session.prefill(&prepared.tokens.token_ids, sampling, progress),
-            #[cfg(feature = "metal")]
+            #[cfg(any(feature = "cuda", feature = "metal"))]
             Self::Vision(prepared) => session.prefill_vision(prepared, sampling, progress),
         }
     }

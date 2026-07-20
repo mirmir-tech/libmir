@@ -120,7 +120,7 @@ impl CapturedModelLayer {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn execute_prefill(
+    pub fn execute_prefill_masked(
         &mut self,
         prefill: LayerPrefill<'_>,
         input: &DeviceBuffer<bf16>,
@@ -128,12 +128,18 @@ impl CapturedModelLayer {
         table: &BlockTable,
         start_position: usize,
         output: &mut DeviceBuffer<bf16>,
+        image: Option<crate::backend::attention::ImageAttentionSpan>,
     ) -> Result<()> {
         match (self, prefill) {
-            (Self::Moe(layer), LayerPrefill::Moe(prefill)) => {
-                layer.execute_prefill(prefill, input, plan, table, start_position, output)
-            },
+            (Self::Moe(layer), LayerPrefill::Moe(prefill)) => layer
+                .execute_prefill_masked(prefill, input, plan, table, start_position, output, image),
             (Self::Dense(layer), LayerPrefill::Dense(prefill)) => {
+                if image.is_some() {
+                    return Err(crate::Error::UnsupportedVisionContract(
+                        "bidirectional pooled-image prefill requires a CUDA hybrid-MoE decoder"
+                            .into(),
+                    ));
+                }
                 layer.execute_prefill(prefill, input, plan, table, start_position, output)
             },
             _ => Err(crate::Error::InvalidDecoderKernel("prefill layer kind differs from graph")),

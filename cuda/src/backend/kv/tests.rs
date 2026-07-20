@@ -83,6 +83,49 @@ fn paged_prefill_is_causal_within_the_query_chunk()
 }
 
 #[test]
+fn paged_prefill_opens_the_bidirectional_image_block()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let backend = CudaBackend::new(CudaConfig::default())?;
+    let spec = KvStorageSpec::new(
+        CacheConfig {
+            block_size: 2,
+            block_count: 3,
+            dtype: KvCacheDType::BFloat16,
+        },
+        1,
+        4,
+    );
+    let mut cache = backend.prepare_paged_kv(0, spec)?;
+    let keys =
+        copy(&backend, &bf16s(&[1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0]))?;
+    let values = copy(
+        &backend,
+        &bf16s(&[1.0, 2.0, 3.0, 4.0, 10.0, 20.0, 30.0, 40.0, 100.0, 200.0, 300.0, 400.0]),
+    )?;
+    let table = block_table();
+    cache.store(&KvWritePlan::prefill(Uuid::nil(), 0, &table, 0, 3)?, &keys, &values)?;
+    let query_values = [1.0, 0.0, 0.0, 0.0].repeat(6);
+    let query = copy(&backend, &bf16s(&query_values))?;
+    let mut output = backend.inner.pool.allocate::<bf16>(&backend.inner.stream, 24)?;
+    backend.prepare_paged_attention_bf16(&cache, 2, 2)?.execute_prefill_masked(
+        &query,
+        &cache,
+        &table,
+        &mut output,
+        3,
+        0,
+        None,
+        0.5,
+        Some((1, 3)),
+    )?;
+    let actual = read(&backend, &output)?;
+    assert_token_output(&actual, 0, &reference(&[0.5], None));
+    assert_token_output(&actual, 1, &reference(&[0.5, 0.0, 0.5], None));
+    assert_token_output(&actual, 2, &reference(&[0.5, 0.0, 0.5], None));
+    Ok(())
+}
+
+#[test]
 fn paged_fp8_e4m3_quantizes_and_attends_on_device()
 -> std::result::Result<(), Box<dyn std::error::Error>> {
     let backend = CudaBackend::new(CudaConfig::default())?;

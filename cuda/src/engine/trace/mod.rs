@@ -128,6 +128,17 @@ fn tensor_trace(model: &LoadedModel) -> TraceTensors {
         entry.0 += 1;
         entry.1 += tensor.shape.iter().product::<usize>();
     }
+    let readiness = model.vision_readiness.as_ref().map_or_else(
+        || format!("native CUDA {:?} model loaded", model.plan.decoder),
+        |vision| {
+            format!(
+                "native CUDA {:?} text model loaded; {:?} vision discovered; {}",
+                model.plan.decoder,
+                model.vision.as_ref().map(models::layout::VisionConfig::pipeline),
+                vision.summary()
+            )
+        },
+    );
     TraceTensors {
         tensor_count: model.catalog.len(),
         native_tensor_count: model.catalog.len(),
@@ -136,8 +147,12 @@ fn tensor_trace(model: &LoadedModel) -> TraceTensors {
         weight_bytes: model.layout.weights.iter().map(|weight| weight.bytes).sum(),
         tokenizer: model.layout.has_tokenizer(),
         safetensors_index: model.layout.safetensors_index_path.is_some(),
-        readiness: format!("native CUDA {:?} model loaded", model.plan.decoder),
-        missing: Vec::new(),
+        readiness,
+        missing: model
+            .vision_readiness
+            .as_ref()
+            .map(|vision| vision.missing.clone())
+            .unwrap_or_default(),
         native_dtypes: dtypes
             .into_iter()
             .map(|(dtype, (tensors, elements))| TraceDTypeCount { dtype, tensors, elements })

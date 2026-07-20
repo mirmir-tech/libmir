@@ -94,6 +94,8 @@ impl CudaMoeModelTemplate {
             .attention()
             .rms_norm_epsilon;
         CudaMoeModelSession::new(
+            self.backend.clone(),
+            hidden,
             self.backend.prepare_bf16_embedding(vocab, hidden, self.embedding_scale)?,
             self.backend.prepare_rms_norm_bf16(1, hidden, epsilon)?,
             self.output_head.instantiate(&self.backend)?,

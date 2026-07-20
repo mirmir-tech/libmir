@@ -34,14 +34,7 @@ impl SpatialMergeVisionTower {
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
-            embedding: PatchEmbedding::load(
-                tensors,
-                config.hidden_size,
-                config.num_position_embeddings,
-                config.spatial_merge_size,
-                prefix,
-                stream,
-            )?,
+            embedding: PatchEmbedding::load(tensors, config, prefix, stream)?,
             layers,
             merger: PatchMerger::load(
                 tensors,

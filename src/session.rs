@@ -4,7 +4,7 @@ use runtime::{
 };
 use uuid::Uuid;
 
-#[cfg(feature = "metal")]
+#[cfg(any(feature = "cuda", feature = "metal"))]
 use crate::PreparedVisionPrompt;
 use crate::{Model, ProgressEvent, Result};
 
@@ -46,9 +46,9 @@ impl Session {
         Ok(output)
     }
 
-    #[cfg(feature = "metal")]
-    /// Prefills a prepared image prompt on Metal. Multimodal sessions
-    /// deliberately never publish reusable prefix-cache entries.
+    #[cfg(any(feature = "cuda", feature = "metal"))]
+    /// Prefills a prepared image prompt on the selected accelerator. Multimodal
+    /// sessions deliberately never publish reusable prefix-cache entries.
     pub fn prefill_vision(
         &mut self,
         prepared: &PreparedVisionPrompt,

@@ -76,7 +76,7 @@ impl CapturedLayer {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(in crate::backend) fn execute_prefill(
+    pub(in crate::backend) fn execute_prefill_masked(
         &mut self,
         prefill: &mut PrefillMoeBlockBf16,
         input: &DeviceBuffer<bf16>,
@@ -84,8 +84,9 @@ impl CapturedLayer {
         table: &BlockTable,
         start_position: usize,
         output: &mut DeviceBuffer<bf16>,
+        image: Option<crate::backend::attention::ImageAttentionSpan>,
     ) -> Result<()> {
-        prefill.execute(
+        prefill.execute_masked(
             &mut self.block,
             input,
             self.weights.borrow(),
@@ -93,6 +94,7 @@ impl CapturedLayer {
             table,
             start_position,
             output,
+            image,
         )
     }
 

@@ -22,6 +22,7 @@ impl Backend for MetalBackend {
                 BackendCapability::Prefill,
                 BackendCapability::Decode,
                 BackendCapability::Streaming,
+                BackendCapability::Vision,
                 BackendCapability::PrefixCache,
                 BackendCapability::ContinuousBatching,
                 BackendCapability::Quantization("int4 affine weights".into()),

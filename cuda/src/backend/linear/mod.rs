@@ -1,3 +1,4 @@
+mod affine_projection;
 mod block_fp8;
 mod mixed;
 mod nvfp4;
@@ -10,7 +11,9 @@ mod selected;
 #[cfg(all(test, target_os = "linux"))]
 mod tests;
 mod vector;
+mod weight;
 
+pub(in crate::backend) use affine_projection::AffineProjection;
 pub use block_fp8::{BlockFp8LinearWeight, Fp8ResidualLinearWeight};
 use mircuda::{DenseMatmulPlan, DenseMatmulSpec, DeviceBuffer, Stream, bf16};
 pub use mixed::Bf16Fp32Linear;
@@ -30,6 +33,7 @@ pub use selected::{
     SelectedAffinePairBf16Linear, SelectedAffineReduceBf16Linear,
 };
 pub use vector::Bf16VectorLinear;
+pub use weight::AffineQuantizedWeight;
 
 use super::CudaBackend;
 use crate::{CudaTensor, Error, Result};
@@ -76,14 +80,48 @@ impl Bf16Linear {
         weight: &CudaTensor,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
-        let expected_shape = [self.output_features, self.input_features];
-        if weight.shape() != expected_shape {
+        self.validate_weight(weight, false)?;
+        self.execute_weight(input, weight, output)
+    }
+
+    pub(crate) fn execute_flattened(
+        &mut self,
+        input: &DeviceBuffer<bf16>,
+        weight: &CudaTensor,
+        output: &mut DeviceBuffer<bf16>,
+    ) -> Result<()> {
+        self.validate_weight(weight, true)?;
+        self.execute_weight(input, weight, output)
+    }
+
+    fn validate_weight(&self, weight: &CudaTensor, flattened: bool) -> Result<()> {
+        let shape = weight.shape();
+        let input = shape.get(1..).and_then(|dimensions| {
+            dimensions.iter().try_fold(1_usize, |total, value| total.checked_mul(*value))
+        });
+        let valid = shape.first() == Some(&self.output_features)
+            && if flattened {
+                input == Some(self.input_features)
+            } else {
+                shape == [self.output_features, self.input_features]
+            };
+        if !valid {
+            let expected_shape = [self.output_features, self.input_features];
             return Err(Error::InvalidLinearWeight {
                 name: weight.name().into(),
                 expected: expected_shape,
                 actual: weight.shape().to_vec(),
             });
         }
+        Ok(())
+    }
+
+    fn execute_weight(
+        &mut self,
+        input: &DeviceBuffer<bf16>,
+        weight: &CudaTensor,
+        output: &mut DeviceBuffer<bf16>,
+    ) -> Result<()> {
         let weight = weight.as_bf16().ok_or_else(|| Error::DTypeMismatch {
             name: weight.name().into(),
             expected: "BF16",

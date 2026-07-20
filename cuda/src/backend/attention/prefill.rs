@@ -25,6 +25,12 @@ pub struct PrefillAttentionBf16 {
     tokens: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::backend) struct ImageAttentionSpan {
+    pub start: usize,
+    pub end: usize,
+}
+
 #[derive(Debug)]
 struct PrefillAttentionScratch {
     normalized: DeviceBuffer<bf16>,
@@ -129,6 +135,21 @@ impl PrefillAttentionBf16 {
         start_position: usize,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
+        self.execute_masked(state, input, weights, write_plan, table, start_position, output, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::backend) fn execute_masked(
+        &mut self,
+        state: &mut DecodeAttentionBf16,
+        input: &DeviceBuffer<bf16>,
+        weights: DecodeAttentionWeights<'_>,
+        write_plan: &KvWritePlan,
+        table: &BlockTable,
+        start_position: usize,
+        output: &mut DeviceBuffer<bf16>,
+        image: Option<ImageAttentionSpan>,
+    ) -> Result<()> {
         let end = start_position
             .checked_add(self.tokens)
             .ok_or(Error::InvalidPagedKv("prefill attention range overflow"))?;
@@ -180,7 +201,8 @@ impl PrefillAttentionBf16 {
         state
             .cache
             .store(write_plan, &self.scratch.key_rope, &self.scratch.value_norm)?;
-        state.attention.execute_prefill(
+        let image = self.config.sliding_window.and(image);
+        state.attention.execute_prefill_masked(
             &self.scratch.query_rope,
             &state.cache,
             table,
@@ -189,6 +211,7 @@ impl PrefillAttentionBf16 {
             start_position,
             self.config.sliding_window,
             self.config.attention_scale,
+            image.map(|span| (span.start, span.end)),
         )?;
         self.output_projection.execute(
             &self.stream,

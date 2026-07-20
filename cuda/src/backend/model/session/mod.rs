@@ -8,15 +8,18 @@ use super::{
     prefill::PrefillTokenBuffer,
 };
 use crate::{
-    Bf16Embedding, CudaOutputHead, CudaTensor, DeviceSamplerBf16, Error, Result, RmsNormBf16,
-    kernels::SelectRowBf16,
+    Bf16Embedding, CudaBackend, CudaOutputHead, CudaTensor, DeviceSamplerBf16, Error, Result,
+    RmsNormBf16, kernels::SelectRowBf16,
 };
 
 mod prefill;
+mod vision;
 mod warmup;
 
 /// Mutable device-resident decode state for one model session.
 pub struct CudaMoeModelSession {
+    backend: CudaBackend,
+    hidden_size: usize,
     embedding: Bf16Embedding,
     final_norm: RmsNormBf16,
     output_projection: CudaOutputHead,
@@ -40,6 +43,8 @@ pub struct CudaMoeModelSession {
 impl CudaMoeModelSession {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
+        backend: CudaBackend,
+        hidden_size: usize,
         embedding: Bf16Embedding,
         final_norm: RmsNormBf16,
         output_projection: CudaOutputHead,
@@ -62,6 +67,8 @@ impl CudaMoeModelSession {
             return Err(Error::InvalidDecoderKernel("CUDA model session requires layers"));
         }
         Ok(Self {
+            backend,
+            hidden_size,
             embedding,
             final_norm,
             output_projection,

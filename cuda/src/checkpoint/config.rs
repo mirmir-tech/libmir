@@ -40,6 +40,13 @@ pub struct NvFp4MoeLayerLoadConfig {
     pub max_sequence_blocks: usize,
 }
 
+/// Session-independent policy for an affine hybrid linear/full-attention model.
+#[derive(Clone, Copy, Debug)]
+pub struct HybridLinearModelLoadConfig {
+    pub cache: CacheConfig,
+    pub max_sequence_blocks: usize,
+}
+
 impl NvFp4MoeLayerLoadConfig {
     pub(super) fn block(
         self,

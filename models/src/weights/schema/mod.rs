@@ -58,10 +58,10 @@ impl TensorReadiness {
     #[must_use]
     pub fn summary(&self) -> String {
         if self.is_ready() {
-            format!("decoder tensors {}/{} ready", self.present, self.required)
+            format!("tensors {}/{} ready", self.present, self.required)
         } else {
             format!(
-                "decoder tensors {}/{} present, {} missing",
+                "tensors {}/{} present, {} missing",
                 self.present,
                 self.required,
                 self.missing.len()

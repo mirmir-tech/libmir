@@ -21,6 +21,25 @@ impl PagedAttentionBf16 {
         window: Option<usize>,
         scale: f32,
     ) -> Result<()> {
+        self.execute_prefill_masked(
+            query, cache, table, output, query_tokens, start_position, window, scale, None,
+        )
+    }
+
+    /// Executes causal prefill while opening one bidirectional image block.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::backend) fn execute_prefill_masked(
+        &mut self,
+        query: &DeviceBuffer<bf16>,
+        cache: &PagedKvCache,
+        table: &BlockTable,
+        output: &mut DeviceBuffer<bf16>,
+        query_tokens: usize,
+        start_position: usize,
+        window: Option<usize>,
+        scale: f32,
+        image: Option<(usize, usize)>,
+    ) -> Result<()> {
         self.validate(cache, table)?;
         self.update_table(table)?;
         self.prefill.execute(
@@ -35,6 +54,7 @@ impl PagedAttentionBf16 {
             table.blocks().len(),
             window,
             scale,
+            image,
         )
     }
 

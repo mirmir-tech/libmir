@@ -6,7 +6,9 @@ use runtime::{
 };
 use uuid::Uuid;
 
-use super::{Engine, EngineInner, metal_progress};
+#[cfg(feature = "metal")]
+use super::metal_progress;
+use super::{Engine, EngineInner};
 
 impl Engine {
     #[allow(clippy::too_many_arguments)]
@@ -21,6 +23,7 @@ impl Engine {
         progress: &mut dyn FnMut(ProgressEvent),
     ) -> runtime::Result<PrefillOutput> {
         match &self.inner {
+            #[cfg(feature = "metal")]
             EngineInner::Metal(metal) => {
                 let mut mapped = |event| progress(metal_progress(event));
                 metal.prefill_spatial_merge_vision_with_progress(
@@ -28,9 +31,9 @@ impl Engine {
                 )
             },
             #[cfg(feature = "cuda")]
-            EngineInner::Cuda(_) => Err(runtime::RuntimeError::BackendUnavailable(
-                "spatial-merge vision prefill is currently implemented only for Metal".into(),
-            )),
+            EngineInner::Cuda(cuda) => Ok(cuda.prefill_spatial_merge_vision_with_progress(
+                model, session_id, prompt, image, block_table, sampling, progress,
+            )?),
         }
     }
 }

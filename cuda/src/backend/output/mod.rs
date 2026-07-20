@@ -1,3 +1,4 @@
+mod affine;
 mod batch;
 mod block;
 mod projection;
@@ -5,6 +6,7 @@ mod projection;
 mod tests;
 mod weight;
 
+pub use affine::CudaAffineOutputHead;
 pub(super) use batch::CudaBatchOutputHead;
 pub use projection::CudaOutputHead;
 pub(super) use weight::CudaOutputHeadTemplate;

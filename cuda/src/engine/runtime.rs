@@ -22,10 +22,12 @@ impl Backend for CudaEngine {
                 BackendCapability::Prefill,
                 BackendCapability::Decode,
                 BackendCapability::Streaming,
+                BackendCapability::Vision,
                 BackendCapability::PrefixCache,
                 BackendCapability::GraphCapture,
                 BackendCapability::ContinuousBatching,
                 BackendCapability::Quantization("ModelOpt NVFP4".into()),
+                BackendCapability::Quantization("affine Int4/Int8".into()),
             ],
         }
     }

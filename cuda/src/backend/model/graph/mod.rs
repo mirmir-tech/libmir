@@ -110,9 +110,27 @@ impl CapturedModelDecode {
         start_position: usize,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
+        self.execute_prefill_masked(
+            index, prefill, input, write_plan, table, start_position, output, None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn execute_prefill_masked(
+        &mut self,
+        index: usize,
+        prefill: LayerPrefill<'_>,
+        input: &DeviceBuffer<bf16>,
+        write_plan: &KvWritePlan,
+        table: &BlockTable,
+        start_position: usize,
+        output: &mut DeviceBuffer<bf16>,
+        image: Option<crate::backend::attention::ImageAttentionSpan>,
+    ) -> Result<()> {
         self.graph.with_resources_mut(|resources| {
-            resources.layers[index]
-                .execute_prefill(prefill, input, write_plan, table, start_position, output)
+            resources.layers[index].execute_prefill_masked(
+                prefill, input, write_plan, table, start_position, output, image,
+            )
         })
     }
 }

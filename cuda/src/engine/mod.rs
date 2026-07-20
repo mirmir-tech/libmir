@@ -4,6 +4,8 @@ mod model;
 mod runner;
 mod runtime;
 mod trace;
+mod vision;
+mod vision_model;
 
 use std::{
     collections::HashMap,

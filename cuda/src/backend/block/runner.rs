@@ -143,12 +143,26 @@ impl DecodeMoeBlockExecutor {
         start_position: usize,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
+        self.execute_prefill_masked(prefill, input, write_plan, table, start_position, output, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::backend) fn execute_prefill_masked(
+        &mut self,
+        prefill: &mut PrefillMoeBlockBf16,
+        input: &DeviceBuffer<bf16>,
+        write_plan: &KvWritePlan,
+        table: &BlockTable,
+        start_position: usize,
+        output: &mut DeviceBuffer<bf16>,
+        image: Option<crate::backend::attention::ImageAttentionSpan>,
+    ) -> Result<()> {
         let state = self
             .state
             .as_mut()
             .ok_or(Error::InvalidDecoderKernel("CUDA block executor is unavailable"))?;
         match state {
-            State::Prepared { block, weights } => prefill.execute(
+            State::Prepared { block, weights } => prefill.execute_masked(
                 block,
                 input,
                 weights.borrow(),
@@ -156,6 +170,7 @@ impl DecodeMoeBlockExecutor {
                 table,
                 start_position,
                 output,
+                image,
             ),
             State::Captured(_) => Err(Error::InvalidDecoderKernel(
                 "CUDA prefill must complete before decode graph capture",

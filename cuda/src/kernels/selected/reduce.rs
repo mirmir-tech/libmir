@@ -35,6 +35,7 @@ pub struct SelectedAffineReduceSpec {
     pub matrix: AffineGemvSpec,
     pub expert_count: usize,
     pub selected_count: usize,
+    pub tokens: usize,
 }
 
 impl SelectedAffineReduceSpec {
@@ -43,10 +44,25 @@ impl SelectedAffineReduceSpec {
         expert_count: usize,
         selected_count: usize,
     ) -> Result<Self> {
-        if expert_count == 0 || selected_count == 0 || selected_count > expert_count {
+        Self::new_batch(matrix, expert_count, selected_count, 1)
+    }
+
+    pub const fn new_batch(
+        matrix: AffineGemvSpec,
+        expert_count: usize,
+        selected_count: usize,
+        tokens: usize,
+    ) -> Result<Self> {
+        if expert_count == 0 || selected_count == 0 || selected_count > expert_count || tokens == 0
+        {
             return Err(Error::InvalidQuantizedGemv("invalid selected expert count"));
         }
-        Ok(Self { matrix, expert_count, selected_count })
+        Ok(Self {
+            matrix,
+            expert_count,
+            selected_count,
+            tokens,
+        })
     }
 }
 
@@ -94,7 +110,7 @@ impl SelectedAffineReduce {
         self.validate(launch)?;
         let matrix = self.spec.matrix;
         let config = LaunchConfig {
-            grid: (narrow(matrix.output_features.div_ceil(8))?, 1, 1),
+            grid: (narrow(matrix.output_features.div_ceil(8))?, narrow(self.spec.tokens)?, 1),
             block: (32, 8, 1),
             shared_memory_bytes: 0,
         };
@@ -153,15 +169,20 @@ impl SelectedAffineReduce {
     fn validate(&self, launch: &SelectedAffineReduceLaunch<'_>) -> Result<()> {
         let matrix = self.spec.matrix;
         let layout = matrix.layout()?;
-        let selected_input = product(matrix.input_features, self.spec.selected_count)?;
+        let selections = product(self.spec.selected_count, self.spec.tokens)?;
+        let selected_input = product(matrix.input_features, selections)?;
         let packed = product(layout.packed_per_matrix, self.spec.expert_count)?;
         let grouped = product(layout.groups_per_matrix, self.spec.expert_count)?;
         require("selected input", selected_input, launch.input.len())?;
-        require("selected experts", self.spec.selected_count, launch.selected.len())?;
-        require("routing weights", self.spec.selected_count, launch.routing_weights.len())?;
+        require("selected experts", selections, launch.selected.len())?;
+        require("routing weights", selections, launch.routing_weights.len())?;
         require("down weight", packed, launch.weight.len())?;
         require("down scales", grouped, launch.scales.len())?;
         require("down biases", grouped, launch.biases.len())?;
-        require("reduced output", matrix.output_features, launch.output.len())
+        require(
+            "reduced output",
+            product(matrix.output_features, self.spec.tokens)?,
+            launch.output.len(),
+        )
     }
 }

@@ -74,8 +74,24 @@ impl SelectedAffineGatedBf16Linear {
         selected_count: usize,
         activation: GatedActivation,
     ) -> Result<Self> {
-        let spec =
-            SelectedAffineGatedSpec::new(matrix, expert_count, selected_count, activation.into())?;
+        Self::new_batch(backend, matrix, expert_count, selected_count, 1, activation)
+    }
+
+    pub(in crate::backend) fn new_batch(
+        backend: &CudaBackend,
+        matrix: AffineGemvSpec,
+        expert_count: usize,
+        selected_count: usize,
+        tokens: usize,
+        activation: GatedActivation,
+    ) -> Result<Self> {
+        let spec = SelectedAffineGatedSpec::new_batch(
+            matrix,
+            expert_count,
+            selected_count,
+            tokens,
+            activation.into(),
+        )?;
         Ok(Self {
             operation: SelectedAffineGated::compile(&backend.inner.compiler, spec)?,
             stream: backend.inner.stream.clone(),
@@ -117,12 +133,14 @@ impl SelectedAffineGatedBf16Linear {
     /// Elements required by the selected intermediate output.
     pub fn output_elements(&self) -> Result<usize> {
         let spec = self.operation.spec();
-        spec.matrix.output_features.checked_mul(spec.selected_count).ok_or_else(|| {
-            Error::InvalidTensorSize {
+        spec.matrix
+            .output_features
+            .checked_mul(spec.selected_count)
+            .and_then(|elements| elements.checked_mul(spec.tokens))
+            .ok_or_else(|| Error::InvalidTensorSize {
                 name: "selected gated output".into(),
                 expected: usize::MAX,
                 actual: 0,
-            }
-        })
+            })
     }
 }

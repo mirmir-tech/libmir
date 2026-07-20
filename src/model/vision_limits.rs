@@ -114,4 +114,21 @@ mod tests {
     fn automatic_budget_uses_available_memory() {
         assert_eq!(attention_budget(VisionRuntimeConfig::default(), Some(10_000)), 8_000);
     }
+
+    #[test]
+    fn admits_the_exact_attention_boundary_and_rejects_the_next_patch() {
+        let limits = VisionLimits {
+            max_pixels: None,
+            attention_budget_bytes: 4 * 16 * 100 * 100,
+        };
+        assert!(limits.validate(100, 16).is_ok());
+        assert!(matches!(
+            limits.validate(101, 16),
+            Err(Error::VisionResourceLimit {
+                patch_tokens: 101,
+                budget_bytes: 640_000,
+                ..
+            })
+        ));
+    }
 }
