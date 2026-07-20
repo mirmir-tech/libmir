@@ -1,11 +1,14 @@
+mod moe;
 mod pair;
 mod projection;
 
 use mircuda::{DeviceBuffer, VariableGroupedFp4Plan, bf16};
+pub use moe::BucketedNvFp4MoeBf16;
 pub(super) use pair::BucketedNvFp4PairBf16;
 use projection::BucketedNvFp4Projection;
 
-use super::{CudaBackend, NvFp4ExpertBank, bucketed_moe::ExpertBuckets};
+use self::moe::ExpertBuckets;
+use super::{CudaBackend, NvFp4ExpertBank};
 use crate::{Error, Result, kernels::NvFp4BucketPreparation};
 
 /// Expert-bucketed W4A4 projection with variable rows per CUTLASS group.

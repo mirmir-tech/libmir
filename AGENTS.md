@@ -15,8 +15,12 @@ The target shape is:
 ## Hard Rules
 
 - No source file may exceed 250 LOC.
-- When splitting a module, prefer `module/mod.rs` plus focused files such as
-  `module/feature.rs`.
+- Split modules only as `module/mod.rs` plus focused files such as
+  `module/feature.rs`. Never flatten a child into a sibling such as
+  `module_feature.rs`.
+- Apply the same nesting to tests: use `module/tests.rs` or
+  `module/tests/feature.rs`, never sibling files such as `module_tests.rs` or
+  `feature_tests.rs` when they test an existing module.
 - Avoid families of similarly named files in one directory.
 - Use `thiserror` for typed errors and error mapping.
 - Prefer `From`/`Into` error conversion with `?`; use `map_err` only as a

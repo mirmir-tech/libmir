@@ -2,10 +2,15 @@
 name = "libmir"
 version.workspace = true
 edition.workspace = true
+
 license.workspace = true
 description = "Native Rust library for local language model inference"
 readme = "README.md"
 repository.workspace = true
+
+[[test]]
+name = "vision"
+path = "tests/vision/mod.rs"
 
 [workspace]
 members = [
@@ -30,7 +35,7 @@ blake3 = "1"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
 minijinja = { version = "2", features = ["builtins"] }
 minijinja-contrib = { version = "2", features = ["pycompat"] }
-mircuda = "0.1"
+mircuda = "0.2"
 mirtal = "0.2.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

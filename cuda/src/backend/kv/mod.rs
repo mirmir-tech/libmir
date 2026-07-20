@@ -1,11 +1,7 @@
 mod attention;
 mod batch;
 #[cfg(test)]
-mod batch_tests;
-#[cfg(test)]
 mod profile;
-#[cfg(test)]
-mod split_tests;
 mod storage;
 #[cfg(test)]
 mod tests;

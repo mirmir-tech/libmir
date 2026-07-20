@@ -3,7 +3,7 @@ use mircuda::{
     VariableGroupedFp4Metadata, VariableGroupedFp4Operands, bf16,
 };
 
-use super::{super::bucketed_moe::ExpertBuckets, BucketedNvFp4Projection, validate_output};
+use super::{BucketedNvFp4Projection, moe::ExpertBuckets, validate_output};
 use crate::{CudaBackend, NvFp4ExpertBank, Result, kernels::NvFp4BucketPreparation};
 
 #[derive(Debug)]

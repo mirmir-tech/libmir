@@ -4,7 +4,6 @@
 //! mathematics, quantization formats, launch geometry, and numerical policy.
 
 mod affine;
-mod affine_embedding;
 mod decoder;
 mod elementwise;
 mod embedding;
@@ -25,24 +24,17 @@ mod qkv;
 mod qmm;
 mod rms_norm_shift;
 mod router;
-mod router_unit;
 mod row;
 mod sampling;
 mod selected;
-mod selected_nvfp4;
 mod sigmoid;
 #[cfg(test)]
 mod tests;
 mod vision;
-mod vision_attention;
-mod vision_clip;
-mod vision_patch;
-mod vision_pooling;
-mod vision_spatial_merge;
-mod vision_splice;
 
-pub use affine::{AffineGemvLaunch, AffineGemvSpec, AffineQuantizedGemv};
-pub use affine_embedding::{AffineEmbedding, AffineEmbeddingSpec};
+pub use affine::{
+    AffineEmbedding, AffineEmbeddingSpec, AffineGemvLaunch, AffineGemvSpec, AffineQuantizedGemv,
+};
 pub use decoder::{RmsNorm, RmsNormUnit, Rope, RopeSpec};
 pub use elementwise::ElementwiseBf16;
 pub use embedding::Embedding;
@@ -83,23 +75,19 @@ pub(crate) use qkv::{
 };
 pub use qmm::{AffineQmmLaunch, AffineQmmSpec, AffineQuantizedQmm};
 pub use rms_norm_shift::ShiftedRmsNorm;
-pub use router::{RouterSpec, RouterTopK};
-pub use router_unit::{RouterUnitSpec, RouterUnitTopK};
+pub use router::{RouterSpec, RouterTopK, RouterUnitSpec, RouterUnitTopK};
 pub use row::SelectRowBf16;
 pub use sampling::{MAX_TOP_K, Sampling, SamplingSpec, SamplingWorkspace};
 pub use selected::{
-    GatedActivation, SelectedAffineGated, SelectedAffineGatedLaunch, SelectedAffineGatedSpec,
-    SelectedAffinePair, SelectedAffinePairLaunch, SelectedAffinePairSpec, SelectedAffineReduce,
-    SelectedAffineReduceLaunch, SelectedAffineReduceSpec,
-};
-pub use selected_nvfp4::{
-    NvFp4BankView, SelectedNvFp4Gated, SelectedNvFp4Reduce, SelectedNvFp4Spec,
+    GatedActivation, NvFp4BankView, SelectedAffineGated, SelectedAffineGatedLaunch,
+    SelectedAffineGatedSpec, SelectedAffinePair, SelectedAffinePairLaunch, SelectedAffinePairSpec,
+    SelectedAffineReduce, SelectedAffineReduceLaunch, SelectedAffineReduceSpec, SelectedNvFp4Gated,
+    SelectedNvFp4Reduce, SelectedNvFp4Spec,
 };
 pub use sigmoid::{SigmoidElementwiseBf16, SigmoidMultiplyBf16};
-pub use vision::{VisionElementwise, VisionElementwiseSpec};
-pub use vision_attention::{VisionAttention, VisionAttentionSpec, VisionSpatialRope};
-pub use vision_clip::{VisionClip, VisionClipSpec};
-pub use vision_patch::VisionPatchLayout;
-pub use vision_pooling::{VisionPool, VisionPoolSpec};
-pub use vision_spatial_merge::SpatialMergeKernels;
-pub(crate) use vision_splice::VisionEmbeddingSplice;
+pub(crate) use vision::VisionEmbeddingSplice;
+pub use vision::{
+    SpatialMergeKernels, VisionAttention, VisionAttentionSpec, VisionClip, VisionClipSpec,
+    VisionElementwise, VisionElementwiseSpec, VisionPatchLayout, VisionPool, VisionPoolSpec,
+    VisionSpatialRope,
+};

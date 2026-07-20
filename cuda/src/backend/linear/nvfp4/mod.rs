@@ -1,8 +1,6 @@
 mod bank;
 mod native;
 #[cfg(all(test, target_os = "linux"))]
-mod pack_tests;
-#[cfg(all(test, target_os = "linux"))]
 mod reference;
 mod selected;
 #[cfg(all(test, target_os = "linux"))]

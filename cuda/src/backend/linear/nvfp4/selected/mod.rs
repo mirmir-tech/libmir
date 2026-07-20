@@ -8,34 +8,22 @@ use crate::{
 };
 
 mod bucketed;
-mod bucketed_moe;
 #[cfg(test)]
 mod direct_down_moe;
 mod grouped;
-mod grouped_moe;
 mod hybrid_gate_moe;
 mod micro_moe;
-#[cfg(test)]
-mod moe_test_support;
-#[cfg(test)]
-mod prepare_tests;
 mod tensor_core;
-mod tensor_core_moe;
-#[cfg(test)]
-mod tensor_core_moe_tests;
-#[cfg(test)]
-mod tensor_core_tests;
 #[cfg(test)]
 mod tests;
 
-pub use bucketed_moe::BucketedNvFp4MoeBf16;
+pub use bucketed::BucketedNvFp4MoeBf16;
 #[cfg(test)]
 pub use direct_down_moe::DirectDownNvFp4MoeBf16;
-pub use grouped_moe::GroupedNvFp4MoeBf16;
+pub use grouped::GroupedNvFp4MoeBf16;
 pub use hybrid_gate_moe::HybridNvFp4MoeBf16;
 pub use micro_moe::DirectNvFp4MoeBf16;
-pub use tensor_core::SelectedNvFp4LinearBf16;
-pub use tensor_core_moe::SelectedNvFp4TensorCoreMoeBf16;
+pub use tensor_core::{SelectedNvFp4LinearBf16, SelectedNvFp4TensorCoreMoeBf16};
 
 /// Two-launch selected-expert NVFP4 MLP with device-side routing inputs.
 #[derive(Debug)]

@@ -8,7 +8,6 @@ use super::geometry::product;
 use crate::{Error, Result};
 
 mod batch;
-mod batch_store;
 mod graph;
 mod prefill;
 mod split;

@@ -1,6 +1,4 @@
 mod batch;
-#[cfg(test)]
-mod batch_tests;
 mod config;
 mod execution;
 mod experts;

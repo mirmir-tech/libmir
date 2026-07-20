@@ -2,11 +2,9 @@ mod backend;
 mod batch;
 mod lifecycle;
 mod memory;
-#[cfg(any(feature = "cuda", feature = "metal"))]
-mod pooled_vision;
 mod select;
 #[cfg(any(feature = "cuda", feature = "metal"))]
-mod spatial_merge_vision;
+mod vision;
 
 #[cfg(feature = "cuda")]
 use cuda::CudaEngine;

@@ -6,8 +6,10 @@ use crate::{
     kernels::{GroupedQuantize, NvFp4GroupedPreparation, NvFp4Spec, scale_elements},
 };
 
+mod moe;
 mod pair;
 
+pub use moe::GroupedNvFp4MoeBf16;
 pub(super) use pair::GroupedNvFp4PairBf16;
 
 /// Device-indexed grouped W4A4 projection over one NVFP4 expert bank.

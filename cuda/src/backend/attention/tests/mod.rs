@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use super::*;
 use crate::{Bf16LinearPackWeights, CudaConfig, CudaTensorSet};
+mod batch;
 mod io;
 mod mrope;
 pub(super) use io::read;

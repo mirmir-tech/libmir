@@ -17,7 +17,7 @@ use super::{
     CudaEngine,
     batch::DecodeBuckets,
     runner::{RunnerGuard, RunnerQueue},
-    vision_model::{LoadedVisionModel, load_vision_model},
+    vision::model::{LoadedVisionModel, load_vision_model},
 };
 use crate::{
     CudaHybridLinearModelSession, CudaHybridLinearModelTemplate, CudaMoeModelSession,

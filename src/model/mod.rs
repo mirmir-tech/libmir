@@ -5,7 +5,6 @@ mod library;
 mod lifecycle;
 mod memory;
 mod vision;
-mod vision_limits;
 
 use std::{
     path::Path,

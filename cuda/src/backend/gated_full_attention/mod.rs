@@ -1,8 +1,6 @@
-#[cfg(test)]
-mod config_tests;
 mod execution;
 mod scratch;
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod tests;
 mod validation;
 mod weights;

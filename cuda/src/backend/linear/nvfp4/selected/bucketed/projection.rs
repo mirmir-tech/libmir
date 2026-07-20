@@ -1,6 +1,6 @@
 use mircuda::{DeviceBuffer, Stream, VariableGroupedFp4Spec, bf16};
 
-use super::super::{CudaBackend, NvFp4ExpertBank, bucketed_moe::ExpertBuckets};
+use super::{CudaBackend, NvFp4ExpertBank, moe::ExpertBuckets};
 use crate::{
     Error, Result,
     kernels::{BucketQuantize, NvFp4BucketPreparation, NvFp4Spec, scale_elements},

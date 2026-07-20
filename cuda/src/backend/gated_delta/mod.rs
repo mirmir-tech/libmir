@@ -188,5 +188,3 @@ fn channels(config: GatedDeltaStateConfig) -> Result<usize> {
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests;
-#[cfg(all(test, target_os = "linux"))]
-mod transform_tests;

@@ -11,8 +11,6 @@ use crate::{
 };
 
 mod batch;
-#[cfg(test)]
-mod batch_tests;
 mod config;
 pub(in crate::backend) mod graph;
 mod output;
