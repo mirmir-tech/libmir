@@ -55,6 +55,7 @@ pub(super) struct ModelTemplateConfig {
     pub(super) source: TemplateSource,
     pub(super) template: Option<String>,
     pub(super) tokens: TemplateTokens,
+    pub(super) model_type: Option<String>,
 }
 
 impl ModelTemplateConfig {
@@ -77,8 +78,18 @@ impl ModelTemplateConfig {
             },
             |template| (TemplateSource::ChatTemplateFile, Some(template)),
         );
-        Ok(Self { source, template, tokens: config.tokens })
+        Ok(Self {
+            source,
+            template,
+            tokens: config.tokens,
+            model_type: read_model_type(&layout.config_path)?,
+        })
     }
+}
+
+fn read_model_type(path: &std::path::Path) -> Result<Option<String>> {
+    let value: Value = serde_json::from_str(&fs::read_to_string(path)?)?;
+    Ok(value.get("model_type").and_then(Value::as_str).map(str::to_owned))
 }
 
 #[derive(Debug, Default)]

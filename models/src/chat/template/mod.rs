@@ -30,7 +30,9 @@ pub enum TemplateSource {
 pub enum TemplateKind {
     ModelJinja,
     ChatMl,
+    QwenChatMl,
     TurnDelimited,
+    Gemma4,
     Plain,
 }
 
@@ -45,25 +47,22 @@ pub struct ChatTemplate {
 impl ChatTemplate {
     pub fn from_layout(layout: &ModelLayout) -> Result<Self> {
         let config = ModelTemplateConfig::from_layout(layout)?;
-        Ok(match config.template {
-            Some(template) => Self {
+        Ok(if let Some(template) = config.template {
+            Self {
                 kind: TemplateKind::ModelJinja,
                 source: config.source,
                 tokens: config.tokens,
                 template: Some(template),
-            },
-            None => Self {
-                kind: if config.tokens.turn_tokens().is_some() {
-                    TemplateKind::TurnDelimited
-                } else if protocol::has_chatml_tokens(layout.tokenizer_path.as_deref())? {
-                    TemplateKind::ChatMl
-                } else {
-                    TemplateKind::Plain
-                },
+            }
+        } else {
+            let has_turns = config.tokens.turn_tokens().is_some();
+            let has_chatml = protocol::has_chatml_tokens(layout.tokenizer_path.as_deref())?;
+            Self {
+                kind: builtin_kind(config.model_type.as_deref(), has_turns, has_chatml),
                 source: TemplateSource::Builtin,
                 tokens: config.tokens,
                 template: None,
-            },
+            }
         })
     }
 
@@ -82,6 +81,16 @@ impl ChatTemplate {
     #[must_use]
     pub const fn kind(&self) -> TemplateKind {
         self.kind
+    }
+}
+
+fn builtin_kind(model_type: Option<&str>, has_turns: bool, has_chatml: bool) -> TemplateKind {
+    match model_type {
+        Some(model) if model.starts_with("gemma4") && has_turns => TemplateKind::Gemma4,
+        Some(model) if model.starts_with("qwen") && has_chatml => TemplateKind::QwenChatMl,
+        _ if has_turns => TemplateKind::TurnDelimited,
+        _ if has_chatml => TemplateKind::ChatMl,
+        _ => TemplateKind::Plain,
     }
 }
 
@@ -154,6 +163,50 @@ mod tests {
         assert_eq!(prompt.text, "<|turn>user\nNapisz zdanie.<turn|>\n<|turn>assistant\n");
         assert!(prompt.add_special_tokens);
         Ok(())
+    }
+
+    #[test]
+    fn builtin_qwen_opens_the_thinking_block() -> Result<()> {
+        let template = ChatTemplate {
+            kind: TemplateKind::QwenChatMl,
+            source: TemplateSource::Builtin,
+            tokens: TemplateTokens::new("", "<|im_end|>"),
+            template: None,
+        };
+
+        let prompt = template.render(&request("Napisz zdanie."))?;
+
+        assert_eq!(
+            prompt.text,
+            "<|im_start|>user\nNapisz zdanie.<|im_end|>\n<|im_start|>assistant\n<think>\n"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn builtin_gemma_uses_model_role_and_thinking_protocol() -> Result<()> {
+        let template = ChatTemplate {
+            kind: TemplateKind::Gemma4,
+            source: TemplateSource::Builtin,
+            tokens: TemplateTokens::new("<bos>", "<eos>").with_turns("<|turn>", "<turn|>"),
+            template: None,
+        };
+
+        let prompt = template.render(&request("Napisz zdanie."))?;
+
+        assert_eq!(
+            prompt.text,
+            "<bos><|turn>system\n<|think|>\n<turn|>\n<|turn>user\nNapisz zdanie.<turn|>\n<|turn>model\n"
+        );
+        assert!(!prompt.add_special_tokens);
+        Ok(())
+    }
+
+    #[test]
+    fn chooses_family_fallbacks_only_for_matching_protocols() {
+        assert_eq!(builtin_kind(Some("gemma4"), true, false), TemplateKind::Gemma4);
+        assert_eq!(builtin_kind(Some("qwen3_5_moe"), false, true), TemplateKind::QwenChatMl);
+        assert_eq!(builtin_kind(Some("qwen3_5_moe"), false, false), TemplateKind::Plain);
     }
 
     #[test]
