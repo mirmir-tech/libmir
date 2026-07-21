@@ -112,6 +112,28 @@ impl GenerationConfig {
 }
 
 impl GenerationSettings {
+    /// Applies request-scoped values on top of settings already resolved for
+    /// the loaded model.
+    pub fn with_overrides(mut self, overrides: GenerationOverrides) -> Result<Self> {
+        if let Some(value) = overrides.max_tokens {
+            self.max_tokens = value;
+        }
+        if let Some(value) = overrides.temperature {
+            self.temperature = value;
+        }
+        if let Some(value) = overrides.top_p {
+            self.top_p = value;
+        }
+        if let Some(value) = overrides.top_k {
+            self.top_k = value;
+        }
+        if let Some(value) = overrides.repetition_penalty {
+            self.repetition_penalty = value;
+        }
+        self.validate()?;
+        Ok(self)
+    }
+
     fn validate(&self) -> Result<()> {
         if self.max_tokens == 0 {
             return Err(invalid("max_new_tokens must be greater than zero"));

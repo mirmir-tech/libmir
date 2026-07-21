@@ -66,3 +66,26 @@ fn checkpoint_and_user_values_override_generic_sampling_defaults() -> Result<()>
     assert!((overridden.temperature - 0.6).abs() < f32::EPSILON);
     Ok(())
 }
+
+#[test]
+fn request_overrides_preserve_loaded_model_settings() -> Result<()> {
+    let loaded = GenerationConfig::default().resolve(GenerationOverrides {
+        max_tokens: Some(20_048),
+        temperature: Some(1.0),
+        top_p: Some(0.95),
+        top_k: Some(64),
+        repetition_penalty: Some(1.0),
+    })?;
+
+    assert_eq!(loaded.with_overrides(GenerationOverrides::default())?, loaded);
+    assert_eq!(
+        loaded
+            .with_overrides(GenerationOverrides {
+                max_tokens: Some(512),
+                ..GenerationOverrides::default()
+            })?
+            .max_tokens,
+        512
+    );
+    Ok(())
+}

@@ -72,10 +72,10 @@ impl ModelDescriptor {
         self.generation
     }
 
-    /// Resolves per-request overrides against the model generation
-    /// configuration.
+    /// Applies per-request overrides to the settings resolved when the model
+    /// was loaded.
     pub fn resolve_generation(&self, overrides: GenerationOverrides) -> Result<GenerationSettings> {
-        Ok(self.generation_config.resolve(overrides)?)
+        Ok(self.generation.with_overrides(overrides)?)
     }
 
     #[must_use]
