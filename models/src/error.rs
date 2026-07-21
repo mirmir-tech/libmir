@@ -25,6 +25,10 @@ pub enum ModelsError {
     Io(#[from] std::io::Error),
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("TOML model specification error: {0}")]
+    Toml(#[from] toml::de::Error),
+    #[error("cannot serialize TOML model specification: {0}")]
+    TomlSerialize(#[from] toml::ser::Error),
     #[error("image error: {0}")]
     Image(#[from] image::ImageError),
     #[error("chat template error: {0}")]

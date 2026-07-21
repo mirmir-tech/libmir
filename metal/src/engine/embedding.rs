@@ -9,9 +9,25 @@ pub struct QuantizedEmbedding {
 
 impl QuantizedEmbedding {
     pub fn load(tensors: &ModelTensors, prefix: &str, group_size: i32) -> Result<Self> {
-        let weight = tensors.get(&format!("{prefix}.weight"))?;
-        let scales = tensors.get(&format!("{prefix}.scales"))?;
-        let biases = tensors.get(&format!("{prefix}.biases"))?;
+        Self::load_names(
+            tensors,
+            &format!("{prefix}.weight"),
+            &format!("{prefix}.scales"),
+            &format!("{prefix}.biases"),
+            group_size,
+        )
+    }
+
+    pub(in crate::engine) fn load_names(
+        tensors: &ModelTensors,
+        weight: &str,
+        scales: &str,
+        biases: &str,
+        group_size: i32,
+    ) -> Result<Self> {
+        let weight = tensors.get(weight)?;
+        let scales = tensors.get(scales)?;
+        let biases = tensors.get(biases)?;
         let bits = super::linear::infer_bits(&weight, &scales, group_size)?;
         let arrays = QuantizedArrays::new(weight, scales, biases, group_size, bits)?;
         Ok(Self { arrays, group_size, bits })

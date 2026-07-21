@@ -95,6 +95,53 @@ impl Array {
         Self::from_native(graph.reciprocal(&adjusted)?)
     }
 
+    pub(crate) fn yarn_rope_frequencies(
+        rotary_dimensions: i32,
+        base: f32,
+        factor: f32,
+        beta_fast: f32,
+        beta_slow: f32,
+        original_context_len: i32,
+        stream: &Stream,
+    ) -> Result<Self> {
+        dimensions(rotary_dimensions)?;
+        for (value, name) in [
+            (base, "base"),
+            (factor, "factor"),
+            (beta_fast, "YaRN beta_fast"),
+            (beta_slow, "YaRN beta_slow"),
+        ] {
+            positive(value, name)?;
+        }
+        if beta_fast <= beta_slow || original_context_len <= 0 {
+            return Err(invalid("invalid YaRN interpolation range"));
+        }
+        let graph = stream.native().graph();
+        let dimensions = as_f32(rotary_dimensions)?;
+        let half = dimensions / 2.0;
+        let exponents = graph.arange(0.0, dimensions, 2.0, DType::Float32)?;
+        let exponents = graph.divide(&exponents, &scalar(graph, dimensions)?)?;
+        let frequencies = graph.power(&scalar(graph, base)?, &exponents)?;
+        let inverse = graph.reciprocal(&frequencies)?;
+        let original = f32::from(u16::try_from(original_context_len)?);
+        let low = half * (original / (beta_fast * std::f32::consts::TAU)).ln() / base.ln();
+        let high = half * (original / (beta_slow * std::f32::consts::TAU)).ln() / base.ln();
+        let indices = graph.arange(0.0, half, 1.0, DType::Float32)?;
+        let ramp = graph.divide(
+            &graph.subtract(&indices, &scalar(graph, low)?)?,
+            &scalar(graph, high - low)?,
+        )?;
+        let ramp = graph.maximum(&ramp, &scalar(graph, 0.0)?)?;
+        let ramp = graph.minimum(&ramp, &scalar(graph, 1.0)?)?;
+        let mask = graph.subtract(&scalar(graph, 1.0)?, &ramp)?;
+        let interpolated = graph.divide(&inverse, &scalar(graph, factor)?)?;
+        let adjusted = graph.add(
+            &graph.multiply(&interpolated, &graph.subtract(&scalar(graph, 1.0)?, &mask)?)?,
+            &graph.multiply(&inverse, &mask)?,
+        )?;
+        Self::from_native(graph.reciprocal(&adjusted)?)
+    }
+
     pub fn rope(&self, options: RopeOptions, stream: &Stream) -> Result<Self> {
         Self::from_native(stream.native().graph().rope(
             self.native(),

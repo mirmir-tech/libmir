@@ -69,6 +69,11 @@ impl TensorCatalog {
         self.tensors.iter().any(|tensor| tensor.name == name)
     }
 
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<&TensorInfo> {
+        self.tensors.iter().find(|tensor| tensor.name == name)
+    }
+
     pub fn by_prefix<'a>(&'a self, prefix: &'a str) -> impl Iterator<Item = &'a TensorInfo> + 'a {
         self.tensors.iter().filter(move |tensor| tensor.name.starts_with(prefix))
     }

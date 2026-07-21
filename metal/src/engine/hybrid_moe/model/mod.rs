@@ -1,14 +1,14 @@
 use std::time::Instant;
 
-use models::layout::DecoderConfig;
+use models::{layout::DecoderConfig, weights::WeightBindingPlan};
 
-use super::{
-    HybridMoeLayer, HybridMoeLayerConfig,
-    layer::{fused_attention_enabled, fused_gate_up_enabled, profile_components},
-};
+use super::{HybridMoeLayer, HybridMoeLayerConfig, layer::profile_components};
 use crate::engine::{
     Array, DecoderCache, ExpertFusionDecision, ModelTensors, QuantizedEmbedding, Result, Stream,
+    binding::affine_embedding,
     configure_expert_fusion, decode_graph,
+    fusion_planner::FusionPlanner,
+    lowering::{FeedForwardLowering, LayerLowering, MixerLowering},
 };
 
 mod prefill;
@@ -27,6 +27,51 @@ pub struct HybridMoeModel {
 }
 
 impl HybridMoeModel {
+    pub fn load_bindings(
+        tensors: &ModelTensors,
+        decoder: &DecoderConfig,
+        bindings: &WeightBindingPlan,
+        lowering: &[LayerLowering],
+        group_size: usize,
+        cache_step: usize,
+        stream: &Stream,
+    ) -> Result<Self> {
+        let compatible = lowering.len() == decoder.num_hidden_layers
+            && lowering.iter().all(|layer| {
+                layer.feed_forward == FeedForwardLowering::DenseAndRouted
+                    && matches!(layer.mixer, MixerLowering::Softmax { .. })
+            });
+        if !compatible {
+            return Err(crate::engine::Error::InvalidModel(
+                "hybrid MoE loader requires dense-and-routed softmax layers".into(),
+            ));
+        }
+        let mut layers = Vec::with_capacity(decoder.num_hidden_layers);
+        let mut cache_windows = Vec::with_capacity(decoder.num_hidden_layers);
+        for (index, lowered) in lowering.iter().enumerate() {
+            let config = HybridMoeLayerConfig::from_decoder(index, decoder, group_size)?;
+            let layer_bindings = bindings.hybrid_moe_layer(index)?;
+            layers.push(HybridMoeLayer::load_bindings(
+                tensors, &layer_bindings, *lowered, config, stream,
+            )?);
+            let MixerLowering::Softmax { window, .. } = lowered.mixer else {
+                unreachable!("validated hybrid MoE mixer");
+            };
+            cache_windows.push(window);
+        }
+        let boundary = bindings.decoder_boundary_with_tied_output(true)?;
+        Self::finish_load(
+            layers,
+            cache_windows,
+            cache_step,
+            affine_embedding(tensors, boundary.embedding)?,
+            tensors.get(&boundary.final_norm.source)?,
+            decoder,
+            stream,
+        )
+    }
+
+    #[cfg(test)]
     pub fn load(
         tensors: &ModelTensors,
         decoder: &DecoderConfig,
@@ -34,11 +79,6 @@ impl HybridMoeModel {
         cache_step: usize,
         stream: &Stream,
     ) -> Result<Self> {
-        if !decoder.uses_hybrid_routed_moe_stack() {
-            return Err(crate::engine::Error::InvalidModel(
-                "native hybrid MoE model requires compatible routed-MoE decoder features".into(),
-            ));
-        }
         let embedding = QuantizedEmbedding::load(
             tensors,
             "language_model.model.embed_tokens",
@@ -51,7 +91,31 @@ impl HybridMoeModel {
             layers.push(HybridMoeLayer::load(tensors, config, stream)?);
             cache_windows.push(config.max_context);
         }
-        if fused_attention_enabled(stream) || fused_gate_up_enabled(stream) {
+        Self::finish_load(
+            layers,
+            cache_windows,
+            cache_step,
+            embedding,
+            tensors.get("language_model.model.norm.weight")?,
+            decoder,
+            stream,
+        )
+    }
+
+    fn finish_load(
+        mut layers: Vec<HybridMoeLayer>,
+        cache_windows: Vec<Option<usize>>,
+        cache_step: usize,
+        embedding: QuantizedEmbedding,
+        final_norm: Array,
+        decoder: &DecoderConfig,
+        stream: &Stream,
+    ) -> Result<Self> {
+        let warm_fusions = layers.iter().any(|layer| {
+            let (attention, key_value, gate_up, _) = layer.fusion_summary();
+            attention || key_value || gate_up
+        });
+        if warm_fusions {
             for layer in &layers {
                 layer.warm_fused_projections()?;
             }
@@ -60,7 +124,7 @@ impl HybridMoeModel {
         let expert_fusion = configure_expert_fusion(
             &mut layers,
             stream,
-            stream.config().fusion.routed_expert_gate_up,
+            FusionPlanner::new(stream).expert_mode(FeedForwardLowering::DenseAndRouted),
         )?;
         let embed_scale = decoder.hidden_size.to_string().parse::<f32>()?.sqrt();
         Ok(Self {
@@ -68,7 +132,7 @@ impl HybridMoeModel {
             cache_windows,
             cache_step,
             embedding,
-            final_norm: tensors.get("language_model.model.norm.weight")?,
+            final_norm,
             embed_scale,
             hidden_size: decoder.hidden_size,
             softcap: decoder

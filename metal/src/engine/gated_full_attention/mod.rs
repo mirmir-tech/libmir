@@ -1,9 +1,10 @@
+mod load;
+
 use models::layout::{AttentionOutput, DecoderConfig, RotaryEmbeddingLayout};
 
 use super::{
-    Array, Error, KvCache, ModelTensors, NormWeight, PagedContextMode, QuantizedLinear, Result,
-    RopeOptions, Stream, attention::apply_mrope, fused_gate_up::split_last,
-    native_paged_attention_mode,
+    Array, Error, KvCache, NormWeight, PagedContextMode, QuantizedLinear, Result, RopeOptions,
+    Stream, attention::apply_mrope, fused_gate_up::split_last, native_paged_attention_mode,
 };
 
 #[derive(Debug, Clone)]
@@ -72,35 +73,6 @@ impl GatedFullAttentionConfig {
 }
 
 impl GatedFullAttention {
-    pub fn load_with_norm_shift(
-        tensors: &ModelTensors,
-        prefix: &str,
-        config: GatedFullAttentionConfig,
-        group_size: i32,
-        norm_shift: f32,
-        stream: &Stream,
-    ) -> Result<Self> {
-        Ok(Self {
-            config,
-            query: linear(tensors, prefix, "q_proj", group_size)?,
-            key: linear(tensors, prefix, "k_proj", group_size)?,
-            value: linear(tensors, prefix, "v_proj", group_size)?,
-            output: linear(tensors, prefix, "o_proj", group_size)?,
-            query_norm: NormWeight::load_adjusted(
-                tensors,
-                &format!("{prefix}.q_norm"),
-                norm_shift,
-                stream,
-            )?,
-            key_norm: NormWeight::load_adjusted(
-                tensors,
-                &format!("{prefix}.k_norm"),
-                norm_shift,
-                stream,
-            )?,
-        })
-    }
-
     pub fn forward(
         &self,
         input: &Array,
@@ -220,15 +192,6 @@ fn dimension(shape: &[i32], axis: usize, name: &str) -> Result<i32> {
         .get(axis)
         .copied()
         .ok_or_else(|| Error::InvalidModel(format!("attention input has no {name} axis")))
-}
-
-fn linear(
-    tensors: &ModelTensors,
-    prefix: &str,
-    name: &str,
-    group_size: i32,
-) -> Result<QuantizedLinear> {
-    QuantizedLinear::load(tensors, &format!("{prefix}.{name}"), group_size)
 }
 
 #[cfg(test)]

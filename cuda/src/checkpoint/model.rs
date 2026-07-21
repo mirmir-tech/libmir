@@ -1,6 +1,7 @@
 use models::{
     layout::DecoderConfig,
-    weights::{TensorCatalog, TensorInfo},
+    semantic::SemanticModelSpec,
+    weights::{TensorCatalog, TensorInfo, WeightBindingPlan},
 };
 
 use super::{DenseSwiGluLayerLoadConfig, NvFp4MoeLayerLoadConfig};
@@ -8,6 +9,7 @@ use crate::{CudaBackend, CudaMoeModelTemplate, CudaTensor, CudaTensorSet, Error,
 
 impl CudaBackend {
     /// Loads a complete BF16 dense `SwiGLU` decoder without host conversion.
+    #[cfg(test)]
     pub(crate) fn load_dense_swiglu_model_template_with_progress(
         &self,
         decoder: &DecoderConfig,
@@ -15,7 +17,22 @@ impl CudaBackend {
         load: DenseSwiGluLayerLoadConfig,
         progress: &mut dyn FnMut(u64, String),
     ) -> Result<CudaMoeModelTemplate> {
-        let source = ModelSource::discover(decoder, catalog)?;
+        let spec = SemanticModelSpec::discover(decoder, catalog)?;
+        let bindings = WeightBindingPlan::discover(&spec, catalog)?;
+        self.load_dense_swiglu_model_template_with_bindings(
+            decoder, &bindings, catalog, load, progress,
+        )
+    }
+
+    pub(crate) fn load_dense_swiglu_model_template_with_bindings(
+        &self,
+        decoder: &DecoderConfig,
+        bindings: &WeightBindingPlan,
+        catalog: &TensorCatalog,
+        load: DenseSwiGluLayerLoadConfig,
+        progress: &mut dyn FnMut(u64, String),
+    ) -> Result<CudaMoeModelTemplate> {
+        let source = ModelSource::discover(decoder, bindings, catalog)?;
         let tensors = source.upload(self)?;
         let mut completed = source.payload_bytes()?;
         progress(completed, "model boundary tensors".into());
@@ -24,8 +41,13 @@ impl CudaBackend {
         let output = tensor(&tensors, source.output)?.clone();
         let mut layers = Vec::with_capacity(decoder.num_hidden_layers);
         for layer in 0..decoder.num_hidden_layers {
-            let (template, bytes) =
-                self.load_dense_swiglu_layer_tracked(decoder, catalog, layer, load)?;
+            let (template, bytes) = self.load_dense_swiglu_layer_tracked(
+                decoder,
+                catalog,
+                layer,
+                bindings.dense_decoder_layer(layer)?,
+                load,
+            )?;
             completed = completed
                 .checked_add(bytes)
                 .ok_or(Error::InvalidDecoderKernel("checkpoint progress byte overflow"))?;
@@ -69,7 +91,22 @@ impl CudaBackend {
         load: NvFp4MoeLayerLoadConfig,
         progress: &mut dyn FnMut(u64, String),
     ) -> Result<CudaMoeModelTemplate> {
-        let source = ModelSource::discover(decoder, catalog)?;
+        let spec = SemanticModelSpec::discover(decoder, catalog)?;
+        let bindings = WeightBindingPlan::discover(&spec, catalog)?;
+        self.load_nvfp4_moe_model_template_with_bindings(
+            decoder, &bindings, catalog, load, progress,
+        )
+    }
+
+    pub(crate) fn load_nvfp4_moe_model_template_with_bindings(
+        &self,
+        decoder: &DecoderConfig,
+        bindings: &WeightBindingPlan,
+        catalog: &TensorCatalog,
+        load: NvFp4MoeLayerLoadConfig,
+        progress: &mut dyn FnMut(u64, String),
+    ) -> Result<CudaMoeModelTemplate> {
+        let source = ModelSource::discover(decoder, bindings, catalog)?;
         let tensors = source.upload(self)?;
         let mut completed = source.payload_bytes()?;
         progress(completed, "model boundary tensors".into());
@@ -78,8 +115,10 @@ impl CudaBackend {
         let output = tensor(&tensors, source.output)?.clone();
         let mut layers = Vec::with_capacity(decoder.num_hidden_layers);
         for layer in 0..decoder.num_hidden_layers {
-            let (template, bytes) =
-                self.load_nvfp4_moe_layer_template_tracked(decoder, catalog, layer, load)?;
+            let layer_bindings = bindings.hybrid_moe_layer(layer)?;
+            let (template, bytes) = self.load_nvfp4_moe_layer_template_tracked(
+                decoder, catalog, layer, &layer_bindings, load,
+            )?;
             completed = completed
                 .checked_add(bytes)
                 .ok_or(Error::InvalidDecoderKernel("checkpoint progress byte overflow"))?;
@@ -106,14 +145,15 @@ struct ModelSource<'a> {
 }
 
 impl<'a> ModelSource<'a> {
-    fn discover(decoder: &DecoderConfig, catalog: &'a TensorCatalog) -> Result<Self> {
-        let embedding = required_any(catalog, &embedding_names())?;
-        let final_norm = required_any(catalog, &norm_names())?;
-        let output = if decoder.tie_word_embeddings {
-            embedding
-        } else {
-            required_any(catalog, &output_names())?
-        };
+    fn discover(
+        decoder: &DecoderConfig,
+        bindings: &WeightBindingPlan,
+        catalog: &'a TensorCatalog,
+    ) -> Result<Self> {
+        let boundary = bindings.decoder_boundary_with_tied_output(decoder.tie_word_embeddings)?;
+        let embedding = required(catalog, &boundary.embedding.source)?;
+        let final_norm = required(catalog, &boundary.final_norm.source)?;
+        let output = required(catalog, &boundary.output.source)?;
         let mut tensors = vec![embedding, final_norm];
         if output.name != embedding.name {
             tensors.push(output);
@@ -147,37 +187,14 @@ pub(super) fn payload_bytes<'a>(tensors: impl IntoIterator<Item = &'a TensorInfo
     })
 }
 
-fn required_any<'a>(catalog: &'a TensorCatalog, names: &[String]) -> Result<&'a TensorInfo> {
-    names
+fn required<'a>(catalog: &'a TensorCatalog, name: &str) -> Result<&'a TensorInfo> {
+    catalog
+        .tensors
         .iter()
-        .find_map(|name| catalog.tensors.iter().find(|tensor| tensor.name == *name))
-        .ok_or_else(|| Error::MissingTensor(names.join(" | ")))
+        .find(|tensor| tensor.name == name)
+        .ok_or_else(|| Error::MissingTensor(name.into()))
 }
 
 fn tensor<'a>(tensors: &'a CudaTensorSet, name: &str) -> Result<&'a CudaTensor> {
     tensors.get(name).ok_or_else(|| Error::MissingTensor(name.into()))
-}
-
-fn embedding_names() -> [String; 3] {
-    model_names("embed_tokens.weight")
-}
-
-fn norm_names() -> [String; 3] {
-    model_names("norm.weight")
-}
-
-fn output_names() -> [String; 3] {
-    [
-        "lm_head.weight".into(),
-        "language_model.lm_head.weight".into(),
-        "model.language_model.lm_head.weight".into(),
-    ]
-}
-
-fn model_names(suffix: &str) -> [String; 3] {
-    [
-        format!("model.{suffix}"),
-        format!("language_model.model.{suffix}"),
-        format!("model.language_model.{suffix}"),
-    ]
 }

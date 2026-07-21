@@ -28,6 +28,7 @@ pub struct ModelLayout {
     pub modules_path: Option<PathBuf>,
     pub sentence_transformers_config_path: Option<PathBuf>,
     pub generation_config_path: Option<PathBuf>,
+    pub model_spec_path: Option<PathBuf>,
     pub chat_template_path: Option<PathBuf>,
     pub kv_config_path: Option<PathBuf>,
     pub processor_config_path: Option<PathBuf>,
@@ -59,6 +60,7 @@ impl ModelLayout {
         let sentence_transformers_config_path =
             optional(root.join("config_sentence_transformers.json"));
         let generation_config_path = optional(root.join("generation_config.json"));
+        let model_spec_path = optional(root.join("mir-model-spec.toml"));
         let chat_template_path = optional(root.join("chat_template.jinja"));
         let kv_config_path = optional(root.join("kv_config.json"));
         let processor_config_path = optional(root.join("processor_config.json"));
@@ -81,6 +83,7 @@ impl ModelLayout {
             modules_path,
             sentence_transformers_config_path,
             generation_config_path,
+            model_spec_path,
             chat_template_path,
             kv_config_path,
             processor_config_path,

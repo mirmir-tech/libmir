@@ -11,10 +11,18 @@ use crate::{
 };
 
 const DEFAULT_MAX_TOKENS: usize = 2_048;
-const DEFAULT_TEMPERATURE: f32 = 0.0;
-const DEFAULT_TOP_P: f32 = 1.0;
-const DEFAULT_TOP_K: usize = 0;
 const DEFAULT_REPETITION_PENALTY: f32 = 1.0;
+
+#[derive(Debug, Clone, Copy)]
+struct SamplingDefaults {
+    temperature: f32,
+    top_p: f32,
+    top_k: usize,
+}
+
+const DEFAULT_SAMPLING: SamplingDefaults =
+    SamplingDefaults { temperature: 0.0, top_p: 1.0, top_k: 0 };
+const DEFAULT_SAMPLE_TEMPERATURE: f32 = 1.0;
 
 #[derive(Debug, Clone, Default)]
 pub struct GenerationConfig {
@@ -66,20 +74,28 @@ impl GenerationConfig {
     }
 
     pub fn resolve(&self, overrides: GenerationOverrides) -> Result<GenerationSettings> {
+        self.resolve_with_defaults(overrides, DEFAULT_SAMPLING)
+    }
+
+    fn resolve_with_defaults(
+        &self,
+        overrides: GenerationOverrides,
+        defaults: SamplingDefaults,
+    ) -> Result<GenerationSettings> {
         let checkpoint_temperature =
             (self.do_sample != Some(false)).then_some(self.temperature).flatten();
-        let temperature = overrides.temperature.or(checkpoint_temperature).unwrap_or_else(|| {
-            if self.do_sample == Some(false) {
-                0.0
-            } else {
-                DEFAULT_TEMPERATURE
+        let temperature = overrides.temperature.or(checkpoint_temperature).unwrap_or({
+            match self.do_sample {
+                Some(false) => 0.0,
+                Some(true) => DEFAULT_SAMPLE_TEMPERATURE,
+                None => defaults.temperature,
             }
         });
         let settings = GenerationSettings {
             max_tokens: overrides.max_tokens.or(self.max_tokens).unwrap_or(DEFAULT_MAX_TOKENS),
             temperature,
-            top_p: overrides.top_p.or(self.top_p).unwrap_or(DEFAULT_TOP_P),
-            top_k: overrides.top_k.or(self.top_k).unwrap_or(DEFAULT_TOP_K),
+            top_p: overrides.top_p.or(self.top_p).unwrap_or(defaults.top_p),
+            top_k: overrides.top_k.or(self.top_k).unwrap_or(defaults.top_k),
             repetition_penalty: overrides
                 .repetition_penalty
                 .or(self.repetition_penalty)

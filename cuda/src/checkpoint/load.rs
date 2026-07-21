@@ -1,7 +1,8 @@
 use mircuda::{DeviceBuffer, bf16};
 use models::{
-    layout::{AttentionLayerType, DecoderConfig},
-    weights::TensorCatalog,
+    layout::DecoderConfig,
+    semantic::SemanticModelSpec,
+    weights::{HybridMoeLayerBindings, TensorCatalog, WeightBindingPlan},
 };
 
 use super::{NvFp4MoeLayerLoadConfig, model::payload_bytes, source::LayerSource};
@@ -21,7 +22,12 @@ impl CudaBackend {
         layer: usize,
         load: NvFp4MoeLayerLoadConfig,
     ) -> Result<DecodeMoeLayerTemplate> {
-        Ok(self.load_nvfp4_moe_layer_template_tracked(decoder, catalog, layer, load)?.0)
+        let spec = SemanticModelSpec::discover(decoder, catalog)?;
+        let bindings = WeightBindingPlan::discover(&spec, catalog)?;
+        let layer_bindings = bindings.hybrid_moe_layer(layer)?;
+        Ok(self
+            .load_nvfp4_moe_layer_template_tracked(decoder, catalog, layer, &layer_bindings, load)?
+            .0)
     }
 
     pub(super) fn load_nvfp4_moe_layer_template_tracked(
@@ -29,12 +35,11 @@ impl CudaBackend {
         decoder: &DecoderConfig,
         catalog: &TensorCatalog,
         layer: usize,
+        bindings: &HybridMoeLayerBindings<'_>,
         load: NvFp4MoeLayerLoadConfig,
     ) -> Result<(DecodeMoeLayerTemplate, u64)> {
         let block = load.block(decoder, layer)?;
-        let key_is_value =
-            decoder.attention_k_eq_v && decoder.layer_type(layer) == AttentionLayerType::Full;
-        let source = LayerSource::discover(catalog, layer, block.experts, key_is_value)?;
+        let source = LayerSource::discover(catalog, bindings)?;
         let tensors = upload(self, &source)?;
         let gate = self.prepare_nvfp4_expert_bank(
             bank(block.experts, block.attention.hidden_size, block.expert_intermediate),
@@ -61,7 +66,6 @@ impl CudaBackend {
         tracing::debug!(
             backend = "cuda",
             layer,
-            prefix = source.prefix,
             tensors = source.tensors.len(),
             experts = block.experts,
             "loaded NVFP4 routed MoE layer template"

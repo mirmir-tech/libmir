@@ -9,7 +9,6 @@ fn main() -> libmir::Result<()> {
     let manifest = descriptor.manifest()?;
 
     println!("id: {}", manifest.id);
-    println!("family: {:?}", manifest.family);
     println!("context: {}", manifest.context_len);
     println!("quantization: {:?}", manifest.quantization);
     println!("decoder: {:?}", descriptor.decoder());

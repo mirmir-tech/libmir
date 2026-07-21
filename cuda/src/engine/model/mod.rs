@@ -1,11 +1,11 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     sync::{Mutex, MutexGuard},
 };
 
 use foundation::model::ModelManifest;
 use models::{
-    execution::{ExecutionPlan, TaskExecutionPlan},
+    execution::{DecoderExecutionContract, TaskExecutionPlan},
     layout::{DecoderConfig, EncoderConfig, ModelLayout, ModelMetadata, VisionConfig},
     weights::{TensorCatalog, TensorReadiness},
 };
@@ -16,12 +16,12 @@ use super::{
     runner::{RunnerGuard, RunnerQueue},
     vision::model::LoadedVisionModel,
 };
-use crate::{
-    CudaHybridLinearModelSession, CudaHybridLinearModelTemplate, CudaMoeModelSession, Error,
-    Result, backend::CudaTextEmbeddingModel,
-};
+use crate::{Error, Result, backend::CudaTextEmbeddingModel};
 
+mod generation;
 mod load;
+
+pub(super) use generation::{GenerationExecution, PooledVisionPrefill, SpatialVisionPrefill};
 
 pub(super) struct LoadedModel {
     pub manifest: ModelManifest,
@@ -30,7 +30,7 @@ pub(super) struct LoadedModel {
     pub decoder: Option<DecoderConfig>,
     pub encoder: Option<EncoderConfig>,
     pub catalog: TensorCatalog,
-    pub plan: Option<ExecutionPlan>,
+    pub contract: Option<DecoderExecutionContract>,
     pub task_plan: TaskExecutionPlan,
     pub vision: Option<VisionConfig>,
     pub vision_readiness: Option<TensorReadiness>,
@@ -46,15 +46,9 @@ pub(super) struct ModelRunner {
 }
 
 pub(super) enum ModelExecution {
-    Standard(Box<CudaMoeModelSession>),
-    Hybrid(Box<HybridExecution>),
+    Generation(Box<dyn GenerationExecution>),
     Embedding(Box<CudaTextEmbeddingModel>),
     SequenceScoring(Box<crate::backend::CudaSequenceScoringModel>),
-}
-
-pub(super) struct HybridExecution {
-    pub template: CudaHybridLinearModelTemplate,
-    pub sessions: HashMap<Uuid, CudaHybridLinearModelSession>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -64,6 +58,10 @@ pub(super) struct DeviceToken {
 }
 
 impl LoadedModel {
+    pub(super) fn semantic(&self) -> Option<&models::semantic::SemanticModelSpec> {
+        self.contract.as_ref().map(|contract| &contract.semantic)
+    }
+
     pub(super) fn sessions(&self) -> Result<MutexGuard<'_, HashSet<Uuid>>> {
         let Ok(sessions) = self.sessions.lock() else {
             return Err(Error::State("session registry lock is poisoned".into()));
@@ -74,8 +72,8 @@ impl LoadedModel {
     pub fn clear_sessions(&self) -> Result<()> {
         let mut runner = self.prefill_runner()?;
         self.sessions()?.clear();
-        if let ModelExecution::Hybrid(hybrid) = &mut runner.execution {
-            hybrid.sessions.clear();
+        if let ModelExecution::Generation(generation) = &mut runner.execution {
+            generation.clear_sessions();
         }
         runner.selected = None;
         drop(runner);
@@ -90,8 +88,8 @@ impl LoadedModel {
     pub fn release_session(&self, session: Uuid) -> Result<()> {
         let mut runner = self.prefill_runner()?;
         self.sessions()?.remove(&session);
-        if let ModelExecution::Hybrid(hybrid) = &mut runner.execution {
-            hybrid.sessions.remove(&session);
+        if let ModelExecution::Generation(generation) = &mut runner.execution {
+            generation.release_session(session);
         }
         if runner.selected.is_some_and(|selected| selected.session == session) {
             runner.selected = None;

@@ -2,7 +2,6 @@ use super::{
     Array, Error, FusedAttention, FusedExpertGateUp, FusedGateUp, FusedKeyValue, ModelTensors,
     QuantizedArrays, Result, RouterOutput, Stream,
 };
-
 #[derive(Debug)]
 pub struct QuantizedLinear {
     arrays: QuantizedArrays,
@@ -10,7 +9,6 @@ pub struct QuantizedLinear {
     group_size: i32,
     bits: i32,
 }
-
 impl QuantizedLinear {
     #[cfg(test)]
     pub(in crate::engine) fn from_quantized(
@@ -22,12 +20,30 @@ impl QuantizedLinear {
     }
 
     pub fn load(tensors: &ModelTensors, prefix: &str, group_size: i32) -> Result<Self> {
-        let weight = tensors.get(&format!("{prefix}.weight"))?;
-        let scales = tensors.get(&format!("{prefix}.scales"))?;
-        let biases = tensors.get(&format!("{prefix}.biases"))?;
+        Self::load_names(
+            tensors,
+            &format!("{prefix}.weight"),
+            &format!("{prefix}.scales"),
+            &format!("{prefix}.biases"),
+            Some(&format!("{prefix}.bias")),
+            group_size,
+        )
+    }
+
+    pub(in crate::engine) fn load_names(
+        tensors: &ModelTensors,
+        weight: &str,
+        scales: &str,
+        biases: &str,
+        output_bias: Option<&str>,
+        group_size: i32,
+    ) -> Result<Self> {
+        let weight = tensors.get(weight)?;
+        let scales = tensors.get(scales)?;
+        let biases = tensors.get(biases)?;
         let bits = infer_bits(&weight, &scales, group_size)?;
         let arrays = QuantizedArrays::new(weight, scales, biases, group_size, bits)?;
-        let affine_bias = tensors.get_optional(&format!("{prefix}.bias"))?;
+        let affine_bias = output_bias.map(|name| tensors.get_optional(name)).transpose()?.flatten();
         Ok(Self {
             arrays,
             bias: affine_bias,
@@ -226,9 +242,8 @@ pub(super) fn infer_bits(weight: &Array, scales: &Array, group_size: i32) -> Res
 }
 
 fn last_dimension(array: &Array) -> Result<usize> {
-    let shape = array.shape()?;
-    let dimension = shape
-        .last()
-        .ok_or_else(|| Error::InvalidQuantization("scalar quantized tensor".into()))?;
-    Ok(usize::try_from(*dimension)?)
+    let Some(dimension) = array.shape()?.last().copied() else {
+        return Err(Error::InvalidQuantization("scalar quantized tensor".into()));
+    };
+    Ok(usize::try_from(dimension)?)
 }

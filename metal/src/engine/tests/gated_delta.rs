@@ -1,6 +1,5 @@
-use models::layout::AttentionLayerType;
-
 use super::*;
+use crate::engine::lowering::MixerLowering;
 
 #[test]
 fn keeps_recurrent_gated_delta_state_on_the_explicit_gpu_stream() -> Result<()> {
@@ -88,7 +87,7 @@ fn snapshots_recurrent_state_without_a_host_round_trip() -> Result<()> {
 #[test]
 fn snapshots_mixed_linear_and_key_value_cache_at_a_common_offset() -> Result<()> {
     let mut cache = DecoderCache::new_hybrid_linear(
-        &[AttentionLayerType::Linear, AttentionLayerType::Full],
+        &[MixerLowering::Linear, MixerLowering::Softmax { sinks: false, window: None }],
         16,
     )?;
 

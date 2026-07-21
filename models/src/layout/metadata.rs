@@ -1,13 +1,12 @@
 use std::{fs, path::Path};
 
-use foundation::model::{ModelFamily, Quantization};
+use foundation::model::Quantization;
 use serde_json::Value;
 
 use crate::{error::Result, layout::ModelLayout};
 
 #[derive(Debug, Clone)]
 pub struct ModelMetadata {
-    pub family: ModelFamily,
     pub architectures: Vec<String>,
     pub model_type: Option<String>,
     pub dtype: Option<String>,
@@ -32,10 +31,7 @@ impl ModelMetadata {
         let quantization = read_quantization(&value);
         let quantization_group_size = read_quantization_usize(&value, "group_size")?;
         let quantization_mode = read_quantization_string(&value, "mode");
-        let family = detect_family(model_type.as_deref(), &architectures);
-
         Ok(Self {
-            family,
             architectures,
             model_type,
             dtype,
@@ -90,8 +86,13 @@ fn read_quantization(value: &Value) -> Quantization {
 
 fn config_quantization(config: Option<&Value>) -> Option<Quantization> {
     let config = config?;
-    if quantization_name(config).is_some_and(|name| name.eq_ignore_ascii_case("nvfp4")) {
-        return Some(Quantization::NvFp4);
+    if let Some(name) = quantization_name(config) {
+        if name.eq_ignore_ascii_case("nvfp4") {
+            return Some(Quantization::NvFp4);
+        }
+        if name.eq_ignore_ascii_case("mxfp4") {
+            return Some(Quantization::MxFp4);
+        }
     }
     let bits = config.get("bits").and_then(Value::as_u64);
     match bits {
@@ -160,28 +161,6 @@ fn read_quantization_string(value: &Value, field: &str) -> Option<String> {
     None
 }
 
-fn detect_family(model_type: Option<&str>, architectures: &[String]) -> ModelFamily {
-    let joined = format!("{} {}", model_type.unwrap_or_default(), architectures.join(" "))
-        .to_ascii_lowercase();
-    if joined.contains("bielik") {
-        ModelFamily::Bielik
-    } else if joined.contains("deepseek") {
-        ModelFamily::DeepSeek
-    } else if joined.contains("gemma") {
-        ModelFamily::Gemma
-    } else if joined.contains("glm") {
-        ModelFamily::Glm
-    } else if joined.contains("qwen") {
-        ModelFamily::Qwen
-    } else if joined.contains("mistral") || joined.contains("mixtral") {
-        ModelFamily::Mistral
-    } else if joined.contains("llama") {
-        ModelFamily::Llama
-    } else {
-        ModelFamily::Unknown
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -226,5 +205,16 @@ mod tests {
         assert_eq!(read_quantization(&value), Quantization::NvFp4);
         assert_eq!(read_quantization_usize(&value, "group_size")?, Some(16));
         Ok(())
+    }
+
+    #[test]
+    fn reads_gpt_oss_mxfp4_contract() {
+        let value = json!({
+            "model_type": "gpt_oss",
+            "architectures": ["GptOssForCausalLM"],
+            "quantization_config": { "quant_method": "mxfp4" }
+        });
+
+        assert_eq!(read_quantization(&value), Quantization::MxFp4);
     }
 }

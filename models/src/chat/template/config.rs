@@ -12,11 +12,24 @@ use crate::{
 pub(super) struct TemplateTokens {
     bos: String,
     eos: String,
+    turn_start: String,
+    turn_end: String,
 }
 
 impl TemplateTokens {
     pub(super) fn new(bos: impl Into<String>, eos: impl Into<String>) -> Self {
-        Self { bos: bos.into(), eos: eos.into() }
+        Self {
+            bos: bos.into(),
+            eos: eos.into(),
+            turn_start: String::new(),
+            turn_end: String::new(),
+        }
+    }
+
+    pub(super) fn with_turns(mut self, start: impl Into<String>, end: impl Into<String>) -> Self {
+        self.turn_start = start.into();
+        self.turn_end = end.into();
+        self
     }
 
     pub(super) fn requires_automatic_bos(&self, text: &str) -> bool {
@@ -29,6 +42,11 @@ impl TemplateTokens {
 
     pub(super) fn eos(&self) -> &str {
         &self.eos
+    }
+
+    pub(super) fn turn_tokens(&self) -> Option<(&str, &str)> {
+        (!self.turn_start.is_empty() && !self.turn_end.is_empty())
+            .then_some((&self.turn_start, &self.turn_end))
     }
 }
 
@@ -73,7 +91,8 @@ fn read_tokenizer_config(path: &std::path::Path) -> Result<TokenizerConfig> {
     let value: Value = serde_json::from_str(&fs::read_to_string(path)?)?;
     Ok(TokenizerConfig {
         template: template(&value)?,
-        tokens: TemplateTokens::new(token(&value, "bos_token")?, token(&value, "eos_token")?),
+        tokens: TemplateTokens::new(token(&value, "bos_token")?, token(&value, "eos_token")?)
+            .with_turns(token(&value, "sot_token")?, token(&value, "eot_token")?),
     })
 }
 
@@ -149,6 +168,19 @@ mod tests {
         let config = json!({ "bos_token": { "content": "<s>" } });
 
         assert_eq!(token(&config, "bos_token")?, "<s>");
+        Ok(())
+    }
+
+    #[test]
+    fn discovers_declared_turn_protocol_tokens() -> Result<()> {
+        let config = json!({
+            "sot_token": "<|turn>",
+            "eot_token": "<turn|>"
+        });
+        let tokens = TemplateTokens::new("", "")
+            .with_turns(token(&config, "sot_token")?, token(&config, "eot_token")?);
+
+        assert_eq!(tokens.turn_tokens(), Some(("<|turn>", "<turn|>")));
         Ok(())
     }
 }

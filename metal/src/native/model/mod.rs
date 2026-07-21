@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use foundation::model::ModelManifest;
 use models::{
-    execution::{ExecutionPlan, TaskExecutionPlan},
+    execution::{DecoderExecutionContract, TaskExecutionPlan},
     layout::{DecoderConfig, EncoderConfig, ModelLayout, ModelMetadata, VisionConfig},
     tokenizer::TokenizerInfo,
     weights::TensorReadiness,
@@ -21,6 +21,7 @@ use crate::engine::{
 };
 
 mod batch;
+#[allow(clippy::self_named_module_files)]
 mod load;
 
 pub(super) use batch::DecodeInput;
@@ -38,7 +39,7 @@ pub(super) struct ModelInfo {
     pub encoder: Option<EncoderConfig>,
     pub vision: Option<VisionConfig>,
     pub vision_readiness: Option<TensorReadiness>,
-    pub plan: Option<ExecutionPlan>,
+    pub contract: Option<DecoderExecutionContract>,
     pub task_plan: TaskExecutionPlan,
     pub tensor_count: usize,
     pub weight_bytes: u64,
@@ -63,7 +64,7 @@ pub(super) struct LoadedModel {
 pub(super) enum LoadedExecution {
     Generation(DecoderModel),
     Embedding(TextEmbeddingModel),
-    SequenceScoring(SequenceScoringModel),
+    SequenceScoring(Box<SequenceScoringModel>),
 }
 
 impl LoadedExecution {
@@ -180,33 +181,34 @@ impl LoadedModel {
     }
 }
 
-fn prefill_step(
-    archetype: models::execution::DecoderArchetype,
-    configured: Option<usize>,
-) -> usize {
+fn prefill_step(spec: &models::semantic::SemanticModelSpec, configured: Option<usize>) -> usize {
     configured
         .filter(|step| *step > 0)
-        .unwrap_or_else(|| default_prefill_step(archetype))
+        .unwrap_or_else(|| default_prefill_step(has_linear_attention(spec)))
 }
 
-const fn default_prefill_step(archetype: models::execution::DecoderArchetype) -> usize {
-    match archetype {
-        models::execution::DecoderArchetype::HybridLinearMoe => HYBRID_LINEAR_PREFILL_STEP,
-        models::execution::DecoderArchetype::HybridMoe
-        | models::execution::DecoderArchetype::DenseSwiGlu => PREFILL_STEP,
+const fn default_prefill_step(has_linear_attention: bool) -> usize {
+    if has_linear_attention {
+        HYBRID_LINEAR_PREFILL_STEP
+    } else {
+        PREFILL_STEP
     }
+}
+
+fn has_linear_attention(spec: &models::semantic::SemanticModelSpec) -> bool {
+    spec.decoder
+        .layers
+        .iter()
+        .any(|layer| matches!(layer.mixer, models::semantic::MixerSpec::LinearAttention(_)))
 }
 
 #[cfg(test)]
 mod tests {
-    use models::execution::DecoderArchetype;
-
     use super::*;
 
     #[test]
     fn gives_hybrid_linear_moe_a_larger_default_prefill_graph() {
-        assert_eq!(default_prefill_step(DecoderArchetype::HybridLinearMoe), 2_048);
-        assert_eq!(default_prefill_step(DecoderArchetype::HybridMoe), 512);
-        assert_eq!(default_prefill_step(DecoderArchetype::DenseSwiGlu), 512);
+        assert_eq!(default_prefill_step(true), 2_048);
+        assert_eq!(default_prefill_step(false), 512);
     }
 }

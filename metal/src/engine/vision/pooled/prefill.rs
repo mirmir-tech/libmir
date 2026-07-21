@@ -1,16 +1,14 @@
 use models::vision::{PooledPreprocessedImage, PooledPromptTokens};
 
 use super::PooledVisionTower;
-use crate::engine::{
-    Array, DecoderCache, Error, ImageTokenSpan, Result, Stream, hybrid_moe::HybridMoeModel,
-};
+use crate::engine::{Array, DecoderCache, DecoderModel, Error, ImageTokenSpan, Result, Stream};
 
 impl PooledVisionTower {
     /// Encodes one image, replaces its expanded placeholder embeddings, and
     /// runs the initial decoder prefill while all embeddings remain on Metal.
-    pub fn forward_multimodal_prefill(
+    pub(crate) fn forward_multimodal_prefill(
         &self,
-        decoder: &HybridMoeModel,
+        decoder: &DecoderModel,
         prompt: &PooledPromptTokens,
         image: &PooledPreprocessedImage,
         cache: &mut DecoderCache,
@@ -28,7 +26,7 @@ impl PooledVisionTower {
         let sequence = i32::try_from(prompt.token_ids.len())?;
         let token_ids = Array::from_u32(&prompt.token_ids, &[1, sequence])?;
         let embeddings = self.forward_preprocessed(image, stream)?;
-        decoder.forward_multimodal_prefill(
+        decoder.forward_pooled_multimodal(
             &token_ids,
             &embeddings,
             span,

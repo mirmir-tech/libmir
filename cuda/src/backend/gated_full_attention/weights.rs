@@ -23,6 +23,20 @@ impl AffineGatedFullAttentionWeights {
         })
     }
 
+    pub fn load_bindings(
+        tensors: &CudaTensorSet,
+        bindings: GatedSoftmaxBindings<'_>,
+    ) -> Result<Self> {
+        Ok(Self {
+            query: AffineQuantizedWeight::load_binding(tensors, bindings.query)?,
+            key: AffineQuantizedWeight::load_binding(tensors, bindings.key)?,
+            value: AffineQuantizedWeight::load_binding(tensors, bindings.value)?,
+            output: AffineQuantizedWeight::load_binding(tensors, bindings.output)?,
+            query_norm: required(tensors, &bindings.query_norm.source)?,
+            key_norm: required(tensors, &bindings.key_norm.source)?,
+        })
+    }
+
     pub(super) fn validate(&self, config: AffineGatedFullAttentionConfig) -> Result<()> {
         let query = config.query_width()?;
         let key_value = config.key_value_width()?;
@@ -63,3 +77,4 @@ fn checked(left: usize, right: usize) -> Result<usize> {
     left.checked_mul(right)
         .ok_or(Error::InvalidDecoderKernel("gated attention weight shape overflow"))
 }
+use models::weights::GatedSoftmaxBindings;

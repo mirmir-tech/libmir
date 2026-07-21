@@ -7,7 +7,7 @@ use super::{
     Result,
     compiled::CompiledGraphs,
     kernels::{
-        Kernels, PageWriteOptions, PreparedPageWrite, PreparedQuantizedPageWrite,
+        Kernels, MxFp4Shape, PageWriteOptions, PreparedPageWrite, PreparedQuantizedPageWrite,
         QuantizedPageWriteOptions,
     },
 };
@@ -99,6 +99,38 @@ impl Stream {
 
     pub(super) fn affine_router(&self, inputs: [&mirtal::Array; 6]) -> Result<[mirtal::Array; 2]> {
         Ok(self.compiled.router(inputs, &self.native)?)
+    }
+
+    pub(super) fn mxfp4_gate_up(
+        &self,
+        inputs: [&super::Array; 6],
+        shape: MxFp4Shape,
+    ) -> Result<super::Array> {
+        self.kernels.mxfp4_gate_up(inputs, shape, self)
+    }
+
+    pub(super) fn mxfp4_down(
+        &self,
+        inputs: [&super::Array; 6],
+        shape: MxFp4Shape,
+    ) -> Result<super::Array> {
+        self.kernels.mxfp4_down(inputs, shape, self)
+    }
+
+    pub(super) fn mxfp4_split_gate_up(
+        &self,
+        inputs: [&super::Array; 9],
+        shape: MxFp4Shape,
+    ) -> Result<super::Array> {
+        self.kernels.mxfp4_split_gate_up(inputs, shape, self)
+    }
+
+    pub(super) fn mxfp4_u32_down(
+        &self,
+        inputs: [&super::Array; 6],
+        shape: MxFp4Shape,
+    ) -> Result<super::Array> {
+        self.kernels.mxfp4_u32_down(inputs, shape, self)
     }
 
     pub(super) fn paged_attention(

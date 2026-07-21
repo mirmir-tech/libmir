@@ -36,3 +36,33 @@ fn disables_sampling_when_checkpoint_requests_greedy_generation() -> Result<()> 
     assert!(config.resolve(GenerationOverrides::default())?.temperature.abs() < f32::EPSILON);
     Ok(())
 }
+
+#[test]
+fn sampling_mode_uses_neutral_temperature_when_checkpoint_omits_it() -> Result<()> {
+    let config = GenerationConfig::from_value(&json!({ "do_sample": true }))?;
+    let settings = config.resolve(GenerationOverrides::default())?;
+
+    assert!((settings.temperature - 1.0).abs() < f32::EPSILON);
+    assert!((settings.top_p - 1.0).abs() < f32::EPSILON);
+    assert_eq!(settings.top_k, 0);
+    Ok(())
+}
+
+#[test]
+fn checkpoint_and_user_values_override_generic_sampling_defaults() -> Result<()> {
+    let config = GenerationConfig::from_value(&json!({
+        "do_sample": true,
+        "temperature": 0.8,
+        "top_p": 0.9
+    }))?;
+    let checkpoint = config.resolve(GenerationOverrides::default())?;
+    let overridden = config.resolve(GenerationOverrides {
+        temperature: Some(0.6),
+        ..GenerationOverrides::default()
+    })?;
+
+    assert!((checkpoint.temperature - 0.8).abs() < f32::EPSILON);
+    assert!((checkpoint.top_p - 0.9).abs() < f32::EPSILON);
+    assert!((overridden.temperature - 0.6).abs() < f32::EPSILON);
+    Ok(())
+}

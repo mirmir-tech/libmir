@@ -1,6 +1,6 @@
 use models::{
     chat::ChatTemplate,
-    execution::{ModelTask, TaskExecutionPlan},
+    execution::{DecoderExecutionContract, ModelTask, TaskExecutionPlan},
     generation::{GenerationOverrides, GenerationSettings},
     layout::{DecoderConfig, ImageProcessorConfig, ModelLayout, ModelMetadata, VisionConfig},
     tokenizer::TextTokenizer,
@@ -18,7 +18,7 @@ impl ModelDescriptor {
     }
 
     #[must_use]
-    /// Returns normalized model-family and context metadata.
+    /// Returns normalized checkpoint and context metadata.
     pub const fn metadata(&self) -> &ModelMetadata {
         &self.metadata
     }
@@ -27,6 +27,12 @@ impl ModelDescriptor {
     /// Returns decoder dimensions and attention-layer configuration.
     pub const fn decoder(&self) -> Option<&DecoderConfig> {
         self.decoder.as_ref()
+    }
+
+    #[must_use]
+    /// Returns the semantic decoder and its physical weight bindings.
+    pub const fn execution(&self) -> Option<&DecoderExecutionContract> {
+        self.execution.as_ref()
     }
 
     #[must_use]
@@ -73,7 +79,7 @@ impl ModelDescriptor {
     }
 
     #[must_use]
-    /// Returns the chat template selected for this model family.
+    /// Returns the chat template discovered from checkpoint files.
     pub const fn template(&self) -> &ChatTemplate {
         &self.template
     }

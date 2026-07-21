@@ -2,7 +2,8 @@ use std::time::Instant;
 
 use super::HybridMoeModel;
 use crate::engine::{
-    Array, DecoderCache, Error, ImageTokenSpan, Result, Stream, prefix_attention_mask,
+    Array, DecoderCache, Error, ImageTokenSpan, Result, Stream,
+    decoder::{LayerContext, LayerLoopOptions, forward_layers},
 };
 
 impl HybridMoeModel {
@@ -99,52 +100,29 @@ impl HybridMoeModel {
 
     fn forward_embedded(
         &self,
-        mut hidden: Array,
+        hidden: Array,
         cache: &mut DecoderCache,
         position: i32,
         causal: bool,
         image: Option<ImageTokenSpan>,
         stream: &Stream,
     ) -> Result<Array> {
-        let sequence = usize::try_from(*hidden.shape()?.get(1).ok_or(Error::ShapeOverflow)?)?;
         let profile = stream.config().diagnostics.profile_layers;
         let evaluation_step = causal
             .then_some(stream.config().diagnostics.prefill_evaluation_layers)
             .flatten();
-        let layer_count = self.layers.len();
-        for (index, (layer, cache)) in
-            self.layers.iter().zip(cache.attention_caches_mut()?.iter_mut()).enumerate()
-        {
-            let started = Instant::now();
-            let mask = image
-                .filter(|_| layer.config.max_context.is_some())
-                .map(|image| {
-                    prefix_attention_mask(sequence, image, layer.config.max_context, stream)
-                })
-                .transpose()?;
-            hidden = layer.forward_with_mask(
-                &hidden,
-                Some(cache),
+        forward_layers(
+            &self.layers,
+            hidden,
+            cache,
+            LayerContext {
                 position,
                 causal,
-                mask.as_ref(),
+                positions: None,
+                image,
                 stream,
-            )?;
-            let evaluate = profile
-                || evaluation_step
-                    .is_some_and(|step| (index + 1) % step == 0 || index + 1 == layer_count);
-            if evaluate {
-                hidden.async_eval()?;
-                stream.synchronize()?;
-            }
-            if profile {
-                tracing::debug!(
-                    layer = index,
-                    milliseconds = started.elapsed().as_secs_f64() * 1_000.0,
-                    "MLX hybrid MoE layer profile"
-                );
-            }
-        }
-        Ok(hidden)
+            },
+            LayerLoopOptions::new(profile, evaluation_step, false),
+        )
     }
 }

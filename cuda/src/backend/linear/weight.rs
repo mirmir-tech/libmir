@@ -1,3 +1,5 @@
+use models::weights::{TensorBinding, TensorStorage};
+
 use crate::{
     AffineQuantizedConfig, AffineQuantizedTensors, CudaTensor, CudaTensorDType, CudaTensorSet,
     Error, Result,
@@ -16,6 +18,20 @@ impl AffineQuantizedWeight {
             weight: required(tensors, &format!("{prefix}.weight"))?,
             scales: required(tensors, &format!("{prefix}.scales"))?,
             biases: required(tensors, &format!("{prefix}.biases"))?,
+        })
+    }
+
+    pub(crate) fn load_binding(tensors: &CudaTensorSet, binding: &TensorBinding) -> Result<Self> {
+        let TensorStorage::AffineQuantized { scales, biases: Some(biases), .. } = &binding.storage
+        else {
+            return Err(Error::InvalidQuantizedGemv(
+                "binding is not an affine weight with zero-point biases",
+            ));
+        };
+        Ok(Self {
+            weight: required(tensors, &binding.source)?,
+            scales: required(tensors, scales)?,
+            biases: required(tensors, biases)?,
         })
     }
 

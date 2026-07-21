@@ -1,3 +1,3 @@
 mod manifest;
 
-pub use manifest::{BackendTarget, ModelFamily, ModelManifest, Quantization};
+pub use manifest::{BackendTarget, ModelManifest, Quantization};

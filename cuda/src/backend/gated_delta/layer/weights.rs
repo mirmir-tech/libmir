@@ -29,6 +29,23 @@ impl AffineGatedDeltaLayerWeights {
         })
     }
 
+    pub fn load_bindings(
+        tensors: &CudaTensorSet,
+        bindings: LinearAttentionBindings<'_>,
+    ) -> Result<Self> {
+        Ok(Self {
+            qkv: AffineQuantizedWeight::load_binding(tensors, bindings.qkv)?,
+            gate: AffineQuantizedWeight::load_binding(tensors, bindings.gate)?,
+            alpha: AffineQuantizedWeight::load_binding(tensors, bindings.alpha)?,
+            beta: AffineQuantizedWeight::load_binding(tensors, bindings.beta)?,
+            output: AffineQuantizedWeight::load_binding(tensors, bindings.output)?,
+            convolution: required(tensors, &bindings.convolution.source)?,
+            norm: required(tensors, &bindings.norm.source)?,
+            a_log: required(tensors, &bindings.decay_log.source)?,
+            dt_bias: required(tensors, &bindings.time_bias.source)?,
+        })
+    }
+
     pub(super) fn validate(&self, config: AffineGatedDeltaLayerConfig) -> Result<()> {
         let mixed = config.mixed_width()?;
         let value = config.value_width()?;
@@ -79,3 +96,4 @@ fn dtype(
     }
     Ok(())
 }
+use models::weights::LinearAttentionBindings;

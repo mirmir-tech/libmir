@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use foundation::model::{BackendTarget, ModelFamily, ModelManifest, Quantization};
+use foundation::model::{BackendTarget, ModelManifest, Quantization};
 use runtime::backend::SamplingLogits;
 use uuid::Uuid;
 
@@ -47,7 +47,6 @@ fn manifest(path: &Path) -> ModelManifest {
     ModelManifest {
         id: "bielik-greedy-regression".into(),
         // Native selection must depend on checkpoint structure, not a caller label.
-        family: ModelFamily::Unknown,
         path: path.to_string_lossy().into_owned(),
         tokenizer_path: None,
         context_len: 32_768,

@@ -16,7 +16,7 @@ use uuid::Uuid;
 
 use super::{
     CudaEngine,
-    model::{DeviceToken, LoadedModel, ModelExecution},
+    model::{DeviceToken, LoadedModel, ModelExecution, PooledVisionPrefill, SpatialVisionPrefill},
 };
 use crate::{Error, Result};
 
@@ -74,24 +74,24 @@ impl CudaEngine {
             ));
         }
         let mut runner = loaded.prefill_runner()?;
-        let ModelExecution::Standard(model) = &mut runner.execution else {
+        let ModelExecution::Generation(generation) = &mut runner.execution else {
             return Err(Error::UnsupportedVisionContract(
-                "pooled vision requires the standard CUDA decoder path".into(),
+                "pooled vision requires a generation runner".into(),
             ));
         };
-        let model = model.as_mut();
-        model.prefill_vision_for_sampling(
-            session_id,
-            &prompt.token_ids,
-            &encoded.hidden,
-            prompt.image_start,
-            prompt.image_end,
-            tower.bidirectional_image_attention(),
-            block_table,
-            sampling,
+        let completed = generation.prefill_pooled_vision(
+            &self.backend,
+            PooledVisionPrefill {
+                session: session_id,
+                tokens: &prompt.token_ids,
+                image: &encoded.hidden,
+                image_span: (prompt.image_start, prompt.image_end),
+                bidirectional: tower.bidirectional_image_attention(),
+                table: block_table,
+                sampling,
+            },
         )?;
         drop(encoded);
-        let completed = self.output(model, sampling)?;
         runner.selected = completed.token.map(|token| DeviceToken { session: session_id, token });
         drop(runner);
         loaded.register_session(session_id)?;
@@ -162,24 +162,25 @@ impl CudaEngine {
             ));
         }
         let mut runner = loaded.prefill_runner()?;
-        let ModelExecution::Hybrid(hybrid) = &mut runner.execution else {
+        let ModelExecution::Generation(generation) = &mut runner.execution else {
             return Err(Error::UnsupportedVisionContract(
-                "spatial-merge vision requires a hybrid CUDA decoder".into(),
+                "spatial-merge vision requires a generation runner".into(),
             ));
         };
-        let mut session = hybrid.template.instantiate()?;
-        session.prefill_vision(
-            session_id,
-            &prompt.token_ids,
-            &prompt.position_ids,
-            block_table,
-            (prompt.image_start, prompt.image_end),
-            &encoded.hidden,
-            prompt.position_delta,
+        let completed = generation.prefill_spatial_vision(
+            &self.backend,
+            SpatialVisionPrefill {
+                session: session_id,
+                tokens: &prompt.token_ids,
+                positions: &prompt.position_ids,
+                image: &encoded.hidden,
+                image_span: (prompt.image_start, prompt.image_end),
+                position_delta: prompt.position_delta,
+                table: block_table,
+                sampling,
+            },
         )?;
         drop(encoded);
-        let completed = self.output_hybrid(&mut session, sampling)?;
-        hybrid.sessions.insert(session_id, session);
         runner.selected = completed.token.map(|token| DeviceToken { session: session_id, token });
         drop(runner);
         loaded.register_session(session_id)?;
@@ -188,7 +189,7 @@ impl CudaEngine {
             accepted_tokens: prompt.token_ids.len(),
             next_token: completed.token,
             trace: Some(format!(
-                "cuda.spatial-merge=device-tower+hybrid-mixed-prefill;layers={}",
+                "cuda.spatial-merge=device-tower+shared-routed-prefill;layers={}",
                 tower.layer_count()
             )),
             logits: completed.logits,

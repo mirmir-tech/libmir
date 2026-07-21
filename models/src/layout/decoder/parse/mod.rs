@@ -31,8 +31,12 @@ impl DecoderConfig {
         let num_hidden_layers =
             require_usize(decoder, &["num_hidden_layers", "num_layers", "n_layer"])?;
         let partial_rotary_factor = partial_rotary_factor(decoder)?;
-        let head_dim = optional_usize(decoder, &["head_dim", "attention_head_dim", "kv_channels"])?
-            .unwrap_or(hidden_size / num_attention_heads);
+        let explicit_head_dim =
+            optional_usize(decoder, &["head_dim", "attention_head_dim", "kv_channels"])?;
+        if explicit_head_dim.is_none() && !hidden_size.is_multiple_of(num_attention_heads) {
+            return Err(invalid("hidden_size must be divisible by num_attention_heads"));
+        }
+        let head_dim = explicit_head_dim.unwrap_or(hidden_size / num_attention_heads);
         let config = Self {
             hidden_size,
             intermediate_size: intermediate_size(decoder)?,
@@ -83,8 +87,11 @@ impl DecoderConfig {
             attention_output: features::attention_output(decoder)?,
             sliding_window: optional_usize(decoder, &["sliding_window"])?,
             linear_attention: features::linear_attention(decoder)?,
-            num_experts: optional_usize(decoder, &["num_experts"])?,
-            top_k_experts: optional_usize(decoder, &["top_k_experts", "num_experts_per_tok"])?,
+            num_experts: optional_usize(decoder, &["num_experts", "num_local_experts"])?,
+            top_k_experts: optional_usize(
+                decoder,
+                &["top_k_experts", "num_experts_per_tok", "experts_per_token"],
+            )?,
             moe_intermediate_size: optional_usize(decoder, &["moe_intermediate_size"])?,
             shared_expert_intermediate_size: optional_usize(
                 decoder,
@@ -93,6 +100,10 @@ impl DecoderConfig {
             hidden_activation: optional_string(decoder, "hidden_activation")?
                 .or(optional_string(decoder, "hidden_act")?),
             final_logit_softcapping: optional_f64(decoder, &["final_logit_softcapping"])?,
+            attention_bias: optional_bool(decoder, "attention_bias")?.unwrap_or(false),
+            attention_sinks: optional_bool(decoder, "attention_sinks")?.unwrap_or(false),
+            swiglu_limit: optional_f64(decoder, &["swiglu_limit"])?,
+            initial_context_length: optional_usize(decoder, &["initial_context_length"])?,
         };
         config.validate()?;
         Ok(config)
@@ -104,9 +115,6 @@ impl DecoderConfig {
         }
         if self.global_head_dim == Some(0) || self.num_global_key_value_heads == Some(0) {
             return Err(invalid("global attention dimensions must be greater than zero"));
-        }
-        if !self.hidden_size.is_multiple_of(self.num_attention_heads) {
-            return Err(invalid("hidden_size must be divisible by num_attention_heads"));
         }
         if !self.num_attention_heads.is_multiple_of(self.num_key_value_heads) {
             return Err(invalid("num_attention_heads must be divisible by num_key_value_heads"));

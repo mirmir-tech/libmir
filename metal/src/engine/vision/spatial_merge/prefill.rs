@@ -1,15 +1,12 @@
 use models::vision::{SpatialMergePreprocessedImage, SpatialMergePromptTokens};
 
 use super::SpatialMergeVisionTower;
-use crate::engine::{
-    Array, DecoderCache, Error, ImageTokenSpan, Result, Stream,
-    hybrid_linear_moe::HybridLinearMoeModel,
-};
+use crate::engine::{Array, DecoderCache, DecoderModel, Error, ImageTokenSpan, Result, Stream};
 
 impl SpatialMergeVisionTower {
-    pub fn forward_multimodal_prefill(
+    pub(crate) fn forward_multimodal_prefill(
         &self,
-        decoder: &HybridLinearMoeModel,
+        decoder: &DecoderModel,
         prompt: &SpatialMergePromptTokens,
         image: &SpatialMergePreprocessedImage,
         cache: &mut DecoderCache,
@@ -29,6 +26,6 @@ impl SpatialMergeVisionTower {
         let position_ids = Array::from_u32(&prompt.position_ids, &[3, sequence])?;
         let embeddings = self.forward_preprocessed(image, stream)?;
         decoder
-            .forward_multimodal_prefill(&token_ids, &embeddings, span, &position_ids, cache, stream)
+            .forward_spatial_multimodal(&token_ids, &embeddings, span, &position_ids, cache, stream)
     }
 }

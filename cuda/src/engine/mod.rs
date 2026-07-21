@@ -1,5 +1,7 @@
 mod batch;
+#[allow(clippy::self_named_module_files)]
 mod execution;
+pub mod lowering;
 mod model;
 mod runner;
 mod runtime;

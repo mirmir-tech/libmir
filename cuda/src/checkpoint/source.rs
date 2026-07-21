@@ -1,32 +1,13 @@
-use models::weights::{TensorCatalog, TensorInfo};
+use std::collections::HashSet;
+
+use models::weights::{
+    BlockFormat, HybridMoeExpertBindings, HybridMoeLayerBindings, TensorBinding, TensorCatalog,
+    TensorInfo, TensorStorage,
+};
 
 use crate::{Error, NvFp4ExpertSource, Result};
 
-const TENSOR_SUFFIXES: [&str; 20] = [
-    "input_layernorm.weight",
-    "self_attn.q_proj.weight",
-    "self_attn.k_proj.weight",
-    "self_attn.v_proj.weight",
-    "self_attn.q_norm.weight",
-    "self_attn.k_norm.weight",
-    "self_attn.o_proj.weight",
-    "post_attention_layernorm.weight",
-    "pre_feedforward_layernorm.weight",
-    "mlp.gate_proj.weight",
-    "mlp.up_proj.weight",
-    "mlp.down_proj.weight",
-    "post_feedforward_layernorm_1.weight",
-    "router.proj.weight",
-    "router.scale",
-    "router.per_expert_scale",
-    "pre_feedforward_layernorm_2.weight",
-    "post_feedforward_layernorm_2.weight",
-    "post_feedforward_layernorm.weight",
-    "layer_scalar",
-];
-
 pub(super) struct LayerSource<'a> {
-    pub prefix: String,
     pub tensors: Vec<&'a TensorInfo>,
     pub names: Vec<String>,
     pub gate: Vec<NvFp4ExpertSource<'a>>,
@@ -37,69 +18,86 @@ pub(super) struct LayerSource<'a> {
 impl<'a> LayerSource<'a> {
     pub fn discover(
         catalog: &'a TensorCatalog,
-        layer: usize,
-        experts: usize,
-        key_is_value: bool,
+        bindings: &HybridMoeLayerBindings<'_>,
     ) -> Result<Self> {
-        let prefix = layer_prefix(catalog, layer)?;
-        let names = TENSOR_SUFFIXES
-            .iter()
-            .enumerate()
-            .map(|(index, suffix)| {
-                let suffix = if key_is_value && index == 3 {
-                    TENSOR_SUFFIXES[2]
-                } else {
-                    suffix
-                };
-                format!("{prefix}.{suffix}")
-            })
-            .collect::<Vec<_>>();
-        let mut tensors = Vec::with_capacity(names.len());
-        for name in &names {
-            let tensor = required(catalog, name)?;
-            if !tensors.iter().any(|present: &&TensorInfo| present.name == tensor.name) {
-                tensors.push(tensor);
-            }
-        }
+        let names = common(bindings).into_iter().map(|binding| binding.source.clone()).collect();
+        let mut seen = HashSet::new();
+        let tensors = common(bindings)
+            .into_iter()
+            .flat_map(TensorBinding::physical_sources)
+            .filter(|name| seen.insert((*name).to_owned()))
+            .map(|name| required(catalog, name))
+            .collect::<Result<_>>()?;
+        let HybridMoeExpertBindings::Individual { gate, up, down } = &bindings.experts else {
+            return Err(Error::UnsupportedDecoderLayer(
+                "CUDA hybrid MoE requires individual NVFP4 expert bindings".into(),
+            ));
+        };
         Ok(Self {
-            gate: expert_sources(catalog, &prefix, experts, "gate_proj")?,
-            up: expert_sources(catalog, &prefix, experts, "up_proj")?,
-            down: expert_sources(catalog, &prefix, experts, "down_proj")?,
-            prefix,
             tensors,
             names,
+            gate: expert_sources(catalog, gate)?,
+            up: expert_sources(catalog, up)?,
+            down: expert_sources(catalog, down)?,
         })
     }
 }
 
-fn layer_prefix(catalog: &TensorCatalog, layer: usize) -> Result<String> {
-    [
-        format!("model.layers.{layer}"),
-        format!("language_model.model.layers.{layer}"),
-        format!("model.language_model.layers.{layer}"),
+fn common<'a>(bindings: &'a HybridMoeLayerBindings<'a>) -> Vec<&'a TensorBinding> {
+    vec![
+        bindings.input_norm,
+        bindings.attention.query,
+        bindings.attention.key,
+        bindings.attention.value.unwrap_or(bindings.attention.key),
+        bindings.attention.query_norm,
+        bindings.attention.key_norm,
+        bindings.attention.output,
+        bindings.post_attention_norm,
+        bindings.pre_dense_norm,
+        bindings.dense.gate,
+        bindings.dense.up,
+        bindings.dense.down,
+        bindings.post_dense_norm,
+        bindings.router.projection,
+        bindings.router.norm_scale,
+        bindings.router.expert_scale,
+        bindings.pre_expert_norm,
+        bindings.post_expert_norm,
+        bindings.post_feed_forward_norm,
+        bindings.layer_scale,
     ]
-    .into_iter()
-    .find(|prefix| catalog.contains(&format!("{prefix}.input_layernorm.weight")))
-    .ok_or_else(|| Error::MissingTensor(format!("decoder layer {layer} input norm")))
 }
 
 fn expert_sources<'a>(
     catalog: &'a TensorCatalog,
-    prefix: &str,
-    experts: usize,
-    projection: &str,
+    bindings: &[&TensorBinding],
 ) -> Result<Vec<NvFp4ExpertSource<'a>>> {
-    (0..experts)
-        .map(|expert| {
-            let prefix = format!("{prefix}.experts.{expert}.{projection}");
-            Ok(NvFp4ExpertSource {
-                weight: required(catalog, &format!("{prefix}.weight"))?,
-                weight_scale: required(catalog, &format!("{prefix}.weight_scale"))?,
-                weight_scale_2: required(catalog, &format!("{prefix}.weight_scale_2"))?,
-                input_scale: required(catalog, &format!("{prefix}.input_scale"))?,
-            })
-        })
-        .collect()
+    bindings.iter().map(|binding| expert_source(catalog, binding)).collect()
+}
+
+fn expert_source<'a>(
+    catalog: &'a TensorCatalog,
+    binding: &TensorBinding,
+) -> Result<NvFp4ExpertSource<'a>> {
+    let TensorStorage::BlockQuantized {
+        format: BlockFormat::NvFp4,
+        scales,
+        global_scale: Some(global_scale),
+        input_scale: Some(input_scale),
+        ..
+    } = &binding.storage
+    else {
+        return Err(Error::UnsupportedDecoderLayer(format!(
+            "CUDA expert {} requires a complete NVFP4 binding",
+            binding.source
+        )));
+    };
+    Ok(NvFp4ExpertSource {
+        weight: required(catalog, &binding.source)?,
+        weight_scale: required(catalog, scales)?,
+        weight_scale_2: required(catalog, global_scale)?,
+        input_scale: required(catalog, input_scale)?,
+    })
 }
 
 fn required<'a>(catalog: &'a TensorCatalog, name: &str) -> Result<&'a TensorInfo> {

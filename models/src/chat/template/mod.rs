@@ -1,8 +1,9 @@
 mod config;
 mod fallback;
+mod protocol;
 mod render;
 
-use foundation::{model::ModelFamily, protocol::ChatCompletionRequest};
+use foundation::protocol::ChatCompletionRequest;
 
 use self::{
     config::{ModelTemplateConfig, TemplateTokens},
@@ -29,9 +30,7 @@ pub enum TemplateSource {
 pub enum TemplateKind {
     ModelJinja,
     ChatMl,
-    Gemma,
-    Gemma4,
-    LlamaHeader,
+    TurnDelimited,
     Plain,
 }
 
@@ -44,7 +43,7 @@ pub struct ChatTemplate {
 }
 
 impl ChatTemplate {
-    pub fn from_layout(layout: &ModelLayout, family: &ModelFamily) -> Result<Self> {
+    pub fn from_layout(layout: &ModelLayout) -> Result<Self> {
         let config = ModelTemplateConfig::from_layout(layout)?;
         Ok(match config.template {
             Some(template) => Self {
@@ -54,7 +53,13 @@ impl ChatTemplate {
                 template: Some(template),
             },
             None => Self {
-                kind: fallback::kind(family, &config.tokens),
+                kind: if config.tokens.turn_tokens().is_some() {
+                    TemplateKind::TurnDelimited
+                } else if protocol::has_chatml_tokens(layout.tokenizer_path.as_deref())? {
+                    TemplateKind::ChatMl
+                } else {
+                    TemplateKind::Plain
+                },
                 source: TemplateSource::Builtin,
                 tokens: config.tokens,
                 template: None,
@@ -64,7 +69,7 @@ impl ChatTemplate {
 
     pub fn render(&self, request: &ChatCompletionRequest) -> Result<ChatPrompt> {
         let text = self.template.as_deref().map_or_else(
-            || Ok(render_builtin(self.kind, request, &self.tokens)),
+            || Ok(render_builtin(request, self.kind, &self.tokens)),
             |template| render_model_template(template, request, &self.tokens),
         )?;
         Ok(ChatPrompt {
@@ -104,16 +109,49 @@ mod tests {
     }
 
     #[test]
-    fn builtin_chatml_allows_tokenizer_bos() -> Result<()> {
+    fn builtin_plain_allows_tokenizer_bos() -> Result<()> {
         let template = ChatTemplate {
-            kind: TemplateKind::ChatMl,
+            kind: TemplateKind::Plain,
             source: TemplateSource::Builtin,
             tokens: TemplateTokens::default(),
             template: None,
         };
         let prompt = template.render(&request("ping"))?;
 
-        assert!(prompt.text.ends_with("<|im_start|>assistant\n"));
+        assert_eq!(prompt.text, "user: ping");
+        assert!(prompt.add_special_tokens);
+        Ok(())
+    }
+
+    #[test]
+    fn builtin_chatml_delimits_messages_and_opens_assistant_turn() -> Result<()> {
+        let template = ChatTemplate {
+            kind: TemplateKind::ChatMl,
+            source: TemplateSource::Builtin,
+            tokens: TemplateTokens::new("", "<|im_end|>"),
+            template: None,
+        };
+        let prompt = template.render(&request("Napisz zdanie."))?;
+
+        assert_eq!(
+            prompt.text,
+            "<|im_start|>user\nNapisz zdanie.<|im_end|>\n<|im_start|>assistant\n"
+        );
+        assert!(prompt.add_special_tokens);
+        Ok(())
+    }
+
+    #[test]
+    fn builtin_turn_protocol_uses_declared_checkpoint_tokens() -> Result<()> {
+        let template = ChatTemplate {
+            kind: TemplateKind::TurnDelimited,
+            source: TemplateSource::Builtin,
+            tokens: TemplateTokens::new("<bos>", "<eos>").with_turns("<|turn>", "<turn|>"),
+            template: None,
+        };
+        let prompt = template.render(&request("Napisz zdanie."))?;
+
+        assert_eq!(prompt.text, "<|turn>user\nNapisz zdanie.<turn|>\n<|turn>assistant\n");
         assert!(prompt.add_special_tokens);
         Ok(())
     }

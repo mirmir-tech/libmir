@@ -24,16 +24,12 @@ pub(super) fn build(
     backend: BackendInfo,
     cache: CacheConfig,
 ) -> Result<ModelTrace> {
-    let (full_attention_layers, sliding_attention_layers) = model.decoder.as_ref().map_or_else(
-        || (model.encoder.as_ref().map_or(0, |encoder| encoder.num_hidden_layers), 0),
-        attention_counts,
-    );
+    let (full_attention_layers, sliding_attention_layers) = attention_counts(model);
     let sessions = model.sessions()?.len();
     Ok(ModelTrace {
         model: TraceModel {
             id: model.manifest.id.clone(),
             root: model.layout.root.display().to_string(),
-            family: model.metadata.family.clone(),
             model_type: model.metadata.model_type.clone(),
             dtype: model.metadata.dtype.clone(),
             architectures: model.metadata.architectures.clone(),

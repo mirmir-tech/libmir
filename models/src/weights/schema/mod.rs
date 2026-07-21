@@ -1,45 +1,12 @@
-use crate::{
-    layout::{DecoderConfig, EncoderConfig},
-    weights::TensorCatalog,
-};
+use crate::{layout::EncoderConfig, weights::TensorCatalog};
 
 mod encoder;
-mod layout;
 mod text;
 mod types;
 mod vision;
 
 pub use text::TextTensorLayout;
-pub use types::{
-    DecoderTensorSchema, EncoderTensorSchema, TensorReadiness, TensorRequirement,
-    VisionTensorSchema,
-};
-
-impl DecoderTensorSchema {
-    #[must_use]
-    pub fn discover(config: &DecoderConfig, catalog: &TensorCatalog) -> Self {
-        if super::hybrid_linear::uses_layout(config, catalog) {
-            super::hybrid_linear::schema(config)
-        } else {
-            layout::discover(config, catalog)
-        }
-    }
-
-    #[must_use]
-    pub fn readiness(&self, catalog: &TensorCatalog) -> TensorReadiness {
-        let missing: Vec<String> = self
-            .requirements
-            .iter()
-            .filter(|requirement| !requirement.is_present(catalog))
-            .map(TensorRequirement::missing_label)
-            .collect();
-        TensorReadiness {
-            required: self.requirements.len(),
-            present: self.requirements.len() - missing.len(),
-            missing,
-        }
-    }
-}
+pub use types::{EncoderTensorSchema, TensorReadiness, TensorRequirement, VisionTensorSchema};
 
 impl EncoderTensorSchema {
     #[must_use]

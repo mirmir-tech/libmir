@@ -1,13 +1,12 @@
 mod attention;
 mod block;
+mod clamped_routed;
 mod decoder;
 mod dense;
 mod embedding;
 mod gated_delta;
 mod gated_full_attention;
-mod gated_full_attention_layer;
 mod hybrid_layer;
-mod hybrid_model;
 mod init;
 mod kv;
 mod linear;
@@ -19,6 +18,7 @@ mod router;
 mod runtime;
 mod sampling;
 mod shared_moe;
+mod shared_routed;
 mod task;
 mod vision;
 
@@ -34,6 +34,7 @@ pub use block::{
     DecodeGraphAction, DecodeMoeBlockBf16, DecodeMoeBlockConfig, DecodeMoeBlockExecutor,
     DecodeMoeBlockWeights, DecodeMoeLayerTemplate, PrefillMoeBlockBf16,
 };
+pub use clamped_routed::{CudaClampedRoutedModelSession, CudaClampedRoutedModelTemplate};
 pub use decoder::{RmsNormBf16, RopeBf16};
 pub use dense::{
     DecodeDenseSwiGlu, DenseDownSource, DenseDownWeight, DenseGateUpSource, DenseGateUpWeights,
@@ -46,18 +47,13 @@ pub use gated_delta::{
     CudaAffineGatedDeltaLayer, CudaGatedDeltaState, GatedDeltaInputs, GatedDeltaStateConfig,
 };
 pub use gated_full_attention::{
-    AffineGatedFullAttentionConfig, AffineGatedFullAttentionWeights, CudaAffineGatedFullAttention,
-    CudaAffineGatedFullAttentionExecution, CudaAffineGatedFullAttentionState,
-};
-pub use gated_full_attention_layer::{
-    AffineGatedFullAttentionMoeLayerConfig, CudaAffineGatedFullAttentionMoeExecution,
-    CudaAffineGatedFullAttentionMoeLayer,
+    AffineGatedFullAttentionConfig, AffineGatedFullAttentionMoeLayerConfig,
+    AffineGatedFullAttentionWeights, CudaAffineGatedFullAttention,
+    CudaAffineGatedFullAttentionExecution, CudaAffineGatedFullAttentionMoeExecution,
+    CudaAffineGatedFullAttentionMoeLayer, CudaAffineGatedFullAttentionState,
 };
 pub use hybrid_layer::{
     AffineGatedDeltaMoeLayerConfig, CudaAffineGatedDeltaMoeExecution, CudaAffineGatedDeltaMoeLayer,
-};
-pub use hybrid_model::{
-    CudaHybridLinearLayerState, CudaHybridLinearModelSession, CudaHybridLinearModelTemplate,
 };
 pub use kv::{BatchedPagedAttentionBf16, PagedAttentionBf16, PagedDecodeBatch, PagedKvCache};
 pub use linear::{
@@ -89,6 +85,9 @@ pub use sampling::{DeviceBatchSamplerBf16, DeviceSamplerBf16};
 pub use shared_moe::{
     AffineSharedExpertMoeConfig, AffineSharedExpertMoeWeights, CudaAffineSharedExpertMoe,
     CudaAffineSharedExpertMoeExecution,
+};
+pub use shared_routed::{
+    CudaSharedRoutedLayerState, CudaSharedRoutedModelSession, CudaSharedRoutedModelTemplate,
 };
 pub use task::{CudaSequenceScoringModel, CudaTextEmbeddingModel};
 pub use vision::{CudaPooledVisionTower, CudaSpatialMergeVisionTower};

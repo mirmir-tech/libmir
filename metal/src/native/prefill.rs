@@ -103,13 +103,7 @@ impl LoadedModel {
                 "pooled vision tower is not loaded or its tensors are incomplete".into(),
             ));
         };
-        let crate::engine::DecoderModel::HybridMoe(decoder) = model else {
-            return Err(Error::UnsupportedModel(
-                "pooled vision Metal multimodal prefill currently requires the hybrid MoE decoder"
-                    .into(),
-            ));
-        };
-        let mut state = SessionState::new(decoder.new_cache(&self.stream)?);
+        let mut state = SessionState::new(model.new_cache(&self.stream)?);
         let reserve = prompt.token_ids.len().max(self.stream.config().cache.kv_reserve_tokens);
         state.cache.reserve(reserve)?;
         progress(MetalProgressEvent::prefill_tokens(0, prompt.token_ids.len()));
@@ -119,7 +113,7 @@ impl LoadedModel {
             image_end: prompt.image_end,
         };
         let hidden = tower.forward_multimodal_prefill(
-            decoder, &prefix_prompt, image, &mut state.cache, &self.stream,
+            model, &prefix_prompt, image, &mut state.cache, &self.stream,
         )?;
         hidden.async_eval()?;
         self.stream.synchronize()?;
@@ -164,12 +158,7 @@ impl LoadedModel {
                 "spatial-merge vision tower is not loaded or its tensors are incomplete".into(),
             ));
         };
-        let crate::engine::DecoderModel::HybridLinearMoe(decoder) = model else {
-            return Err(Error::UnsupportedModel(
-                "spatial-merge vision Metal multimodal prefill requires the hybrid linear MoE decoder".into(),
-            ));
-        };
-        let mut state = SessionState::new(decoder.new_cache(&self.stream)?);
+        let mut state = SessionState::new(model.new_cache(&self.stream)?);
         state.rope_position_delta = prompt.position_delta;
         state
             .cache
@@ -177,7 +166,7 @@ impl LoadedModel {
         progress(MetalProgressEvent::prefill_tokens(0, prompt.token_ids.len()));
         let prefix_prompt = spatial_merge_prefix(prompt, prefix.len());
         let hidden = tower.forward_multimodal_prefill(
-            decoder, &prefix_prompt, image, &mut state.cache, &self.stream,
+            model, &prefix_prompt, image, &mut state.cache, &self.stream,
         )?;
         hidden.async_eval()?;
         self.stream.synchronize()?;

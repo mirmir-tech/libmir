@@ -7,8 +7,8 @@ use foundation::protocol::{ChatCompletionRequest, ChatMessage};
 use mircuda::PinnedBuffer;
 use models::{
     chat::ChatTemplate,
-    execution::{AttentionFeature, DecoderArchetype, ExecutionPlan},
-    layout::{DecoderConfig, ModelLayout, ModelMetadata},
+    layout::{DecoderConfig, ModelLayout},
+    semantic::SemanticModelSpec,
     tokenizer::TextTokenizer,
     weights::TensorCatalog,
 };
@@ -22,7 +22,6 @@ use crate::{
     CudaBackend, CudaConfig, CudaDenseVectorPolicy, CudaKernelAdmission, CudaMoeModelTemplate,
     CudaNumericalPolicy, CudaOutputHeadPolicy, CudaPlanningPolicy, DenseRole,
     DenseSwiGluLayerLoadConfig, NvFp4MoeLayerLoadConfig, ProjectionFormat, Result,
-    kernels::QkvNormalization,
 };
 
 mod topk;
@@ -150,49 +149,39 @@ pub(super) fn load_template(
     catalog: &TensorCatalog,
 ) -> Result<CudaMoeModelTemplate> {
     let cache = CacheConfig::new(u32::try_from(BLOCKS)?);
-    let plan = ExecutionPlan::discover(decoder, catalog)?;
-    match plan.decoder {
-        DecoderArchetype::HybridMoe => backend.load_nvfp4_moe_model_template(
+    let semantic = SemanticModelSpec::discover(decoder, catalog)?;
+    let plan = crate::engine::lowering::CudaDecoderPlan::lower(&semantic);
+    if plan.all_dense_and_routed() {
+        backend.load_nvfp4_moe_model_template(
             decoder,
             catalog,
             NvFp4MoeLayerLoadConfig { cache, max_sequence_blocks: BLOCKS },
-        ),
-        DecoderArchetype::DenseSwiGlu => {
-            let mut ignored = |_completed, _detail| {};
-            backend.load_dense_swiglu_model_template_with_progress(
-                decoder,
-                catalog,
-                DenseSwiGluLayerLoadConfig {
-                    cache,
-                    max_sequence_blocks: BLOCKS,
-                    qkv_normalization: normalization(plan.attention)?,
-                    projection_format: ProjectionFormat::NvFp4,
-                },
-                &mut ignored,
-            )
-        },
-        DecoderArchetype::HybridLinearMoe => Err(crate::Error::UnsupportedDecoderLayer(
-            "CUDA gated-delta attention is unsupported".into(),
-        )),
-    }
-}
-
-fn normalization(attention: AttentionFeature) -> Result<QkvNormalization> {
-    match attention {
-        AttentionFeature::RmsNormalizedSharedKv => Ok(QkvNormalization::ALL),
-        AttentionFeature::RmsNormalizedGroupedQuery => Ok(QkvNormalization::QUERY_KEY),
-        AttentionFeature::GroupedQuery => Ok(QkvNormalization::NONE),
-        AttentionFeature::GatedDeltaAndRmsNormalizedGroupedQuery => {
-            Err(crate::Error::UnsupportedDecoderLayer(
-                "CUDA gated-delta attention is unsupported".into(),
-            ))
-        },
+        )
+    } else if plan.all_dense() {
+        let mut ignored = |_completed, _detail| {};
+        backend.load_dense_swiglu_model_template_with_progress(
+            decoder,
+            catalog,
+            DenseSwiGluLayerLoadConfig {
+                cache,
+                max_sequence_blocks: BLOCKS,
+                qkv_normalization: plan.graph_normalization()?,
+                projection_format: ProjectionFormat::NvFp4,
+            },
+            &mut ignored,
+        )
+    } else {
+        Err(crate::Error::MissingCapability {
+            operation: "projection-gate graph decoder",
+            storage: "NVFP4 bindings".into(),
+            geometry: format!("layers={}", plan.layers().len()),
+            requirement: "the test admits dense or dense-plus-routed semantic layers",
+        })
     }
 }
 
 pub(super) fn prompts(layout: &ModelLayout) -> Result<Vec<Vec<u32>>> {
-    let metadata = ModelMetadata::from_layout(layout)?;
-    let template = ChatTemplate::from_layout(layout, &metadata.family)?;
+    let template = ChatTemplate::from_layout(layout)?;
     let tokenizer = TextTokenizer::from_layout(layout)?;
     [
         "Hello. Briefly introduce yourself and explain what you can help with.",

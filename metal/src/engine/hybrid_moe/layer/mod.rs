@@ -1,16 +1,25 @@
-use std::time::Instant;
+use models::weights::HybridMoeLayerBindings;
 
+use super::{HybridMoeLayerConfig, weights::LayerWeights};
+#[cfg(test)]
 use super::{
-    HybridMoeLayerConfig,
     attention::{self, DecodeContext},
     feed_forward,
-    weights::LayerWeights,
+};
+#[cfg(test)]
+use crate::engine::{
+    Array, KvCache,
+    lowering::{FeedForwardLowering, MixerLowering, NormalizationLowering},
 };
 use crate::engine::{
-    Array, ExpertFusion, FusedAttention, FusedExpertGateUp, FusedGateUp, FusedKeyValue, KvCache,
-    ModelTensors, Result, Stream,
+    ExpertFusion, FusedAttention, FusedExpertGateUp, FusedGateUp, FusedKeyValue, ModelTensors,
+    QuantizedLinear, Result, Stream,
+    fusion_planner::{FusionPlanner, ProjectionBiases},
+    lowering::LayerLowering,
 };
 
+mod forward;
+mod lowered;
 #[cfg(test)]
 mod tests;
 
@@ -25,6 +34,19 @@ pub struct HybridMoeLayer {
 }
 
 impl HybridMoeLayer {
+    pub fn load_bindings(
+        tensors: &ModelTensors,
+        bindings: &HybridMoeLayerBindings<'_>,
+        lowering: LayerLowering,
+        config: HybridMoeLayerConfig,
+        stream: &Stream,
+    ) -> Result<Self> {
+        let config = config.validate()?;
+        let weights = LayerWeights::load_bindings(tensors, bindings, config, stream)?;
+        Self::finish_load(weights, lowering, config, stream)
+    }
+
+    #[cfg(test)]
     pub fn load(
         tensors: &ModelTensors,
         config: HybridMoeLayerConfig,
@@ -32,7 +54,32 @@ impl HybridMoeLayer {
     ) -> Result<Self> {
         let config = config.validate()?;
         let weights = LayerWeights::load(tensors, config, stream)?;
-        let fused_attention = fused_attention_enabled(stream)
+        let lowering = LayerLowering {
+            index: config.layer_index,
+            input_norm: NormalizationLowering::Rms,
+            post_attention_norm: NormalizationLowering::Rms,
+            mixer: MixerLowering::Softmax { sinks: false, window: config.max_context },
+            feed_forward: FeedForwardLowering::DenseAndRouted,
+        };
+        Self::finish_load(weights, lowering, config, stream)
+    }
+
+    fn finish_load(
+        weights: LayerWeights,
+        lowering: LayerLowering,
+        config: HybridMoeLayerConfig,
+        stream: &Stream,
+    ) -> Result<Self> {
+        let fusion = FusionPlanner::new(stream).projections(
+            lowering.feed_forward,
+            ProjectionBiases::new(
+                [weights.attention.query.has_bias(), weights.attention.key.has_bias()],
+                weights.attention.value.as_ref().map(QuantizedLinear::has_bias),
+                [weights.dense.gate.has_bias(), weights.dense.up.has_bias()],
+            ),
+        );
+        let fused_attention = fusion
+            .attention
             .then(|| {
                 weights.attention.query.fuse_attention(
                     &weights.attention.key,
@@ -42,11 +89,12 @@ impl HybridMoeLayer {
             })
             .transpose()?
             .flatten();
-        let fused_key_value = (fused_attention_enabled(stream) && fused_attention.is_none())
+        let fused_key_value = (fusion.key_value && fused_attention.is_none())
             .then(|| weights.attention.key.fuse_key_value(weights.attention.value.as_ref(), stream))
             .transpose()?
             .flatten();
-        let fused_gate_up = fused_gate_up_enabled(stream)
+        let fused_gate_up = fusion
+            .gate_up
             .then(|| weights.dense.gate.fuse_gate_up(&weights.dense.up, stream))
             .transpose()?
             .flatten();
@@ -58,84 +106,6 @@ impl HybridMoeLayer {
             fused_gate_up,
             fused_expert_gate_up: None,
         })
-    }
-
-    pub fn forward_uncached_decode(&self, input: &Array, stream: &Stream) -> Result<Array> {
-        self.forward_decode(input, None, 0, false, stream)
-    }
-
-    pub fn forward_decode(
-        &self,
-        input: &Array,
-        cache: Option<&mut KvCache>,
-        position: i32,
-        causal: bool,
-        stream: &Stream,
-    ) -> Result<Array> {
-        self.forward_with_mask(input, cache, position, causal, None, stream)
-    }
-
-    pub(super) fn forward_with_mask(
-        &self,
-        input: &Array,
-        cache: Option<&mut KvCache>,
-        position: i32,
-        causal: bool,
-        mask: Option<&Array>,
-        stream: &Stream,
-    ) -> Result<Array> {
-        let profile = !causal && profile_components(stream);
-        let attention_started = Instant::now();
-        let normalized = self.weights.input_norm.apply(input, self.config.rms_norm_eps, stream)?;
-        let attention = attention::forward_decode(
-            &normalized,
-            &self.weights.attention,
-            self.config,
-            self.fused_attention.as_ref(),
-            self.fused_key_value.as_ref(),
-            DecodeContext { cache, position, causal, mask, stream },
-        )?;
-        let attention =
-            self.weights
-                .post_attention_norm
-                .apply(&attention, self.config.rms_norm_eps, stream)?;
-        let hidden = input.add(&attention, stream)?;
-        if profile {
-            emit_profile(&hidden, stream, self.config.layer_index, "attention")?;
-            tracing::debug!(
-                layer = self.config.layer_index,
-                component = "attention",
-                milliseconds = attention_started.elapsed().as_secs_f64() * 1_000.0,
-                "MLX hybrid MoE component profile"
-            );
-        }
-
-        let feed_forward_started = Instant::now();
-        let feed_forward = feed_forward::forward(
-            &hidden,
-            &self.weights,
-            self.config,
-            self.fused_gate_up.as_ref(),
-            self.fused_expert_gate_up.as_ref(),
-            stream,
-        )?;
-        let feed_forward = self.weights.post_feed_forward_norm.apply(
-            &feed_forward,
-            self.config.rms_norm_eps,
-            stream,
-        )?;
-        let output = hidden.add(&feed_forward, stream)?;
-        let output = output.multiply(&self.weights.layer_scalar, stream)?;
-        if profile {
-            emit_profile(&output, stream, self.config.layer_index, "feed_forward")?;
-            tracing::debug!(
-                layer = self.config.layer_index,
-                component = "feed_forward",
-                milliseconds = feed_forward_started.elapsed().as_secs_f64() * 1_000.0,
-                "MLX hybrid MoE component profile"
-            );
-        }
-        Ok(output)
     }
 
     pub(super) fn warm_fused_projections(&self) -> Result<()> {
@@ -183,21 +153,6 @@ impl ExpertFusion for HybridMoeLayer {
     }
 }
 
-pub(super) fn fused_gate_up_enabled(stream: &Stream) -> bool {
-    stream.config().fusion.hybrid_dense_gate_up.enabled()
-}
-
-pub(super) fn fused_attention_enabled(stream: &Stream) -> bool {
-    stream.config().fusion.hybrid_attention.enabled()
-}
-
 pub(super) fn profile_components(stream: &Stream) -> bool {
     stream.config().diagnostics.profile_components
-}
-
-fn emit_profile(output: &Array, stream: &Stream, layer: usize, component: &str) -> Result<()> {
-    output.async_eval()?;
-    stream.synchronize()?;
-    tracing::debug!(layer, component, "MLX hybrid MoE component synchronized");
-    Ok(())
 }

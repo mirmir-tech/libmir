@@ -10,7 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use foundation::model::{BackendTarget, ModelFamily, ModelManifest, Quantization};
+use foundation::model::{BackendTarget, ModelManifest, Quantization};
 use runtime::backend::SamplingLogits;
 use uuid::Uuid;
 
@@ -179,7 +179,6 @@ impl BenchmarkConfig {
     fn manifest(&self) -> ModelManifest {
         ModelManifest {
             id: "native-decode-benchmark".into(),
-            family: ModelFamily::Unknown,
             path: self.model.to_string_lossy().into_owned(),
             tokenizer_path: None,
             context_len: self.prompt_tokens + self.decode_tokens,

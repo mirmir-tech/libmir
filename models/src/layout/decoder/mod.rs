@@ -8,6 +8,7 @@ pub use features::{AttentionOutput, LinearAttentionConfig, RotaryEmbeddingLayout
 pub use rope::RopeScaling;
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct DecoderConfig {
     pub hidden_size: usize,
     pub intermediate_size: usize,
@@ -43,7 +44,12 @@ pub struct DecoderConfig {
     pub shared_expert_intermediate_size: Option<usize>,
     pub hidden_activation: Option<String>,
     pub final_logit_softcapping: Option<f64>,
+    pub attention_bias: bool,
+    pub attention_sinks: bool,
+    pub swiglu_limit: Option<f64>,
+    pub initial_context_length: Option<usize>,
 }
 
 #[cfg(test)]
+#[allow(clippy::self_named_module_files)]
 mod tests;

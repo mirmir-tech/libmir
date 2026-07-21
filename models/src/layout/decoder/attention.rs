@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use super::{AttentionOutput, DecoderConfig, parse::invalid};
+use super::{DecoderConfig, parse::invalid};
 use crate::error::Result;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,23 +67,6 @@ fn layer_type(value: &Value) -> Result<AttentionLayerType> {
 }
 
 impl DecoderConfig {
-    #[must_use]
-    pub fn uses_hybrid_routed_moe_stack(&self) -> bool {
-        self.attention_k_eq_v
-            && self.num_experts.is_some()
-            && self.hidden_activation.as_deref() == Some("gelu_pytorch_tanh")
-    }
-
-    #[must_use]
-    pub fn uses_hybrid_linear_moe_stack(&self) -> bool {
-        self.linear_attention.is_some()
-            && self.num_experts.is_some()
-            && self.shared_expert_intermediate_size.is_some()
-            && self.attention_output == AttentionOutput::Gated
-            && self.layer_types.contains(&AttentionLayerType::Linear)
-            && self.layer_types.contains(&AttentionLayerType::Full)
-    }
-
     #[must_use]
     pub fn layer_type(&self, index: usize) -> AttentionLayerType {
         self.layer_types.get(index).copied().unwrap_or(AttentionLayerType::Full)

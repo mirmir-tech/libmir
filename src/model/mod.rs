@@ -17,7 +17,7 @@ use foundation::{
 };
 use models::{
     chat::{ChatPrompt, ChatTemplate},
-    execution::{ModelTask, TaskExecutionPlan},
+    execution::{DecoderExecutionContract, ModelTask, TaskExecutionPlan},
     generation::{GenerationConfig, GenerationOverrides, GenerationSettings},
     layout::{DecoderConfig, ImageProcessorConfig, ModelLayout, ModelMetadata, VisionConfig},
     tokenizer::{TextTokenizer, TokenizedPrompt},
@@ -35,6 +35,7 @@ pub struct ModelDescriptor {
     layout: ModelLayout,
     metadata: ModelMetadata,
     decoder: Option<DecoderConfig>,
+    execution: Option<DecoderExecutionContract>,
     task_plan: TaskExecutionPlan,
     generation_config: GenerationConfig,
     generation: GenerationSettings,
@@ -90,6 +91,10 @@ impl ModelDescriptor {
             | TaskExecutionPlan::Embedding { decoder, .. } => Some(decoder.clone()),
             TaskExecutionPlan::SequenceScoring { .. } => None,
         };
+        let execution = decoder
+            .as_ref()
+            .map(|decoder| DecoderExecutionContract::discover(&layout, decoder, &catalog))
+            .transpose()?;
         let vision = VisionConfig::from_layout(&layout)?;
         let vision_readiness = vision
             .as_ref()
@@ -101,13 +106,14 @@ impl ModelDescriptor {
             .flatten();
         Ok(Self {
             decoder,
+            execution,
             task_plan,
             generation: generation_config.resolve(overrides)?,
             generation_config,
             vision,
             vision_readiness,
             image_processor,
-            template: ChatTemplate::from_layout(&layout, &metadata.family)?,
+            template: ChatTemplate::from_layout(&layout)?,
             tokenizer: TextTokenizer::from_layout(&layout)?,
             layout,
             metadata,
@@ -155,7 +161,6 @@ impl ModelDescriptor {
     ) -> Result<ModelManifest> {
         Ok(ModelManifest {
             id: model_id(&self.layout.root)?,
-            family: self.metadata.family.clone(),
             path: self.layout.root.display().to_string(),
             tokenizer_path: self
                 .layout

@@ -4,7 +4,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use models::execution::DecoderArchetype;
 use runtime::backend::SamplingLogits;
 use uuid::Uuid;
 
@@ -81,25 +80,26 @@ fn preserves_hybrid_moe_greedy_sequence_after_128_token_prefill() -> Result<()> 
     };
     let mut ignored = |_event| {};
     let mut model = LoadedModel::load(&config.manifest(), &mut ignored)?;
-    let expected = expected_digest(
-        model
-            .info
-            .plan
-            .as_ref()
-            .ok_or_else(|| Error::Benchmark("context matrix requires a decoder model".into()))?
-            .decoder,
-    )?;
+    let contract = model
+        .info
+        .contract
+        .as_ref()
+        .ok_or_else(|| Error::Benchmark("context matrix requires a decoder model".into()))?;
+    let expected = expected_digest(crate::engine::lowering::plan(&contract.semantic)?.runtime())?;
     let samples = collect_samples(&mut model, &config, GREEDY_VERIFY_CONTEXT, 0)?;
     assert_eq!(digest(&samples).as_bytes(), expected);
     Ok(())
 }
 
-fn expected_digest(archetype: DecoderArchetype) -> Result<&'static [u8; 32]> {
-    match archetype {
-        DecoderArchetype::HybridMoe => Ok(&GEMMA_4_GREEDY_DIGEST),
-        DecoderArchetype::HybridLinearMoe => Ok(&QWEN_3_6_GREEDY_DIGEST),
-        DecoderArchetype::DenseSwiGlu => {
+fn expected_digest(runtime: crate::engine::lowering::DecoderRuntime) -> Result<&'static [u8; 32]> {
+    match runtime {
+        crate::engine::lowering::DecoderRuntime::DenseAndRouted => Ok(&GEMMA_4_GREEDY_DIGEST),
+        crate::engine::lowering::DecoderRuntime::SharedRouted => Ok(&QWEN_3_6_GREEDY_DIGEST),
+        crate::engine::lowering::DecoderRuntime::Dense => {
             Err(Error::Benchmark("context matrix digest requires a hybrid MoE model".into()))
+        },
+        crate::engine::lowering::DecoderRuntime::ClampedRouted => {
+            Err(Error::Benchmark("context matrix has no clamped-routed reference digest".into()))
         },
     }
 }

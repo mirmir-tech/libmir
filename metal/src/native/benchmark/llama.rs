@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use foundation::model::{BackendTarget, ModelFamily, ModelManifest, Quantization};
+use foundation::model::{BackendTarget, ModelManifest, Quantization};
 use runtime::backend::SamplingLogits;
 use uuid::Uuid;
 
@@ -44,7 +44,6 @@ fn model_path() -> Result<PathBuf> {
 fn manifest(path: &Path) -> ModelManifest {
     ModelManifest {
         id: "tied-embedding-rope-regression".into(),
-        family: ModelFamily::Unknown,
         path: path.to_string_lossy().into_owned(),
         tokenizer_path: None,
         context_len: 131_072,

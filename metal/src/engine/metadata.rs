@@ -3,6 +3,7 @@ use super::{Array, Error, Result};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Dtype {
     Bool,
+    Uint8,
     Uint32,
     Int32,
     Float16,
@@ -27,6 +28,7 @@ impl Array {
     pub fn dtype(&self) -> Result<Dtype> {
         Ok(match self.native().dtype()? {
             mirtal::DType::Bool => Dtype::Bool,
+            mirtal::DType::Uint8 => Dtype::Uint8,
             mirtal::DType::Uint32 => Dtype::Uint32,
             mirtal::DType::Int32 => Dtype::Int32,
             mirtal::DType::Float16 => Dtype::Float16,
@@ -41,7 +43,7 @@ impl Array {
             total.checked_mul(dimension).ok_or(Error::ShapeOverflow)
         })?;
         let bytes_per_element = match self.dtype()? {
-            Dtype::Bool => 1,
+            Dtype::Bool | Dtype::Uint8 => 1,
             Dtype::Uint32 | Dtype::Int32 | Dtype::Float32 => 4,
             Dtype::Float16 | Dtype::Bfloat16 => 2,
             Dtype::Unknown => return Err(Error::InvalidModel("unknown MLX dtype".into())),
@@ -54,6 +56,7 @@ impl Dtype {
     pub(super) fn native(self) -> Result<mirtal::DType> {
         match self {
             Self::Bool => Ok(mirtal::DType::Bool),
+            Self::Uint8 => Ok(mirtal::DType::Uint8),
             Self::Uint32 => Ok(mirtal::DType::Uint32),
             Self::Int32 => Ok(mirtal::DType::Int32),
             Self::Float16 => Ok(mirtal::DType::Float16),

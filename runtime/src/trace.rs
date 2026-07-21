@@ -1,4 +1,4 @@
-use foundation::model::{ModelFamily, Quantization};
+use foundation::model::Quantization;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -24,7 +24,6 @@ pub struct ModelTrace {
 pub struct TraceModel {
     pub id: String,
     pub root: String,
-    pub family: ModelFamily,
     pub model_type: Option<String>,
     pub dtype: Option<String>,
     pub architectures: Vec<String>,
@@ -145,7 +144,7 @@ impl ModelTrace {
     #[must_use]
     pub fn summary_lines(&self) -> Vec<String> {
         let mut lines = vec![
-            format!("model: {} ({:?})", self.model.id, self.model.family),
+            format!("model: {}", self.model.id),
             format!("backend: {} on {}", self.backend.name, self.backend.device),
             format!(
                 "decoder: {} layers, hidden {}, vocab {}, heads {}/{}, experts {}",

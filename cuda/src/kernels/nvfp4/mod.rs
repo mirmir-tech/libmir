@@ -6,10 +6,22 @@ use mircuda::{
 use super::geometry::{narrow, product, require};
 use crate::{Error, Result};
 
+mod buckets;
 mod gated;
+mod grouped;
+mod micro;
 mod norm;
+mod selected;
+pub use buckets::{BucketGeometry, BucketQuantize, NvFp4BucketPreparation};
 pub use gated::NvFp4Gated;
+pub use grouped::{BankScaleGeometry, GroupedQuantize, NvFp4GroupedPreparation};
+pub use micro::{
+    NvFp4MicroBanks, NvFp4MicroDownKernels, NvFp4MicroDownLaunch, NvFp4MicroDownWorkspace,
+    NvFp4MicroGateLaunch, NvFp4MicroGateWorkspace, NvFp4MicroKernels, NvFp4MicroLaunch,
+    NvFp4MicroSpec, NvFp4MicroWorkspace,
+};
 pub use norm::NvFp4RmsNorm;
+pub use selected::{NvFp4SelectedWeightLaunch, NvFp4SelectedWeightPreparation};
 
 cuda_export!(
     NvFp4DequantKernel = "libmir_cuda_nvfp4_dequant_bf16"(

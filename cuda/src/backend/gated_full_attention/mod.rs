@@ -1,4 +1,5 @@
 mod execution;
+mod layer;
 mod scratch;
 #[cfg(test)]
 mod tests;
@@ -6,6 +7,10 @@ mod validation;
 mod weights;
 
 pub use execution::CudaAffineGatedFullAttentionExecution;
+pub use layer::{
+    AffineGatedFullAttentionMoeLayerConfig, CudaAffineGatedFullAttentionMoeExecution,
+    CudaAffineGatedFullAttentionMoeLayer,
+};
 use models::layout::{AttentionLayerType, AttentionOutput, DecoderConfig, RotaryEmbeddingLayout};
 use runtime::kv::KvStorageSpec;
 pub use weights::AffineGatedFullAttentionWeights;

@@ -3,6 +3,8 @@ use serde_json::json;
 use super::*;
 use crate::error::Result;
 
+mod gpt_oss;
+
 #[test]
 fn reads_common_decoder_fields() -> Result<()> {
     let value = json!({

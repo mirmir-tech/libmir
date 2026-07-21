@@ -1,7 +1,13 @@
-use models::execution::{AttentionFeature, DecoderArchetype};
+use models::{
+    semantic::{KeyValueRelation, MixerSpec, QkNormalization},
+    weights::TensorStorage,
+};
 use runtime::trace::{TraceTensors, TraceWeights};
 
-use crate::native::model::LoadedModel;
+use crate::{
+    engine::lowering::{self, DecoderLowering, DecoderRuntime},
+    native::model::LoadedModel,
+};
 
 pub(super) fn tensors(model: &LoadedModel) -> TraceTensors {
     let info = &model.info;
@@ -41,11 +47,8 @@ pub(super) fn tensors(model: &LoadedModel) -> TraceTensors {
 
 pub(super) fn weights(model: &LoadedModel) -> TraceWeights {
     let info = &model.info;
-    let Some(plan) = info.plan.as_ref() else {
-        let Some(encoder) = info.encoder.as_ref() else {
-            return unknown_weights();
-        };
-        return TraceWeights {
+    let Some(contract) = info.contract.as_ref() else {
+        return info.encoder.as_ref().map_or_else(unknown_weights, |encoder| TraceWeights {
             token_embeddings: "new.embeddings.word_embeddings".into(),
             final_norm: "post-attention and post-MLP LayerNorm per encoder layer".into(),
             output_head: "new.pooler.dense -> tanh -> classifier".into(),
@@ -54,49 +57,85 @@ pub(super) fn weights(model: &LoadedModel) -> TraceWeights {
             attention_layout: "packed QKV with bidirectional self-attention".into(),
             mlp_layout: "packed gated exact-GELU feed-forward".into(),
             linear_bias_count: encoder.num_hidden_layers.saturating_mul(4).saturating_add(2),
-        };
+        });
     };
-    let Some(decoder) = info.decoder.as_ref() else {
+    let spec = &contract.semantic;
+    let Ok(boundary) = contract
+        .bindings
+        .decoder_boundary_with_tied_output(spec.decoder.tie_word_embeddings)
+    else {
         return unknown_weights();
     };
-    match plan.decoder {
-        DecoderArchetype::HybridMoe => TraceWeights {
-            token_embeddings: "language_model.model.embed_tokens".into(),
-            final_norm: "language_model.model.norm.weight".into(),
-            output_head: "language_model.model.embed_tokens.weight (tied)".into(),
-            output_tied: true,
-            layer_count: decoder.num_hidden_layers,
-            attention_layout: "split Q/K/V; full layers share K/V".into(),
-            mlp_layout: "dense GeGLU plus routed quantized MoE".into(),
-            linear_bias_count: 0,
+    let Ok(lowering) = lowering::plan(spec) else {
+        return unknown_weights();
+    };
+    TraceWeights {
+        token_embeddings: boundary.embedding.source.clone(),
+        final_norm: boundary.final_norm.source.clone(),
+        output_head: boundary.output.source.clone(),
+        output_tied: spec.decoder.tie_word_embeddings,
+        layer_count: spec.decoder.layers.len(),
+        attention_layout: attention_layout(&lowering, spec).into(),
+        mlp_layout: mlp_layout(&lowering).into(),
+        linear_bias_count: contract
+            .bindings
+            .tensors
+            .iter()
+            .map(has_bias)
+            .filter(|biased| *biased)
+            .count(),
+    }
+}
+
+fn attention_layout(
+    lowering: &DecoderLowering,
+    spec: &models::semantic::SemanticModelSpec,
+) -> &'static str {
+    match lowering.runtime() {
+        DecoderRuntime::ClampedRouted => {
+            "biased grouped-query attention with learned sinks and semantic windowing"
         },
-        DecoderArchetype::HybridLinearMoe => TraceWeights {
-            token_embeddings: "language_model.model.embed_tokens".into(),
-            final_norm: "language_model.model.norm.weight".into(),
-            output_head: "language_model.lm_head.weight".into(),
-            output_tied: false,
-            layer_count: decoder.num_hidden_layers,
-            attention_layout: "Gated Delta recurrence plus gated RMS-normalized GQA".into(),
-            mlp_layout: "shared expert routed SwiGLU".into(),
-            linear_bias_count: 0,
+        DecoderRuntime::DenseAndRouted => "RMS-normalized attention with shared K/V semantics",
+        DecoderRuntime::SharedRouted => {
+            "linear recurrence plus gated RMS-normalized grouped-query attention"
         },
-        DecoderArchetype::DenseSwiGlu => {
-            let output_head = if decoder.tie_word_embeddings {
-                "model.embed_tokens.weight (tied)"
-            } else {
-                "lm_head.weight"
-            };
-            TraceWeights {
-                token_embeddings: "model.embed_tokens".into(),
-                final_norm: "model.norm.weight".into(),
-                output_head: output_head.into(),
-                output_tied: decoder.tie_word_embeddings,
-                layer_count: decoder.num_hidden_layers,
-                attention_layout: dense_attention_layout(plan.attention).into(),
-                mlp_layout: "dense SwiGLU".into(),
-                linear_bias_count: decoder.num_hidden_layers.saturating_mul(7),
-            }
+        DecoderRuntime::Dense => dense_attention_layout(spec),
+    }
+}
+
+fn dense_attention_layout(spec: &models::semantic::SemanticModelSpec) -> &'static str {
+    let attentions = spec.decoder.layers.iter().filter_map(|layer| match &layer.mixer {
+        MixerSpec::SoftmaxAttention(attention) => Some(attention),
+        MixerSpec::LinearAttention(_) => None,
+    });
+    if attentions.clone().all(|attention| attention.sinks) {
+        "grouped-query attention with learned sinks"
+    } else if attentions.clone().all(|attention| {
+        attention.qk_normalization == QkNormalization::QueryKeyRms
+            && attention.key_value_relation == KeyValueRelation::Separate
+    }) {
+        "RMS-normalized grouped-query attention"
+    } else {
+        "grouped-query attention"
+    }
+}
+
+fn mlp_layout(lowering: &DecoderLowering) -> &'static str {
+    match lowering.runtime() {
+        DecoderRuntime::Dense => "dense gated feed-forward",
+        DecoderRuntime::DenseAndRouted => "dense GELU plus routed experts",
+        DecoderRuntime::SharedRouted => "shared expert plus routed experts",
+        DecoderRuntime::ClampedRouted => "clamped routed SwiGLU experts",
+    }
+}
+
+fn has_bias(binding: &models::weights::TensorBinding) -> bool {
+    match &binding.storage {
+        TensorStorage::Dense { bias, .. } | TensorStorage::BlockQuantized { bias, .. } => {
+            bias.is_some()
         },
+        TensorStorage::AffineQuantized { output_bias, .. } => output_bias.is_some(),
+        TensorStorage::Auxiliary { .. } => false,
     }
 }
 
@@ -110,16 +149,5 @@ fn unknown_weights() -> TraceWeights {
         attention_layout: "unknown".into(),
         mlp_layout: "unknown".into(),
         linear_bias_count: 0,
-    }
-}
-
-fn dense_attention_layout(feature: AttentionFeature) -> &'static str {
-    match feature {
-        AttentionFeature::RmsNormalizedGroupedQuery => {
-            "split Q/K/V with RMS-normalized grouped-query attention"
-        },
-        AttentionFeature::GroupedQuery => "split Q/K/V with grouped-query attention",
-        AttentionFeature::RmsNormalizedSharedKv
-        | AttentionFeature::GatedDeltaAndRmsNormalizedGroupedQuery => unreachable!(),
     }
 }

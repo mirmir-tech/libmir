@@ -23,7 +23,6 @@ pub(super) fn build(model: &LoadedModel, backend: BackendInfo) -> ModelTrace {
         model: TraceModel {
             id: info.manifest.id.clone(),
             root: info.layout.root.display().to_string(),
-            family: info.metadata.family.clone(),
             model_type: info.metadata.model_type.clone(),
             dtype: info.metadata.dtype.clone(),
             architectures: info.metadata.architectures.clone(),
@@ -51,7 +50,6 @@ pub(super) fn build(model: &LoadedModel, backend: BackendInfo) -> ModelTrace {
 pub(super) fn emit(trace: &ModelTrace) {
     tracing::debug!(
         model_id = %trace.model.id,
-        family = ?trace.model.family,
         backend = %trace.backend.name,
         device = %trace.backend.device,
         tensors = trace.tensors.native_tensor_count,
@@ -96,8 +94,7 @@ fn actions(model: &LoadedModel) -> Vec<TraceAction> {
         TraceAction::new(
             "inspect",
             format!(
-                "recognized {:?}, {} safetensor shards, tokenizer {}",
-                info.metadata.family,
+                "compiled semantic execution from {} safetensor shards; tokenizer {}",
                 info.layout.weights.len(),
                 info.layout.has_tokenizer()
             ),
@@ -168,10 +165,7 @@ fn task_actions(model: &LoadedModel) -> Vec<TraceAction> {
     vec![
         TraceAction::new(
             "inspect",
-            format!(
-                "recognized {:?} from config, task modules, and tensor schema",
-                model.info.metadata.family
-            ),
+            "compiled task semantics from config, task modules, and tensor schema",
         ),
         TraceAction::new(
             "load",

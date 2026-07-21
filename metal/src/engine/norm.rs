@@ -12,9 +12,11 @@ impl NormWeight {
     }
 
     pub(in crate::engine) fn load(tensors: &ModelTensors, prefix: &str) -> Result<Self> {
-        Ok(Self {
-            weight: tensors.get(&format!("{prefix}.weight"))?,
-        })
+        Self::load_name(tensors, &format!("{prefix}.weight"))
+    }
+
+    pub(in crate::engine) fn load_name(tensors: &ModelTensors, weight: &str) -> Result<Self> {
+        Ok(Self { weight: tensors.get(weight)? })
     }
 
     pub(in crate::engine) fn load_shifted(
@@ -37,6 +39,21 @@ impl NormWeight {
             return Self::load(tensors, prefix);
         }
         Self::load_shifted(tensors, prefix, shift, stream)
+    }
+
+    pub(in crate::engine) fn load_name_adjusted(
+        tensors: &ModelTensors,
+        weight: &str,
+        shift: f32,
+        stream: &Stream,
+    ) -> Result<Self> {
+        let weight = tensors.get(weight)?;
+        let weight = if shift == 0.0 {
+            weight
+        } else {
+            weight.add_scalar(shift, stream)?
+        };
+        Ok(Self { weight })
     }
 
     pub(in crate::engine) fn load_optional(

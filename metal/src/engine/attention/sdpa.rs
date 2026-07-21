@@ -14,6 +14,51 @@ pub struct PagedAttention<'a> {
 }
 
 impl Array {
+    pub fn scaled_dot_product_attention_with_sinks(
+        &self,
+        keys: &Self,
+        values: &Self,
+        scale: f32,
+        causal: bool,
+        sinks: &Self,
+        stream: &Stream,
+    ) -> Result<Self> {
+        let mask = if causal {
+            mirtal::AttentionMask::Causal
+        } else {
+            mirtal::AttentionMask::None
+        };
+        Self::from_native(stream.native().graph().scaled_dot_product_attention(
+            self.native(),
+            keys.native(),
+            values.native(),
+            mirtal::ScaledDotProductAttention { scale, mask, sinks: Some(sinks.native()) },
+        )?)?
+        .astype_like(self, stream)
+    }
+
+    pub fn masked_scaled_dot_product_attention_with_sinks(
+        &self,
+        keys: &Self,
+        values: &Self,
+        scale: f32,
+        mask: &Self,
+        sinks: &Self,
+        stream: &Stream,
+    ) -> Result<Self> {
+        Self::from_native(stream.native().graph().scaled_dot_product_attention(
+            self.native(),
+            keys.native(),
+            values.native(),
+            mirtal::ScaledDotProductAttention {
+                scale,
+                mask: mirtal::AttentionMask::Array(mask.native()),
+                sinks: Some(sinks.native()),
+            },
+        )?)?
+        .astype_like(self, stream)
+    }
+
     pub fn scaled_dot_product_attention(
         &self,
         keys: &Self,

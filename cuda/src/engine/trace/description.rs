@@ -1,14 +1,26 @@
-use models::layout::{AttentionLayerType, DecoderConfig, EncoderConfig};
+use models::{
+    layout::{DecoderConfig, EncoderConfig},
+    semantic::MixerSpec,
+};
 use runtime::trace::{TraceDecoder, TraceWeights};
 
 use super::{LoadedModel, mlp_layout};
 
-pub(super) fn attention_counts(decoder: &DecoderConfig) -> (usize, usize) {
-    decoder.layer_types.iter().fold((0, 0), |(full, sliding), layer| match layer {
-        AttentionLayerType::Full => (full + 1, sliding),
-        AttentionLayerType::Sliding => (full, sliding + 1),
-        AttentionLayerType::Linear => (full, sliding),
-    })
+pub(super) fn attention_counts(model: &LoadedModel) -> (usize, usize) {
+    if let Some(semantic) = model.semantic() {
+        return semantic
+            .decoder
+            .layers
+            .iter()
+            .fold((0, 0), |(full, sliding), layer| match &layer.mixer {
+                MixerSpec::SoftmaxAttention(attention) if attention.window.is_some() => {
+                    (full, sliding + 1)
+                },
+                MixerSpec::SoftmaxAttention(_) => (full + 1, sliding),
+                MixerSpec::LinearAttention(_) => (full, sliding),
+            });
+    }
+    (model.encoder.as_ref().map_or(0, |encoder| encoder.num_hidden_layers), 0)
 }
 
 pub(super) fn execution(

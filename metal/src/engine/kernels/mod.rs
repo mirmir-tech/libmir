@@ -1,8 +1,10 @@
 mod gated_delta;
+mod mxfp4;
 mod page_write;
 mod paged_attention;
 mod quantized_kv;
 
+pub(super) use mxfp4::MxFp4Shape;
 pub(super) use page_write::{PageWriteOptions, PreparedPageWrite};
 pub(super) use quantized_kv::{PreparedQuantizedPageWrite, QuantizedPageWriteOptions};
 
@@ -15,6 +17,80 @@ mirtal::metal_kernel! {
         inputs: [alpha: float, beta: float, a_log: float, dt_bias: float],
         outputs: [decay: f32, update: f32],
         source: file "kernels/gated_delta_gates.metal",
+        header: inline "",
+        row_contiguous: true,
+        atomic_outputs: false,
+    }
+}
+
+mirtal::metal_kernel! {
+    fn mxfp4_gate_up {
+        name: "mirmir_mxfp4_gate_up",
+        templates: [
+            T: dtype = bf16, HIDDEN: int = 2880, INTERMEDIATE: int = 2880,
+            TOP_K: int = 4,
+        ],
+        inputs: [
+            input: T, blocks: u8, scales: u8, bias: T, indices: u32,
+            limit: scalar<f32>,
+        ],
+        outputs: [output: T],
+        source: file "kernels/mxfp4_gate_up.metal",
+        header: inline "",
+        row_contiguous: true,
+        atomic_outputs: false,
+    }
+}
+
+mirtal::metal_kernel! {
+    fn mxfp4_down {
+        name: "mirmir_mxfp4_down",
+        templates: [
+            T: dtype = bf16, HIDDEN: int = 2880, INTERMEDIATE: int = 2880,
+            TOP_K: int = 4,
+        ],
+        inputs: [input: T, blocks: u8, scales: u8, bias: T, indices: u32, routing: T],
+        outputs: [output: T],
+        source: file "kernels/mxfp4_down.metal",
+        header: inline "",
+        row_contiguous: true,
+        atomic_outputs: false,
+    }
+}
+
+mirtal::metal_kernel! {
+    fn mxfp4_split_gate_up {
+        name: "mirmir_mxfp4_split_gate_up",
+        templates: [
+            T: dtype = bf16, HIDDEN: int = 2880, INTERMEDIATE: int = 2880,
+            TOP_K: int = 4,
+        ],
+        inputs: [
+            input: T, gate_blocks: u32, gate_scales: u8, gate_bias: T,
+            up_blocks: u32, up_scales: u8, up_bias: T, indices: u32,
+            limit: scalar<f32>,
+        ],
+        outputs: [output: T],
+        source: file "kernels/mxfp4_split_gate_up.metal",
+        header: inline "",
+        row_contiguous: true,
+        atomic_outputs: false,
+    }
+}
+
+mirtal::metal_kernel! {
+    fn mxfp4_u32_down {
+        name: "mirmir_mxfp4_u32_down",
+        templates: [
+            T: dtype = bf16, HIDDEN: int = 2880, INTERMEDIATE: int = 2880,
+            TOP_K: int = 4,
+        ],
+        inputs: [
+            input: T, blocks: u32, scales: u8, bias: T, indices: u32,
+            routing: T,
+        ],
+        outputs: [output: T],
+        source: file "kernels/mxfp4_u32_down.metal",
         header: inline "",
         row_contiguous: true,
         atomic_outputs: false,
@@ -112,6 +188,10 @@ pub(super) struct Kernels {
     paged_attention_partial: mirtal::MetalLibrary,
     paged_attention_reduce: mirtal::MetalKernel<3, 1>,
     paged_kv: mirtal::MetalLibrary,
+    mxfp4_gate_up: mirtal::MetalKernel<6, 1>,
+    mxfp4_down: mirtal::MetalKernel<6, 1>,
+    mxfp4_split_gate_up: mirtal::MetalKernel<9, 1>,
+    mxfp4_u32_down: mirtal::MetalKernel<6, 1>,
     quantized_kv: quantized_kv::QuantizedKvKernels,
 }
 
@@ -125,6 +205,10 @@ impl Kernels {
             paged_attention_partial: paged_attention_partial_library()?,
             paged_attention_reduce: paged_attention_reduce()?,
             paged_kv: paged_kv_library()?,
+            mxfp4_gate_up: mxfp4_gate_up()?,
+            mxfp4_down: mxfp4_down()?,
+            mxfp4_split_gate_up: mxfp4_split_gate_up()?,
+            mxfp4_u32_down: mxfp4_u32_down()?,
             quantized_kv: quantized_kv::QuantizedKvKernels::new()?,
         })
     }

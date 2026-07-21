@@ -1,12 +1,12 @@
 mod config;
 mod dense;
-mod hybrid;
 mod load;
 mod model;
+mod shared_routed;
 mod source;
 mod vision;
 
 pub use config::{
-    DenseSwiGluLayerLoadConfig, HybridLinearModelLoadConfig, NvFp4MoeLayerLoadConfig,
+    DenseSwiGluLayerLoadConfig, NvFp4MoeLayerLoadConfig, SharedRoutedModelLoadConfig,
 };
 pub use vision::load_vision_tensors;

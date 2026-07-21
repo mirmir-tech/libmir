@@ -5,11 +5,6 @@ pub struct TensorRequirement {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DecoderTensorSchema {
-    pub requirements: Vec<TensorRequirement>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncoderTensorSchema {
     pub requirements: Vec<TensorRequirement>,
 }

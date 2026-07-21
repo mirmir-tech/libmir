@@ -3,7 +3,9 @@ use super::{
     model::HybridLinearMoeModel,
 };
 use crate::engine::{
-    Array, DecoderCache, Result, Stream, decode_graph, paged_attention_min_context,
+    Array, DecoderCache, Result, Stream, decode_graph,
+    decoder::{LoweredPackedLayer, forward_packed_layers},
+    paged_attention_min_context,
 };
 
 impl HybridLinearMoeModel {
@@ -14,10 +16,8 @@ impl HybridLinearMoeModel {
         positions: &[i32],
         stream: &Stream,
     ) -> Result<Array> {
-        let mut hidden = self.embedding.lookup(token_ids, stream)?;
-        for layer in &self.layers {
-            hidden = layer.forward_packed(&hidden, caches, positions, stream)?;
-        }
+        let hidden = self.embedding.lookup(token_ids, stream)?;
+        let hidden = forward_packed_layers(&self.layers, hidden, caches, positions, stream)?;
         let hidden = self.final_norm.apply(&hidden, self.rms_norm_eps, stream)?;
         let logits = self.output.forward(&hidden, stream)?;
         decode_graph::export_once(&logits, stream)?;
@@ -25,8 +25,30 @@ impl HybridLinearMoeModel {
     }
 }
 
+impl LoweredPackedLayer for HybridLinearMoeLayer {
+    fn forward_packed_mixer(
+        &self,
+        input: &Array,
+        caches: &mut [&mut DecoderCache],
+        _index: usize,
+        positions: &[i32],
+        stream: &Stream,
+    ) -> Result<Array> {
+        self.mix_packed(input, caches, positions, stream)
+    }
+
+    fn forward_packed_feed_forward(
+        &self,
+        input: &Array,
+        _batch_size: usize,
+        stream: &Stream,
+    ) -> Result<Array> {
+        self.feed_forward_packed(input, stream)
+    }
+}
+
 impl HybridLinearMoeLayer {
-    fn forward_packed(
+    fn mix_packed(
         &self,
         input: &Array,
         caches: &mut [&mut DecoderCache],
@@ -35,9 +57,12 @@ impl HybridLinearMoeLayer {
     ) -> Result<Array> {
         let normalized = self.input_norm.apply(input, self.rms_norm_eps, stream)?;
         let attention = self.packed_attention(&normalized, caches, positions, stream)?;
-        let hidden = input.add(&attention, stream)?;
-        let normalized = self.post_attention_norm.apply(&hidden, self.rms_norm_eps, stream)?;
-        hidden.add(&self.moe.forward(&normalized, stream)?, stream)
+        input.add(&attention, stream)
+    }
+
+    fn feed_forward_packed(&self, input: &Array, stream: &Stream) -> Result<Array> {
+        let normalized = self.post_attention_norm.apply(input, self.rms_norm_eps, stream)?;
+        input.add(&self.moe.forward(&normalized, stream)?, stream)
     }
 
     fn packed_attention(

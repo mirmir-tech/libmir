@@ -91,6 +91,15 @@ pub enum Error {
     /// capability set.
     #[error("unsupported CUDA decoder layer: {0}")]
     UnsupportedDecoderLayer(String),
+    /// Semantic lowering found no CUDA implementation for one concrete
+    /// operation, storage representation, and geometry.
+    #[error("missing CUDA capability for {operation} with {storage} at {geometry}: {requirement}")]
+    MissingCapability {
+        operation: &'static str,
+        storage: String,
+        geometry: String,
+        requirement: &'static str,
+    },
     /// A structurally discovered vision contract has no complete CUDA path.
     #[error("unsupported CUDA vision contract: {0}")]
     UnsupportedVisionContract(String),

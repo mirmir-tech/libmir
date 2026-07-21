@@ -28,6 +28,25 @@ impl AffineSharedExpertMoeWeights {
         })
     }
 
+    pub fn load_bindings(
+        tensors: &CudaTensorSet,
+        bindings: SharedRoutedFeedForwardBindings<'_>,
+    ) -> Result<Self> {
+        Ok(Self {
+            router: AffineQuantizedWeight::load_binding(tensors, bindings.router)?,
+            routed_gate: AffineQuantizedWeight::load_binding(tensors, bindings.routed_gate)?,
+            routed_up: AffineQuantizedWeight::load_binding(tensors, bindings.routed_up)?,
+            routed_down: AffineQuantizedWeight::load_binding(tensors, bindings.routed_down)?,
+            shared_gate: AffineQuantizedWeight::load_binding(tensors, bindings.shared_gate)?,
+            shared_up: AffineQuantizedWeight::load_binding(tensors, bindings.shared_up)?,
+            shared_down: AffineQuantizedWeight::load_binding(tensors, bindings.shared_down)?,
+            shared_output_gate: AffineQuantizedWeight::load_binding(
+                tensors,
+                bindings.shared_output_gate,
+            )?,
+        })
+    }
+
     pub(super) fn validate(&self, config: AffineSharedExpertMoeConfig) -> Result<()> {
         let validate = |weight: &AffineQuantizedWeight, matrices, input, output, bits| {
             weight.validate(matrices, input, output, config.group_size, bits)
@@ -68,3 +87,4 @@ impl AffineSharedExpertMoeWeights {
         validate(&self.shared_output_gate, 1, config.hidden_size, 1, config.router_bits)
     }
 }
+use models::weights::SharedRoutedFeedForwardBindings;

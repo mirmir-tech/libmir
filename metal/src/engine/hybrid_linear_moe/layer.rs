@@ -1,17 +1,55 @@
 use std::time::Instant;
 
-use models::layout::{AttentionLayerType, DecoderConfig};
+use models::{
+    layout::DecoderConfig,
+    weights::{HybridDecoderLayerBindings, HybridMixerBindings},
+};
 
 use super::super::{
     Array, DecoderCache, Error, ExpertFusion, GatedDeltaLayer, GatedDeltaLayerConfig,
     GatedFullAttention, GatedFullAttentionConfig, ModelTensors, NormWeight, Result,
-    SharedExpertMoe, SharedExpertMoeConfig, Stream, paged_attention_min_context,
+    SharedExpertMoe, SharedExpertMoeConfig, Stream, binding::adjusted_norm,
+    paged_attention_min_context,
+};
+use crate::engine::{
+    decoder::{LayerContext, LoweredLayer, MixerKind},
+    lowering::LayerLowering,
 };
 
 #[derive(Debug)]
 pub(super) enum Attention {
     Linear(GatedDeltaLayer),
     Full(GatedFullAttention),
+}
+
+impl LoweredLayer for HybridLinearMoeLayer {
+    fn mixer_kind(&self) -> MixerKind {
+        match self.attention {
+            Attention::Linear(_) => MixerKind::Linear,
+            Attention::Full(_) => MixerKind::Softmax,
+        }
+    }
+
+    fn forward_mixer(
+        &self,
+        input: &Array,
+        cache: &mut DecoderCache,
+        _index: usize,
+        context: LayerContext<'_>,
+    ) -> Result<Array> {
+        self.mix(
+            input,
+            cache,
+            context.position,
+            context.causal,
+            context.positions,
+            context.stream,
+        )
+    }
+
+    fn forward_feed_forward(&self, input: &Array, context: LayerContext<'_>) -> Result<Array> {
+        self.feed_forward(input, context.stream)
+    }
 }
 
 #[derive(Debug)]
@@ -29,12 +67,12 @@ impl HybridLinearMoeLayer {
         tensors: &ModelTensors,
         decoder: &DecoderConfig,
         index: usize,
-        group_size: i32,
+        bindings: HybridDecoderLayerBindings<'_>,
+        lowering: LayerLowering,
         norm_shift: f32,
         stream: &Stream,
     ) -> Result<Self> {
-        let prefix = format!("language_model.model.layers.{index}");
-        let attention = attention(tensors, decoder, index, group_size, norm_shift, stream)?;
+        let attention = attention(tensors, decoder, bindings.mixer, norm_shift, stream)?;
         let experts = SharedExpertMoeConfig::new(
             decoder
                 .num_experts
@@ -46,30 +84,25 @@ impl HybridLinearMoeLayer {
         Ok(Self {
             index,
             attention,
-            input_norm: NormWeight::load_adjusted(
+            input_norm: adjusted_norm(tensors, bindings.input_norm, norm_shift, stream)?,
+            post_attention_norm: adjusted_norm(
                 tensors,
-                &format!("{prefix}.input_layernorm"),
+                bindings.post_attention_norm,
                 norm_shift,
                 stream,
             )?,
-            post_attention_norm: NormWeight::load_adjusted(
+            moe: SharedExpertMoe::load_bindings(
                 tensors,
-                &format!("{prefix}.post_attention_layernorm"),
-                norm_shift,
-                stream,
-            )?,
-            moe: SharedExpertMoe::load(
-                tensors,
-                &format!("{prefix}.mlp"),
+                bindings.feed_forward,
                 experts,
-                group_size,
+                lowering.feed_forward,
                 stream,
             )?,
             rms_norm_eps: decoder.rms_norm_eps.to_string().parse()?,
         })
     }
 
-    pub(super) fn forward_with_positions(
+    fn mix(
         &self,
         input: &Array,
         cache: &mut DecoderCache,
@@ -105,14 +138,18 @@ impl HybridLinearMoeLayer {
                 attention_started,
             )?;
         }
-        let hidden = input.add(&attention, stream)?;
+        input.add(&attention, stream)
+    }
+
+    fn feed_forward(&self, input: &Array, stream: &Stream) -> Result<Array> {
+        let profile = stream.config().diagnostics.profile_components;
         let moe_started = Instant::now();
-        let normalized = self.post_attention_norm.apply(&hidden, self.rms_norm_eps, stream)?;
+        let normalized = self.post_attention_norm.apply(input, self.rms_norm_eps, stream)?;
         let moe = self.moe.forward(&normalized, stream)?;
         if profile {
             emit_component(&moe, stream, self.index, self.attention_kind(), "moe", moe_started)?;
         }
-        hidden.add(&moe, stream)
+        input.add(&moe, stream)
     }
 
     pub(super) const fn attention_kind(&self) -> &'static str {
@@ -160,41 +197,28 @@ fn emit_component(
 fn attention(
     tensors: &ModelTensors,
     decoder: &DecoderConfig,
-    index: usize,
-    group_size: i32,
+    bindings: HybridMixerBindings<'_>,
     norm_shift: f32,
     stream: &Stream,
 ) -> Result<Attention> {
-    let prefix = format!("language_model.model.layers.{index}");
-    match decoder.layer_type(index) {
-        AttentionLayerType::Linear => {
+    match bindings {
+        HybridMixerBindings::Linear(bindings) => {
             let config = GatedDeltaLayerConfig::from_linear_attention(
                 decoder.linear_attention.as_ref().ok_or_else(|| {
                     Error::InvalidModel("missing linear attention configuration".into())
                 })?,
                 decoder.rms_norm_eps,
             )?;
-            GatedDeltaLayer::load_with_norm_shift(
-                tensors,
-                &format!("{prefix}.linear_attn"),
-                config,
-                group_size,
-                norm_shift,
-                stream,
-            )
-            .map(Attention::Linear)
+            GatedDeltaLayer::load_bindings(tensors, bindings, config, norm_shift, stream)
+                .map(Attention::Linear)
         },
-        AttentionLayerType::Full => GatedFullAttention::load_with_norm_shift(
+        HybridMixerBindings::Softmax(bindings) => GatedFullAttention::load_bindings(
             tensors,
-            &format!("{prefix}.self_attn"),
+            bindings,
             GatedFullAttentionConfig::from_decoder(decoder)?,
-            group_size,
             norm_shift,
             stream,
         )
         .map(Attention::Full),
-        AttentionLayerType::Sliding => Err(Error::InvalidModel(
-            "hybrid linear MoE does not support sliding attention layers".into(),
-        )),
     }
 }

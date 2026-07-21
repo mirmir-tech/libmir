@@ -49,25 +49,42 @@ impl CudaAffineGatedDeltaMoeLayer {
         prefix: &str,
         config: AffineGatedDeltaMoeLayerConfig,
     ) -> Result<Self> {
-        config.validate()?;
-        let input_norm = norm(tensors, &format!("{prefix}.input_layernorm.weight"), config)?;
-        let post_attention_norm =
-            norm(tensors, &format!("{prefix}.post_attention_layernorm.weight"), config)?;
-        Ok(Self {
-            backend: backend.clone(),
+        Self::new(
+            backend,
             config,
-            attention: CudaAffineGatedDeltaLayer::from_tensors(
+            CudaAffineGatedDeltaLayer::from_tensors(
                 backend,
                 tensors,
                 &format!("{prefix}.linear_attn"),
                 config.attention,
             )?,
-            moe: CudaAffineSharedExpertMoe::from_tensors(
+            CudaAffineSharedExpertMoe::from_tensors(
                 backend,
                 tensors,
                 &format!("{prefix}.mlp"),
                 config.moe,
             )?,
+            norm(tensors, &format!("{prefix}.input_layernorm.weight"), config)?,
+            norm(tensors, &format!("{prefix}.post_attention_layernorm.weight"), config)?,
+        )
+    }
+
+    pub fn new(
+        backend: &CudaBackend,
+        config: AffineGatedDeltaMoeLayerConfig,
+        attention: CudaAffineGatedDeltaLayer,
+        moe: CudaAffineSharedExpertMoe,
+        input_norm: CudaTensor,
+        post_attention_norm: CudaTensor,
+    ) -> Result<Self> {
+        config.validate()?;
+        validate_norm(&input_norm, config)?;
+        validate_norm(&post_attention_norm, config)?;
+        Ok(Self {
+            backend: backend.clone(),
+            config,
+            attention,
+            moe,
             input_norm,
             post_attention_norm,
         })
@@ -96,15 +113,23 @@ fn norm(
     config: AffineGatedDeltaMoeLayerConfig,
 ) -> Result<CudaTensor> {
     let tensor = tensors.get(name).cloned().ok_or_else(|| Error::MissingTensor(name.into()))?;
+    validate_norm(&tensor, config)?;
+    Ok(tensor)
+}
+
+fn validate_norm(tensor: &CudaTensor, config: AffineGatedDeltaMoeLayerConfig) -> Result<()> {
     if tensor.shape() != [config.attention.hidden_size] {
         return Err(Error::InvalidQuantizedTensor {
-            name: name.into(),
+            name: tensor.name().into(),
             expected: vec![config.attention.hidden_size],
             actual: tensor.shape().to_vec(),
         });
     }
     if tensor.dtype() != CudaTensorDType::Bf16 {
-        return Err(Error::DTypeMismatch { name: name.into(), expected: "BF16" });
+        return Err(Error::DTypeMismatch {
+            name: tensor.name().into(),
+            expected: "BF16",
+        });
     }
-    Ok(tensor)
+    Ok(())
 }

@@ -1,5 +1,8 @@
 use super::{HybridMoeLayerConfig, weights::LayerWeights};
-use crate::engine::{Array, FusedExpertGateUp, FusedGateUp, Result, Stream};
+use crate::engine::{
+    Array, FusedExpertGateUp, FusedGateUp, Result, Stream, fusion_planner::FusionPlanner,
+    lowering::FeedForwardLowering,
+};
 
 mod expert;
 
@@ -49,7 +52,7 @@ pub(super) fn routing(
     config: HybridMoeLayerConfig,
     stream: &Stream,
 ) -> Result<crate::engine::RouterOutput> {
-    if stream.config().fusion.native_router.enabled() {
+    if FusionPlanner::new(stream).native_router(FeedForwardLowering::DenseAndRouted) {
         return weights.router.projection.route(
             input,
             &weights.router.norm_scale,

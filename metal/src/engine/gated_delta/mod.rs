@@ -1,6 +1,9 @@
 mod convolution;
 mod fallback;
+mod layer;
 mod update;
+
+pub use layer::{GatedDeltaLayer, GatedDeltaLayerConfig};
 
 use super::{Array, Error, Result, Stream};
 
