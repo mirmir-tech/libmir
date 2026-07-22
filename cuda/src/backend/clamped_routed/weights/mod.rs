@@ -133,7 +133,7 @@ fn binding_bias(tensors: &CudaTensorSet, binding: &TensorBinding) -> Result<Cuda
             bias.as_deref()
         },
         TensorStorage::AffineQuantized { output_bias, .. } => output_bias.as_deref(),
-        TensorStorage::Auxiliary { .. } => None,
+        TensorStorage::PackedInt8 { .. } | TensorStorage::Auxiliary { .. } => None,
     }
     .ok_or_else(|| Error::MissingTensor(format!("bias for logical tensor {}", binding.source)))?;
     tensor(tensors, name)

@@ -14,6 +14,8 @@ use crate::{
 
 mod dense;
 mod hybrid;
+mod mistral;
+mod packed_int8;
 mod roles;
 mod view;
 

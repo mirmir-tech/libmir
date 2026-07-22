@@ -4,7 +4,7 @@ use super::{
     Bf16LinearPackWeights, CudaTensor, DecodeAttentionOutputWeight, DeviceBuffer,
     NvFp4LinearWeight, ProjectionFormat, bf16,
 };
-use crate::{Error, Result};
+use crate::{CompressedInt8Weight, Error, Result};
 
 /// Config-derived geometry for one fixed-shape decode attention layer.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -37,6 +37,7 @@ pub struct DecodeAttentionWeights<'a> {
 #[derive(Clone, Copy)]
 pub enum DecodeQkvWeights<'a> {
     Bf16(&'a Bf16LinearPackWeights<3>),
+    Int8([&'a CompressedInt8Weight; 3]),
     NvFp4([&'a NvFp4LinearWeight; 3]),
 }
 
@@ -44,7 +45,7 @@ impl<'a> DecodeQkvWeights<'a> {
     pub(in crate::backend) fn require_bf16(self) -> Result<&'a Bf16LinearPackWeights<3>> {
         match self {
             Self::Bf16(weights) => Ok(weights),
-            Self::NvFp4(_) => {
+            Self::Int8(_) | Self::NvFp4(_) => {
                 Err(Error::InvalidExecutionPlan("BF16 QKV operation received NVFP4 weights"))
             },
         }

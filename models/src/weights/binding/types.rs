@@ -43,6 +43,10 @@ pub enum TensorStorage {
         output_bias: Option<String>,
         group_size: Option<usize>,
     },
+    PackedInt8 {
+        dtype: String,
+        scales: String,
+    },
     BlockQuantized {
         format: BlockFormat,
         scales: String,
@@ -87,6 +91,7 @@ impl TensorBinding {
                 sources.extend(biases.as_deref());
                 sources.extend(output_bias.as_deref());
             },
+            TensorStorage::PackedInt8 { scales, .. } => sources.push(scales),
             TensorStorage::BlockQuantized {
                 scales, global_scale, input_scale, bias, ..
             } => {

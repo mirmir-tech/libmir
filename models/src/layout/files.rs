@@ -47,7 +47,8 @@ impl ModelLayout {
     pub fn inspect(root: impl AsRef<Path>) -> Result<Self> {
         let root = root.as_ref().to_path_buf();
         let config_path = required(root.join("config.json"))?;
-        let configuration_path = optional(root.join("configuration.json"));
+        let configuration_path = optional(root.join("configuration.json"))
+            .or_else(|| optional(root.join("params.json")));
         let vocab_path = optional(root.join("vocab.json"));
         let tokenizer_path = optional(root.join("tokenizer.json"))
             .or_else(|| optional(root.join("tokenizer.model")))
@@ -145,4 +146,25 @@ fn weight_file(path: PathBuf) -> Result<WeightFile> {
         return Err(ModelsError::MissingFile(path));
     };
     Ok(WeightFile { path, bytes: metadata.len() })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discovers_mistral_params_as_supplemental_configuration() -> Result<()> {
+        let root =
+            std::env::temp_dir().join(format!("libmir-model-layout-params-{}", std::process::id()));
+        fs::create_dir(&root)?;
+        fs::write(root.join("config.json"), "{}")?;
+        fs::write(root.join("params.json"), "{}")?;
+        fs::write(root.join("model.safetensors"), [])?;
+
+        let layout = ModelLayout::inspect(&root)?;
+        fs::remove_dir_all(&root)?;
+
+        assert_eq!(layout.configuration_path, Some(root.join("params.json")));
+        Ok(())
+    }
 }

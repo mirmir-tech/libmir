@@ -1,5 +1,5 @@
 use super::{Bf16LinearPairWeights, CudaTensor, DecodeAttentionConfig, DecodeAttentionWeights};
-use crate::{Error, NvFp4LinearWeight, Result};
+use crate::{CompressedInt8Weight, Error, NvFp4LinearWeight, Result};
 
 #[derive(Clone, Copy, Debug)]
 pub struct DenseSwiGluConfig {
@@ -19,6 +19,10 @@ pub struct DenseSwiGluWeights<'a> {
 #[derive(Clone, Copy)]
 pub enum DenseGateUpWeights<'a> {
     Bf16(&'a Bf16LinearPairWeights),
+    Int8 {
+        gate: &'a CompressedInt8Weight,
+        up: &'a CompressedInt8Weight,
+    },
     NvFp4 {
         gate: &'a NvFp4LinearWeight,
         up: &'a NvFp4LinearWeight,
@@ -29,7 +33,7 @@ impl<'a> DenseGateUpWeights<'a> {
     pub(super) fn require_bf16(self) -> Result<&'a Bf16LinearPairWeights> {
         match self {
             Self::Bf16(weights) => Ok(weights),
-            Self::NvFp4 { .. } => {
+            Self::Int8 { .. } | Self::NvFp4 { .. } => {
                 Err(Error::InvalidExecutionPlan("BF16 gate/up operation received NVFP4 weights"))
             },
         }
@@ -39,6 +43,7 @@ impl<'a> DenseGateUpWeights<'a> {
 #[derive(Clone, Copy)]
 pub enum DenseDownWeight<'a> {
     Bf16(&'a CudaTensor),
+    Int8(&'a CompressedInt8Weight),
     NvFp4(&'a NvFp4LinearWeight),
 }
 
@@ -46,7 +51,7 @@ impl<'a> DenseDownWeight<'a> {
     pub(super) fn require_bf16(self) -> Result<&'a CudaTensor> {
         match self {
             Self::Bf16(weight) => Ok(weight),
-            Self::NvFp4(_) => {
+            Self::Int8(_) | Self::NvFp4(_) => {
                 Err(Error::InvalidExecutionPlan("BF16 down operation received NVFP4 weight"))
             },
         }

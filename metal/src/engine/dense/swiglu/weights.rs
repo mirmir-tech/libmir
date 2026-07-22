@@ -70,14 +70,13 @@ impl DenseSwiGluWeights {
 fn rope_frequencies(config: DenseSwiGluLayerConfig, stream: &Stream) -> Result<Option<Array>> {
     config
         .rope_scaling
-        .map(|scaling| {
-            let (factor, low_frequency_factor, high_frequency_factor, original_context_len) =
-                scaling.piecewise_frequency().ok_or_else(|| {
-                    crate::engine::Error::InvalidModel(
-                        "dense SwiGLU does not support this RoPE scaling mode".into(),
-                    )
-                })?;
-            Array::piecewise_rope_frequencies(
+        .map(|scaling| match scaling {
+            models::layout::RopeScaling::PiecewiseFrequency {
+                factor,
+                low_frequency_factor,
+                high_frequency_factor,
+                original_context_len,
+            } => Array::piecewise_rope_frequencies(
                 config.head_dim,
                 config.rope_base,
                 factor.to_string().parse()?,
@@ -85,7 +84,22 @@ fn rope_frequencies(config: DenseSwiGluLayerConfig, stream: &Stream) -> Result<O
                 high_frequency_factor.to_string().parse()?,
                 i32::try_from(original_context_len)?,
                 stream,
-            )
+            ),
+            models::layout::RopeScaling::Yarn {
+                factor,
+                beta_fast,
+                beta_slow,
+                original_context_len,
+                ..
+            } => Array::yarn_rope_frequencies(
+                config.head_dim,
+                config.rope_base,
+                factor.to_string().parse()?,
+                beta_fast.to_string().parse()?,
+                beta_slow.to_string().parse()?,
+                i32::try_from(original_context_len)?,
+                stream,
+            ),
         })
         .transpose()
 }

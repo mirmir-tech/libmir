@@ -1,7 +1,7 @@
 use mircuda::{DeviceBuffer, bf16};
 
 use crate::{
-    Bf16LinearPackWeights, BlockFp8LinearWeight, CudaBackend, CudaTensor,
+    Bf16LinearPackWeights, BlockFp8LinearWeight, CompressedInt8Weight, CudaBackend, CudaTensor,
     DecodeAttentionOutputWeight, DecodeAttentionWeights, DecodeQkvWeights, DenseExecution,
     DensePlanRequest, DenseRole, Error, ExecutionPhase, Fp8ResidualLinearWeight, NvFp4LinearWeight,
     Result,
@@ -10,6 +10,7 @@ use crate::{
 #[derive(Clone)]
 enum CapturedOutputWeight {
     Bf16(CudaTensor),
+    Int8(CompressedInt8Weight),
     NvFp4(NvFp4LinearWeight),
     BlockFp8 {
         exact: CudaTensor,
@@ -24,6 +25,7 @@ enum CapturedOutputWeight {
 #[derive(Clone)]
 enum CapturedQkvWeights {
     Bf16(Bf16LinearPackWeights<3>),
+    Int8(Box<[CompressedInt8Weight; 3]>),
     NvFp4([NvFp4LinearWeight; 3]),
 }
 
@@ -88,6 +90,7 @@ impl CapturedAttentionWeights {
             key_norm: &self.key_norm,
             output: match &self.output {
                 CapturedOutputWeight::Bf16(weight) => DecodeAttentionOutputWeight::Bf16(weight),
+                CapturedOutputWeight::Int8(weight) => DecodeAttentionOutputWeight::Int8(weight),
                 CapturedOutputWeight::NvFp4(weight) => DecodeAttentionOutputWeight::NvFp4(weight),
                 CapturedOutputWeight::BlockFp8 { exact, quantized } => {
                     DecodeAttentionOutputWeight::BlockFp8 { exact, quantized }
@@ -116,6 +119,7 @@ impl From<DecodeQkvWeights<'_>> for CapturedQkvWeights {
     fn from(weights: DecodeQkvWeights<'_>) -> Self {
         match weights {
             DecodeQkvWeights::Bf16(weights) => Self::Bf16(weights.clone()),
+            DecodeQkvWeights::Int8(weights) => Self::Int8(Box::new(weights.map(Clone::clone))),
             DecodeQkvWeights::NvFp4(weights) => Self::NvFp4(weights.map(Clone::clone)),
         }
     }
@@ -125,6 +129,7 @@ impl CapturedQkvWeights {
     fn borrow(&self) -> DecodeQkvWeights<'_> {
         match self {
             Self::Bf16(weights) => DecodeQkvWeights::Bf16(weights),
+            Self::Int8(weights) => DecodeQkvWeights::Int8([&weights[0], &weights[1], &weights[2]]),
             Self::NvFp4(weights) => {
                 DecodeQkvWeights::NvFp4([&weights[0], &weights[1], &weights[2]])
             },
@@ -136,6 +141,7 @@ impl From<DecodeAttentionOutputWeight<'_>> for CapturedOutputWeight {
     fn from(weight: DecodeAttentionOutputWeight<'_>) -> Self {
         match weight {
             DecodeAttentionOutputWeight::Bf16(weight) => Self::Bf16(weight.clone()),
+            DecodeAttentionOutputWeight::Int8(weight) => Self::Int8(weight.clone()),
             DecodeAttentionOutputWeight::NvFp4(weight) => Self::NvFp4(weight.clone()),
             DecodeAttentionOutputWeight::BlockFp8 { exact, quantized } => Self::BlockFp8 {
                 exact: exact.clone(),

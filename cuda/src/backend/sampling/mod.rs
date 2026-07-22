@@ -69,7 +69,7 @@ impl DeviceSamplerBf16 {
 fn spec(vocab: usize, policy: SamplingLogits) -> Result<SamplingSpec> {
     let (top_k, top_p, temperature, draw) = match policy {
         SamplingLogits::None => (1, 1.0, 1.0, 0.0),
-        SamplingLogits::SampleTopK { k, vocab_size, temperature, draw } if vocab_size == vocab => {
+        SamplingLogits::SampleTopK { k, vocab_size, temperature, draw } if vocab_size <= vocab => {
             (k, 1.0, temperature, draw)
         },
         SamplingLogits::Sample {
@@ -78,7 +78,7 @@ fn spec(vocab: usize, policy: SamplingLogits) -> Result<SamplingSpec> {
             top_p,
             top_k,
             draw,
-        } if vocab_size == vocab => (top_k, top_p, temperature, draw),
+        } if vocab_size <= vocab => (top_k, top_p, temperature, draw),
         SamplingLogits::Full
         | SamplingLogits::TopK { .. }
         | SamplingLogits::SampleTopK { .. }

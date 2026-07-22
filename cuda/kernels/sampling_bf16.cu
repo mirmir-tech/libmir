@@ -28,12 +28,12 @@ __device__ unsigned int token(unsigned long long value) {
 
 extern "C" __global__ void libmir_cuda_sampling_candidates_bf16(
     const __nv_bfloat16* logits, unsigned long long* output,
-    float* denominator, unsigned int vocab, unsigned int top_k,
+    float* denominator, unsigned int vocab, unsigned int logits_stride, unsigned int top_k,
     unsigned int row, unsigned int workspace_stride) {
   using Sort = cub::BlockRadixSort<unsigned long long, kThreads, kItems>;
   __shared__ typename Sort::TempStorage storage;
   unsigned long long keys[kItems];
-  logits += static_cast<unsigned long long>(row) * vocab;
+  logits += static_cast<unsigned long long>(row) * logits_stride;
   output += static_cast<unsigned long long>(row) * workspace_stride;
   const unsigned int base = blockIdx.x * kChunk;
   #pragma unroll
@@ -77,11 +77,11 @@ extern "C" __global__ void libmir_cuda_sampling_merge(
 
 extern "C" __global__ void libmir_cuda_sampling_mass_bf16(
     const __nv_bfloat16* logits, const unsigned long long* candidates,
-    float* denominator, unsigned int vocab, unsigned int row,
+    float* denominator, unsigned int vocab, unsigned int logits_stride, unsigned int row,
     unsigned int workspace_stride) {
   using Reduce = cub::BlockReduce<float, kThreads>;
   __shared__ typename Reduce::TempStorage storage;
-  logits += static_cast<unsigned long long>(row) * vocab;
+  logits += static_cast<unsigned long long>(row) * logits_stride;
   candidates += static_cast<unsigned long long>(row) * workspace_stride;
   const float maximum = __bfloat162float(logits[token(candidates[0])]);
   float local = 0.0f;
@@ -98,9 +98,9 @@ extern "C" __global__ void libmir_cuda_sampling_finalize_bf16(
     const __nv_bfloat16* logits, const unsigned long long* candidates,
     const float* denominator, unsigned int* output, unsigned int top_k,
     float top_p, float temperature, float draw, unsigned int vocab,
-    unsigned int row, unsigned int workspace_stride) {
+    unsigned int logits_stride, unsigned int row, unsigned int workspace_stride) {
   if (threadIdx.x != 0) return;
-  logits += static_cast<unsigned long long>(row) * vocab;
+  logits += static_cast<unsigned long long>(row) * logits_stride;
   candidates += static_cast<unsigned long long>(row) * workspace_stride;
   const unsigned int first = token(candidates[0]);
   if (top_k == 1) {

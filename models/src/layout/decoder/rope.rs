@@ -16,6 +16,7 @@ pub enum RopeScaling {
         beta_fast: f64,
         beta_slow: f64,
         original_context_len: usize,
+        attention_factor: f64,
     },
 }
 
@@ -34,14 +35,15 @@ impl RopeScaling {
     }
 
     #[must_use]
-    pub const fn yarn(self) -> Option<(f64, f64, f64, usize)> {
+    pub const fn yarn(self) -> Option<(f64, f64, f64, usize, f64)> {
         match self {
             Self::Yarn {
                 factor,
                 beta_fast,
                 beta_slow,
                 original_context_len,
-            } => Some((factor, beta_fast, beta_slow, original_context_len)),
+                attention_factor,
+            } => Some((factor, beta_fast, beta_slow, original_context_len, attention_factor)),
             Self::PiecewiseFrequency { .. } => None,
         }
     }
@@ -85,9 +87,10 @@ pub(super) fn scaling(config: &Value) -> Result<Option<RopeScaling>> {
 
 fn yarn(value: &Value) -> Result<RopeScaling> {
     let factor = number(value, "factor")?;
-    let beta_fast = number(value, "beta_fast")?;
-    let beta_slow = number(value, "beta_slow")?;
+    let beta_fast = optional_number(value, "beta_fast")?.unwrap_or(32.0);
+    let beta_slow = optional_number(value, "beta_slow")?.unwrap_or(1.0);
     let original_context_len = integer(value, "original_max_position_embeddings")?;
+    let attention_factor = yarn_attention_factor(value, factor)?;
     if !factor.is_finite()
         || !beta_fast.is_finite()
         || !beta_slow.is_finite()
@@ -95,6 +98,8 @@ fn yarn(value: &Value) -> Result<RopeScaling> {
         || beta_fast <= beta_slow
         || beta_slow <= 0.0
         || original_context_len == 0
+        || !attention_factor.is_finite()
+        || attention_factor <= 0.0
     {
         return Err(invalid("invalid YaRN rope_scaling parameters"));
     }
@@ -103,7 +108,32 @@ fn yarn(value: &Value) -> Result<RopeScaling> {
         beta_fast,
         beta_slow,
         original_context_len,
+        attention_factor,
     })
+}
+
+fn yarn_attention_factor(value: &Value, factor: f64) -> Result<f64> {
+    if let Some(attention_factor) = optional_number(value, "attention_factor")? {
+        return Ok(attention_factor);
+    }
+    let default = yarn_mscale(factor, 1.0);
+    if let Some(multiplier) = optional_number(value, "attn_factor")? {
+        return Ok(default * multiplier);
+    }
+    match (optional_number(value, "mscale")?, optional_number(value, "mscale_all_dim")?) {
+        (Some(mscale), Some(all_dim)) => {
+            Ok(yarn_mscale(factor, mscale) / yarn_mscale(factor, all_dim))
+        },
+        _ => Ok(default),
+    }
+}
+
+fn yarn_mscale(factor: f64, scale: f64) -> f64 {
+    if factor <= 1.0 {
+        1.0
+    } else {
+        0.1_f64.mul_add(scale * factor.ln(), 1.0)
+    }
 }
 
 fn string(value: &Value, field: &str) -> Result<String> {
@@ -119,6 +149,18 @@ fn number(value: &Value, field: &str) -> Result<f64> {
         .get(field)
         .and_then(Value::as_f64)
         .ok_or_else(|| invalid(format!("rope_scaling.{field} must be a number")))
+}
+
+fn optional_number(value: &Value, field: &str) -> Result<Option<f64>> {
+    value
+        .get(field)
+        .filter(|value| !value.is_null())
+        .map(|value| {
+            value
+                .as_f64()
+                .ok_or_else(|| invalid(format!("rope_scaling.{field} must be a number")))
+        })
+        .transpose()
 }
 
 fn integer(value: &Value, field: &str) -> Result<usize> {

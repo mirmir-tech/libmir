@@ -2,7 +2,7 @@ use mircuda::{DeviceBuffer, bf16};
 
 use super::super::{DenseDownWeight, DenseGateUpWeights, DenseSwiGluConfig, DenseSwiGluWeights};
 use crate::{
-    Bf16LinearPackWeights, Bf16LinearPairWeights, CudaBackend, CudaTensor,
+    Bf16LinearPackWeights, Bf16LinearPairWeights, CompressedInt8Weight, CudaBackend, CudaTensor,
     DecodeAttentionOutputWeight, DecodeAttentionWeights, DecodeQkvWeights, NvFp4LinearWeight,
     Result,
 };
@@ -14,18 +14,24 @@ use norm::norm_buffer;
 #[derive(Clone, Copy)]
 pub enum DenseQkvSource<'a> {
     Bf16(&'a Bf16LinearPackWeights<3>),
+    Int8([&'a CompressedInt8Weight; 3]),
     NvFp4([&'a NvFp4LinearWeight; 3]),
 }
 
 #[derive(Clone, Copy)]
 pub enum DenseOutputSource<'a> {
     Bf16(&'a CudaTensor),
+    Int8(&'a CompressedInt8Weight),
     NvFp4(&'a NvFp4LinearWeight),
 }
 
 #[derive(Clone, Copy)]
 pub enum DenseGateUpSource<'a> {
     Bf16(&'a Bf16LinearPairWeights),
+    Int8 {
+        gate: &'a CompressedInt8Weight,
+        up: &'a CompressedInt8Weight,
+    },
     NvFp4 {
         gate: &'a NvFp4LinearWeight,
         up: &'a NvFp4LinearWeight,
@@ -35,6 +41,7 @@ pub enum DenseGateUpSource<'a> {
 #[derive(Clone, Copy)]
 pub enum DenseDownSource<'a> {
     Bf16(&'a CudaTensor),
+    Int8(&'a CompressedInt8Weight),
     NvFp4(&'a NvFp4LinearWeight),
 }
 
@@ -65,18 +72,24 @@ pub(super) struct DenseWeights {
 #[derive(Clone)]
 enum DenseQkvOwned {
     Bf16(Bf16LinearPackWeights<3>),
+    Int8(Box<[CompressedInt8Weight; 3]>),
     NvFp4([NvFp4LinearWeight; 3]),
 }
 
 #[derive(Clone)]
 enum DenseOutputOwned {
     Bf16(CudaTensor),
+    Int8(CompressedInt8Weight),
     NvFp4(NvFp4LinearWeight),
 }
 
 #[derive(Clone)]
 enum DenseGateUpOwned {
     Bf16(Bf16LinearPairWeights),
+    Int8 {
+        gate: CompressedInt8Weight,
+        up: CompressedInt8Weight,
+    },
     NvFp4 {
         gate: NvFp4LinearWeight,
         up: NvFp4LinearWeight,
@@ -86,6 +99,7 @@ enum DenseGateUpOwned {
 #[derive(Clone)]
 enum DenseDownOwned {
     Bf16(CudaTensor),
+    Int8(CompressedInt8Weight),
     NvFp4(NvFp4LinearWeight),
 }
 
@@ -138,6 +152,7 @@ impl DenseQkvOwned {
     fn borrow(&self) -> DecodeQkvWeights<'_> {
         match self {
             Self::Bf16(weights) => DecodeQkvWeights::Bf16(weights),
+            Self::Int8(weights) => DecodeQkvWeights::Int8([&weights[0], &weights[1], &weights[2]]),
             Self::NvFp4(weights) => {
                 DecodeQkvWeights::NvFp4([&weights[0], &weights[1], &weights[2]])
             },
@@ -149,6 +164,7 @@ impl DenseOutputOwned {
     fn borrow(&self) -> DecodeAttentionOutputWeight<'_> {
         match self {
             Self::Bf16(weight) => DecodeAttentionOutputWeight::Bf16(weight),
+            Self::Int8(weight) => DecodeAttentionOutputWeight::Int8(weight),
             Self::NvFp4(weight) => DecodeAttentionOutputWeight::NvFp4(weight),
         }
     }
@@ -158,6 +174,7 @@ impl DenseGateUpOwned {
     fn borrow(&self) -> DenseGateUpWeights<'_> {
         match self {
             Self::Bf16(weights) => DenseGateUpWeights::Bf16(weights),
+            Self::Int8 { gate, up } => DenseGateUpWeights::Int8 { gate, up },
             Self::NvFp4 { gate, up } => DenseGateUpWeights::NvFp4 { gate, up },
         }
     }
@@ -167,6 +184,7 @@ impl DenseDownOwned {
     fn borrow(&self) -> DenseDownWeight<'_> {
         match self {
             Self::Bf16(weight) => DenseDownWeight::Bf16(weight),
+            Self::Int8(weight) => DenseDownWeight::Int8(weight),
             Self::NvFp4(weight) => DenseDownWeight::NvFp4(weight),
         }
     }
@@ -176,6 +194,7 @@ impl From<DenseQkvSource<'_>> for DenseQkvOwned {
     fn from(source: DenseQkvSource<'_>) -> Self {
         match source {
             DenseQkvSource::Bf16(weights) => Self::Bf16(weights.clone()),
+            DenseQkvSource::Int8(weights) => Self::Int8(Box::new(weights.map(Clone::clone))),
             DenseQkvSource::NvFp4(weights) => Self::NvFp4(weights.map(Clone::clone)),
         }
     }
@@ -185,6 +204,7 @@ impl From<DenseOutputSource<'_>> for DenseOutputOwned {
     fn from(source: DenseOutputSource<'_>) -> Self {
         match source {
             DenseOutputSource::Bf16(weight) => Self::Bf16(weight.clone()),
+            DenseOutputSource::Int8(weight) => Self::Int8(weight.clone()),
             DenseOutputSource::NvFp4(weight) => Self::NvFp4(weight.clone()),
         }
     }
@@ -194,6 +214,9 @@ impl From<DenseGateUpSource<'_>> for DenseGateUpOwned {
     fn from(source: DenseGateUpSource<'_>) -> Self {
         match source {
             DenseGateUpSource::Bf16(weights) => Self::Bf16(weights.clone()),
+            DenseGateUpSource::Int8 { gate, up } => {
+                Self::Int8 { gate: gate.clone(), up: up.clone() }
+            },
             DenseGateUpSource::NvFp4 { gate, up } => {
                 Self::NvFp4 { gate: gate.clone(), up: up.clone() }
             },
@@ -205,6 +228,7 @@ impl From<DenseDownSource<'_>> for DenseDownOwned {
     fn from(source: DenseDownSource<'_>) -> Self {
         match source {
             DenseDownSource::Bf16(weight) => Self::Bf16(weight.clone()),
+            DenseDownSource::Int8(weight) => Self::Int8(weight.clone()),
             DenseDownSource::NvFp4(weight) => Self::NvFp4(weight.clone()),
         }
     }

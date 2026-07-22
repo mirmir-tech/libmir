@@ -7,10 +7,10 @@ use models::{
 
 use super::source::DenseLayerSource;
 use crate::{
-    CudaBackend, CudaTensor, CudaTensorSet, DenseDownSource, DenseGateUpSource, DenseOutputSource,
-    DenseQkvSource, DenseSwiGluLayerLoadConfig, DenseSwiGluLayerTemplate, DenseWeightSource, Error,
-    NvFp4Config, NvFp4LinearWeight, NvFp4Tensors, ProjectionFormat, Result,
-    checkpoint::model::payload_bytes,
+    CompressedInt8Weight, CudaBackend, CudaTensor, CudaTensorSet, DenseDownSource,
+    DenseGateUpSource, DenseOutputSource, DenseQkvSource, DenseSwiGluLayerLoadConfig,
+    DenseSwiGluLayerTemplate, DenseWeightSource, Error, NvFp4Config, NvFp4LinearWeight,
+    NvFp4Tensors, ProjectionFormat, Result, checkpoint::model::payload_bytes,
 };
 
 impl CudaBackend {
@@ -27,6 +27,7 @@ impl CudaBackend {
         let tensors = upload(self, &source)?;
         let template = match load.projection_format {
             ProjectionFormat::Bf16 => load_bf16(self, block, &tensors, bindings)?,
+            ProjectionFormat::Int8 => load_int8(self, block, &tensors, bindings)?,
             ProjectionFormat::NvFp4 => load_nvfp4(self, block, &tensors, bindings)?,
         };
         tracing::debug!(
@@ -38,6 +39,46 @@ impl CudaBackend {
         );
         Ok((template, payload_bytes(source.tensors)?))
     }
+}
+
+fn load_int8(
+    backend: &CudaBackend,
+    block: crate::DenseSwiGluConfig,
+    tensors: &CudaTensorSet,
+    bindings: DenseDecoderLayerBindings<'_>,
+) -> Result<DenseSwiGluLayerTemplate> {
+    let hidden = block.attention.hidden_size;
+    let head = block.attention.cache.key_head_dim;
+    let query = block.attention.query_heads * head;
+    let key_value = block.attention.cache.kv_heads * head;
+    let intermediate = block.intermediate_size;
+    let q = int8(tensors, bindings.attention.query, hidden, query)?;
+    let k = int8(tensors, bindings.attention.key, hidden, key_value)?;
+    let v = int8(tensors, bindings.attention.value, hidden, key_value)?;
+    let output = int8(tensors, bindings.attention.output, query, hidden)?;
+    let gate = int8(tensors, bindings.gate, hidden, intermediate)?;
+    let up = int8(tensors, bindings.up, hidden, intermediate)?;
+    let down = int8(tensors, bindings.down, intermediate, hidden)?;
+    backend.prepare_dense_swiglu_layer_template(
+        block,
+        common_source(
+            tensors,
+            bindings,
+            DenseQkvSource::Int8([&q, &k, &v]),
+            DenseOutputSource::Int8(&output),
+            DenseGateUpSource::Int8 { gate: &gate, up: &up },
+            DenseDownSource::Int8(&down),
+        )?,
+    )
+}
+
+fn int8(
+    tensors: &CudaTensorSet,
+    binding: &TensorBinding,
+    input: usize,
+    output: usize,
+) -> Result<CompressedInt8Weight> {
+    CompressedInt8Weight::load_binding(tensors, binding, input, output)
 }
 
 fn load_bf16(

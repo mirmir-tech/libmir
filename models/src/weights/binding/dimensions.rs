@@ -28,7 +28,8 @@ pub(super) fn affine_geometry(
 pub(super) fn uniform_affine_group_size(bindings: &[TensorBinding]) -> Option<usize> {
     let mut sizes = bindings.iter().filter_map(|binding| match binding.storage {
         super::TensorStorage::AffineQuantized { group_size, .. } => group_size,
-        super::TensorStorage::Dense { .. }
+        super::TensorStorage::PackedInt8 { .. }
+        | super::TensorStorage::Dense { .. }
         | super::TensorStorage::BlockQuantized { .. }
         | super::TensorStorage::Auxiliary { .. } => None,
     });

@@ -55,6 +55,8 @@ fn bind(
     let logical_shape = shapes::logical(spec, &role);
     let storage = if let Some(prefix) = tensor.name.strip_suffix("_blocks") {
         block_storage(prefix, catalog, consumed)
+    } else if let Some(prefix) = tensor.name.strip_suffix(".weight_packed") {
+        packed_int8_storage(prefix, tensor, catalog, consumed)?
     } else if tensor.name.ends_with(".weight") {
         projection_storage(logical_shape.as_deref(), tensor, catalog, consumed)?
     } else {
@@ -69,6 +71,21 @@ fn bind(
         transforms,
         storage,
     })
+}
+
+fn packed_int8_storage(
+    prefix: &str,
+    tensor: &TensorInfo,
+    catalog: &TensorCatalog,
+    consumed: &mut BTreeSet<String>,
+) -> Result<TensorStorage> {
+    let scales = format!("{prefix}.weight_scale");
+    if !catalog.contains(&scales) {
+        return Err(ModelsError::InvalidConfig(format!("missing packed INT8 scales {scales}")));
+    }
+    let _inserted = consumed.insert(scales.clone());
+    let _inserted = consumed.insert(format!("{prefix}.weight_shape"));
+    Ok(TensorStorage::PackedInt8 { dtype: tensor.dtype.clone(), scales })
 }
 
 fn block_storage(
@@ -171,6 +188,7 @@ fn is_companion(name: &str, catalog: &TensorCatalog) -> bool {
         || name.ends_with(".weight_scale")
         || name.ends_with(".weight_scale_2")
         || name.ends_with(".input_scale")
+        || name.ends_with(".weight_shape")
         || name.ends_with(".bias")
         || name
             .strip_suffix("_bias")

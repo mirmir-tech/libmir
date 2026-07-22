@@ -46,7 +46,7 @@ pub enum TokenizerKind {
 }
 
 pub struct TextTokenizer {
-    inner: Tokenizer,
+    pub(super) inner: Tokenizer,
     path: PathBuf,
     kind: TokenizerKind,
     added_tokens: BTreeMap<String, u32>,

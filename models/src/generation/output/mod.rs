@@ -4,6 +4,7 @@ use crate::tokenizer::TextTokenizer;
 pub enum GenerationChannel {
     Content,
     Reasoning,
+    ToolCalls,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +22,7 @@ pub struct OutputNormalizer {
 enum State {
     Content,
     Reasoning,
+    ToolCalls,
     ChannelName(String),
 }
 
@@ -31,6 +33,7 @@ struct Markers {
     channel: Vec<u32>,
     channel_body: Vec<u32>,
     channel_end: Vec<u32>,
+    tool_calls: Vec<u32>,
 }
 
 impl OutputNormalizer {
@@ -54,6 +57,10 @@ impl OutputNormalizer {
         }
         if self.markers.content.contains(&id) || self.markers.channel_end.contains(&id) {
             self.state = State::Content;
+            return None;
+        }
+        if self.markers.tool_calls.contains(&id) {
+            self.state = State::ToolCalls;
             return None;
         }
         if self.markers.channel.contains(&id) {
@@ -98,6 +105,7 @@ impl Markers {
             channel: token_ids(tokenizer, &["<|channel>", "<|channel|>"]),
             channel_body: token_ids(tokenizer, &["<|message|>"]),
             channel_end: token_ids(tokenizer, &["<channel|>", "<|end|>", "<|return|>"]),
+            tool_calls: token_ids(tokenizer, &["[TOOL_CALLS]"]),
         }
     }
 }
@@ -124,6 +132,7 @@ fn unmatched(text: &str, start: &str, end: &str) -> bool {
 const fn channel(state: &State) -> GenerationChannel {
     match state {
         State::Reasoning => GenerationChannel::Reasoning,
+        State::ToolCalls => GenerationChannel::ToolCalls,
         State::Content | State::ChannelName(_) => GenerationChannel::Content,
     }
 }
@@ -131,6 +140,7 @@ const fn channel(state: &State) -> GenerationChannel {
 fn named_channel(name: &str) -> GenerationChannel {
     match name.trim().to_ascii_lowercase().as_str() {
         "analysis" | "reasoning" | "thought" => GenerationChannel::Reasoning,
+        "tool" | "tool_calls" => GenerationChannel::ToolCalls,
         _ => GenerationChannel::Content,
     }
 }
@@ -139,6 +149,7 @@ const fn state(channel: GenerationChannel) -> State {
     match channel {
         GenerationChannel::Content => State::Content,
         GenerationChannel::Reasoning => State::Reasoning,
+        GenerationChannel::ToolCalls => State::ToolCalls,
     }
 }
 

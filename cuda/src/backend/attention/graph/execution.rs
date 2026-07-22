@@ -56,7 +56,7 @@ impl Geometry {
             theta: config.rope_theta,
             epsilon: config.rms_norm_epsilon,
             normalization: config.qkv_normalization,
-            separate_qkv: config.projection_format == crate::ProjectionFormat::NvFp4,
+            separate_qkv: config.projection_format != crate::ProjectionFormat::Bf16,
         })
     }
 }

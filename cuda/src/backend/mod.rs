@@ -60,12 +60,13 @@ pub use linear::{
     AffineQuantizedBf16Linear, AffineQuantizedBf16Qmm, AffineQuantizedConfig,
     AffineQuantizedPairTensors, AffineQuantizedTensors, AffineQuantizedWeight, Bf16Linear,
     Bf16LinearPack, Bf16LinearPackWeights, Bf16LinearPair, Bf16LinearPairWeights, Bf16Projection,
-    Bf16VectorLinear, BlockFp8LinearWeight, BucketedNvFp4MoeBf16, DirectNvFp4MoeBf16,
-    Fp8ResidualLinearWeight, GatedActivation, GroupedNvFp4MoeBf16, HybridNvFp4MoeBf16,
-    NvFp4Bf16Linear, NvFp4Bf16Pack, NvFp4Config, NvFp4ExpertBank, NvFp4ExpertBankConfig,
-    NvFp4ExpertSource, NvFp4LinearWeight, NvFp4Tensors, ProjectionFormat,
-    SelectedAffineGatedBf16Linear, SelectedAffinePairBf16Linear, SelectedAffineReduceBf16Linear,
-    SelectedNvFp4LinearBf16, SelectedNvFp4MoeBf16, SelectedNvFp4TensorCoreMoeBf16,
+    Bf16VectorLinear, BlockFp8LinearWeight, BucketedNvFp4MoeBf16, CompressedInt8Bf16Linear,
+    CompressedInt8Weight, DirectNvFp4MoeBf16, Fp8ResidualLinearWeight, GatedActivation,
+    GroupedNvFp4MoeBf16, HybridNvFp4MoeBf16, NvFp4Bf16Linear, NvFp4Bf16Pack, NvFp4Config,
+    NvFp4ExpertBank, NvFp4ExpertBankConfig, NvFp4ExpertSource, NvFp4LinearWeight, NvFp4Tensors,
+    ProjectionFormat, SelectedAffineGatedBf16Linear, SelectedAffinePairBf16Linear,
+    SelectedAffineReduceBf16Linear, SelectedNvFp4LinearBf16, SelectedNvFp4MoeBf16,
+    SelectedNvFp4TensorCoreMoeBf16,
 };
 use mircuda::{Compiler, Context, DeviceInfo, MemoryPool, Stream};
 pub use model::{

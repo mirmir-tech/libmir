@@ -2,17 +2,19 @@ use mircuda::{DeviceBuffer, bf16};
 
 use super::{CudaBackend, DenseDownWeight, DenseGateUpWeights, DenseSwiGluConfig};
 use crate::{
-    Bf16Linear, Bf16LinearPair, CudaTensor, Error, ExecutionPhase, NvFp4Bf16Linear, NvFp4Bf16Pack,
-    ProjectionFormat, Result, RmsNormBf16,
+    Bf16Linear, Bf16LinearPair, CompressedInt8Bf16Linear, CudaTensor, Error, ExecutionPhase,
+    NvFp4Bf16Linear, NvFp4Bf16Pack, ProjectionFormat, Result, RmsNormBf16,
 };
 
 pub(super) enum GateUpProjection {
     Bf16(Bf16LinearPair),
+    Int8(Box<[CompressedInt8Bf16Linear; 2]>),
     NvFp4(Box<NvFp4Bf16Pack<2>>),
 }
 
 pub(super) enum DownProjection {
     Bf16(Bf16Linear),
+    Int8(CompressedInt8Bf16Linear),
     NvFp4(NvFp4Bf16Linear),
 }
 
@@ -42,6 +44,32 @@ impl GateUpProjection {
                 config.attention.hidden_size,
                 config.intermediate_size,
             )?)),
+            ProjectionFormat::Int8 => {
+                let DenseGateUpWeights::Int8 { gate, up } = weights.ok_or(
+                    Error::InvalidExecutionPlan("INT8 MLP requires prepared gate/up weights"),
+                )?
+                else {
+                    return Err(Error::InvalidExecutionPlan(
+                        "INT8 MLP received non-INT8 gate/up weights",
+                    ));
+                };
+                Ok(Self::Int8(Box::new([
+                    CompressedInt8Bf16Linear::new(
+                        backend,
+                        tokens,
+                        config.attention.hidden_size,
+                        config.intermediate_size,
+                        gate.clone(),
+                    )?,
+                    CompressedInt8Bf16Linear::new(
+                        backend,
+                        tokens,
+                        config.attention.hidden_size,
+                        config.intermediate_size,
+                        up.clone(),
+                    )?,
+                ])))
+            },
             ProjectionFormat::NvFp4 => {
                 let DenseGateUpWeights::NvFp4 { gate, up } = weights.ok_or(
                     Error::InvalidExecutionPlan("NVFP4 MLP requires prepared gate/up weights"),
@@ -73,6 +101,18 @@ impl GateUpProjection {
                 input_norm.execute(input, norm_weight, buffers.normalized)?;
                 operation.execute(buffers.normalized, weights.require_bf16()?, buffers.packed)?;
                 Ok(false)
+            },
+            Self::Int8(operations) => {
+                let DenseGateUpWeights::Int8 { .. } = weights else {
+                    return Err(Error::InvalidExecutionPlan(
+                        "INT8 MLP operation received non-INT8 weights",
+                    ));
+                };
+                input_norm.execute(input, norm_weight, buffers.normalized)?;
+                for (operation, output) in operations.iter().zip(buffers.separate.iter_mut()) {
+                    operation.execute(buffers.normalized, output)?;
+                }
+                Ok(true)
             },
             Self::NvFp4(operation) => {
                 let DenseGateUpWeights::NvFp4 { .. } = weights else {
@@ -106,6 +146,22 @@ impl DownProjection {
                 config.intermediate_size,
                 config.attention.hidden_size,
             )?)),
+            ProjectionFormat::Int8 => {
+                let DenseDownWeight::Int8(weight) = weight
+                    .ok_or(Error::InvalidExecutionPlan("INT8 MLP requires prepared down weight"))?
+                else {
+                    return Err(Error::InvalidExecutionPlan(
+                        "INT8 MLP received non-INT8 down weight",
+                    ));
+                };
+                Ok(Self::Int8(CompressedInt8Bf16Linear::new(
+                    backend,
+                    tokens,
+                    config.intermediate_size,
+                    config.attention.hidden_size,
+                    weight.clone(),
+                )?))
+            },
             ProjectionFormat::NvFp4 => {
                 let DenseDownWeight::NvFp4(weight) = weight.ok_or(Error::InvalidExecutionPlan(
                     "NVFP4 MLP requires prepared down weight",
@@ -128,9 +184,15 @@ impl DownProjection {
     ) -> Result<()> {
         match self {
             Self::Bf16(operation) => operation.execute(input, weight.require_bf16()?, output),
+            Self::Int8(operation) => match weight {
+                DenseDownWeight::Int8(_) => operation.execute(input, output),
+                _ => {
+                    Err(Error::InvalidExecutionPlan("INT8 down operation received non-INT8 weight"))
+                },
+            },
             Self::NvFp4(operation) => match weight {
                 DenseDownWeight::NvFp4(_) => operation.execute(input, output),
-                DenseDownWeight::Bf16(_) => {
+                DenseDownWeight::Bf16(_) | DenseDownWeight::Int8(_) => {
                     Err(Error::InvalidExecutionPlan("NVFP4 down operation received BF16 weight"))
                 },
             },
@@ -146,15 +208,19 @@ impl DownProjection {
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<bool> {
         match (self, weight) {
-            (Self::Bf16(_), DenseDownWeight::Bf16(_)) => Ok(false),
+            (Self::Bf16(_), DenseDownWeight::Bf16(_))
+            | (Self::Int8(_), DenseDownWeight::Int8(_)) => Ok(false),
             (Self::NvFp4(operation), DenseDownWeight::NvFp4(_)) => {
                 operation.execute_gated(gate, up, activation.into(), output)?;
                 Ok(true)
             },
-            (Self::Bf16(_), DenseDownWeight::NvFp4(_)) => {
+            (Self::Bf16(_), DenseDownWeight::Int8(_) | DenseDownWeight::NvFp4(_)) => {
                 Err(Error::InvalidExecutionPlan("BF16 down operation received NVFP4 weight"))
             },
-            (Self::NvFp4(_), DenseDownWeight::Bf16(_)) => {
+            (Self::Int8(_), DenseDownWeight::Bf16(_) | DenseDownWeight::NvFp4(_)) => {
+                Err(Error::InvalidExecutionPlan("INT8 down operation received other weight"))
+            },
+            (Self::NvFp4(_), DenseDownWeight::Bf16(_) | DenseDownWeight::Int8(_)) => {
                 Err(Error::InvalidExecutionPlan("NVFP4 down operation received BF16 weight"))
             },
         }

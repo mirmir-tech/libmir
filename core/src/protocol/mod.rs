@@ -1,6 +1,7 @@
 mod openai;
 
 pub use openai::{
-    ChatChoice, ChatCompletionRequest, ChatCompletionResponse, ChatMessage, ChatStreamChoice,
-    ChatStreamChunk, DeltaMessage, MirmirChatInfo, Usage,
+    ChatChoice, ChatCompletionRequest, ChatCompletionResponse, ChatFunctionCall,
+    ChatFunctionDefinition, ChatMessage, ChatStreamChoice, ChatStreamChunk, ChatTool, ChatToolCall,
+    DeltaMessage, MirmirChatInfo, Usage,
 };

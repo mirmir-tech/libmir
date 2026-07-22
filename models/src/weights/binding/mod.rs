@@ -71,6 +71,13 @@ impl WeightBindingPlan {
     }
 
     #[must_use]
+    pub fn uses_packed_int8(&self) -> bool {
+        self.tensors
+            .iter()
+            .any(|binding| matches!(binding.storage, TensorStorage::PackedInt8 { .. }))
+    }
+
+    #[must_use]
     pub fn affine_group_size(&self) -> Option<usize> {
         dimensions::uniform_affine_group_size(&self.tensors)
     }

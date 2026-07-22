@@ -3,6 +3,7 @@ mod block_fp8;
 mod mixed;
 mod nvfp4;
 mod pack;
+mod packed_int8;
 mod pair;
 mod projection;
 mod qmm;
@@ -24,6 +25,7 @@ pub use nvfp4::{
     SelectedNvFp4MoeBf16, SelectedNvFp4TensorCoreMoeBf16,
 };
 pub use pack::{Bf16LinearPack, Bf16LinearPackWeights};
+pub use packed_int8::{CompressedInt8Bf16Linear, CompressedInt8Weight};
 pub use pair::{Bf16LinearPair, Bf16LinearPairWeights};
 pub use projection::Bf16Projection;
 pub use qmm::AffineQuantizedBf16Qmm;
@@ -42,6 +44,7 @@ use crate::{CudaTensor, Error, Result};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProjectionFormat {
     Bf16,
+    Int8,
     NvFp4,
 }
 

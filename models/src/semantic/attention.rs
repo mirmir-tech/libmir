@@ -94,5 +94,6 @@ pub enum RopeScalingSpec {
         beta_fast: f64,
         beta_slow: f64,
         original_context_len: usize,
+        attention_factor: f64,
     },
 }

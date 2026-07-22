@@ -68,6 +68,7 @@ fn spec(
                             beta_fast: 32.0,
                             beta_slow: 1.0,
                             original_context_len: 4096,
+                            attention_factor: 1.0,
                         }),
                     }),
                 }),

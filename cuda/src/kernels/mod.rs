@@ -17,6 +17,7 @@ mod mrope;
 mod nvfp4;
 mod output_fp8;
 mod packed_gated;
+mod packed_int8;
 mod paged;
 mod qkv;
 mod qmm;
@@ -60,6 +61,7 @@ pub use output_fp8::{
     Fp8OutputKernels, Fp8OutputSpec, Fp8RefinementKernels, Fp8ResidualWeightBuffers,
 };
 pub(crate) use packed_gated::PackedGatedBf16;
+pub use packed_int8::{PackedInt8Launch, PackedInt8Linear, PackedInt8Spec};
 pub(crate) use paged::{
     AttentionKernel, KvStoreKernel, MergeAttentionArguments, SplitAttentionArguments,
     SplitAttentionConfigs, SplitAttentionKernels, SplitAttentionNodes,

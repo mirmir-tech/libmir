@@ -124,8 +124,15 @@ impl Array {
         let frequencies = graph.power(&scalar(graph, base)?, &exponents)?;
         let inverse = graph.reciprocal(&frequencies)?;
         let original = f32::from(u16::try_from(original_context_len)?);
-        let low = half * (original / (beta_fast * std::f32::consts::TAU)).ln() / base.ln();
-        let high = half * (original / (beta_slow * std::f32::consts::TAU)).ln() / base.ln();
+        let low = (half * (original / (beta_fast * std::f32::consts::TAU)).ln() / base.ln())
+            .floor()
+            .max(0.0);
+        let mut high = (half * (original / (beta_slow * std::f32::consts::TAU)).ln() / base.ln())
+            .ceil()
+            .min(dimensions - 1.0);
+        if low.to_bits() == high.to_bits() {
+            high += 0.001;
+        }
         let indices = graph.arange(0.0, half, 1.0, DType::Float32)?;
         let ramp = graph.divide(
             &graph.subtract(&indices, &scalar(graph, low)?)?,

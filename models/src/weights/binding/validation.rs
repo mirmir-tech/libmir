@@ -40,6 +40,9 @@ pub(super) fn validate(plan: &WeightBindingPlan, catalog: &TensorCatalog) -> Res
                     companion(catalog, output_bias, &logical[..logical.len() - 1])?;
                 }
             },
+            TensorStorage::PackedInt8 { dtype, scales } => {
+                packed_int8(binding, logical, dtype, scales, catalog)?;
+            },
             TensorStorage::BlockQuantized {
                 format,
                 scales,
@@ -61,6 +64,26 @@ pub(super) fn validate(plan: &WeightBindingPlan, catalog: &TensorCatalog) -> Res
         }
     }
     Ok(())
+}
+
+fn packed_int8(
+    binding: &TensorBinding,
+    logical: &[usize],
+    dtype: &str,
+    scales: &str,
+    catalog: &TensorCatalog,
+) -> Result<()> {
+    if dtype != "I32" {
+        return Err(invalid(&binding.source, "packed INT8 storage must use I32 words"));
+    }
+    let (prefix, input) = projection(logical, &binding.source)?;
+    let packed = divided(input, 4, &binding.source)?;
+    let mut physical = prefix.to_vec();
+    physical.push(packed);
+    shape(&binding.source, &binding.shape, &physical)?;
+    let mut scale_shape = prefix.to_vec();
+    scale_shape.push(1);
+    companion(catalog, scales, &scale_shape)
 }
 
 fn dense_shape(binding: &TensorBinding, logical: &[usize]) -> Vec<usize> {

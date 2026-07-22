@@ -18,7 +18,15 @@ pub struct ModelMetadata {
 
 impl ModelMetadata {
     pub fn from_layout(layout: &ModelLayout) -> Result<Self> {
-        Self::from_config_path(&layout.config_path)
+        let mut metadata = Self::from_config_path(&layout.config_path)?;
+        if let Some(path) = layout.configuration_path.as_deref() {
+            let json = fs::read_to_string(path)?;
+            let value: Value = serde_json::from_str(&json)?;
+            if let Some(context) = read_context_len(&value)? {
+                metadata.context_len = metadata.context_len.max(context);
+            }
+        }
+        Ok(metadata)
     }
 
     pub fn from_config_path(path: impl AsRef<Path>) -> Result<Self> {
@@ -27,7 +35,7 @@ impl ModelMetadata {
         let architectures = read_architectures(&value);
         let model_type = value.get("model_type").and_then(Value::as_str).map(str::to_owned);
         let dtype = read_dtype(&value);
-        let context_len = read_context_len(&value)?;
+        let context_len = read_context_len(&value)?.unwrap_or(4096);
         let quantization = read_quantization(&value);
         let quantization_group_size = read_quantization_usize(&value, "group_size")?;
         let quantization_mode = read_quantization_string(&value, "mode");
@@ -54,15 +62,15 @@ fn read_architectures(value: &Value) -> Vec<String> {
         .collect()
 }
 
-fn read_context_len(value: &Value) -> Result<usize> {
+fn read_context_len(value: &Value) -> Result<Option<usize>> {
     for section in config_sections(value) {
         for key in ["max_position_embeddings", "max_sequence_length", "seq_length", "n_positions"] {
             if let Some(raw) = section.get(key).and_then(Value::as_u64) {
-                return Ok(usize::try_from(raw)?);
+                return Ok(Some(usize::try_from(raw)?));
             }
         }
     }
-    Ok(4096)
+    Ok(None)
 }
 
 fn config_sections(value: &Value) -> Vec<&Value> {
@@ -94,7 +102,16 @@ fn config_quantization(config: Option<&Value>) -> Option<Quantization> {
             return Some(Quantization::MxFp4);
         }
     }
-    let bits = config.get("bits").and_then(Value::as_u64);
+    let bits = config
+        .get("bits")
+        .or_else(|| {
+            config
+                .get("config_groups")?
+                .as_object()?
+                .values()
+                .find_map(|group| group.pointer("/weights/num_bits"))
+        })
+        .and_then(Value::as_u64);
     match bits {
         Some(4) => Some(Quantization::Int4),
         Some(8) => Some(Quantization::Int8),
@@ -181,8 +198,7 @@ mod tests {
                 "max_position_embeddings": 262_144
             }
         });
-
-        assert_eq!(read_context_len(&value)?, 262_144);
+        assert_eq!(read_context_len(&value)?, Some(262_144));
         assert_eq!(read_dtype(&value).as_deref(), Some("bfloat16"));
         assert_eq!(read_quantization(&value), Quantization::Int4);
         assert_eq!(read_quantization_usize(&value, "group_size")?, Some(64));
@@ -216,5 +232,19 @@ mod tests {
         });
 
         assert_eq!(read_quantization(&value), Quantization::MxFp4);
+    }
+
+    #[test]
+    fn reads_compressed_tensors_w8a16_contract() {
+        let value = json!({
+            "dtype": "bfloat16",
+            "quantization_config": {
+                "quant_method": "compressed-tensors",
+                "config_groups": {
+                    "group_0": { "weights": { "num_bits": 8, "strategy": "channel" } }
+                }
+            }
+        });
+        assert_eq!(read_quantization(&value), Quantization::Int8);
     }
 }

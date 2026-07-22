@@ -34,7 +34,10 @@ pub use engine::Engine;
 pub use error::{Error, Result};
 pub use foundation::{
     self,
-    protocol::{ChatCompletionRequest, ChatMessage},
+    protocol::{
+        ChatCompletionRequest, ChatFunctionCall, ChatFunctionDefinition, ChatMessage, ChatTool,
+        ChatToolCall,
+    },
 };
 pub use generation::GenerationOutput;
 pub use memory::{MemorySnapshot, ModelMemoryEstimate};

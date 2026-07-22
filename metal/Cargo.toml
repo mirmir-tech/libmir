@@ -9,10 +9,10 @@ repository.workspace = true
 [dependencies]
 async-trait.workspace = true
 blake3.workspace = true
-foundation = { package = "libmir-core", version = "0.2.0", path = "../core" }
-models = { package = "libmir-models", version = "0.2.0", path = "../models" }
+foundation = { package = "libmir-core", version = "0.3.0", path = "../core" }
+models = { package = "libmir-models", version = "0.3.0", path = "../models" }
 mirtal.workspace = true
-runtime = { package = "libmir-runtime", version = "0.2.0", path = "../runtime" }
+runtime = { package = "libmir-runtime", version = "0.3.0", path = "../runtime" }
 thiserror.workspace = true
 tracing.workspace = true
 uuid.workspace = true

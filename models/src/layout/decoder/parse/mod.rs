@@ -12,7 +12,18 @@ use value::{optional_bool, optional_f64, optional_string, partial_rotary_factor,
 
 impl DecoderConfig {
     pub fn from_layout(layout: &ModelLayout) -> Result<Self> {
-        Self::from_config_path(&layout.config_path)
+        let mut config = Self::from_config_path(&layout.config_path)?;
+        if let Some(path) = layout.configuration_path.as_deref() {
+            let json = fs::read_to_string(path)?;
+            let value: Value = serde_json::from_str(&json)?;
+            if let Some(context) = optional_usize(
+                &value,
+                &["max_position_embeddings", "max_sequence_length", "seq_length"],
+            )? {
+                config.max_position_embeddings = config.max_position_embeddings.max(context);
+            }
+        }
+        Ok(config)
     }
 
     pub fn from_config_path(path: impl AsRef<Path>) -> Result<Self> {

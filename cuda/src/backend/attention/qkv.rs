@@ -3,11 +3,14 @@ use mircuda::{DeviceBuffer, bf16};
 use super::{
     Bf16LinearPack, CudaBackend, DecodeAttentionConfig, DecodeQkvWeights, ProjectionFormat,
 };
-use crate::{CudaTensor, Error, ExecutionPhase, NvFp4Bf16Pack, Result, RmsNormBf16};
+use crate::{
+    CompressedInt8Bf16Linear, CudaTensor, Error, ExecutionPhase, NvFp4Bf16Pack, Result, RmsNormBf16,
+};
 
 #[derive(Debug)]
 pub(super) enum AttentionQkvProjection {
     Bf16(Bf16LinearPack<3>),
+    Int8(Box<[CompressedInt8Bf16Linear; 3]>),
     NvFp4(Box<NvFp4Bf16Pack<3>>),
 }
 
@@ -39,6 +42,39 @@ impl AttentionQkvProjection {
                 config.hidden_size,
                 [query, key, value],
             )?)),
+            ProjectionFormat::Int8 => {
+                let DecodeQkvWeights::Int8(weights) = weights.ok_or(
+                    Error::InvalidExecutionPlan("INT8 attention requires prepared QKV weights"),
+                )?
+                else {
+                    return Err(Error::InvalidExecutionPlan(
+                        "INT8 attention received non-INT8 QKV weights",
+                    ));
+                };
+                Ok(Self::Int8(Box::new([
+                    CompressedInt8Bf16Linear::new(
+                        backend,
+                        tokens,
+                        config.hidden_size,
+                        query,
+                        weights[0].clone(),
+                    )?,
+                    CompressedInt8Bf16Linear::new(
+                        backend,
+                        tokens,
+                        config.hidden_size,
+                        key,
+                        weights[1].clone(),
+                    )?,
+                    CompressedInt8Bf16Linear::new(
+                        backend,
+                        tokens,
+                        config.hidden_size,
+                        value,
+                        weights[2].clone(),
+                    )?,
+                ])))
+            },
             ProjectionFormat::NvFp4 => {
                 let DecodeQkvWeights::NvFp4(weights) = weights.ok_or(
                     Error::InvalidExecutionPlan("NVFP4 attention requires prepared QKV weights"),
@@ -70,6 +106,18 @@ impl AttentionQkvProjection {
                 input_norm.execute(input, norm_weight, buffers.normalized)?;
                 operation.execute(buffers.normalized, weights.require_bf16()?, buffers.packed)?;
                 Ok(false)
+            },
+            Self::Int8(operations) => {
+                let DecodeQkvWeights::Int8(_) = weights else {
+                    return Err(Error::InvalidExecutionPlan(
+                        "INT8 QKV operation received non-INT8 weights",
+                    ));
+                };
+                input_norm.execute(input, norm_weight, buffers.normalized)?;
+                for (operation, output) in operations.iter().zip(buffers.separate.iter_mut()) {
+                    operation.execute(buffers.normalized, output)?;
+                }
+                Ok(true)
             },
             Self::NvFp4(operation) => {
                 let DecodeQkvWeights::NvFp4(_) = weights else {

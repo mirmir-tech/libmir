@@ -6,34 +6,17 @@ use models::generation::{
 };
 use runtime::{
     backend::{CandidateLogitsTrace, LogitsTrace, SamplingLogits},
-    metrics::{GenerationMetrics, GenerationMetricsRecorder},
+    metrics::GenerationMetricsRecorder,
     sampling::{Sampler, SamplerConfig},
 };
 
 use crate::{CancellationToken, Error, Model, ProgressEvent, Result};
 
 mod input;
+mod output;
 
 use input::PreparedGeneration;
-
-#[derive(Debug, Clone)]
-/// Completed generation, including separated reasoning, tokens, and timing
-/// metrics.
-pub struct GenerationOutput {
-    /// User-visible assistant text.
-    pub text: String,
-    /// Reasoning text emitted on the reasoning channel, when present.
-    pub reasoning: String,
-    /// Generated token identifiers, including a terminal stop token when
-    /// emitted.
-    pub token_ids: Vec<u32>,
-    /// Number of tokens in the prepared prompt.
-    pub prompt_tokens: usize,
-    /// Stable completion reason such as `"stop"` or `"max_tokens"`.
-    pub finish_reason: &'static str,
-    /// Prefill, decode, throughput, and cache metrics for this generation.
-    pub metrics: GenerationMetrics,
-}
+pub use output::GenerationOutput;
 
 impl Model {
     /// Generates a complete response and streams normalized token deltas to
@@ -89,6 +72,7 @@ impl Model {
         metrics.record_prompt(Duration::ZERO, prompt_tokens);
         let tokenizer = descriptor.tokenizer();
         let mut normalizer = OutputNormalizer::new(tokenizer, prepared.prompt_text());
+        let mut text_decoder = tokenizer.decoder();
         let decoder = descriptor.decoder().ok_or(Error::TaskMismatch {
             requested: "generation",
             actual: "sequence scoring",
@@ -112,6 +96,7 @@ impl Model {
         let mut token_ids = Vec::with_capacity(settings.max_tokens);
         let mut text = String::new();
         let mut reasoning = String::new();
+        let mut tool_calls = String::new();
         let mut finish_reason = "max_tokens";
         progress(ProgressEvent::decode_tokens(0, settings.max_tokens));
         while token_ids.len() < settings.max_tokens {
@@ -121,11 +106,12 @@ impl Model {
             if let Some(history) = history.as_mut() {
                 history.push(next);
             }
-            let piece = tokenizer.decode(&[next])?;
+            let piece = text_decoder.step(next)?.unwrap_or_default();
             if let Some(delta) = normalizer.push(next, piece) {
                 match delta.channel {
                     GenerationChannel::Content => text.push_str(&delta.text),
                     GenerationChannel::Reasoning => reasoning.push_str(&delta.text),
+                    GenerationChannel::ToolCalls => tool_calls.push_str(&delta.text),
                 }
                 token(delta);
             }
@@ -150,9 +136,13 @@ impl Model {
         }
         metrics.record_generated(token_ids.len());
         let metrics = metrics.snapshot(session.cache_stats());
+        if !tool_calls.is_empty() {
+            finish_reason = "tool_calls";
+        }
         Ok(GenerationOutput {
             text,
             reasoning,
+            tool_calls,
             token_ids,
             prompt_tokens,
             finish_reason,

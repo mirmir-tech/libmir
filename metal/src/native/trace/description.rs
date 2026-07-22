@@ -135,7 +135,7 @@ fn has_bias(binding: &models::weights::TensorBinding) -> bool {
             bias.is_some()
         },
         TensorStorage::AffineQuantized { output_bias, .. } => output_bias.is_some(),
-        TensorStorage::Auxiliary { .. } => false,
+        TensorStorage::PackedInt8 { .. } | TensorStorage::Auxiliary { .. } => false,
     }
 }
 

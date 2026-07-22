@@ -179,6 +179,7 @@ fn rotary(attention: &AttentionSpec) -> Result<(f32, f32, f32, f32, f32)> {
         beta_fast,
         beta_slow,
         original_context_len,
+        ..
     }) = rotary.scaling
     else {
         return Err(Error::UnsupportedDecoderLayer(

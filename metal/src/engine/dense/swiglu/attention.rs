@@ -113,7 +113,7 @@ pub(super) fn rope_layout(
     stream: &Stream,
 ) -> Result<Array> {
     let input = input.transpose(&[0, 2, 1, 3], stream)?;
-    frequencies.map_or_else(
+    let rotated = frequencies.map_or_else(
         || {
             input.rope(
                 RopeOptions {
@@ -129,5 +129,10 @@ pub(super) fn rope_layout(
         |frequencies| {
             input.rope_with_frequencies(config.head_dim, false, frequencies, position, stream)
         },
-    )
+    )?;
+    if config.rope_attention_factor.to_bits() == 1.0_f32.to_bits() {
+        Ok(rotated)
+    } else {
+        rotated.multiply_scalar(config.rope_attention_factor, stream)
+    }
 }

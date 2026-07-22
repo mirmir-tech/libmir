@@ -20,6 +20,18 @@ fn separates_think_tokens() {
 }
 
 #[test]
+fn separates_mistral_tool_calls() {
+    let mut normalizer = normalizer(Markers {
+        tool_calls: vec![9],
+        ..Markers::default()
+    });
+    assert!(normalizer.push(9, String::new()).is_none());
+    let token = normalizer.push(10, r#"[{"name":"weather"}]"#.into());
+    assert_eq!(token.as_ref().map(|token| token.channel), Some(GenerationChannel::ToolCalls));
+    assert_eq!(token.map(|token| token.text), Some(r#"[{"name":"weather"}]"#.to_owned()));
+}
+
+#[test]
 fn parses_harmony_channel_header() {
     let mut normalizer = normalizer(Markers {
         channel: vec![3],

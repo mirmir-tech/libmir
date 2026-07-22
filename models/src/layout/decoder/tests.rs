@@ -4,6 +4,8 @@ use super::*;
 use crate::error::Result;
 
 mod gpt_oss;
+mod mistral;
+mod rope;
 
 #[test]
 fn reads_common_decoder_fields() -> Result<()> {

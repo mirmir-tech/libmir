@@ -10,6 +10,7 @@ pub(super) struct DenseSwiGluLayerConfig {
     pub(super) attention_scale: f32,
     pub(super) rope_base: f32,
     pub(super) rope_scaling: Option<RopeScaling>,
+    pub(super) rope_attention_factor: f32,
     pub(super) rms_norm_eps: f32,
     pub(super) group_size: i32,
 }
@@ -39,6 +40,10 @@ impl DenseSwiGluLayerConfig {
             attention_scale,
             rope_base: decoder.rope_theta.unwrap_or(10_000.0).to_string().parse()?,
             rope_scaling: decoder.rope_scaling,
+            rope_attention_factor: decoder
+                .rope_scaling
+                .and_then(RopeScaling::yarn)
+                .map_or(Ok(1.0), |values| values.4.to_string().parse())?,
             rms_norm_eps: decoder.rms_norm_eps.to_string().parse()?,
             group_size: i32::try_from(group_size)?,
         };
@@ -64,6 +69,8 @@ impl DenseSwiGluLayerConfig {
         if !self.rope_base.is_finite()
             || !self.rms_norm_eps.is_finite()
             || !self.attention_scale.is_finite()
+            || !self.rope_attention_factor.is_finite()
+            || self.rope_attention_factor <= 0.0
         {
             return Err(Error::InvalidModel(format!("non-finite dense SwiGLU config: {self:?}")));
         }

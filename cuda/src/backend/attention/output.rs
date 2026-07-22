@@ -2,13 +2,15 @@ use mircuda::{DeviceBuffer, Stream, bf16};
 
 use super::{Bf16Projection, CudaBackend, DecodeAttentionConfig, ProjectionFormat};
 use crate::{
-    BlockFp8LinearWeight, CudaTensor, DenseExecution, DensePlanRequest, DenseRole, Error,
-    ExecutionPhase, Fp8ResidualLinearWeight, NvFp4Bf16Linear, NvFp4LinearWeight, Result,
+    BlockFp8LinearWeight, CompressedInt8Bf16Linear, CompressedInt8Weight, CudaTensor,
+    DenseExecution, DensePlanRequest, DenseRole, Error, ExecutionPhase, Fp8ResidualLinearWeight,
+    NvFp4Bf16Linear, NvFp4LinearWeight, Result,
 };
 
 #[derive(Clone, Copy)]
 pub enum DecodeAttentionOutputWeight<'a> {
     Bf16(&'a CudaTensor),
+    Int8(&'a CompressedInt8Weight),
     NvFp4(&'a NvFp4LinearWeight),
     BlockFp8 {
         exact: &'a CudaTensor,
@@ -27,7 +29,7 @@ impl<'a> DecodeAttentionOutputWeight<'a> {
             Self::Bf16(weight)
             | Self::BlockFp8 { exact: weight, .. }
             | Self::Fp8Int4 { exact: weight, .. } => Some(weight),
-            Self::NvFp4(_) => None,
+            Self::Int8(_) | Self::NvFp4(_) => None,
         }
     }
 }
@@ -35,6 +37,7 @@ impl<'a> DecodeAttentionOutputWeight<'a> {
 #[derive(Debug)]
 pub(super) enum AttentionOutputProjection {
     Bf16(Bf16Projection),
+    Int8(CompressedInt8Bf16Linear),
     NvFp4(NvFp4Bf16Linear),
     BlockFp8,
     Fp8Int4,
@@ -60,6 +63,20 @@ impl AttentionOutputProjection {
             output_features: config.hidden_size,
         };
         match config.projection_format {
+            ProjectionFormat::Int8 => {
+                let Some(DecodeAttentionOutputWeight::Int8(weight)) = weight else {
+                    return Err(Error::InvalidExecutionPlan(
+                        "INT8 attention requires prepared output weight",
+                    ));
+                };
+                Ok(Self::Int8(CompressedInt8Bf16Linear::new(
+                    backend,
+                    tokens,
+                    input_features,
+                    config.hidden_size,
+                    weight.clone(),
+                )?))
+            },
             ProjectionFormat::NvFp4 => {
                 let Some(DecodeAttentionOutputWeight::NvFp4(weight)) = weight else {
                     return Err(Error::InvalidExecutionPlan(
@@ -88,6 +105,12 @@ impl AttentionOutputProjection {
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
         match (self, weight) {
+            (Self::Int8(operation), DecodeAttentionOutputWeight::Int8(_)) => {
+                operation.execute(input, output)
+            },
+            (Self::Int8(_), _) => {
+                Err(Error::InvalidExecutionPlan("INT8 attention output received other weight"))
+            },
             (Self::NvFp4(operation), DecodeAttentionOutputWeight::NvFp4(_)) => {
                 operation.execute(input, output)
             },
@@ -118,6 +141,9 @@ impl AttentionOutputProjection {
             ),
             (_, DecodeAttentionOutputWeight::NvFp4(_)) => {
                 Err(Error::InvalidExecutionPlan("NVFP4 attention output execution is not prepared"))
+            },
+            (_, DecodeAttentionOutputWeight::Int8(_)) => {
+                Err(Error::InvalidExecutionPlan("INT8 attention output execution is not prepared"))
             },
         }
     }

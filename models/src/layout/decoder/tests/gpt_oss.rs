@@ -1,22 +1,20 @@
 use serde_json::{Value, json};
 
 use super::super::{AttentionLayerType, DecoderConfig, RopeScaling};
-use crate::error::Result;
+use crate::error::{ModelsError, Result};
 
 #[test]
 fn reads_official_20b_geometry() -> Result<()> {
     let config = DecoderConfig::from_value(&configuration(24, 32))?;
 
-    assert_contract(&config, 24, 32);
-    Ok(())
+    assert_contract(&config, 24, 32)
 }
 
 #[test]
 fn reads_official_120b_geometry() -> Result<()> {
     let config = DecoderConfig::from_value(&configuration(36, 128))?;
 
-    assert_contract(&config, 36, 128);
-    Ok(())
+    assert_contract(&config, 36, 128)
 }
 
 fn configuration(layers: usize, experts: usize) -> Value {
@@ -59,7 +57,7 @@ fn configuration(layers: usize, experts: usize) -> Value {
     value
 }
 
-fn assert_contract(config: &DecoderConfig, layers: usize, experts: usize) {
+fn assert_contract(config: &DecoderConfig, layers: usize, experts: usize) -> Result<()> {
     assert_eq!(config.hidden_size, 2880);
     assert_eq!(config.head_dim, 64);
     assert_eq!(config.num_hidden_layers, layers);
@@ -69,5 +67,11 @@ fn assert_contract(config: &DecoderConfig, layers: usize, experts: usize) {
     assert!(!config.attention_sinks);
     assert!(config.layer_types.contains(&AttentionLayerType::Sliding));
     assert!(config.layer_types.contains(&AttentionLayerType::Full));
-    assert_eq!(config.rope_scaling.and_then(RopeScaling::yarn), Some((32.0, 32.0, 1.0, 4096)));
+    let (factor, beta_fast, beta_slow, context, attention_factor) = config
+        .rope_scaling
+        .and_then(RopeScaling::yarn)
+        .ok_or_else(|| ModelsError::InvalidConfig("expected YaRN scaling".into()))?;
+    assert_eq!((factor, beta_fast, beta_slow, context), (32.0, 32.0, 1.0, 4096));
+    assert!((attention_factor - 0.1_f64.mul_add(32.0_f64.ln(), 1.0)).abs() < 1.0e-12);
+    Ok(())
 }

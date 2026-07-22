@@ -13,7 +13,7 @@ const CHUNK: usize = THREADS as usize * ITEMS_PER_THREAD;
 
 cuda_export!(CandidatesKernel = "libmir_cuda_sampling_candidates_bf16"(
     logits: &DeviceBuffer<bf16>, output: &mut DeviceBuffer<u64>,
-    denominator: &mut DeviceBuffer<f32>, vocab: u32, top_k: u32,
+    denominator: &mut DeviceBuffer<f32>, vocab: u32, logits_stride: u32, top_k: u32,
     row: u32, workspace_stride: u32,
 ));
 cuda_export!(MergeKernel = "libmir_cuda_sampling_merge"(
@@ -23,14 +23,14 @@ cuda_export!(MergeKernel = "libmir_cuda_sampling_merge"(
 ));
 cuda_export!(MassKernel = "libmir_cuda_sampling_mass_bf16"(
     logits: &DeviceBuffer<bf16>, candidates: &DeviceBuffer<u64>,
-    denominator: &mut DeviceBuffer<f32>, vocab: u32, row: u32,
+    denominator: &mut DeviceBuffer<f32>, vocab: u32, logits_stride: u32, row: u32,
     workspace_stride: u32,
 ));
 cuda_export!(FinalizeKernel = "libmir_cuda_sampling_finalize_bf16"(
     logits: &DeviceBuffer<bf16>, candidates: &DeviceBuffer<u64>,
     denominator: &DeviceBuffer<f32>, output: &mut DeviceBuffer<u32>,
     top_k: u32, top_p: f32, temperature: f32, draw: f32,
-    vocab: u32, row: u32, workspace_stride: u32,
+    vocab: u32, logits_stride: u32, row: u32, workspace_stride: u32,
 ));
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -105,14 +105,14 @@ impl Sampling {
         row: usize,
     ) -> Result<()> {
         validate(spec)?;
-        if spec.vocab != self.vocab {
-            return Err(Error::InvalidSampling("sampler vocabulary changed".into()));
+        if spec.vocab > self.vocab {
+            return Err(Error::InvalidSampling("sampling vocabulary exceeds logits".into()));
         }
-        let capacity = Self::workspace_elements(spec.vocab)?;
+        let capacity = Self::workspace_elements(self.vocab)?;
         let rows = row
             .checked_add(1)
             .ok_or_else(|| Error::InvalidSampling("sampling row overflow".into()))?;
-        require("sampling logits", rows * spec.vocab, logits.len())?;
+        require("sampling logits", rows * self.vocab, logits.len())?;
         require("sampled token", rows, output.len())?;
         require("sampling first workspace", rows * capacity, workspace.first.len())?;
         require("sampling second workspace", rows * capacity, workspace.second.len())?;
@@ -125,7 +125,16 @@ impl Sampling {
         self.candidates.launch(
             stream,
             launch(initial_blocks)?,
-            (logits, &mut *first, &mut *denominator, narrow(spec.vocab)?, top_k, row, stride),
+            (
+                logits,
+                &mut *first,
+                &mut *denominator,
+                narrow(spec.vocab)?,
+                narrow(self.vocab)?,
+                top_k,
+                row,
+                stride,
+            ),
         )?;
         let mut count = initial_blocks
             .checked_mul(spec.top_k)
@@ -161,7 +170,15 @@ impl Sampling {
             self.mass.launch(
                 stream,
                 launch(mass_blocks)?,
-                (logits, candidates, &mut *denominator, narrow(spec.vocab)?, row, stride),
+                (
+                    logits,
+                    candidates,
+                    &mut *denominator,
+                    narrow(spec.vocab)?,
+                    narrow(self.vocab)?,
+                    row,
+                    stride,
+                ),
             )?;
         }
         Ok(self.finalize.launch(
@@ -181,6 +198,7 @@ impl Sampling {
                 spec.temperature,
                 spec.draw,
                 narrow(spec.vocab)?,
+                narrow(self.vocab)?,
                 row,
                 stride,
             ),

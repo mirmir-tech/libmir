@@ -118,6 +118,7 @@ fn canonical_path(name: &str) -> String {
         .or_else(|| name.strip_prefix("model."))
         .unwrap_or(name);
     path.strip_suffix("_blocks")
+        .or_else(|| path.strip_suffix(".weight_packed"))
         .map_or_else(|| path.to_owned(), |prefix| format!("{prefix}.weight"))
 }
 

@@ -11,7 +11,6 @@ use crate::{
     RmsNormBf16,
     kernels::{QkvPostprocess, QkvPostprocessSpec},
 };
-
 /// Fixed-chunk BF16 attention prefill sharing paged state with decode.
 #[derive(Debug)]
 pub struct PrefillAttentionBf16 {
@@ -24,13 +23,11 @@ pub struct PrefillAttentionBf16 {
     config: DecodeAttentionConfig,
     tokens: usize,
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::backend) struct ImageAttentionSpan {
     pub start: usize,
     pub end: usize,
 }
-
 #[derive(Debug)]
 struct PrefillAttentionScratch {
     normalized: DeviceBuffer<bf16>,
@@ -41,7 +38,6 @@ struct PrefillAttentionScratch {
     key_rope: DeviceBuffer<bf16>,
     attention: DeviceBuffer<bf16>,
 }
-
 impl CudaBackend {
     pub fn prepare_prefill_attention_bf16(
         &self,
@@ -51,7 +47,6 @@ impl CudaBackend {
         PrefillAttentionBf16::new(self, config, tokens, None)
     }
 }
-
 impl PrefillAttentionBf16 {
     pub(in crate::backend) fn new(
         backend: &CudaBackend,
@@ -89,16 +84,25 @@ impl PrefillAttentionBf16 {
             ProjectionFormat::Bf16 => {
                 AttentionOutputProjection::Bf16(backend.prepare_bf16_projection(output_request)?)
             },
-            ProjectionFormat::NvFp4 => {
-                let DecodeAttentionOutputWeight::NvFp4(weight) = weights
-                    .ok_or(Error::InvalidExecutionPlan(
-                        "NVFP4 prefill attention requires prepared output weight",
-                    ))?
-                    .output
+            ProjectionFormat::Int8 => {
+                let Some(DecodeAttentionOutputWeight::Int8(weight)) =
+                    weights.map(|weights| weights.output)
                 else {
-                    return Err(Error::InvalidExecutionPlan(
-                        "NVFP4 prefill attention received non-NVFP4 output weight",
-                    ));
+                    return Err(Error::InvalidExecutionPlan("INT8 prefill requires INT8 output"));
+                };
+                AttentionOutputProjection::Int8(crate::CompressedInt8Bf16Linear::new(
+                    backend,
+                    tokens,
+                    attention_width,
+                    hidden,
+                    weight.clone(),
+                )?)
+            },
+            ProjectionFormat::NvFp4 => {
+                let Some(DecodeAttentionOutputWeight::NvFp4(weight)) =
+                    weights.map(|weights| weights.output)
+                else {
+                    return Err(Error::InvalidExecutionPlan("NVFP4 prefill requires NVFP4 output"));
                 };
                 AttentionOutputProjection::NvFp4(NvFp4Bf16Linear::from_weight(
                     backend,
@@ -221,7 +225,6 @@ impl PrefillAttentionBf16 {
         )
     }
 }
-
 impl PrefillAttentionScratch {
     fn new(backend: &CudaBackend, config: DecodeAttentionConfig, tokens: usize) -> Result<Self> {
         let allocate = |width| -> Result<DeviceBuffer<bf16>> {

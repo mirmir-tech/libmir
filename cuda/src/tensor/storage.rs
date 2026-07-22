@@ -97,6 +97,16 @@ impl CudaTensor {
         }
     }
 
+    /// Returns packed signed I32 storage without copying when the dtype
+    /// matches.
+    #[must_use]
+    pub fn as_i32(&self) -> Option<&DeviceBuffer<i32>> {
+        match &self.storage {
+            TensorStorage::I32(buffer) => Some(buffer),
+            _ => None,
+        }
+    }
+
     /// Returns byte storage without copying when the dtype is exactly U8.
     #[must_use]
     pub fn as_u8(&self) -> Option<&DeviceBuffer<u8>> {

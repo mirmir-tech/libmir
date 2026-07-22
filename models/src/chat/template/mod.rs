@@ -32,6 +32,7 @@ pub enum TemplateKind {
     ChatMl,
     QwenChatMl,
     TurnDelimited,
+    MistralInst,
     Gemma4,
     Plain,
 }
@@ -88,6 +89,7 @@ fn builtin_kind(model_type: Option<&str>, has_turns: bool, has_chatml: bool) -> 
     match model_type {
         Some(model) if model.starts_with("gemma4") && has_turns => TemplateKind::Gemma4,
         Some(model) if model.starts_with("qwen") && has_chatml => TemplateKind::QwenChatMl,
+        Some(model) if model.starts_with("mistral") => TemplateKind::MistralInst,
         _ if has_turns => TemplateKind::TurnDelimited,
         _ if has_chatml => TemplateKind::ChatMl,
         _ => TemplateKind::Plain,
@@ -207,6 +209,7 @@ mod tests {
         assert_eq!(builtin_kind(Some("gemma4"), true, false), TemplateKind::Gemma4);
         assert_eq!(builtin_kind(Some("qwen3_5_moe"), false, true), TemplateKind::QwenChatMl);
         assert_eq!(builtin_kind(Some("qwen3_5_moe"), false, false), TemplateKind::Plain);
+        assert_eq!(builtin_kind(Some("mistral"), false, false), TemplateKind::MistralInst);
     }
 
     #[test]
@@ -217,7 +220,6 @@ mod tests {
             tokens: TemplateTokens::default(),
             template: Some("{% if enable_thinking %}<|think|>{% endif %}".into()),
         };
-
         let prompt = template.render(&request("Hello"))?;
 
         assert_eq!(prompt.text, "<|think|>");
@@ -231,7 +233,11 @@ mod tests {
                 role: "user".into(),
                 content: content.into(),
                 reasoning_content: None,
+                tool_calls: None,
+                tool_call_id: None,
             }],
+            tools: Vec::new(),
+            tool_choice: None,
             stream: false,
             max_tokens: None,
             temperature: None,

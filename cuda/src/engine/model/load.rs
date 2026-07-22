@@ -153,6 +153,7 @@ impl CudaEngine {
     ) -> Result<ModelRunner> {
         let bindings = &contract.bindings;
         let nvfp4 = bindings.uses_block_format(BlockFormat::NvFp4);
+        let int8 = bindings.uses_packed_int8();
         let template = if plan.all_dense_and_routed() && nvfp4 {
             self.backend.load_nvfp4_moe_model_template_with_bindings(
                 decoder,
@@ -175,6 +176,8 @@ impl CudaEngine {
                     qkv_normalization: plan.graph_normalization()?,
                     projection_format: if nvfp4 {
                         crate::ProjectionFormat::NvFp4
+                    } else if int8 {
+                        crate::ProjectionFormat::Int8
                     } else {
                         crate::ProjectionFormat::Bf16
                     },
