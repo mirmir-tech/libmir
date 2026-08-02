@@ -1,35 +1,13 @@
-use mircuda::{
-    CompileOptions, Compiler, DeviceBuffer, LaunchConfig, Stream, TypedKernel, bf16, cuda_export,
-    cuda_kernel_file,
-};
+use mircuda::{Compiler, DeviceBuffer, LaunchConfig, Stream, TypedKernel, bf16, cuda_kernel_files};
 
-use super::super::{
-    affine::AffineGemvSpec,
-    geometry::{narrow, product, require},
+use super::{
+    super::{
+        affine::{AffineGemvSpec, compile_options},
+        geometry::{narrow, product, require},
+    },
+    kernel::{SelectedPairFallbackKernel, SelectedPairInt4Kernel, SelectedPairInt8Kernel},
 };
 use crate::{Error, Result};
-
-cuda_export!(
-    SelectedPairInt4Kernel = "libmir_cuda_selected_affine_pair_bf16_int4"(
-        input: &DeviceBuffer<bf16>, selected: &DeviceBuffer<u32>,
-        gate_weight: &DeviceBuffer<u32>, gate_scales: &DeviceBuffer<bf16>,
-        gate_biases: &DeviceBuffer<bf16>, up_weight: &DeviceBuffer<u32>,
-        up_scales: &DeviceBuffer<bf16>, up_biases: &DeviceBuffer<bf16>,
-        gate_output: &mut DeviceBuffer<bf16>, up_output: &mut DeviceBuffer<bf16>,
-        input_features: u32, output_features: u32, group_size: u32, expert_count: u32,
-    )
-);
-
-cuda_export!(
-    SelectedPairInt8Kernel = "libmir_cuda_selected_affine_pair_bf16_int8"(
-        input: &DeviceBuffer<bf16>, selected: &DeviceBuffer<u32>,
-        gate_weight: &DeviceBuffer<u32>, gate_scales: &DeviceBuffer<bf16>,
-        gate_biases: &DeviceBuffer<bf16>, up_weight: &DeviceBuffer<u32>,
-        up_scales: &DeviceBuffer<bf16>, up_biases: &DeviceBuffer<bf16>,
-        gate_output: &mut DeviceBuffer<bf16>, up_output: &mut DeviceBuffer<bf16>,
-        input_features: u32, output_features: u32, group_size: u32, expert_count: u32,
-    )
-);
 
 /// Geometry for paired projections over a device-selected expert set.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -37,6 +15,7 @@ pub struct SelectedAffinePairSpec {
     pub matrix: AffineGemvSpec,
     pub expert_count: usize,
     pub selected_count: usize,
+    pub tokens: usize,
 }
 
 impl SelectedAffinePairSpec {
@@ -45,10 +24,25 @@ impl SelectedAffinePairSpec {
         expert_count: usize,
         selected_count: usize,
     ) -> Result<Self> {
-        if expert_count == 0 || selected_count == 0 || selected_count > expert_count {
+        Self::new_batch(matrix, expert_count, selected_count, 1)
+    }
+
+    pub const fn new_batch(
+        matrix: AffineGemvSpec,
+        expert_count: usize,
+        selected_count: usize,
+        tokens: usize,
+    ) -> Result<Self> {
+        if expert_count == 0 || selected_count == 0 || selected_count > expert_count || tokens == 0
+        {
             return Err(Error::InvalidQuantizedGemv("invalid selected expert count"));
         }
-        Ok(Self { matrix, expert_count, selected_count })
+        Ok(Self {
+            matrix,
+            expert_count,
+            selected_count,
+            tokens,
+        })
     }
 }
 
@@ -76,16 +70,21 @@ pub struct SelectedAffinePair {
 enum PairKernel {
     Int4(TypedKernel<SelectedPairInt4Kernel>),
     Int8(TypedKernel<SelectedPairInt8Kernel>),
+    Fallback(TypedKernel<SelectedPairFallbackKernel>),
 }
 
 impl SelectedAffinePair {
     pub fn compile(compiler: &Compiler, spec: SelectedAffinePairSpec) -> Result<Self> {
-        let source = cuda_kernel_file!("../../../kernels/selected_affine_pair_bf16.cu");
-        let module =
-            compiler.compile(source, &CompileOptions { fast_math: true, ..Default::default() })?;
+        let source = cuda_kernel_files!(
+            "selected_affine_pair_bf16.cu";
+            "../../../kernels/affine_packed.cuh",
+            "../../../kernels/selected_affine_pair_bf16.cu",
+        );
+        let module = compiler.compile(source, &compile_options(spec.matrix.bits, true))?;
         let kernel = match spec.matrix.bits {
             4 => PairKernel::Int4(module.kernel()?),
             8 => PairKernel::Int8(module.kernel()?),
+            2 | 3 | 5 | 6 => PairKernel::Fallback(module.kernel()?),
             _ => return Err(Error::InvalidQuantizedGemv("unsupported weight precision")),
         };
         Ok(Self { kernel, spec })
@@ -102,7 +101,7 @@ impl SelectedAffinePair {
             grid: (
                 narrow(matrix.output_features.div_ceil(8))?,
                 narrow(self.spec.selected_count)?,
-                1,
+                narrow(self.spec.tokens)?,
             ),
             block: (32, 8, 1),
             shared_memory_bytes: 0,
@@ -154,6 +153,26 @@ impl SelectedAffinePair {
                     dimensions.3,
                 ),
             ),
+            PairKernel::Fallback(kernel) => kernel.launch(
+                stream,
+                config,
+                (
+                    launch.input,
+                    launch.selected,
+                    launch.gate_weight,
+                    launch.gate_scales,
+                    launch.gate_biases,
+                    launch.up_weight,
+                    launch.up_scales,
+                    launch.up_biases,
+                    &mut *launch.gate_output,
+                    &mut *launch.up_output,
+                    dimensions.0,
+                    dimensions.1,
+                    dimensions.2,
+                    dimensions.3,
+                ),
+            ),
         }?)
     }
 
@@ -167,9 +186,10 @@ impl SelectedAffinePair {
         let layout = matrix.layout()?;
         let packed = product(layout.packed_per_matrix, self.spec.expert_count)?;
         let grouped = product(layout.groups_per_matrix, self.spec.expert_count)?;
-        let output = product(matrix.output_features, self.spec.selected_count)?;
-        require("input", matrix.input_features, launch.input.len())?;
-        require("selected experts", self.spec.selected_count, launch.selected.len())?;
+        let routes = product(self.spec.selected_count, self.spec.tokens)?;
+        let output = product(matrix.output_features, routes)?;
+        require("input", product(matrix.input_features, self.spec.tokens)?, launch.input.len())?;
+        require("selected experts", routes, launch.selected.len())?;
         require("gate weight", packed, launch.gate_weight.len())?;
         require("up weight", packed, launch.up_weight.len())?;
         for (name, actual) in [

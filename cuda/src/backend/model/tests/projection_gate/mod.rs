@@ -3,13 +3,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use foundation::protocol::{ChatCompletionRequest, ChatMessage};
 use mircuda::PinnedBuffer;
 use models::{
-    chat::ChatTemplate,
     layout::{DecoderConfig, ModelLayout},
     semantic::SemanticModelSpec,
-    tokenizer::TextTokenizer,
     weights::TensorCatalog,
 };
 use runtime::{
@@ -19,12 +16,20 @@ use runtime::{
 use uuid::Uuid;
 
 use crate::{
-    CudaBackend, CudaConfig, CudaDenseVectorPolicy, CudaKernelAdmission, CudaMoeModelTemplate,
-    CudaNumericalPolicy, CudaOutputHeadPolicy, CudaPlanningPolicy, DenseRole,
-    DenseSwiGluLayerLoadConfig, NvFp4MoeLayerLoadConfig, ProjectionFormat, Result,
+    CudaBackend, CudaConfig, CudaDenseVectorPolicy, CudaDenseVendorPolicy, CudaDenseWeightPolicy,
+    CudaKernelAdmission, CudaMoeModelTemplate, CudaNumericalPolicy, CudaOutputHeadPolicy,
+    CudaPlanningPolicy, DenseRole, DenseSwiGluLayerLoadConfig, NvFp4MoeLayerLoadConfig,
+    ProjectionFormat, Result,
 };
 
+mod dense_vectors;
+mod dense_weights;
+mod prompt;
+mod quality;
 mod topk;
+mod vendor;
+
+pub(super) use prompt::prompts;
 
 const GENERATED: usize = 128;
 const BLOCKS: usize = 64;
@@ -49,9 +54,21 @@ fn checkpoint_output_projections_preserve_broad_greedy_sequences()
         &prompts,
         CudaOutputHeadPolicy::Bf16,
         CudaDenseVectorPolicy::Disabled,
+        CudaDenseVendorPolicy::Disabled,
+        CudaDenseWeightPolicy::Bf16,
+        ProjectionFormat::NvFp4,
     )?;
     for policy in [CudaOutputHeadPolicy::Fp8Residual, CudaOutputHeadPolicy::Fp8BlockRefined] {
-        let candidate = run(&decoder, &catalog, &prompts, policy, CudaDenseVectorPolicy::Disabled)?;
+        let candidate = run(
+            &decoder,
+            &catalog,
+            &prompts,
+            policy,
+            CudaDenseVectorPolicy::Disabled,
+            CudaDenseVendorPolicy::Disabled,
+            CudaDenseWeightPolicy::Bf16,
+            ProjectionFormat::NvFp4,
+        )?;
         assert_eq!(candidate.sequences, baseline.sequences, "{policy:?} changed greedy output");
         eprintln!(
             "output gate {policy:?}: {:.2} tok/s across {} tokens",
@@ -65,6 +82,9 @@ fn checkpoint_output_projections_preserve_broad_greedy_sequences()
         &prompts,
         CudaOutputHeadPolicy::Fp8BlockRefined,
         CudaDenseVectorPolicy::Role(DenseRole::AttentionOutput),
+        CudaDenseVendorPolicy::Disabled,
+        CudaDenseWeightPolicy::Bf16,
+        ProjectionFormat::NvFp4,
     )?;
     assert_eq!(
         combined.sequences, baseline.sequences,
@@ -89,15 +109,21 @@ struct Report {
     elapsed: Duration,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run(
     decoder: &DecoderConfig,
     catalog: &TensorCatalog,
     prompts: &[Vec<u32>],
     output_head: CudaOutputHeadPolicy,
     dense_vectors: CudaDenseVectorPolicy,
+    dense_vendor: CudaDenseVendorPolicy,
+    dense_weights: CudaDenseWeightPolicy,
+    projection_format: ProjectionFormat,
 ) -> Result<Report> {
     let experimental = output_head != CudaOutputHeadPolicy::Bf16
-        || dense_vectors != CudaDenseVectorPolicy::Disabled;
+        || dense_vectors != CudaDenseVectorPolicy::Disabled
+        || dense_vendor != CudaDenseVendorPolicy::Disabled
+        || dense_weights != CudaDenseWeightPolicy::Bf16;
     let backend = CudaBackend::new(CudaConfig {
         planning: CudaPlanningPolicy {
             numerical: if experimental {
@@ -112,11 +138,13 @@ fn run(
             },
             output_head,
             dense_vectors,
+            dense_vendor,
+            dense_weights,
             ..CudaPlanningPolicy::default()
         },
         ..CudaConfig::default()
     })?;
-    let template = load_template(&backend, decoder, catalog)?;
+    let template = load_template_with_format(&backend, decoder, catalog, projection_format)?;
     let mut elapsed = Duration::ZERO;
     let mut sequences = Vec::with_capacity(prompts.len());
     for prompt in prompts {
@@ -148,14 +176,34 @@ pub(super) fn load_template(
     decoder: &DecoderConfig,
     catalog: &TensorCatalog,
 ) -> Result<CudaMoeModelTemplate> {
-    let cache = CacheConfig::new(u32::try_from(BLOCKS)?);
+    load_template_with_format(backend, decoder, catalog, ProjectionFormat::NvFp4)
+}
+
+fn load_template_with_format(
+    backend: &CudaBackend,
+    decoder: &DecoderConfig,
+    catalog: &TensorCatalog,
+    projection_format: ProjectionFormat,
+) -> Result<CudaMoeModelTemplate> {
+    load_template_with_cache(backend, decoder, catalog, projection_format, BLOCKS, BLOCKS)
+}
+
+pub(super) fn load_template_with_cache(
+    backend: &CudaBackend,
+    decoder: &DecoderConfig,
+    catalog: &TensorCatalog,
+    projection_format: ProjectionFormat,
+    cache_blocks: usize,
+    max_sequence_blocks: usize,
+) -> Result<CudaMoeModelTemplate> {
+    let cache = CacheConfig::new(u32::try_from(cache_blocks)?);
     let semantic = SemanticModelSpec::discover(decoder, catalog)?;
     let plan = crate::engine::lowering::CudaDecoderPlan::lower(&semantic);
     if plan.all_dense_and_routed() {
         backend.load_nvfp4_moe_model_template(
             decoder,
             catalog,
-            NvFp4MoeLayerLoadConfig { cache, max_sequence_blocks: BLOCKS },
+            NvFp4MoeLayerLoadConfig { cache, max_sequence_blocks },
         )
     } else if plan.all_dense() {
         let mut ignored = |_completed, _detail| {};
@@ -164,9 +212,9 @@ pub(super) fn load_template(
             catalog,
             DenseSwiGluLayerLoadConfig {
                 cache,
-                max_sequence_blocks: BLOCKS,
-                qkv_normalization: plan.graph_normalization()?,
-                projection_format: ProjectionFormat::NvFp4,
+                max_sequence_blocks,
+                qkv_normalization: crate::engine::lowering::graph_normalization(&plan)?,
+                projection_format,
             },
             &mut ignored,
         )
@@ -177,42 +225,6 @@ pub(super) fn load_template(
             geometry: format!("layers={}", plan.layers().len()),
             requirement: "the test admits dense or dense-plus-routed semantic layers",
         })
-    }
-}
-
-pub(super) fn prompts(layout: &ModelLayout) -> Result<Vec<Vec<u32>>> {
-    let template = ChatTemplate::from_layout(layout)?;
-    let tokenizer = TextTokenizer::from_layout(layout)?;
-    [
-        "Hello. Briefly introduce yourself and explain what you can help with.",
-        "Explain mixture-of-experts routing, load balancing, and inference trade-offs.",
-        "Write a safe Rust function that parses a port number and explain its error handling.",
-    ]
-    .into_iter()
-    .map(|content| {
-        let prompt = template.render(&request(content))?;
-        Ok(tokenizer
-            .encode_with_special_tokens(&prompt.text, prompt.add_special_tokens)?
-            .token_ids)
-    })
-    .collect()
-}
-
-fn request(content: &str) -> ChatCompletionRequest {
-    ChatCompletionRequest {
-        model: "projection-gate".into(),
-        messages: vec![ChatMessage {
-            role: "user".into(),
-            content: content.into(),
-            reasoning_content: None,
-        }],
-        stream: false,
-        max_tokens: Some(GENERATED),
-        temperature: Some(0.0),
-        top_p: Some(1.0),
-        top_k: Some(0),
-        repetition_penalty: Some(1.0),
-        seed: Some(0),
     }
 }
 

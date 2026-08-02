@@ -3,7 +3,7 @@ use models::weights::GatedSoftmaxBindings;
 use super::{GatedFullAttention, GatedFullAttentionConfig};
 use crate::engine::{
     ModelTensors, NormWeight, QuantizedLinear, Result, Stream,
-    binding::{adjusted_norm, affine_linear},
+    binding::{BoundLinear, adjusted_norm},
 };
 
 impl GatedFullAttention {
@@ -45,10 +45,10 @@ impl GatedFullAttention {
     ) -> Result<Self> {
         Ok(Self {
             config,
-            query: affine_linear(tensors, bindings.query)?,
-            key: affine_linear(tensors, bindings.key)?,
-            value: affine_linear(tensors, bindings.value)?,
-            output: affine_linear(tensors, bindings.output)?,
+            query: BoundLinear::load(tensors, bindings.query, stream)?,
+            key: BoundLinear::load(tensors, bindings.key, stream)?,
+            value: BoundLinear::load(tensors, bindings.value, stream)?,
+            output: BoundLinear::load(tensors, bindings.output, stream)?,
             query_norm: adjusted_norm(tensors, bindings.query_norm, norm_shift, stream)?,
             key_norm: adjusted_norm(tensors, bindings.key_norm, norm_shift, stream)?,
         })
@@ -60,6 +60,6 @@ fn linear(
     prefix: &str,
     name: &str,
     group_size: i32,
-) -> Result<QuantizedLinear> {
-    QuantizedLinear::load(tensors, &format!("{prefix}.{name}"), group_size)
+) -> Result<BoundLinear> {
+    QuantizedLinear::load(tensors, &format!("{prefix}.{name}"), group_size).map(BoundLinear::Affine)
 }

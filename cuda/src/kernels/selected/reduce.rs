@@ -1,33 +1,13 @@
-use mircuda::{
-    CompileOptions, Compiler, DeviceBuffer, LaunchConfig, Stream, TypedKernel, bf16, cuda_export,
-    cuda_kernel_file,
-};
+use mircuda::{Compiler, DeviceBuffer, LaunchConfig, Stream, TypedKernel, bf16, cuda_kernel_files};
 
-use super::super::{
-    affine::AffineGemvSpec,
-    geometry::{narrow, product, require},
+use super::{
+    super::{
+        affine::{AffineGemvSpec, compile_options},
+        geometry::{narrow, product, require},
+    },
+    kernel::{SelectedReduceFallbackKernel, SelectedReduceInt4Kernel, SelectedReduceInt8Kernel},
 };
 use crate::{Error, Result};
-
-cuda_export!(
-    SelectedReduceInt4Kernel = "libmir_cuda_selected_affine_reduce_bf16_int4"(
-        input: &DeviceBuffer<bf16>, selected: &DeviceBuffer<u32>,
-        routing_weights: &DeviceBuffer<bf16>, weight: &DeviceBuffer<u32>,
-        scales: &DeviceBuffer<bf16>, biases: &DeviceBuffer<bf16>,
-        output: &mut DeviceBuffer<bf16>, input_features: u32, output_features: u32,
-        group_size: u32, expert_count: u32, selected_count: u32,
-    )
-);
-
-cuda_export!(
-    SelectedReduceInt8Kernel = "libmir_cuda_selected_affine_reduce_bf16_int8"(
-        input: &DeviceBuffer<bf16>, selected: &DeviceBuffer<u32>,
-        routing_weights: &DeviceBuffer<bf16>, weight: &DeviceBuffer<u32>,
-        scales: &DeviceBuffer<bf16>, biases: &DeviceBuffer<bf16>,
-        output: &mut DeviceBuffer<bf16>, input_features: u32, output_features: u32,
-        group_size: u32, expert_count: u32, selected_count: u32,
-    )
-);
 
 /// Geometry for selected down projections and deterministic router reduction.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -87,16 +67,21 @@ pub struct SelectedAffineReduce {
 enum ReduceKernel {
     Int4(TypedKernel<SelectedReduceInt4Kernel>),
     Int8(TypedKernel<SelectedReduceInt8Kernel>),
+    Fallback(TypedKernel<SelectedReduceFallbackKernel>),
 }
 
 impl SelectedAffineReduce {
     pub fn compile(compiler: &Compiler, spec: SelectedAffineReduceSpec) -> Result<Self> {
-        let source = cuda_kernel_file!("../../../kernels/selected_affine_reduce_bf16.cu");
-        let module =
-            compiler.compile(source, &CompileOptions { fast_math: true, ..Default::default() })?;
+        let source = cuda_kernel_files!(
+            "selected_affine_reduce_bf16.cu";
+            "../../../kernels/affine_packed.cuh",
+            "../../../kernels/selected_affine_reduce_bf16.cu",
+        );
+        let module = compiler.compile(source, &compile_options(spec.matrix.bits, true))?;
         let kernel = match spec.matrix.bits {
             4 => ReduceKernel::Int4(module.kernel()?),
             8 => ReduceKernel::Int8(module.kernel()?),
+            2 | 3 | 5 | 6 => ReduceKernel::Fallback(module.kernel()?),
             _ => return Err(Error::InvalidQuantizedGemv("unsupported weight precision")),
         };
         Ok(Self { kernel, spec })
@@ -141,6 +126,24 @@ impl SelectedAffineReduce {
                 ),
             ),
             ReduceKernel::Int8(kernel) => kernel.launch(
+                stream,
+                config,
+                (
+                    launch.input,
+                    launch.selected,
+                    launch.routing_weights,
+                    launch.weight,
+                    launch.scales,
+                    launch.biases,
+                    &mut *launch.output,
+                    dimensions.0,
+                    dimensions.1,
+                    dimensions.2,
+                    dimensions.3,
+                    dimensions.4,
+                ),
+            ),
+            ReduceKernel::Fallback(kernel) => kernel.launch(
                 stream,
                 config,
                 (

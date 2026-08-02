@@ -6,13 +6,27 @@ use mircuda::{
 use super::Fp8OutputSpec;
 use crate::{
     Error, Result,
-    kernels::geometry::{narrow, require},
+    kernels::geometry::{narrow, product, require},
 };
 
 const TOP_K: usize = 128;
 const THREADS: u32 = 256;
 const ITEMS_PER_THREAD: usize = 8;
 const CHUNK: usize = THREADS as usize * ITEMS_PER_THREAD;
+
+impl Fp8OutputSpec {
+    pub fn new_refinement(input_features: usize, output_features: usize) -> Result<Self> {
+        if input_features == 0
+            || output_features == 0
+            || !input_features.is_multiple_of(64)
+            || !output_features.is_multiple_of(128)
+        {
+            return Err(Error::InvalidDecoderKernel("invalid FP8 refinement geometry"));
+        }
+        let _ = product(input_features, output_features)?;
+        Ok(Self { input_features, output_features })
+    }
+}
 
 cuda_export!(CandidateKernel = "libmir_cuda_output_refine_candidates"(
     logits: &DeviceBuffer<bf16>, output: &mut DeviceBuffer<u64>, vocab: u32,
@@ -147,4 +161,15 @@ fn launch(block_count: usize) -> Result<LaunchConfig> {
         block: (THREADS, 1, 1),
         shared_memory_bytes: 0,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Fp8OutputSpec;
+
+    #[test]
+    fn refinement_admits_a_half_block_tail_without_relaxing_other_output_paths() {
+        assert!(Fp8OutputSpec::new_refinement(2_880, 201_088).is_ok());
+        assert!(Fp8OutputSpec::new(2_880, 201_088).is_err());
+    }
 }

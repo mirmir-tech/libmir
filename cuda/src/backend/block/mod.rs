@@ -1,7 +1,7 @@
 mod batch;
 mod config;
 mod execution;
-mod experts;
+pub(in crate::backend) mod experts;
 mod graph;
 mod prefill;
 mod runner;
@@ -23,10 +23,13 @@ pub(in crate::backend) use runner::PreparedDecodeMoeBlock;
 pub use runner::{DecodeGraphAction, DecodeMoeBlockExecutor};
 pub use template::DecodeMoeLayerTemplate;
 
-use self::{experts::Experts, scratch::BlockScratch};
+use self::{
+    experts::{ExpertWeights, Experts},
+    scratch::BlockScratch,
+};
 use super::{
     Bf16Linear, Bf16LinearPair, Bf16LinearPairWeights, CudaBackend, DecodeAttentionBf16,
-    DecodeAttentionConfig, DecodeAttentionWeights, ExecutionPhase, GatedActivation, MoePlanRequest,
+    DecodeAttentionConfig, DecodeAttentionWeights, ExecutionPhase, GatedActivation,
     NvFp4ExpertBank, PagedKvCache, RmsNormBf16, RouterBf16, RouterTensors,
 };
 use crate::{
@@ -45,6 +48,7 @@ pub struct DecodeMoeBlockBf16 {
     router: RouterBf16,
     pre_expert_norm: RmsNormBf16,
     experts: Experts,
+    expert_weights: ExpertWeights,
     post_expert_norm: RmsNormBf16,
     post_feed_forward_norm: RmsNormBf16,
     hidden_ops: ElementwiseBf16,
@@ -75,36 +79,29 @@ impl DecodeMoeBlockBf16 {
         down: NvFp4ExpertBank,
     ) -> Result<Self> {
         let cache = backend.prepare_paged_kv(config.attention.layer, config.attention.cache)?;
-        Self::new_with_cache(backend, config, gate, up, down, cache)
+        Self::new_with_cache(
+            backend,
+            config,
+            &ExpertWeights::NvFp4 {
+                gate,
+                up,
+                down,
+                activation_mode: models::weights::BlockActivationMode::WeightAndActivation,
+            },
+            cache,
+        )
     }
 
-    pub(in crate::backend) fn new_with_cache(
+    pub(in crate::backend::block) fn new_with_cache(
         backend: &CudaBackend,
         config: DecodeMoeBlockConfig,
-        gate: NvFp4ExpertBank,
-        up: NvFp4ExpertBank,
-        down: NvFp4ExpertBank,
+        expert_weights: &ExpertWeights,
         cache: PagedKvCache,
     ) -> Result<Self> {
         validate(config)?;
         let hidden = config.attention.hidden_size;
         let epsilon = config.attention.rms_norm_epsilon;
-        let expert_bank = gate.config();
-        if expert_bank.experts != config.experts
-            || expert_bank.input_features != hidden
-            || expert_bank.output_features != config.expert_intermediate
-        {
-            return Err(Error::InvalidNvFp4("expert bank differs from block configuration"));
-        }
         trace::prepared(config);
-        let expert_plan = backend.execution_planner().plan_moe(MoePlanRequest::nvfp4(
-            ExecutionPhase::Decode,
-            1,
-            config.experts,
-            config.top_k,
-            hidden,
-            config.expert_intermediate,
-        ))?;
         let norm = || RmsNormBf16::new(backend, 1, hidden, epsilon);
         Ok(Self {
             attention: DecodeAttentionBf16::new_with_cache(backend, config.attention, cache)?,
@@ -129,14 +126,13 @@ impl DecodeMoeBlockBf16 {
             pre_expert_norm: norm()?,
             experts: Experts::new(
                 backend,
+                ExecutionPhase::Decode,
                 1,
                 config.top_k,
                 config.activation,
-                expert_plan.execution(),
-                gate,
-                up,
-                down,
+                expert_weights,
             )?,
+            expert_weights: expert_weights.clone(),
             post_expert_norm: norm()?,
             post_feed_forward_norm: norm()?,
             hidden_ops: ElementwiseBf16::compile(&backend.inner.compiler, hidden)?,

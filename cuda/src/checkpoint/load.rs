@@ -86,9 +86,10 @@ impl LayerSource<'_> {
 }
 
 fn upload(backend: &CudaBackend, source: &LayerSource<'_>) -> Result<CudaTensorSet> {
+    let cast = backend.prepare_dense_cast()?;
     let mut upload = backend.begin_tensor_upload();
     for tensor in &source.tensors {
-        upload.enqueue(tensor)?;
+        upload.enqueue_float_as_bf16(tensor, &cast)?;
     }
     upload.finish()
 }
@@ -101,7 +102,7 @@ fn bank(experts: usize, input: usize, output: usize) -> NvFp4ExpertBankConfig {
     }
 }
 
-fn weights<'a>(
+pub(super) fn weights<'a>(
     tensors: &'a CudaTensorSet,
     names: &[String],
     qkv: &'a Bf16LinearPackWeights<3>,
@@ -133,7 +134,7 @@ fn weights<'a>(
     })
 }
 
-fn tensor<'a>(tensors: &'a CudaTensorSet, name: &str) -> Result<&'a CudaTensor> {
+pub(super) fn tensor<'a>(tensors: &'a CudaTensorSet, name: &str) -> Result<&'a CudaTensor> {
     tensors.get(name).ok_or_else(|| Error::MissingTensor(name.into()))
 }
 

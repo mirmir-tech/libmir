@@ -113,6 +113,49 @@ impl NvFp4ExpertBank {
             config,
         })
     }
+
+    #[cfg(all(test, target_os = "linux"))]
+    pub(crate) fn synthetic_zero(
+        backend: &CudaBackend,
+        config: NvFp4ExpertBankConfig,
+    ) -> Result<Self> {
+        let matrix = config
+            .input_features
+            .checked_mul(config.output_features)
+            .and_then(|value| value.checked_mul(config.experts))
+            .ok_or(Error::InvalidNvFp4("synthetic expert bank size overflow"))?;
+        let scale_count = config
+            .experts
+            .checked_mul(scale_elements(config.output_features, config.input_features)?)
+            .ok_or(Error::InvalidNvFp4("synthetic expert scale size overflow"))?;
+        let weight = backend.inner.pool.allocate_zeroed(&backend.inner.stream, matrix / 2)?;
+        let scales = backend.inner.pool.allocate_zeroed(&backend.inner.stream, matrix / 16)?;
+        let mut cutlass_scales =
+            backend.inner.pool.allocate_zeroed(&backend.inner.stream, scale_count)?;
+        NvFp4GroupedPreparation::compile(&backend.inner.compiler)?.prepare_bank_scales(
+            &backend.inner.stream,
+            &scales,
+            &mut cutlass_scales,
+            BankScaleGeometry {
+                experts: config.experts,
+                rows: config.output_features,
+                columns: config.input_features,
+            },
+        )?;
+        let zero_scales =
+            || backend.inner.pool.allocate_zeroed(&backend.inner.stream, config.experts);
+        let bank = Self {
+            weight,
+            scales,
+            cutlass_scales,
+            global_scales: zero_scales()?,
+            input_scales: zero_scales()?,
+            combined_scales: zero_scales()?,
+            config,
+        };
+        backend.inner.stream.synchronize()?;
+        Ok(bank)
+    }
 }
 
 fn upload_scalars(backend: &CudaBackend, values: &[f32]) -> Result<DeviceBuffer<f32>> {

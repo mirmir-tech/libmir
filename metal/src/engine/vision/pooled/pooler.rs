@@ -1,11 +1,13 @@
+use models::weights::TensorBinding;
+
 use super::dimension;
-use crate::engine::{Array, DenseLinear, Dtype, Error, ModelTensors, Result, Stream};
+use crate::engine::{Array, Dtype, Error, ModelTensors, Result, Stream, binding::BoundLinear};
 
 #[derive(Debug)]
 pub(super) struct VisionPooler {
     bias: Option<Array>,
     scale: Option<Array>,
-    projection: DenseLinear,
+    projection: BoundLinear,
     hidden_size: usize,
     kernel: usize,
     eps: f32,
@@ -18,6 +20,7 @@ impl VisionPooler {
         kernel: usize,
         standardize: bool,
         eps: f32,
+        projection: &TensorBinding,
         stream: &Stream,
     ) -> Result<Self> {
         let (bias, scale) = if standardize {
@@ -31,11 +34,7 @@ impl VisionPooler {
         Ok(Self {
             bias,
             scale,
-            projection: DenseLinear::load(
-                tensors,
-                "model.embed_vision.embedding_projection",
-                stream,
-            )?,
+            projection: BoundLinear::load(tensors, projection, stream)?,
             hidden_size,
             kernel,
             eps,
@@ -103,7 +102,11 @@ impl VisionPooler {
         Ok(Self {
             bias: None,
             scale: None,
-            projection: DenseLinear::from_arrays(projection_weight, None, stream)?,
+            projection: BoundLinear::Dense(crate::engine::DenseLinear::from_arrays(
+                projection_weight,
+                None,
+                stream,
+            )?),
             hidden_size,
             kernel,
             eps,

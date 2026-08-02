@@ -13,6 +13,8 @@ use crate::{
 mod batch;
 mod config;
 pub(in crate::backend) mod graph;
+mod mxfp4;
+mod mxfp8;
 mod output;
 mod prefill;
 mod qkv;

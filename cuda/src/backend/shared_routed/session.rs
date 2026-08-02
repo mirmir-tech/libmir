@@ -5,21 +5,24 @@ use runtime::{backend::SamplingLogits, kv::BlockTable};
 use uuid::Uuid;
 
 use super::{
-    CudaSharedRoutedLayerState, CudaSharedRoutedModelTemplate, plan::SharedRoutedExecutionPlan,
+    CudaSharedRoutedLayerState, CudaSharedRoutedModelTemplate,
+    boundary::{SharedRoutedEmbedding, SharedRoutedOutputHead},
+    plan::SharedRoutedExecutionPlan,
 };
 use crate::{
-    CudaAffineOutputHead, CudaBackend, DeviceSamplerBf16, Error, Result,
+    CudaBackend, DeviceSamplerBf16, Error, Result,
     kernels::{SelectRowBf16, ShiftedRmsNorm},
 };
 
-/// One mutable CUDA session for an affine shared-routed mixed-mixer model.
+/// One mutable CUDA session for a dense or affine shared-routed mixed-mixer
+/// model.
 pub struct CudaSharedRoutedModelSession {
     template: CudaSharedRoutedModelTemplate,
-    embedding: crate::AffineQuantizedEmbedding,
+    embedding: SharedRoutedEmbedding,
     states: Vec<CudaSharedRoutedLayerState>,
     plans: HashMap<usize, SharedRoutedExecutionPlan>,
     final_norm: ShiftedRmsNorm,
-    output: CudaAffineOutputHead,
+    output: SharedRoutedOutputHead,
     sampler: DeviceSamplerBf16,
     select_row: SelectRowBf16,
     last_hidden: DeviceBuffer<bf16>,

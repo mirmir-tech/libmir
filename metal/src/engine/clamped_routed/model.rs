@@ -65,9 +65,9 @@ impl ClampedRoutedModel {
             windows,
             cache_step,
             config,
-            embedding: BoundEmbedding::load_binding(tensors, boundary.embedding)?,
+            embedding: BoundEmbedding::load(tensors, boundary.embedding, stream)?,
             final_norm: NormWeight::load_name(tensors, &boundary.final_norm.source)?,
-            output: BoundLinear::load_binding(tensors, boundary.output, stream)?,
+            output: BoundLinear::load(tensors, boundary.output, stream)?,
         })
     }
 

@@ -6,8 +6,10 @@ use super::*;
 
 #[test]
 fn matches_scalar_and_tensor_core_affine_prefill() -> Result<()> {
-    for (bits, tokens) in [(4, 2), (4, 64), (8, 64)] {
-        check(bits, tokens)?;
+    for bits in [2, 3, 4, 5, 6, 8] {
+        for tokens in [2, 64] {
+            check(bits, tokens)?;
+        }
     }
     Ok(())
 }
@@ -22,8 +24,7 @@ fn check(bits: usize, tokens: usize) -> Result<()> {
     let weight_values = weights(bits);
     let input = copy_device(&context, &stream, &pool, &input_values)?;
     let weight = copy_device(&context, &stream, &pool, &weight_values)?;
-    let scales =
-        copy_device(&context, &stream, &pool, &[bf16::from_f32(0.5), bf16::from_f32(0.5)])?;
+    let scales = copy_device(&context, &stream, &pool, &[bf16::ONE; 2])?;
     let biases = copy_device(&context, &stream, &pool, &[bf16::ZERO; 2])?;
     let output_elements = tokens * 2;
     let mut output = pool.allocate_zeroed::<bf16>(&stream, output_elements)?;
@@ -72,13 +73,20 @@ fn input_values(tokens: usize) -> Vec<bf16> {
 }
 
 fn weights(bits: usize) -> Vec<u32> {
-    let values_per_word = 32 / bits;
-    let words_per_row = 64 / values_per_word;
-    let row_zero = (0..values_per_word).fold(0_u32, |word, lane| word | (2 << (lane * bits)));
-    let row_one = (0..values_per_word).fold(0_u32, |word, lane| word | (4 << (lane * bits)));
-    let mut values = vec![row_zero; words_per_row * 2];
-    values[words_per_row..].fill(row_one);
-    values
+    let values = [vec![1_u32; 64], vec![2_u32; 64]].concat();
+    pack(&values, bits)
+}
+
+fn pack(values: &[u32], bits: usize) -> Vec<u32> {
+    let mut packed = vec![0_u32; values.len() * bits / 32];
+    for (index, &value) in values.iter().enumerate() {
+        let bit = index * bits;
+        packed[bit / 32] |= value << (bit % 32);
+        if bit % 32 + bits > 32 {
+            packed[bit / 32 + 1] |= value >> (32 - bit % 32);
+        }
+    }
+    packed
 }
 
 fn copy_device<T: DeviceElement + Copy>(

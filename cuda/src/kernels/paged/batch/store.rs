@@ -56,4 +56,38 @@ impl PagedKvStore {
             ),
         )?)
     }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn execute_prefill_batch(
+        &self,
+        stream: &Stream,
+        keys: &DeviceBuffer<bf16>,
+        values: &DeviceBuffer<bf16>,
+        key_pages: &mut DeviceBuffer<u8>,
+        value_pages: &mut DeviceBuffer<u8>,
+        slot_mapping: &DeviceBuffer<u32>,
+        token_count: usize,
+    ) -> Result<()> {
+        let key_width = product(self.spec.kv_heads, self.spec.key_head_dim)?;
+        let value_width = product(self.spec.kv_heads, self.spec.value_head_dim)?;
+        require("prefill batch keys", product(token_count, key_width)?, keys.len())?;
+        require("prefill batch values", product(token_count, value_width)?, values.len())?;
+        require("prefill batch slots", token_count, slot_mapping.len())?;
+        let elements = product(token_count, key_width.max(value_width))?;
+        Ok(self.prefill_batch_kernel.launch(
+            stream,
+            LaunchConfig::for_elements(elements, 256)?,
+            (
+                keys,
+                values,
+                key_pages,
+                value_pages,
+                slot_mapping,
+                narrow(token_count)?,
+                narrow(self.spec.kv_heads)?,
+                narrow(self.spec.key_head_dim)?,
+                narrow(self.spec.value_head_dim)?,
+            ),
+        )?)
+    }
 }

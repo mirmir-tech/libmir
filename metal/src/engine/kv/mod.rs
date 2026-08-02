@@ -34,6 +34,7 @@ pub struct PagedKvContext {
     pub(crate) scratch: Arc<PagedAttentionScratch>,
     pub page_size: usize,
     pub context_tokens: usize,
+    pub(crate) fragmented: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,7 +155,7 @@ impl KvCache {
         Ok(Self {
             keys: clone_array(self.keys.as_ref())?,
             values: clone_array(self.values.as_ref())?,
-            pages: self.pages.as_ref().map(paged::PagedStore::snapshot).transpose()?,
+            pages: self.pages.as_ref().map(|pages| pages.snapshot_at(offset)).transpose()?,
             offset,
             capacity: self.capacity,
             write_index: self.write_index,
@@ -162,6 +163,15 @@ impl KvCache {
             max_context: self.max_context,
             reserve_tokens: self.reserve_tokens,
         })
+    }
+
+    pub(crate) const fn supports_prefix_offsets(&self) -> bool {
+        self.pages.is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn physical_page_count(&self) -> usize {
+        self.pages.as_ref().map_or(0, paged::PagedStore::page_count)
     }
 
     pub fn update(&mut self, keys: &Array, values: &Array, stream: &Stream) -> Result<KvContext> {

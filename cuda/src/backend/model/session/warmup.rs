@@ -15,13 +15,7 @@ impl CudaMoeModelSession {
         context_len: usize,
     ) -> Result<()> {
         let capacity = warmup_capacity(self.prefill_tokens.capacity(), cache, context_len)?;
-        let geometries = canonical_geometries(capacity);
-        for layer in &mut self.layers {
-            for tokens in &geometries {
-                layer.prepare_prefill(*tokens)?;
-            }
-        }
-        for tokens in geometries {
+        for tokens in canonical_geometries(capacity) {
             let prompt = vec![0; tokens];
             let table = block_table(tokens, cache)?;
             self.prefill_from_for_sampling(session_id, &prompt, 0, &table, SamplingLogits::None)?;

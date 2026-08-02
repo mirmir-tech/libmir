@@ -5,6 +5,7 @@ mod reference;
 mod selected;
 #[cfg(all(test, target_os = "linux"))]
 mod tests;
+mod weight_only;
 
 pub use bank::{NvFp4ExpertBank, NvFp4ExpertBankConfig, NvFp4ExpertSource};
 use mircuda::{DeviceBuffer, bf16};
@@ -12,6 +13,7 @@ pub use selected::{
     BucketedNvFp4MoeBf16, DirectNvFp4MoeBf16, GroupedNvFp4MoeBf16, HybridNvFp4MoeBf16,
     SelectedNvFp4LinearBf16, SelectedNvFp4MoeBf16, SelectedNvFp4TensorCoreMoeBf16,
 };
+pub use weight_only::{NvFp4WeightOnlyBf16Linear, NvFp4WeightOnlyWeight};
 
 use super::CudaBackend;
 use crate::{CudaTensor, Error, Result, kernels::NvFp4Spec};

@@ -1,24 +1,32 @@
 mod backend;
 mod batch;
+#[cfg(any(feature = "cuda", feature = "metal"))]
+mod generation;
 mod lifecycle;
 mod memory;
+mod prefill;
 mod select;
 mod tasks;
+mod telemetry;
 #[cfg(any(feature = "cuda", feature = "metal"))]
 mod vision;
 
 #[cfg(feature = "cuda")]
 use cuda::CudaEngine;
 use foundation::model::{BackendTarget, ModelManifest};
+#[cfg(any(feature = "cuda", feature = "metal"))]
+pub use generation::PrefillExecutionProfile;
+#[cfg(any(feature = "cuda", feature = "metal"))]
+pub use generation::{EngineGenerationStepOutput, EnginePrefillBatch};
 #[cfg(feature = "metal")]
 use metal::MetalBackend;
 #[cfg(not(any(feature = "cuda", feature = "metal")))]
 use runtime::RuntimeError;
 #[cfg(feature = "cuda")]
-use runtime::backend::{DecodeRequest, PrefillRequest};
+use runtime::backend::DecodeRequest;
 use runtime::{
     Result as RuntimeResult,
-    backend::{DecodeOutput, ModelHandle, PrefillOutput, SamplingLogits},
+    backend::{DecodeOutput, ModelHandle, SamplingLogits},
     kv::BlockTable,
     progress::ProgressEvent,
 };
@@ -66,18 +74,42 @@ impl Engine {
     }
 
     /// Enables or disables backend decode profiling where supported.
-    pub fn set_profile_decode(&self, enabled: bool) {
+    pub fn set_profile_decode(&self, enabled: bool) -> Result<()> {
         #[cfg(not(any(feature = "cuda", feature = "metal")))]
-        let _ = enabled;
-        #[cfg(all(feature = "cuda", not(feature = "metal")))]
         let _ = enabled;
         match &self.inner {
             #[cfg(feature = "cuda")]
-            EngineInner::Cuda(_) => {},
+            EngineInner::Cuda(cuda) => Ok(cuda.set_profile_decode(enabled)?),
             #[cfg(feature = "metal")]
-            EngineInner::Metal(metal) => metal.set_profile_decode(enabled),
+            EngineInner::Metal(metal) => {
+                metal.set_profile_decode(enabled);
+                Ok(())
+            },
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => {},
+            EngineInner::Unavailable => Ok(()),
+        }
+    }
+
+    #[cfg_attr(
+        not(feature = "metal"),
+        expect(
+            clippy::unnecessary_wraps,
+            reason = "Metal and CUDA builds share one startup-tuning interface"
+        )
+    )]
+    pub(crate) fn finish_startup_tuning(&self, model: &ModelHandle) -> Result<()> {
+        #[cfg(not(feature = "metal"))]
+        let _ = model;
+        match &self.inner {
+            #[cfg(feature = "cuda")]
+            EngineInner::Cuda(cuda) => {
+                cuda.finish_startup_tuning();
+                Ok(())
+            },
+            #[cfg(feature = "metal")]
+            EngineInner::Metal(metal) => Ok(metal.finish_startup_tuning(model)?),
+            #[cfg(not(any(feature = "cuda", feature = "metal")))]
+            EngineInner::Unavailable => Ok(()),
         }
     }
 
@@ -96,44 +128,6 @@ impl Engine {
             EngineInner::Metal(metal) => {
                 let mut mapped = |event| progress(metal_progress(event));
                 metal.load_model_with_progress(manifest, &mut mapped)
-            },
-            #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => unavailable(),
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    /// Prefills one session from token identifiers and its allocated cache
-    /// blocks.
-    pub fn prefill_tokens_with_progress(
-        &self,
-        model: &ModelHandle,
-        session_id: Uuid,
-        prompt_tokens: &[u32],
-        block_table: &BlockTable,
-        sampling: SamplingLogits,
-        progress: &mut dyn FnMut(ProgressEvent),
-    ) -> RuntimeResult<PrefillOutput> {
-        #[cfg(not(any(feature = "cuda", feature = "metal")))]
-        let _ = (&model, session_id, &prompt_tokens, &block_table, sampling, &progress);
-        match &self.inner {
-            #[cfg(feature = "cuda")]
-            EngineInner::Cuda(cuda) => Ok(cuda.prefill_with_progress(
-                &PrefillRequest {
-                    model: model.clone(),
-                    session_id,
-                    prompt_tokens: prompt_tokens.to_vec(),
-                    block_table: block_table.clone(),
-                    sampling_logits: sampling,
-                },
-                progress,
-            )?),
-            #[cfg(feature = "metal")]
-            EngineInner::Metal(metal) => {
-                let mut mapped = |event| progress(metal_progress(event));
-                metal.prefill_tokens_with_progress(
-                    model, session_id, prompt_tokens, block_table, sampling, &mut mapped,
-                )
             },
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
             EngineInner::Unavailable => unavailable(),

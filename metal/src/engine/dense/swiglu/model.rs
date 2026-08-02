@@ -1,11 +1,12 @@
 use models::{layout::DecoderConfig, weights::WeightBindingPlan};
 
-use super::{config::DenseSwiGluLayerConfig, layer::DenseSwiGluLayer};
+use super::{
+    config::DenseSwiGluLayerConfig,
+    layer::DenseSwiGluLayer,
+    projection::{BoundEmbedding, BoundLinear},
+};
 use crate::engine::{
-    Array, DecoderCache, ModelTensors, NormWeight, QuantizedEmbedding, QuantizedLinear, Result,
-    Stream,
-    binding::{affine_embedding, affine_linear},
-    decode_graph,
+    Array, DecoderCache, ModelTensors, NormWeight, Result, Stream, decode_graph,
     decoder::{LayerContext, LayerLoopOptions, forward_layers},
     lowering::{FeedForwardLowering, LayerLowering, MixerLowering},
 };
@@ -14,7 +15,7 @@ use crate::engine::{
 pub struct DenseSwiGluModel {
     pub(super) layers: Vec<DenseSwiGluLayer>,
     cache_step: usize,
-    pub(super) embedding: QuantizedEmbedding,
+    pub(super) embedding: BoundEmbedding,
     pub(super) output_projection: OutputProjection,
     pub(super) final_norm: NormWeight,
 }
@@ -22,7 +23,7 @@ pub struct DenseSwiGluModel {
 #[derive(Debug)]
 pub(super) enum OutputProjection {
     TiedEmbedding,
-    Linear(QuantizedLinear),
+    Linear(BoundLinear),
 }
 
 impl DenseSwiGluModel {
@@ -31,7 +32,6 @@ impl DenseSwiGluModel {
         decoder: &DecoderConfig,
         bindings: &WeightBindingPlan,
         lowering: &[LayerLowering],
-        group_size: usize,
         cache_step: usize,
         stream: &Stream,
     ) -> Result<Self> {
@@ -47,7 +47,7 @@ impl DenseSwiGluModel {
         }
         let mut layers = Vec::with_capacity(decoder.num_hidden_layers);
         for (index, lowered) in lowering.iter().enumerate() {
-            let config = DenseSwiGluLayerConfig::from_decoder(decoder, group_size)?;
+            let config = DenseSwiGluLayerConfig::from_decoder(decoder)?;
             layers.push(DenseSwiGluLayer::load(
                 tensors,
                 bindings.dense_decoder_layer(index)?,
@@ -60,12 +60,12 @@ impl DenseSwiGluModel {
         let output_projection = if decoder.tie_word_embeddings {
             OutputProjection::TiedEmbedding
         } else {
-            OutputProjection::Linear(affine_linear(tensors, boundary.output)?)
+            OutputProjection::Linear(BoundLinear::load(tensors, boundary.output, stream)?)
         };
         Ok(Self {
             layers,
             cache_step,
-            embedding: affine_embedding(tensors, boundary.embedding)?,
+            embedding: BoundEmbedding::load(tensors, boundary.embedding, stream)?,
             output_projection,
             final_norm: NormWeight::load_name(tensors, &boundary.final_norm.source)?,
         })
@@ -102,6 +102,16 @@ impl DenseSwiGluModel {
         self.forward_hidden(token_ids, cache, position, true, stream)
     }
 
+    pub fn forward_prefill_state(
+        &self,
+        token_ids: &Array,
+        cache: &mut DecoderCache,
+        position: i32,
+        stream: &Stream,
+    ) -> Result<Array> {
+        self.forward_layers(token_ids, cache, position, true, stream)
+    }
+
     fn forward_hidden(
         &self,
         token_ids: &Array,
@@ -110,8 +120,38 @@ impl DenseSwiGluModel {
         causal: bool,
         stream: &Stream,
     ) -> Result<Array> {
+        let hidden = self.forward_layers(token_ids, cache, position, causal, stream)?;
+        let hidden = self.final_norm.apply(&hidden, 1.0e-6, stream)?;
+        match &self.output_projection {
+            OutputProjection::TiedEmbedding => self.embedding.project(&hidden, stream),
+            OutputProjection::Linear(output_head) => output_head.forward(&hidden, stream),
+        }
+    }
+
+    fn forward_layers(
+        &self,
+        token_ids: &Array,
+        cache: &mut DecoderCache,
+        position: i32,
+        causal: bool,
+        stream: &Stream,
+    ) -> Result<Array> {
         let hidden = self.embedding.lookup(token_ids, stream)?;
-        let hidden = forward_layers(
+        let shape = token_ids.shape()?;
+        let batch = usize::try_from(shape[0])?;
+        let sequence = usize::try_from(shape[1])?;
+        let position_tokens = usize::try_from(position)?;
+        let evaluation_step = causal
+            .then(|| {
+                crate::engine::decoder::prefill_evaluation_step(
+                    batch,
+                    sequence,
+                    position_tokens,
+                    self.layers.len(),
+                )
+            })
+            .flatten();
+        forward_layers(
             &self.layers,
             hidden,
             cache,
@@ -122,13 +162,8 @@ impl DenseSwiGluModel {
                 image: None,
                 stream,
             },
-            LayerLoopOptions::disabled(),
-        )?;
-        let hidden = self.final_norm.apply(&hidden, 1.0e-6, stream)?;
-        match &self.output_projection {
-            OutputProjection::TiedEmbedding => self.embedding.project(&hidden, stream),
-            OutputProjection::Linear(output_head) => output_head.forward(&hidden, stream),
-        }
+            LayerLoopOptions::new(false, evaluation_step, false),
+        )
     }
 
     #[must_use]

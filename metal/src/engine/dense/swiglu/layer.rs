@@ -1,8 +1,11 @@
+use std::time::Instant;
+
 use super::{attention, config::DenseSwiGluLayerConfig, weights::DenseSwiGluWeights};
 use crate::engine::{
     Array, DecoderCache, Error, FusedAttention, FusedGateUp, KvCache, ModelTensors, Result, Stream,
     decoder::{LayerContext, LoweredLayer, LoweredPackedLayer, MixerKind},
     fusion_planner::{FusionPlanner, ProjectionBiases},
+    gate_up_tuning,
     lowering::LayerLowering,
 };
 
@@ -34,7 +37,7 @@ impl LoweredLayer for DenseSwiGluLayer {
     }
 
     fn forward_feed_forward(&self, input: &Array, context: LayerContext<'_>) -> Result<Array> {
-        self.feed_forward(input, context.stream)
+        self.feed_forward(input, context.causal, context.stream)
     }
 }
 
@@ -120,6 +123,7 @@ impl DenseSwiGluLayer {
         causal: bool,
         stream: &Stream,
     ) -> Result<Array> {
+        let started = profile_started(stream);
         let normalized = self.weights.input_norm.apply(input, self.config.rms_norm_eps, stream)?;
         let attention = attention::forward(
             &normalized,
@@ -128,10 +132,13 @@ impl DenseSwiGluLayer {
             self.config,
             attention::AttentionContext { cache, position, causal, stream },
         )?;
-        input.add(&attention, stream)
+        let output = input.add(&attention, stream)?;
+        emit_profile(&output, stream, "attention", causal, started)?;
+        Ok(output)
     }
 
-    fn feed_forward(&self, input: &Array, stream: &Stream) -> Result<Array> {
+    fn feed_forward(&self, input: &Array, causal: bool, stream: &Stream) -> Result<Array> {
+        let started = profile_started(stream);
         let normalized =
             self.weights
                 .post_attention_norm
@@ -139,22 +146,51 @@ impl DenseSwiGluLayer {
         let fused = (input.shape()?.get(1) == Some(&1))
             .then_some(self.fused_gate_up.as_ref())
             .flatten();
-        let (gate, up) = fused.map_or_else(
-            || {
-                Ok((
-                    self.weights.mlp.gate.forward(&normalized, stream)?,
-                    self.weights.mlp.up.forward(&normalized, stream)?,
-                ))
-            },
-            |fused| fused.forward_pair(&normalized, stream),
+        let (gate, up) = gate_up_tuning::forward(
+            &self.weights.mlp.gate,
+            &self.weights.mlp.up,
+            fused,
+            &normalized,
+            stream,
         )?;
         let activated = gate.silu_mul(&up, stream)?;
         let feed_forward = self.weights.mlp.down.forward(&activated, stream)?;
-        input.add(&feed_forward, stream)
+        let output = input.add(&feed_forward, stream)?;
+        emit_profile(&output, stream, "feed_forward", causal, started)?;
+        Ok(output)
     }
 
     pub(super) fn fusion_summary(&self) -> (bool, bool) {
         (self.fused_attention.is_some(), self.fused_gate_up.is_some())
     }
+}
+
+fn profile_started(stream: &Stream) -> Option<Instant> {
+    stream.config().diagnostics.profile_components.then(Instant::now)
+}
+
+fn emit_profile(
+    output: &Array,
+    stream: &Stream,
+    component: &str,
+    causal: bool,
+    started: Option<Instant>,
+) -> Result<()> {
+    let Some(started) = started else {
+        return Ok(());
+    };
+    output.async_eval()?;
+    stream.synchronize()?;
+    tracing::debug!(
+        component,
+        phase = if causal {
+            "prefill"
+        } else {
+            "decode"
+        },
+        milliseconds = started.elapsed().as_secs_f64() * 1_000.0,
+        "MLX dense component profile"
+    );
+    Ok(())
 }
 use models::weights::DenseDecoderLayerBindings;

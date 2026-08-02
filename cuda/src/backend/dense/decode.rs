@@ -77,6 +77,7 @@ impl DecodeDenseSwiGlu {
             &mut self.scratch.residual,
         )?;
         let separate = self.gate_up.execute(
+            &self.stream,
             &self.scratch.residual,
             &self.post_attention_norm,
             weights.post_attention_norm,
@@ -112,8 +113,12 @@ impl DecodeDenseSwiGlu {
             )?;
         }
         if !fused_down {
-            self.down
-                .execute(&self.scratch.activated, weights.down, &mut self.scratch.mlp)?;
+            self.down.execute(
+                &self.stream,
+                &self.scratch.activated,
+                weights.down,
+                &mut self.scratch.mlp,
+            )?;
         }
         self.hidden_ops
             .add(&self.stream, &self.scratch.residual, &self.scratch.mlp, output)

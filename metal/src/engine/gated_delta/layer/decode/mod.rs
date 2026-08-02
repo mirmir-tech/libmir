@@ -4,7 +4,9 @@ use mirtal::{
 };
 
 use super::{GatedDeltaLayer, GatedDeltaLayerConfig};
-use crate::engine::{GatedDeltaState, Result, Stream, kernels::new_gated_delta_decode_kernel};
+use crate::engine::{
+    GatedDeltaState, Result, Stream, kernels::gated_delta::new_gated_delta_decode_kernel,
+};
 
 mod batch;
 
@@ -31,13 +33,28 @@ struct Linear {
 }
 
 impl CompiledDecode {
-    pub(super) fn new(layer: &GatedDeltaLayer, stream: &Stream) -> Result<Self> {
+    pub(super) fn new(layer: &GatedDeltaLayer, stream: &Stream) -> Result<Option<Self>> {
+        let Some(qkv) = layer.in_proj_qkv.as_affine() else {
+            return Ok(None);
+        };
+        let Some(gate) = layer.in_proj_z.as_affine() else {
+            return Ok(None);
+        };
+        let Some(beta) = layer.in_proj_b.as_affine() else {
+            return Ok(None);
+        };
+        let Some(alpha) = layer.in_proj_a.as_affine() else {
+            return Ok(None);
+        };
+        let Some(output) = layer.out_proj.as_affine() else {
+            return Ok(None);
+        };
         let weights = Weights {
-            qkv: Linear::new(&layer.in_proj_qkv)?,
-            gate: Linear::new(&layer.in_proj_z)?,
-            beta: Linear::new(&layer.in_proj_b)?,
-            alpha: Linear::new(&layer.in_proj_a)?,
-            output: Linear::new(&layer.out_proj)?,
+            qkv: Linear::new(qkv)?,
+            gate: Linear::new(gate)?,
+            beta: Linear::new(beta)?,
+            alpha: Linear::new(alpha)?,
+            output: Linear::new(output)?,
             convolution: layer.conv_weight.native().clone(),
             norm: layer.norm_weight.native_clone(),
             a_log: layer.a_log.native().clone(),
@@ -48,7 +65,7 @@ impl CompiledDecode {
         let graph = stream.native().compile(CompileOptions::default(), move |graph, inputs| {
             build(graph, inputs, &weights, config, &kernel)
         })?;
-        Ok(Self { graph })
+        Ok(Some(Self { graph }))
     }
 
     pub(super) fn forward(

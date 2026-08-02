@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
 use models::weights::{
-    BlockFormat, HybridMoeExpertBindings, HybridMoeLayerBindings, TensorBinding, TensorCatalog,
-    TensorInfo, TensorStorage,
+    BlockQuantization, HybridMoeExpertBindings, HybridMoeLayerBindings, TensorBinding,
+    TensorCatalog, TensorInfo, TensorStorage,
 };
 
 use crate::{Error, NvFp4ExpertSource, Result};
@@ -43,7 +43,7 @@ impl<'a> LayerSource<'a> {
     }
 }
 
-fn common<'a>(bindings: &'a HybridMoeLayerBindings<'a>) -> Vec<&'a TensorBinding> {
+pub(super) fn common<'a>(bindings: &'a HybridMoeLayerBindings<'a>) -> Vec<&'a TensorBinding> {
     vec![
         bindings.input_norm,
         bindings.attention.query,
@@ -80,7 +80,7 @@ fn expert_source<'a>(
     binding: &TensorBinding,
 ) -> Result<NvFp4ExpertSource<'a>> {
     let TensorStorage::BlockQuantized {
-        format: BlockFormat::NvFp4,
+        format: BlockQuantization::NVFP4,
         scales,
         global_scale: Some(global_scale),
         input_scale: Some(input_scale),

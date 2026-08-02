@@ -80,6 +80,7 @@ impl HybridLinearMoeLayer {
             decoder
                 .top_k_experts
                 .ok_or_else(|| Error::InvalidModel("missing MoE top-k".into()))?,
+            decoder.moe_intermediate_size.unwrap_or(decoder.intermediate_size),
         )?;
         Ok(Self {
             index,

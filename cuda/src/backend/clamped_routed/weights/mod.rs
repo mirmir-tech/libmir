@@ -6,12 +6,17 @@ use super::{
     ClampedRoutedConfig,
     layout::ClampedRoutedLayout,
     projection::{
-        ClampedRoutedBoundaryProjection, ClampedRoutedLinearWeight, ClampedRoutedQkvWeight,
+        ClampedRoutedBoundaryProjection, ClampedRoutedLinearWeight, ClampedRoutedOutputProjection,
+        ClampedRoutedQkvWeight,
     },
     validation::validate_common,
 };
-use crate::{AffineQuantizedWeight, CudaBackend, CudaTensor, CudaTensorSet, Error, Result};
+use crate::{
+    AffineQuantizedWeight, CudaBackend, CudaTensor, CudaTensorSet, Error, Result,
+    backend::output::CudaOutputHeadTemplate,
+};
 
+mod dense;
 mod mlx;
 mod native;
 
@@ -32,6 +37,7 @@ pub(super) struct ClampedRoutedLayerWeights {
 pub(super) enum ClampedRoutedExpertWeights {
     Native(Box<NativeExpertWeights>),
     Mlx(Box<MlxExpertWeights>),
+    Dense(Box<crate::backend::linear::DenseExpertWeights>),
 }
 
 #[derive(Clone)]
@@ -58,18 +64,27 @@ pub(super) struct MlxExpertWeights {
 }
 
 pub(super) fn boundary(
+    backend: &CudaBackend,
     layout: ClampedRoutedLayout,
     tensors: &CudaTensorSet,
     bindings: DecoderBoundaryBindings<'_>,
     config: ClampedRoutedConfig,
-) -> Result<(ClampedRoutedBoundaryProjection, CudaTensor, ClampedRoutedBoundaryProjection)> {
+) -> Result<(ClampedRoutedBoundaryProjection, CudaTensor, ClampedRoutedOutputProjection)> {
     let norm = tensor(tensors, &bindings.final_norm.source)?;
     match layout {
-        ClampedRoutedLayout::Native => Ok((
-            ClampedRoutedBoundaryProjection::Native(tensor(tensors, &bindings.embedding.source)?),
-            norm,
-            ClampedRoutedBoundaryProjection::Native(tensor(tensors, &bindings.output.source)?),
-        )),
+        ClampedRoutedLayout::Native | ClampedRoutedLayout::Dense => {
+            let output = tensor(tensors, &bindings.output.source)?;
+            Ok((
+                ClampedRoutedBoundaryProjection::Native(tensor(
+                    tensors,
+                    &bindings.embedding.source,
+                )?),
+                norm,
+                ClampedRoutedOutputProjection::Native(Box::new(CudaOutputHeadTemplate::prepare(
+                    backend, output, config.hidden, config.vocab,
+                )?)),
+            ))
+        },
         ClampedRoutedLayout::Mlx => {
             let embedding = affine(tensors, bindings.embedding)?;
             let output = affine(tensors, bindings.output)?;
@@ -78,7 +93,7 @@ pub(super) fn boundary(
             Ok((
                 ClampedRoutedBoundaryProjection::Mlx(embedding),
                 norm,
-                ClampedRoutedBoundaryProjection::Mlx(output),
+                ClampedRoutedOutputProjection::Mlx(Box::new(output)),
             ))
         },
     }
@@ -110,6 +125,7 @@ pub(super) fn layer(
     let (qkv, output, router, experts) = match layout {
         ClampedRoutedLayout::Native => native::load(backend, config, tensors, bindings)?,
         ClampedRoutedLayout::Mlx => mlx::load(config, tensors, bindings)?,
+        ClampedRoutedLayout::Dense => dense::load(backend, config, tensors, bindings)?,
     };
     Ok(ClampedRoutedLayerWeights {
         input_norm,
@@ -129,11 +145,16 @@ pub(super) fn layer(
 
 fn binding_bias(tensors: &CudaTensorSet, binding: &TensorBinding) -> Result<CudaTensor> {
     let name = match &binding.storage {
-        TensorStorage::Dense { bias, .. } | TensorStorage::BlockQuantized { bias, .. } => {
-            bias.as_deref()
-        },
+        TensorStorage::Dense { bias, .. }
+        | TensorStorage::Float8 { bias, .. }
+        | TensorStorage::BlockQuantized { bias, .. } => bias.as_deref(),
         TensorStorage::AffineQuantized { output_bias, .. } => output_bias.as_deref(),
-        TensorStorage::PackedInt8 { .. } | TensorStorage::Auxiliary { .. } => None,
+        TensorStorage::PackedInt8 { .. }
+        | TensorStorage::PackedInt4 { .. }
+        | TensorStorage::Awq { .. }
+        | TensorStorage::Gptq { .. }
+        | TensorStorage::BitsAndBytes4Bit { .. }
+        | TensorStorage::Auxiliary { .. } => None,
     }
     .ok_or_else(|| Error::MissingTensor(format!("bias for logical tensor {}", binding.source)))?;
     tensor(tensors, name)

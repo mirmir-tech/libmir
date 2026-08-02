@@ -27,6 +27,7 @@ pub(in crate::backend::clamped_routed) enum ClampedRoutedQkv {
     },
     Mlx {
         operations: Box<[AffineProjection; 3]>,
+        weights: Box<[AffineQuantizedWeight; 3]>,
         biases: [CudaTensor; 3],
     },
 }
@@ -42,7 +43,10 @@ pub(in crate::backend::clamped_routed) enum ClampedRoutedLinear {
         operation: Bf16Projection,
         weight: CudaTensor,
     },
-    Mlx(AffineProjection),
+    Mlx {
+        operation: AffineProjection,
+        weight: AffineQuantizedWeight,
+    },
 }
 
 impl ClampedRoutedQkv {
@@ -82,6 +86,7 @@ impl ClampedRoutedQkv {
                     affine(backend, tokens, config.hidden, outputs[1], &weights[1])?,
                     affine(backend, tokens, config.hidden, outputs[2], &weights[2])?,
                 ]),
+                weights: weights.clone(),
                 biases: weight.biases.clone(),
             }),
             _ => Err(crate::Error::InvalidExecutionPlan(
@@ -95,7 +100,6 @@ impl ClampedRoutedQkv {
         kernels: &ClampedRoutedKernels,
         stream: &Stream,
         scratch: &mut ClampedRoutedScratch,
-        start: usize,
     ) -> Result<()> {
         match self {
             Self::Native { operation, weights, biases } => {
@@ -107,13 +111,15 @@ impl ClampedRoutedQkv {
                     &mut scratch.query,
                     &mut scratch.key,
                     &mut scratch.value,
-                    start,
+                    &scratch.rope_sines,
+                    &scratch.rope_cosines,
+                    scratch.rope_concentration,
                 )
             },
-            Self::Mlx { operations, biases } => {
-                operations[0].execute(&scratch.normalized, &mut scratch.raw_query)?;
-                operations[1].execute(&scratch.normalized, &mut scratch.raw_key)?;
-                operations[2].execute(&scratch.normalized, &mut scratch.raw_value)?;
+            Self::Mlx { operations, weights, biases } => {
+                operations[0].execute(&scratch.normalized, &weights[0], &mut scratch.raw_query)?;
+                operations[1].execute(&scratch.normalized, &weights[1], &mut scratch.raw_key)?;
+                operations[2].execute(&scratch.normalized, &weights[2], &mut scratch.raw_value)?;
                 kernels.qkv_mlx(
                     stream,
                     [&scratch.raw_query, &scratch.raw_key, &scratch.raw_value],
@@ -121,7 +127,9 @@ impl ClampedRoutedQkv {
                     &mut scratch.query,
                     &mut scratch.key,
                     &mut scratch.value,
-                    start,
+                    &scratch.rope_sines,
+                    &scratch.rope_cosines,
+                    scratch.rope_concentration,
                 )
             },
         }
@@ -148,9 +156,10 @@ impl ClampedRoutedLinear {
                 })?,
                 weight: weight.clone(),
             }),
-            ClampedRoutedLinearWeight::Mlx(weight) => {
-                affine(backend, tokens, input, output, weight).map(Self::Mlx)
-            },
+            ClampedRoutedLinearWeight::Mlx(weight) => Ok(Self::Mlx {
+                operation: affine(backend, tokens, input, output, weight)?,
+                weight: weight.clone(),
+            }),
         }
     }
 
@@ -161,7 +170,7 @@ impl ClampedRoutedLinear {
     ) -> Result<()> {
         match self {
             Self::Native { operation, weight } => operation.execute(input, weight, output),
-            Self::Mlx(operation) => operation.execute(input, output),
+            Self::Mlx { operation, weight } => operation.execute(input, weight, output),
         }
     }
 }

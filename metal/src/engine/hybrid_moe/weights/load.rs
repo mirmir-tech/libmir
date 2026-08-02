@@ -3,11 +3,13 @@ use models::weights::{
     HybridMoeLayerBindings, HybridMoeRouterBindings, TensorBinding,
 };
 
-use super::{AttentionWeights, DenseWeights, ExpertWeights, LayerWeights, RouterWeights};
+use super::{
+    AttentionWeights, DenseWeights, ExpertGateUpWeights, ExpertWeights, LayerWeights, RouterWeights,
+};
 #[cfg(test)]
 use crate::engine::QuantizedLinear;
 use crate::engine::{
-    Array, Error, ModelTensors, NormWeight, Result, Stream, binding::affine_linear,
+    Array, Error, ModelTensors, NormWeight, Result, Stream, binding::BoundLinear,
     hybrid_moe::HybridMoeLayerConfig,
 };
 
@@ -28,9 +30,9 @@ impl LayerWeights {
             post_feed_forward_norm: norm(tensors, bindings.post_feed_forward_norm)?,
             layer_scalar: tensors.get(&bindings.layer_scale.source)?,
             attention: attention(tensors, bindings.attention, config, stream)?,
-            dense: dense(tensors, bindings.dense)?,
+            dense: dense(tensors, bindings.dense, stream)?,
             router: router(tensors, bindings.router, config, stream)?,
-            experts: experts(tensors, &bindings.experts)?,
+            experts: experts(tensors, &bindings.experts, stream)?,
         })
     }
 
@@ -75,13 +77,13 @@ fn attention(
         let binding = bindings.value.ok_or_else(|| {
             Error::InvalidModel("hybrid MoE attention value projection is unbound".into())
         })?;
-        Some(affine_linear(tensors, binding)?)
+        Some(BoundLinear::load(tensors, binding, stream)?)
     };
     Ok(AttentionWeights {
-        query: affine_linear(tensors, bindings.query)?,
-        key: affine_linear(tensors, bindings.key)?,
+        query: BoundLinear::load(tensors, bindings.query, stream)?,
+        key: BoundLinear::load(tensors, bindings.key, stream)?,
         value,
-        output: affine_linear(tensors, bindings.output)?,
+        output: BoundLinear::load(tensors, bindings.output, stream)?,
         query_norm: norm(tensors, bindings.query_norm)?,
         key_norm: norm(tensors, bindings.key_norm)?,
         rope_frequencies: config
@@ -91,11 +93,15 @@ fn attention(
     })
 }
 
-fn dense(tensors: &ModelTensors, bindings: HybridMoeDenseBindings<'_>) -> Result<DenseWeights> {
+fn dense(
+    tensors: &ModelTensors,
+    bindings: HybridMoeDenseBindings<'_>,
+    stream: &Stream,
+) -> Result<DenseWeights> {
     Ok(DenseWeights {
-        gate: affine_linear(tensors, bindings.gate)?,
-        up: affine_linear(tensors, bindings.up)?,
-        down: affine_linear(tensors, bindings.down)?,
+        gate: BoundLinear::load(tensors, bindings.gate, stream)?,
+        up: BoundLinear::load(tensors, bindings.up, stream)?,
+        down: BoundLinear::load(tensors, bindings.down, stream)?,
     })
 }
 
@@ -106,7 +112,7 @@ fn router(
     stream: &Stream,
 ) -> Result<RouterWeights> {
     Ok(RouterWeights {
-        projection: affine_linear(tensors, bindings.projection)?,
+        projection: BoundLinear::load(tensors, bindings.projection, stream)?,
         norm_scale: tensors
             .get(&bindings.norm_scale.source)?
             .multiply_scalar(config.router_norm_scale, stream)?,
@@ -117,14 +123,37 @@ fn router(
 fn experts(
     tensors: &ModelTensors,
     bindings: &HybridMoeExpertBindings<'_>,
+    stream: &Stream,
 ) -> Result<ExpertWeights> {
-    let HybridMoeExpertBindings::Stacked(bindings) = bindings else {
-        return Err(Error::InvalidModel(
-            "Metal hybrid MoE requires stacked expert bindings".into(),
-        ));
-    };
-    let weights = dense(tensors, *bindings)?;
-    Ok(weights.into())
+    match bindings {
+        HybridMoeExpertBindings::Stacked(bindings) => {
+            let weights = dense(tensors, *bindings, stream)?;
+            Ok(weights.into())
+        },
+        HybridMoeExpertBindings::FusedStacked { gate_up, down } => {
+            let output = gate_up.shape.get(1).copied().ok_or(Error::ShapeOverflow)?;
+            if !output.is_multiple_of(2) {
+                return Err(Error::InvalidModel("fused expert gate/up width must be even".into()));
+            }
+            Ok(ExpertWeights {
+                gate_up: ExpertGateUpWeights::Fused {
+                    projection: BoundLinear::load(tensors, gate_up, stream)?,
+                    width: output / 2,
+                    interleaved: gate_up.transforms.contains(
+                        &models::weights::BindingTransform::FusedGateUp { interleaved: true },
+                    ),
+                },
+                down: BoundLinear::load(tensors, down, stream)?,
+            })
+        },
+        HybridMoeExpertBindings::Individual { gate, up, down } => Ok(ExpertWeights {
+            gate_up: ExpertGateUpWeights::Separate {
+                gate: BoundLinear::load_nvfp4_bank(tensors, gate, stream)?,
+                up: BoundLinear::load_nvfp4_bank(tensors, up, stream)?,
+            },
+            down: BoundLinear::load_nvfp4_bank(tensors, down, stream)?,
+        }),
+    }
 }
 
 fn norm(tensors: &ModelTensors, binding: &TensorBinding) -> Result<NormWeight> {
@@ -143,8 +172,7 @@ fn rope_frequencies(config: HybridMoeLayerConfig, stream: &Stream) -> Result<Arr
 impl From<DenseWeights> for ExpertWeights {
     fn from(weights: DenseWeights) -> Self {
         Self {
-            gate: weights.gate,
-            up: weights.up,
+            gate_up: ExpertGateUpWeights::Separate { gate: weights.gate, up: weights.up },
             down: weights.down,
         }
     }
@@ -209,6 +237,6 @@ fn legacy_linear(
     prefix: &str,
     name: &str,
     group: i32,
-) -> Result<QuantizedLinear> {
-    QuantizedLinear::load(tensors, &format!("{prefix}.{name}"), group)
+) -> Result<BoundLinear> {
+    QuantizedLinear::load(tensors, &format!("{prefix}.{name}"), group).map(BoundLinear::Affine)
 }

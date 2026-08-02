@@ -35,6 +35,55 @@ pub enum RoutedExpertBindings<'a> {
         up: &'a TensorBinding,
         down: &'a TensorBinding,
     },
+    Individual {
+        tensors: &'a [TensorBinding],
+        layer: usize,
+    },
+}
+
+impl<'a> RoutedExpertBindings<'a> {
+    #[must_use]
+    pub fn individual(self, projection: ExpertProjectionRole) -> Vec<&'a TensorBinding> {
+        let Self::Individual { tensors, layer } = self else {
+            return Vec::new();
+        };
+        let mut found =
+            tensors
+                .iter()
+                .filter_map(|binding| match binding.role {
+                    LogicalTensorRole::Layer {
+                        index,
+                        tensor:
+                            LayerTensorRole::ExpertProjection {
+                                expert: Some(expert),
+                                projection: value,
+                            },
+                    } if index == layer && value == projection => Some((expert, binding)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+        found.sort_by_key(|(expert, _)| *expert);
+        found.into_iter().map(|(_, binding)| binding).collect()
+    }
+
+    pub(super) fn bindings(self) -> Vec<&'a TensorBinding> {
+        match self {
+            Self::InterleavedGateUp { gate_up, down } => vec![gate_up, down],
+            Self::SeparateGateUp { gate, up, down } => vec![gate, up, down],
+            Self::Individual { tensors, layer } => tensors
+                .iter()
+                .filter(|binding| {
+                    matches!(
+                        binding.role,
+                        LogicalTensorRole::Layer {
+                            index,
+                            tensor: LayerTensorRole::ExpertProjection { expert: Some(_), .. },
+                        } if index == layer
+                    )
+                })
+                .collect(),
+        }
+    }
 }
 
 impl WeightBindingPlan {
@@ -97,28 +146,32 @@ impl<'a> RoutedDecoderLayerBindings<'a> {
             self.post_attention_norm,
             self.router,
         ];
-        match self.experts {
-            RoutedExpertBindings::InterleavedGateUp { gate_up, down } => {
-                bindings.extend([gate_up, down]);
-            },
-            RoutedExpertBindings::SeparateGateUp { gate, up, down } => {
-                bindings.extend([gate, up, down]);
-            },
-        }
+        bindings.extend(self.experts.bindings());
         sources(bindings)
     }
 }
 
 fn experts(plan: &WeightBindingPlan, index: usize) -> Result<RoutedExpertBindings<'_>> {
-    let down = expert(plan, index, ExpertProjectionRole::Down)?;
-    if let Some(gate_up) = optional_expert(plan, index, ExpertProjectionRole::GateUp) {
-        return Ok(RoutedExpertBindings::InterleavedGateUp { gate_up, down });
+    if let Some(down) = optional_expert(plan, index, ExpertProjectionRole::Down) {
+        if let Some(gate_up) = optional_expert(plan, index, ExpertProjectionRole::GateUp) {
+            return Ok(RoutedExpertBindings::InterleavedGateUp { gate_up, down });
+        }
+        return Ok(RoutedExpertBindings::SeparateGateUp {
+            gate: expert(plan, index, ExpertProjectionRole::Gate)?,
+            up: expert(plan, index, ExpertProjectionRole::Up)?,
+            down,
+        });
     }
-    Ok(RoutedExpertBindings::SeparateGateUp {
-        gate: expert(plan, index, ExpertProjectionRole::Gate)?,
-        up: expert(plan, index, ExpertProjectionRole::Up)?,
-        down,
-    })
+    let individual = RoutedExpertBindings::Individual { tensors: &plan.tensors, layer: index };
+    let gate = individual.individual(ExpertProjectionRole::Gate);
+    let up = individual.individual(ExpertProjectionRole::Up);
+    let down = individual.individual(ExpertProjectionRole::Down);
+    if gate.is_empty() || gate.len() != up.len() || gate.len() != down.len() {
+        return Err(ModelsError::InvalidConfig(format!(
+            "logical expert tensor roles are incomplete for layer {index}"
+        )));
+    }
+    Ok(individual)
 }
 
 fn attention(
@@ -166,6 +219,6 @@ fn required<'a>(
     })
 }
 
-fn sources<'a>(bindings: impl IntoIterator<Item = &'a TensorBinding>) -> Vec<&'a str> {
+pub(super) fn sources<'a>(bindings: impl IntoIterator<Item = &'a TensorBinding>) -> Vec<&'a str> {
     bindings.into_iter().flat_map(TensorBinding::physical_sources).collect()
 }

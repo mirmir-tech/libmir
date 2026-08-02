@@ -7,7 +7,7 @@ use super::{
 };
 use crate::{
     CudaBackend, Error, Result, RmsNormBf16,
-    kernels::{BatchedQkvPostprocess, QkvPostprocessSpec},
+    kernels::{BatchedQkvPostprocess, BatchedSplitAttentionWorkspace, QkvPostprocessSpec},
 };
 
 /// Fixed-shape attention for independent one-token decode rows.
@@ -73,6 +73,17 @@ impl BatchedDecodeAttentionBf16 {
         cache: PagedKvCache,
         weights: Option<DecodeAttentionWeights<'_>>,
     ) -> Result<Self> {
+        Self::new_with_cache_weights_workspace(backend, config, batch_size, cache, weights, None)
+    }
+
+    pub(in crate::backend) fn new_with_cache_weights_workspace(
+        backend: &CudaBackend,
+        config: DecodeAttentionConfig,
+        batch_size: usize,
+        cache: PagedKvCache,
+        weights: Option<DecodeAttentionWeights<'_>>,
+        workspace: Option<BatchedSplitAttentionWorkspace>,
+    ) -> Result<Self> {
         validate(config)?;
         if batch_size == 0 {
             return Err(Error::InvalidPagedKv("decode attention batch is empty"));
@@ -80,11 +91,13 @@ impl BatchedDecodeAttentionBf16 {
         if cache.layer() != config.layer || cache.storage_spec() != config.cache {
             return Err(Error::InvalidPagedKv("shared cache differs from batched attention"));
         }
-        let attention = backend.prepare_batched_paged_attention_bf16(
+        let attention = BatchedPagedAttentionBf16::new_with_workspace(
+            backend,
             &cache,
             config.query_heads,
             config.max_sequence_blocks,
             batch_size,
+            workspace,
         )?;
         let qkv_spec = QkvPostprocessSpec {
             tokens: batch_size,
@@ -164,7 +177,7 @@ impl BatchedDecodeAttentionBf16 {
             separate,
             weights.query_norm,
             weights.key_norm,
-            batch.token_counts(),
+            batch.positions(),
             &mut self.scratch.query_rope,
             &mut self.scratch.key_rope,
             &mut self.scratch.value_norm,

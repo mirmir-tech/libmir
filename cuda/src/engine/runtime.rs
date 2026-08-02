@@ -31,6 +31,7 @@ impl Backend for CudaEngine {
                 BackendCapability::SequenceScoring,
                 BackendCapability::Quantization("ModelOpt NVFP4".into()),
                 BackendCapability::Quantization("affine Int4/Int8".into()),
+                BackendCapability::Quantization("bitsandbytes NF4/FP4".into()),
             ],
         }
     }

@@ -38,6 +38,8 @@ pub struct GenerationConfig {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GenerationOverrides {
     pub max_tokens: Option<usize>,
+    pub min_tokens: Option<usize>,
+    pub ignore_eos: Option<bool>,
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,
     pub top_k: Option<usize>,
@@ -47,6 +49,8 @@ pub struct GenerationOverrides {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GenerationSettings {
     pub max_tokens: usize,
+    pub min_tokens: usize,
+    pub ignore_eos: bool,
     pub temperature: f32,
     pub top_p: f32,
     pub top_k: usize,
@@ -93,6 +97,8 @@ impl GenerationConfig {
         });
         let settings = GenerationSettings {
             max_tokens: overrides.max_tokens.or(self.max_tokens).unwrap_or(DEFAULT_MAX_TOKENS),
+            min_tokens: overrides.min_tokens.unwrap_or(0),
+            ignore_eos: overrides.ignore_eos.unwrap_or(false),
             temperature,
             top_p: overrides.top_p.or(self.top_p).unwrap_or(defaults.top_p),
             top_k: overrides.top_k.or(self.top_k).unwrap_or(defaults.top_k),
@@ -118,6 +124,12 @@ impl GenerationSettings {
         if let Some(value) = overrides.max_tokens {
             self.max_tokens = value;
         }
+        if let Some(value) = overrides.min_tokens {
+            self.min_tokens = value;
+        }
+        if let Some(value) = overrides.ignore_eos {
+            self.ignore_eos = value;
+        }
         if let Some(value) = overrides.temperature {
             self.temperature = value;
         }
@@ -137,6 +149,9 @@ impl GenerationSettings {
     fn validate(&self) -> Result<()> {
         if self.max_tokens == 0 {
             return Err(invalid("max_new_tokens must be greater than zero"));
+        }
+        if self.min_tokens > self.max_tokens {
+            return Err(invalid("min_tokens cannot exceed max_new_tokens"));
         }
         if !self.temperature.is_finite() || self.temperature < 0.0 {
             return Err(invalid("temperature must be finite and non-negative"));

@@ -20,8 +20,11 @@ use crate::{Error, Result, backend::CudaTextEmbeddingModel};
 
 mod generation;
 mod load;
+mod projection;
 
-pub(super) use generation::{GenerationExecution, PooledVisionPrefill, SpatialVisionPrefill};
+pub(super) use generation::{
+    GenerationExecution, PooledVisionPrefill, PrefillChunk, SpatialVisionPrefill,
+};
 
 pub(super) struct LoadedModel {
     pub manifest: ModelManifest,

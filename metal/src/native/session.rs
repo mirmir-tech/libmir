@@ -29,7 +29,7 @@ impl SessionState {
 
     pub(super) fn model_position(&self) -> crate::native::error::Result<usize> {
         let position = i64::try_from(self.position)? + i64::from(self.rope_position_delta);
-        usize::try_from(position).map_err(Into::into)
+        Ok(usize::try_from(position)?)
     }
 }
 

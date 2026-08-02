@@ -3,6 +3,7 @@ use std::collections::VecDeque;
 use super::{BlockHash, BlockId, BlockTable, KvBlock, PrefixCache};
 use crate::error::{Result, RuntimeError};
 
+mod pressure;
 mod probe;
 #[cfg(test)]
 mod tests;
@@ -57,6 +58,7 @@ impl KvCache {
     }
 
     pub fn allocate(&mut self) -> Result<BlockId> {
+        self.ensure_free_blocks(1)?;
         let id = self
             .free
             .pop_front()
@@ -94,8 +96,14 @@ impl KvCache {
             && old_hash != hash.0
         {
             let _removed = self.prefix.remove(old_hash);
+            let _released = self.release(block)?;
         }
-        self.prefix.insert(hash, block);
+        if let Some(replaced) = self.prefix.insert(hash, block)
+            && replaced != block
+        {
+            self.block_mut(replaced)?.hash = None;
+            let _released = self.release(replaced)?;
+        }
         Ok(hash)
     }
 
@@ -141,7 +149,9 @@ impl KvCache {
         let Some(block) = self.prefix.remove(hash.0) else {
             return Ok(false);
         };
-        self.release(block)
+        let released = self.release(block)?;
+        self.counters.evictions += 1;
+        Ok(released)
     }
 
     pub fn release_table(&mut self, table: &BlockTable) -> Result<usize> {
@@ -185,9 +195,7 @@ impl KvCache {
     }
 
     pub(crate) fn allocate_blocks(&mut self, count: usize) -> Result<BlockTable> {
-        if count > self.free.len() {
-            return Err(RuntimeError::KvCache("not enough free KV blocks".into()));
-        }
+        self.ensure_free_blocks(count)?;
         let mut table = BlockTable::with_block_size(self.config.block_size);
         for _ in 0..count {
             table.push(self.allocate()?);

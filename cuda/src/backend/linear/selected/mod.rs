@@ -1,3 +1,4 @@
+mod dense;
 mod gated;
 mod pair;
 mod reduce;
@@ -28,3 +29,5 @@ fn u32_tensor(tensor: &CudaTensor) -> Result<&DeviceBuffer<u32>> {
         expected: "U32",
     })
 }
+pub use dense::DenseExpertWeights;
+pub(in crate::backend) use dense::SelectedDenseMoeBf16;

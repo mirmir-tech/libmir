@@ -86,10 +86,10 @@ impl AffineGatedDeltaLayerConfig {
             convolution_kernel_size: self.convolution_kernel_size,
         };
         if self.hidden_size == 0
-            || self.group_size == 0
-            || !matches!(self.bits, 4 | 8)
-            || !self.hidden_size.is_multiple_of(self.group_size)
-            || !self.value_width()?.is_multiple_of(self.group_size)
+            || !valid_storage(self.group_size, self.bits)
+            || (self.group_size > 0
+                && (!self.hidden_size.is_multiple_of(self.group_size)
+                    || !self.value_width()?.is_multiple_of(self.group_size)))
             || !self.rms_norm_epsilon.is_finite()
             || self.rms_norm_epsilon < 0.0
             || !self.norm_weight_shift.is_finite()
@@ -106,6 +106,10 @@ impl AffineGatedDeltaLayerConfig {
         let _mixed = self.mixed_width()?;
         Ok(())
     }
+}
+
+const fn valid_storage(group_size: usize, bits: usize) -> bool {
+    (group_size == 0 && bits == 0) || (group_size > 0 && matches!(bits, 2 | 3 | 4 | 5 | 6 | 8))
 }
 
 #[derive(Clone, Debug)]

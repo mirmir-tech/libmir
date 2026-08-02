@@ -9,6 +9,8 @@ pub struct MemorySnapshot {
     pub active_bytes: u64,
     /// Reusable bytes retained by backend allocators.
     pub cached_bytes: u64,
+    /// Additional immediately free memory required by the backend allocator.
+    pub allocation_reserve_bytes: u64,
     /// Human-readable source of the memory figures.
     pub source: String,
     /// Whether host and accelerator share a unified memory pool.

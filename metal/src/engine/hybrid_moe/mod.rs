@@ -24,6 +24,8 @@ pub struct HybridMoeLayerConfig {
     pub use_k_eq_v: bool,
     pub rms_norm_eps: f32,
     pub top_k: i32,
+    pub expert_count: usize,
+    pub expert_intermediate: usize,
     pub group_size: i32,
     pub router_norm_scale: f32,
     pub max_context: Option<usize>,
@@ -58,6 +60,8 @@ impl HybridMoeLayerConfig {
             use_k_eq_v: layer_type == AttentionLayerType::Full && decoder.attention_k_eq_v,
             rms_norm_eps: decoder.rms_norm_eps.to_string().parse()?,
             top_k: i32::try_from(decoder.top_k_experts.unwrap_or(1))?,
+            expert_count: decoder.num_experts.unwrap_or(1),
+            expert_intermediate: decoder.moe_intermediate_size.unwrap_or(decoder.intermediate_size),
             group_size: i32::try_from(group_size)?,
             router_norm_scale,
             max_context: decoder.layer_sliding_window(layer_index),
@@ -74,7 +78,10 @@ impl HybridMoeLayerConfig {
             self.top_k,
             self.group_size,
         ];
-        if dimensions.into_iter().any(|dimension| dimension <= 0) {
+        if dimensions.into_iter().any(|dimension| dimension <= 0)
+            || self.expert_count == 0
+            || self.expert_intermediate == 0
+        {
             return Err(Error::InvalidModel(format!("non-positive dimensions: {self:?}")));
         }
         if !self.rope_base.is_finite()

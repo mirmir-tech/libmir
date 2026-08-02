@@ -1,11 +1,12 @@
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
 
 use super::{
-    Result,
+    Result, attention_tuning,
     compiled::CompiledGraphs,
+    gate_up_tuning::MetalTuner,
     kernels::{
         Kernels, MxFp4Shape, PageWriteOptions, PreparedPageWrite, PreparedQuantizedPageWrite,
         QuantizedPageWriteOptions,
@@ -18,6 +19,7 @@ pub struct Stream {
     compiled: CompiledGraphs,
     kernels: Kernels,
     config: Arc<crate::MetalConfig>,
+    pub(super) tuner: Mutex<MetalTuner>,
     graph_dumped: AtomicBool,
 }
 
@@ -38,11 +40,13 @@ impl Stream {
         let native = device.new_stream()?;
         let compiled = CompiledGraphs::new(&native)?;
         let kernels = Kernels::new()?;
+        let tuner = Mutex::new(MetalTuner::new(config.tuning.clone()));
         Ok(Self {
             native,
             compiled,
             kernels,
             config,
+            tuner,
             graph_dumped: AtomicBool::new(false),
         })
     }
@@ -55,8 +59,19 @@ impl Stream {
         &self.native
     }
 
+    pub(super) const fn kernels(&self) -> &Kernels {
+        &self.kernels
+    }
+
     pub(crate) fn config(&self) -> &crate::MetalConfig {
         &self.config
+    }
+
+    pub(crate) fn finish_startup_tuning(&self) {
+        self.tuner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .finish_startup();
     }
 
     pub(crate) fn take_graph_dump_path(&self) -> Option<&std::path::Path> {
@@ -141,8 +156,35 @@ impl Stream {
         context_tokens: usize,
         scale: f32,
     ) -> Result<mirtal::Array> {
+        attention_tuning::forward(
+            &self.kernels, inputs, scratch, page_size, context_tokens, scale, self,
+        )
+    }
+
+    pub(super) fn batched_paged_attention(
+        &self,
+        inputs: [&mirtal::Array; 20],
+        page_size: usize,
+        context_tokens: usize,
+        scale: f32,
+    ) -> Result<mirtal::Array> {
         self.kernels
-            .paged_attention(&self.native, inputs, scratch, page_size, context_tokens, scale)
+            .batched_paged_attention(&self.native, inputs, page_size, context_tokens, scale)
+    }
+
+    pub(super) fn expert_restore_reduce(
+        &self,
+        inputs: [&mirtal::Array; 3],
+    ) -> Result<mirtal::Array> {
+        self.kernels.expert_restore_reduce(&self.native, inputs)
+    }
+
+    pub(super) fn expert_group(
+        &self,
+        indices: &mirtal::Array,
+        experts: usize,
+    ) -> Result<[mirtal::Array; 2]> {
+        self.kernels.expert_group(&self.native, indices, experts)
     }
 
     pub(super) fn quantized_paged_attention(

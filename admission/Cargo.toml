@@ -1,0 +1,16 @@
+[package]
+name = "libmir-admission"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Hardware-free architecture admission contracts for libmir backends"
+repository.workspace = true
+
+[dependencies]
+models = { package = "libmir-models", version = "0.3.0", path = "../models" }
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

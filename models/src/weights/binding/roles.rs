@@ -6,6 +6,7 @@ pub enum LogicalTensorRole {
     Embedding,
     FinalNorm,
     Output,
+    VisionProjection,
     Layer { index: usize, tensor: LayerTensorRole },
     Auxiliary { path: String },
 }
@@ -96,6 +97,9 @@ pub(super) fn parse(name: &str) -> LogicalTensorRole {
         "embed_tokens.weight" => return LogicalTensorRole::Embedding,
         "norm.weight" => return LogicalTensorRole::FinalNorm,
         "lm_head.weight" => return LogicalTensorRole::Output,
+        "embed_vision.embedding_projection.weight" => {
+            return LogicalTensorRole::VisionProjection;
+        },
         _ => {},
     }
     let Some(remainder) = path.strip_prefix("layers.") else {
@@ -119,6 +123,7 @@ fn canonical_path(name: &str) -> String {
         .unwrap_or(name);
     path.strip_suffix("_blocks")
         .or_else(|| path.strip_suffix(".weight_packed"))
+        .or_else(|| path.strip_suffix(".qweight"))
         .map_or_else(|| path.to_owned(), |prefix| format!("{prefix}.weight"))
 }
 
@@ -163,15 +168,17 @@ fn layer(suffix: &str) -> LayerTensorRole {
         "mlp.experts.up_proj.weight" | "mlp.switch_mlp.up_proj.weight" => {
             expert(None, ExpertProjectionRole::Up)
         },
-        "mlp.experts.gate_up_proj.weight" | "mlp.switch_mlp.gate_up_proj.weight" => {
-            expert(None, ExpertProjectionRole::GateUp)
-        },
-        "mlp.experts.down_proj.weight" | "mlp.switch_mlp.down_proj.weight" => {
-            expert(None, ExpertProjectionRole::Down)
-        },
+        "mlp.experts.gate_up_proj.weight"
+        | "mlp.experts.gate_up_proj"
+        | "mlp.switch_mlp.gate_up_proj.weight"
+        | "experts.gate_up_proj" => expert(None, ExpertProjectionRole::GateUp),
+        "mlp.experts.down_proj.weight"
+        | "mlp.experts.down_proj"
+        | "mlp.switch_mlp.down_proj.weight"
+        | "experts.down_proj"
+        | "experts.switch_glu.down_proj.weight" => expert(None, ExpertProjectionRole::Down),
         "experts.switch_glu.gate_proj.weight" => expert(None, ExpertProjectionRole::Gate),
         "experts.switch_glu.up_proj.weight" => expert(None, ExpertProjectionRole::Up),
-        "experts.switch_glu.down_proj.weight" => expert(None, ExpertProjectionRole::Down),
         "mlp.shared_expert.gate_proj.weight" => shared(FeedForwardProjectionRole::Gate),
         "mlp.shared_expert.up_proj.weight" => shared(FeedForwardProjectionRole::Up),
         "mlp.shared_expert.down_proj.weight" => shared(FeedForwardProjectionRole::Down),

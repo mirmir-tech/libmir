@@ -12,8 +12,8 @@ const EXPERTS: usize = 3;
 const SELECTED: usize = 2;
 
 #[test]
-fn matches_selected_int4_and_int8_gate_up_projections() -> Result<()> {
-    for bits in [4, 8] {
+fn matches_selected_native_mlx_gate_up_projections() -> Result<()> {
+    for bits in [2, 3, 4, 5, 6, 8] {
         check_selected_pair(bits)?;
     }
     Ok(())
@@ -58,23 +58,22 @@ fn check_selected_pair(bits: usize) -> Result<()> {
     let mut host_up = backend.inner.context.allocate_pinned::<bf16>(output_elements)?;
     backend.inner.stream.copy_to_host(&gate_output, &mut host_gate)?;
     backend.inner.stream.copy_to_host(&up_output, &mut host_up)?;
-    assert_eq!(host_gate.to_vec()?, [192.0_f32, 256.0, 64.0, 128.0].map(bf16::from_f32));
-    assert_eq!(host_up.to_vec()?, [384.0_f32, 448.0, 128.0, 192.0].map(bf16::from_f32));
+    assert_eq!(host_gate.to_vec()?, [192.0_f32, 64.0, 64.0, 128.0].map(bf16::from_f32));
+    assert_eq!(host_up.to_vec()?, [64.0_f32, 128.0, 128.0, 192.0].map(bf16::from_f32));
     fs::remove_file(path)?;
     Ok(())
 }
 
 fn fixture(bits: usize) -> Result<(PathBuf, [TensorInfo; 6])> {
-    let values_per_word = 32 / bits;
-    let words_per_row = INPUT / values_per_word;
+    let words_per_row = INPUT * bits / 32;
     let mut bytes = Vec::new();
-    append_bank(&mut bytes, bits, words_per_row, false)?;
+    append_bank(&mut bytes, bits, false)?;
     let gate_weight_end = u64::try_from(bytes.len())?;
     append_bf16(&mut bytes, &[1.0; EXPERTS * OUTPUT]);
     let gate_scale_end = u64::try_from(bytes.len())?;
     append_bf16(&mut bytes, &[0.0; EXPERTS * OUTPUT]);
     let gate_bias_end = u64::try_from(bytes.len())?;
-    append_bank(&mut bytes, bits, words_per_row, true)?;
+    append_bank(&mut bytes, bits, true)?;
     let up_weight_end = u64::try_from(bytes.len())?;
     append_bf16(&mut bytes, &[1.0; EXPERTS * OUTPUT]);
     let up_scale_end = u64::try_from(bytes.len())?;
@@ -102,24 +101,33 @@ fn fixture(bits: usize) -> Result<(PathBuf, [TensorInfo; 6])> {
     Ok((path, infos))
 }
 
-fn append_bank(bytes: &mut Vec<u8>, bits: usize, words_per_row: usize, up: bool) -> Result<()> {
-    let values_per_word = 32 / bits;
+fn append_bank(bytes: &mut Vec<u8>, bits: usize, up: bool) -> Result<()> {
     for expert in 0..EXPERTS {
         for row in 0..OUTPUT {
             let value = if up {
-                2 * (expert + 1) + row
+                (expert + row + 1) % 3 + 1
             } else {
-                expert + row + 1
+                (expert + row) % 3 + 1
             };
             let value = u32::try_from(value)?;
-            let word =
-                (0..values_per_word).fold(0_u32, |word, lane| word | (value << (lane * bits)));
-            for _ in 0..words_per_row {
-                bytes.extend_from_slice(&word.to_le_bytes());
-            }
+            append_packed_row(bytes, value, bits);
         }
     }
     Ok(())
+}
+
+fn append_packed_row(bytes: &mut Vec<u8>, value: u32, bits: usize) {
+    let mut words = vec![0_u32; INPUT * bits / 32];
+    for index in 0..INPUT {
+        let bit = index * bits;
+        words[bit / 32] |= value << (bit % 32);
+        if bit % 32 + bits > 32 {
+            words[bit / 32 + 1] |= value >> (32 - bit % 32);
+        }
+    }
+    for word in words {
+        bytes.extend_from_slice(&word.to_le_bytes());
+    }
 }
 
 fn append_bf16(bytes: &mut Vec<u8>, values: &[f32]) {

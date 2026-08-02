@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{Error, Result};
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DecodeMoeBlockConfig {
     pub attention: DecodeAttentionConfig,
     pub dense_intermediate: usize,

@@ -5,8 +5,8 @@ use super::{
     scratch::GatedDeltaScratch,
 };
 use crate::{
-    CudaBackend, Error, GatedDeltaInputs, Result,
-    backend::linear::AffineProjection,
+    CudaBackend, DenseRole, Error, GatedDeltaInputs, Result,
+    backend::linear::CheckpointProjection,
     kernels::{GatedDeltaTransformSpec, GatedDeltaTransforms},
 };
 
@@ -15,11 +15,11 @@ pub struct CudaAffineGatedDeltaExecution {
     backend: CudaBackend,
     config: AffineGatedDeltaLayerConfig,
     tokens: usize,
-    qkv: AffineProjection,
-    gate: AffineProjection,
-    alpha: AffineProjection,
-    beta: AffineProjection,
-    output: AffineProjection,
+    qkv: CheckpointProjection,
+    gate: CheckpointProjection,
+    alpha: CheckpointProjection,
+    beta: CheckpointProjection,
+    output: CheckpointProjection,
     transforms: GatedDeltaTransforms,
     weights: AffineGatedDeltaLayerWeights,
     scratch: GatedDeltaScratch,
@@ -33,13 +33,12 @@ impl CudaAffineGatedDeltaExecution {
         tokens: usize,
     ) -> Result<Self> {
         let projection = |input, output, weights| {
-            AffineProjection::new(
+            CheckpointProjection::new(
                 backend,
                 tokens,
                 input,
                 output,
-                config.group_size,
-                config.bits,
+                DenseRole::AttentionQkv,
                 weights,
             )
         };
@@ -52,7 +51,14 @@ impl CudaAffineGatedDeltaExecution {
             gate: projection(config.hidden_size, value, &weights.gate)?,
             alpha: projection(config.hidden_size, config.value_heads, &weights.alpha)?,
             beta: projection(config.hidden_size, config.value_heads, &weights.beta)?,
-            output: projection(value, config.hidden_size, &weights.output)?,
+            output: CheckpointProjection::new(
+                backend,
+                tokens,
+                value,
+                config.hidden_size,
+                DenseRole::AttentionOutput,
+                &weights.output,
+            )?,
             transforms: GatedDeltaTransforms::compile(
                 &backend.inner.compiler,
                 GatedDeltaTransformSpec {

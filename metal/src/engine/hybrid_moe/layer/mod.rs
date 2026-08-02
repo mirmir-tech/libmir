@@ -13,7 +13,8 @@ use crate::engine::{
 };
 use crate::engine::{
     ExpertFusion, FusedAttention, FusedExpertGateUp, FusedGateUp, FusedKeyValue, ModelTensors,
-    QuantizedLinear, Result, Stream,
+    Result, Stream,
+    binding::BoundLinear,
     fusion_planner::{FusionPlanner, ProjectionBiases},
     lowering::LayerLowering,
 };
@@ -74,7 +75,7 @@ impl HybridMoeLayer {
             lowering.feed_forward,
             ProjectionBiases::new(
                 [weights.attention.query.has_bias(), weights.attention.key.has_bias()],
-                weights.attention.value.as_ref().map(QuantizedLinear::has_bias),
+                weights.attention.value.as_ref().map(BoundLinear::has_bias),
                 [weights.dense.gate.has_bias(), weights.dense.up.has_bias()],
             ),
         );
@@ -119,17 +120,19 @@ impl HybridMoeLayer {
         if self.fused_expert_gate_up.is_some() {
             return Ok(true);
         }
-        self.fused_expert_gate_up = self
-            .weights
-            .experts
-            .gate
-            .fuse_expert_gate_up(&self.weights.experts.up, stream)?;
+        let Some((gate, up)) = self.weights.experts.separate() else {
+            return Ok(false);
+        };
+        self.fused_expert_gate_up = gate.fuse_expert_gate_up(up, stream)?;
         self.fused_expert_gate_up.as_ref().map_or(Ok(()), FusedExpertGateUp::warm)?;
         Ok(self.fused_expert_gate_up.is_some())
     }
 
     pub(super) fn fused_expert_gate_up_bytes(&self) -> Result<Option<usize>> {
-        self.weights.experts.gate.fused_expert_gate_up_bytes(&self.weights.experts.up)
+        let Some((gate, up)) = self.weights.experts.separate() else {
+            return Ok(None);
+        };
+        gate.fused_expert_gate_up_bytes(up)
     }
 
     #[must_use]

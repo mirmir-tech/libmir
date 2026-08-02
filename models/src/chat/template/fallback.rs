@@ -153,6 +153,8 @@ mod tests {
             tool_choice: None,
             stream: false,
             max_tokens: None,
+            min_tokens: None,
+            ignore_eos: None,
             temperature: None,
             top_p: None,
             top_k: None,

@@ -23,7 +23,20 @@ impl EncoderTensorSchema {
 impl TensorRequirement {
     #[must_use]
     pub fn any(label: impl Into<String>, aliases: Vec<String>) -> Self {
-        Self { label: label.into(), aliases }
+        Self {
+            label: label.into(),
+            aliases,
+            include_dense_dtype: true,
+        }
+    }
+
+    #[must_use]
+    pub fn bound(label: impl Into<String>, aliases: Vec<String>) -> Self {
+        Self {
+            label: label.into(),
+            aliases,
+            include_dense_dtype: false,
+        }
     }
 
     #[must_use]
@@ -58,15 +71,32 @@ impl TensorReadiness {
     }
 }
 
-fn readiness(requirements: &[TensorRequirement], catalog: &TensorCatalog) -> TensorReadiness {
+pub(super) fn readiness(
+    requirements: &[TensorRequirement],
+    catalog: &TensorCatalog,
+) -> TensorReadiness {
     let missing: Vec<String> = requirements
         .iter()
         .filter(|requirement| !requirement.is_present(catalog))
         .map(TensorRequirement::missing_label)
         .collect();
+    let mut dtypes = requirements
+        .iter()
+        .filter(|requirement| requirement.include_dense_dtype)
+        .filter_map(|requirement| {
+            requirement
+                .aliases
+                .iter()
+                .find_map(|alias| catalog.get(alias))
+                .map(|tensor| tensor.dtype.clone())
+        })
+        .collect::<Vec<_>>();
+    dtypes.sort();
+    dtypes.dedup();
     TensorReadiness {
         required: requirements.len(),
         present: requirements.len() - missing.len(),
         missing,
+        dtypes,
     }
 }

@@ -115,14 +115,14 @@ impl SplitPagedAttention {
     pub(crate) fn configs(&self, active: usize) -> Result<SplitAttentionConfigs> {
         Ok(SplitAttentionConfigs {
             split: LaunchConfig {
-                grid: (narrow(product(self.spec.query_heads, active)?)?, 1, 1),
+                grid: (narrow(product(self.split_heads(), active)?)?, 1, 1),
                 block: (self.threads(), 1, 1),
                 shared_memory_bytes: 0,
             },
             merge: LaunchConfig {
                 grid: (narrow(self.spec.query_heads)?, 1, 1),
                 block: (self.threads(), 1, 1),
-                shared_memory_bytes: 0,
+                shared_memory_bytes: narrow(active * size_of::<f32>())?,
             },
         })
     }

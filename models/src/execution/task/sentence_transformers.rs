@@ -40,31 +40,54 @@ pub(super) fn discover(layout: &ModelLayout) -> Result<Option<EmbeddingTask>> {
     let Some(modules_path) = layout.modules_path.as_ref() else {
         return Ok(None);
     };
-    let modules: Vec<Module> = serde_json::from_str(&fs::read_to_string(modules_path)?)?;
-    let Some(pooling_module) = modules.iter().find(|module| module.kind.ends_with(".Pooling"))
-    else {
+    let modules_value = serde_json::from_str(&fs::read_to_string(modules_path)?)?;
+    let Some(pooling_path) = EmbeddingTask::pooling_config_path(&modules_value)? else {
         return Ok(None);
     };
-    let pooling_path = layout.root.join(&pooling_module.path).join("config.json");
-    let pooling: Pooling = serde_json::from_str(&fs::read_to_string(&pooling_path)?)?;
-    let mode = pooling_mode(&pooling)?;
-    let normalize = modules.iter().any(|module| module.kind.ends_with(".Normalize"));
-    let sentence = layout
+    let pooling_value = serde_json::from_str(&fs::read_to_string(layout.root.join(pooling_path))?)?;
+    let sentence_value = layout
         .sentence_transformers_config_path
         .as_ref()
-        .map(|path| -> Result<SentenceConfig> {
+        .map(|path| -> Result<serde_json::Value> {
             Ok(serde_json::from_str(&fs::read_to_string(path)?)?)
         })
-        .transpose()?
-        .unwrap_or_default();
-    Ok(Some(EmbeddingTask {
-        pooling: mode,
-        normalize,
-        native_dimensions: pooling.word_embedding_dimension,
-        include_prompt: pooling.include_prompt,
-        prompts: sentence.prompts,
-        default_prompt: sentence.default_prompt_name,
-    }))
+        .transpose()?;
+    Ok(Some(EmbeddingTask::from_sentence_transformers_values(
+        &modules_value,
+        &pooling_value,
+        sentence_value.as_ref(),
+    )?))
+}
+
+impl EmbeddingTask {
+    pub fn pooling_config_path(modules: &serde_json::Value) -> Result<Option<String>> {
+        let modules: Vec<Module> = serde_json::from_value(modules.clone())?;
+        Ok(modules
+            .iter()
+            .find(|module| module.kind.ends_with(".Pooling"))
+            .map(|module| format!("{}/config.json", module.path.trim_end_matches('/'))))
+    }
+
+    pub fn from_sentence_transformers_values(
+        modules: &serde_json::Value,
+        pooling: &serde_json::Value,
+        sentence: Option<&serde_json::Value>,
+    ) -> Result<Self> {
+        let modules: Vec<Module> = serde_json::from_value(modules.clone())?;
+        let pooling: Pooling = serde_json::from_value(pooling.clone())?;
+        let sentence: SentenceConfig =
+            sentence.cloned().map(serde_json::from_value).transpose()?.unwrap_or_default();
+        let mode = pooling_mode(&pooling)?;
+        let normalize = modules.iter().any(|module| module.kind.ends_with(".Normalize"));
+        Ok(Self {
+            pooling: mode,
+            normalize,
+            native_dimensions: pooling.word_embedding_dimension,
+            include_prompt: pooling.include_prompt,
+            prompts: sentence.prompts,
+            default_prompt: sentence.default_prompt_name,
+        })
+    }
 }
 
 fn pooling_mode(config: &Pooling) -> Result<PoolingMode> {
@@ -117,5 +140,30 @@ mod tests {
             include_prompt: false,
         };
         assert!(pooling_mode(&pooling).is_err());
+    }
+
+    #[test]
+    fn parses_remote_module_path_and_task_metadata() -> Result<()> {
+        let modules = serde_json::json!([
+            {"path": "1_Pooling", "type": "sentence_transformers.models.Pooling"},
+            {"path": "2_Normalize", "type": "sentence_transformers.models.Normalize"}
+        ]);
+        let pooling = serde_json::json!({
+            "word_embedding_dimension": 32,
+            "pooling_mode_cls_token": false,
+            "pooling_mode_mean_tokens": false,
+            "pooling_mode_lasttoken": true,
+            "include_prompt": true
+        });
+
+        assert_eq!(
+            EmbeddingTask::pooling_config_path(&modules)?.as_deref(),
+            Some("1_Pooling/config.json")
+        );
+        let task = EmbeddingTask::from_sentence_transformers_values(&modules, &pooling, None)?;
+        assert_eq!(task.pooling, PoolingMode::LastToken);
+        assert!(task.normalize);
+        assert!(task.include_prompt);
+        Ok(())
     }
 }

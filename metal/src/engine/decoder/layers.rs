@@ -2,6 +2,9 @@ use std::time::{Duration, Instant};
 
 use super::{Array, DecoderCache, ImageTokenSpan, Result, Stream};
 
+const PREFILL_UNSEGMENTED_TOKEN_PAIRS: usize = 4 * 1_024 * 1_024;
+const PREFILL_COMMAND_LAYER_TOKEN_PAIRS: usize = 96 * 1_024 * 1_024;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MixerKind {
     Softmax,
@@ -146,4 +149,32 @@ pub fn forward_packed_layers<L: LoweredPackedLayer>(
         hidden = layer.forward_packed_feed_forward(&hidden, caches.len(), stream)?;
     }
     Ok(hidden)
+}
+
+pub(in crate::engine) fn prefill_evaluation_step(
+    batch: usize,
+    sequence: usize,
+    position: usize,
+    layers: usize,
+) -> Option<usize> {
+    let context = position.saturating_add(sequence);
+    let work = batch.saturating_mul(sequence).saturating_mul(context).max(1);
+    if work <= PREFILL_UNSEGMENTED_TOKEN_PAIRS {
+        return None;
+    }
+    let step = (PREFILL_COMMAND_LAYER_TOKEN_PAIRS / work).max(1);
+    (step < layers).then_some(step)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prefill_evaluation_step;
+
+    #[test]
+    fn segments_only_expensive_prefill_graphs() {
+        assert_eq!(prefill_evaluation_step(1, 512, 0, 36), None);
+        assert_eq!(prefill_evaluation_step(1, 512, 7_680, 36), None);
+        assert_eq!(prefill_evaluation_step(1, 512, 8_192, 36), Some(22));
+        assert_eq!(prefill_evaluation_step(10, 512, 8_192, 36), Some(2));
+    }
 }

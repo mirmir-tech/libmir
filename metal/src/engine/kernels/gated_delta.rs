@@ -1,6 +1,27 @@
 use super::{Kernels, template};
 use crate::engine::{Error, Result};
 
+mirtal::metal_kernel! {
+    fn gated_delta_gates {
+        name: "mirmir_gated_delta_gates",
+        templates: [HV: int = 16],
+        inputs: [alpha: float, beta: float, a_log: float, dt_bias: float],
+        outputs: [decay: f32, update: f32],
+        source: file "kernels/gated_delta_gates.metal",
+        header: inline "",
+        row_contiguous: true,
+        atomic_outputs: false,
+    }
+}
+
+pub(super) fn new_gated_delta_gates_kernel() -> Result<mirtal::MetalKernel<4, 2>> {
+    Ok(gated_delta_gates()?)
+}
+
+pub(in crate::engine) fn new_gated_delta_decode_kernel() -> Result<mirtal::MetalKernel<8, 2>> {
+    Ok(super::gated_delta_decode()?)
+}
+
 impl Kernels {
     pub(crate) fn gated_delta_gates(
         &self,

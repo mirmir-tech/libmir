@@ -36,6 +36,9 @@ pub enum Error {
         expected: usize,
         actual: usize,
     },
+    /// A device-side dtype conversion received incompatible buffer lengths.
+    #[error("invalid CUDA tensor conversion lengths: input {input}, output {output}")]
+    InvalidTensorConversion { input: usize, output: usize },
     /// A completed upload contains the same tensor name more than once.
     #[error("duplicate CUDA tensor: {0}")]
     DuplicateTensor(String),

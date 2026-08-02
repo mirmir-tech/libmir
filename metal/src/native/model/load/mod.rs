@@ -7,7 +7,10 @@ use models::{
     weights::{TensorCatalog, TensorReadiness, VisionTensorSchema},
 };
 
-use super::{KV_CACHE_STEP, LoadedExecution, LoadedModel, ModelInfo, prefill_step};
+use super::{
+    KV_CACHE_STEP, LoadedExecution, LoadedModel, ModelInfo, memory::prefix_cache_budget,
+    prefill_step,
+};
 
 mod backend;
 mod execution;
@@ -51,7 +54,7 @@ impl LoadedModel {
                 contract
                     .as_ref()
                     .ok_or_else(|| Error::UnsupportedModel("generation contract is missing".into()))
-                    .and_then(|contract| lowering::plan(&contract.semantic).map_err(Into::into))
+                    .and_then(|contract| Ok(lowering::plan(&contract.semantic)?))
             })
             .transpose()?;
         let vision = VisionConfig::from_layout(&layout)?;
@@ -106,13 +109,18 @@ impl LoadedModel {
                     &stream,
                 )?)
             },
-            TaskExecutionPlan::SequenceScoring { encoder, .. } => LoadedExecution::SequenceScoring(
-                Box::new(crate::engine::SequenceScoringModel::load(&tensors, encoder, &stream)?),
-            ),
+            TaskExecutionPlan::SequenceScoring { encoder, bindings, .. } => {
+                LoadedExecution::SequenceScoring(Box::new(
+                    crate::engine::SequenceScoringModel::load(
+                        &tensors, encoder, bindings, &stream,
+                    )?,
+                ))
+            },
         };
         let vision_model = load_vision_model(
             vision.as_ref(),
             vision_readiness.as_ref().is_some_and(TensorReadiness::is_ready),
+            contract.as_ref().map(|contract| &contract.bindings),
             &tensors,
             &stream,
         )?;
@@ -120,6 +128,8 @@ impl LoadedModel {
         let (tokenizer, tokenizer_error) = tokenizer_info(&layout);
         let weight_bytes = layout.weights.iter().map(|weight| weight.bytes).sum();
         let prefix_cache_entries = stream.config().cache.prefix_cache_entries;
+        let prefix_cache_bytes =
+            prefix_cache_budget(metal_memory, stream.config().cache.prefix_cache_bytes);
         let model_prefill_step = contract.as_ref().map_or(0, |contract| {
             prefill_step(&contract.semantic, stream.config().cache.prefill_step)
         });
@@ -145,7 +155,7 @@ impl LoadedModel {
             stream,
             execution,
             vision_model,
-            prefixes: PrefixCache::new(prefix_cache_entries),
+            prefixes: PrefixCache::new(prefix_cache_entries, prefix_cache_bytes),
             sessions: std::collections::HashMap::new(),
         })
     }

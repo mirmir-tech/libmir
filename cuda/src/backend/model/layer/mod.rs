@@ -1,19 +1,22 @@
 use std::collections::HashMap;
 
+mod prefill;
 mod prepared;
+mod shared;
 
 use mircuda::{DeviceBuffer, bf16};
-pub(super) use prepared::{LayerPrefill, PreparedLayer};
+pub(super) use prepared::{LayerPrefill, PrefillSignature, PreparedLayer, SharedLayerPrefill};
 use runtime::kv::{BlockTable, KvWritePlan};
 
 use crate::{
-    BatchedDecodeMoeLayer, DecodeDenseSwiGlu, DecodeMoeBlockExecutor, DecodeMoeLayerTemplate,
-    DenseSwiGluLayerTemplate, Error, PagedDecodeBatch, PagedKvCache, PrefillDenseSwiGlu,
-    PrefillMoeBlockBf16, Result,
+    BatchedDecodeMoeLayer, BatchedPagedAttentionBf16, CudaBackend, DecodeDenseSwiGlu,
+    DecodeMoeBlockExecutor, DecodeMoeLayerTemplate, DenseSwiGluLayerTemplate, Error,
+    PagedDecodeBatch, PagedKvCache, PrefillDenseSwiGlu, PrefillMoeBlockBf16, Result,
     backend::dense::{
         BatchedDecodeDenseLayer,
         graph::{DenseSwiGluWeightsOwned, PreparedDecodeDense},
     },
+    kernels::BatchedSplitAttentionWorkspace,
 };
 
 #[derive(Clone)]
@@ -80,16 +83,47 @@ impl DecoderLayerTemplate {
         &self,
         rows: usize,
         cache: PagedKvCache,
+        workspace: BatchedSplitAttentionWorkspace,
     ) -> Result<BatchedLayer> {
         match self {
-            Self::Moe(template) => {
-                Ok(BatchedLayer::Moe(Box::new(template.instantiate_batch_with_cache(rows, cache)?)))
-            },
+            Self::Moe(template) => Ok(BatchedLayer::Moe(Box::new(
+                template.instantiate_batch_with_cache_workspace(rows, cache, Some(workspace))?,
+            ))),
             Self::Dense(template) => Ok(BatchedLayer::Dense(Box::new(
-                template.instantiate_batch_with_cache(rows, cache)?,
+                template.instantiate_batch_with_cache_workspace(rows, cache, Some(workspace))?,
             ))),
         }
     }
+}
+
+pub(super) fn allocate_batch_attention_workspace(
+    backend: &CudaBackend,
+    layers: &[DecoderLayerTemplate],
+    caches: &[PagedKvCache],
+    rows: usize,
+) -> Result<BatchedSplitAttentionWorkspace> {
+    let (values, statistics) = layers.iter().zip(caches).try_fold(
+        (0_usize, 0_usize),
+        |(values, statistics), (layer, cache)| {
+            let attention = layer.attention();
+            let required = BatchedPagedAttentionBf16::workspace_lengths(
+                backend,
+                cache,
+                attention.query_heads,
+                attention.max_sequence_blocks,
+                rows,
+            )?;
+            Ok::<_, Error>((values.max(required.0), statistics.max(required.1)))
+        },
+    )?;
+    if values == 0 || statistics == 0 {
+        return Err(Error::InvalidDecoderKernel("CUDA batch requires at least one layer"));
+    }
+    Ok(BatchedSplitAttentionWorkspace::new(
+        backend.inner.pool.allocate(&backend.inner.stream, values)?,
+        backend.inner.pool.allocate(&backend.inner.stream, statistics)?,
+        backend.inner.pool.allocate(&backend.inner.stream, statistics)?,
+    ))
 }
 
 impl BatchedLayer {
@@ -150,100 +184,17 @@ impl SessionLayer {
         }
     }
 
-    pub(super) fn prepare_prefill(&mut self, tokens: usize) -> Result<()> {
-        match self {
-            Self::Moe(layer) => {
-                if !layer.prefill.contains_key(&tokens) {
-                    layer.prefill.insert(tokens, layer.template.instantiate_prefill(tokens)?);
-                }
-            },
-            Self::Dense(layer) => {
-                if !layer.prefill.contains_key(&tokens) {
-                    layer.prefill.insert(tokens, layer.template.instantiate_prefill(tokens)?);
-                }
-            },
-        }
-        Ok(())
-    }
-
-    pub(super) fn prefill_plan(&mut self, tokens: usize) -> Result<LayerPrefill<'_>> {
-        match self {
-            Self::Moe(layer) => Ok(LayerPrefill::Moe(
-                layer
-                    .prefill
-                    .get_mut(&tokens)
-                    .ok_or(Error::InvalidDecoderKernel("missing CUDA prefill plan"))?,
-            )),
-            Self::Dense(layer) => Ok(LayerPrefill::Dense(
-                layer
-                    .prefill
-                    .get_mut(&tokens)
-                    .ok_or(Error::InvalidDecoderKernel("missing dense CUDA prefill plan"))?,
-            )),
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn execute_prefill(
-        &mut self,
-        input: &DeviceBuffer<bf16>,
-        output: &mut DeviceBuffer<bf16>,
-        write_plan: &KvWritePlan,
-        table: &BlockTable,
-        start_position: usize,
-        tokens: usize,
-    ) -> Result<()> {
-        self.execute_prefill_masked(input, output, write_plan, table, start_position, tokens, None)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn execute_prefill_masked(
-        &mut self,
-        input: &DeviceBuffer<bf16>,
-        output: &mut DeviceBuffer<bf16>,
-        write_plan: &KvWritePlan,
-        table: &BlockTable,
-        start_position: usize,
-        tokens: usize,
-        image: Option<crate::backend::attention::ImageAttentionSpan>,
-    ) -> Result<()> {
-        match self {
-            Self::Moe(layer) => {
-                let decode = layer.decode.as_mut().ok_or(Error::InvalidDecoderKernel(
-                    "CUDA prefill executor belongs to model graph",
-                ))?;
-                let prefill = layer
-                    .prefill
-                    .get_mut(&tokens)
-                    .ok_or(Error::InvalidDecoderKernel("missing CUDA prefill plan"))?;
-                decode.execute_prefill_masked(
-                    prefill, input, write_plan, table, start_position, output, image,
-                )
-            },
-            Self::Dense(layer) => {
-                if image.is_some() {
-                    return Err(Error::UnsupportedVisionContract(
-                        "bidirectional pooled-image prefill requires a CUDA hybrid-MoE decoder"
-                            .into(),
-                    ));
-                }
-                let weights = layer.template.weights();
-                let decode = layer.decode.as_mut().ok_or(Error::InvalidDecoderKernel(
-                    "CUDA prefill executor belongs to model graph",
-                ))?;
-                let prefill = layer
-                    .prefill
-                    .get_mut(&tokens)
-                    .ok_or(Error::InvalidDecoderKernel("missing dense CUDA prefill plan"))?;
-                prefill.execute(decode, input, weights, write_plan, table, start_position, output)
-            },
-        }
-    }
-
     pub(super) const fn layer(&self) -> usize {
         match self {
             Self::Moe(layer) => layer.template.config().attention.layer,
             Self::Dense(layer) => layer.template.config().attention.layer,
+        }
+    }
+
+    pub(super) const fn attention_config(&self) -> crate::DecodeAttentionConfig {
+        match self {
+            Self::Moe(layer) => layer.template.config().attention,
+            Self::Dense(layer) => layer.template.config().attention,
         }
     }
 }

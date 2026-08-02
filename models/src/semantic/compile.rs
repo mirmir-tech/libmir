@@ -72,7 +72,9 @@ fn mixer(decoder: &DecoderConfig, tensors: &TensorCatalog, index: usize) -> Resu
         query_heads: decoder.num_attention_heads,
         key_value_heads: decoder.layer_key_value_heads(index),
         head_dim,
-        key_value_relation: if decoder.attention_k_eq_v {
+        key_value_relation: if decoder.layer_type(index) == AttentionLayerType::Full
+            && decoder.attention_k_eq_v
+        {
             KeyValueRelation::KeyEqualsValue
         } else {
             KeyValueRelation::Separate

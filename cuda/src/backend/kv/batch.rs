@@ -30,6 +30,7 @@ impl U32Metadata {
 pub struct PagedDecodeBatch {
     tables: U32Metadata,
     token_counts: U32Metadata,
+    positions: U32Metadata,
     block_counts: U32Metadata,
     stream: Stream,
     cache: CacheConfig,
@@ -54,6 +55,7 @@ impl PagedDecodeBatch {
         Ok(Self {
             tables: U32Metadata::new(backend, table_len, u32::MAX)?,
             token_counts: U32Metadata::new(backend, max_batch, 0)?,
+            positions: U32Metadata::new(backend, max_batch, 0)?,
             block_counts: U32Metadata::new(backend, max_batch, 0)?,
             stream: backend.inner.stream.clone(),
             cache: storage.cache,
@@ -70,6 +72,7 @@ impl PagedDecodeBatch {
         }
         self.tables.host.fill(u32::MAX);
         self.token_counts.host.fill(0);
+        self.positions.host.fill(0);
         self.block_counts.host.fill(0);
         for (sequence, table) in batch.iter().copied().enumerate() {
             self.validate_table(table)?;
@@ -78,10 +81,12 @@ impl PagedDecodeBatch {
                 *target = block.0;
             }
             self.token_counts.host[sequence] = u32::try_from(table.token_len())?;
+            self.positions.host[sequence] = u32::try_from(table.token_len() - 1)?;
             self.block_counts.host[sequence] = u32::try_from(table.blocks().len())?;
         }
         self.tables.upload(&self.stream)?;
         self.token_counts.upload(&self.stream)?;
+        self.positions.upload(&self.stream)?;
         self.block_counts.upload(&self.stream)?;
         self.active = batch.len();
         Ok(())
@@ -100,12 +105,24 @@ impl PagedDecodeBatch {
         &self.token_counts.device
     }
 
+    pub(crate) const fn positions(&self) -> &DeviceBuffer<u32> {
+        &self.positions.device
+    }
+
     pub(crate) const fn block_counts(&self) -> &DeviceBuffer<u32> {
         &self.block_counts.device
     }
 
     pub(crate) const fn max_blocks(&self) -> usize {
         self.max_blocks
+    }
+
+    pub(crate) fn maximum_tokens(&self) -> usize {
+        self.token_counts.host[..self.active]
+            .iter()
+            .copied()
+            .max()
+            .map_or(0, |tokens| tokens as usize)
     }
 
     pub(crate) const fn cache_config(&self) -> CacheConfig {

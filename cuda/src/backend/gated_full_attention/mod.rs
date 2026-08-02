@@ -59,11 +59,9 @@ impl AffineGatedFullAttentionConfig {
             .or(decoder.partial_rotary_factor)
             .unwrap_or(1.0);
         let head_dim_scalar = head_dim.to_string().parse::<f64>()?;
-        let rotary_dim = (head_dim_scalar * factor)
-            .round()
-            .to_string()
-            .parse()
-            .map_err(|_| Error::InvalidDecoderKernel("invalid parsed rotary dimension"))?;
+        let Ok(rotary_dim) = (head_dim_scalar * factor).round().to_string().parse() else {
+            return Err(Error::InvalidDecoderKernel("invalid parsed rotary dimension"));
+        };
         let (rope_sections, rope_interleaved) = sections(&decoder.rope_layout, rotary_dim)?;
         let scale = decoder.attention_scale.unwrap_or_else(|| head_dim_scalar.sqrt().recip());
         let config = Self {
@@ -112,10 +110,10 @@ impl AffineGatedFullAttentionConfig {
             || self.rotary_dim > self.head_dim
             || !self.rotary_dim.is_multiple_of(2)
             || covered != self.rotary_dim / 2
-            || self.group_size == 0
-            || !matches!(self.bits, 4 | 8)
-            || !self.hidden_size.is_multiple_of(self.group_size)
-            || !self.query_width()?.is_multiple_of(self.group_size)
+            || !valid_storage(self.group_size, self.bits)
+            || (self.group_size > 0
+                && (!self.hidden_size.is_multiple_of(self.group_size)
+                    || !self.query_width()?.is_multiple_of(self.group_size)))
             || !self.rope_theta.is_finite()
             || self.rope_theta <= 0.0
             || !self.attention_scale.is_finite()
@@ -130,17 +128,21 @@ impl AffineGatedFullAttentionConfig {
     }
 }
 
+const fn valid_storage(group_size: usize, bits: usize) -> bool {
+    (group_size == 0 && bits == 0) || (group_size > 0 && matches!(bits, 2 | 3 | 4 | 5 | 6 | 8))
+}
+
 fn sections(layout: &RotaryEmbeddingLayout, rotary_dim: usize) -> Result<([usize; 3], bool)> {
     let half = rotary_dim / 2;
     match layout {
         RotaryEmbeddingLayout::Standard => Ok(([half, 0, 0], false)),
         RotaryEmbeddingLayout::MultiSection(values)
         | RotaryEmbeddingLayout::InterleavedMultiSection(values) => {
-            let values: [usize; 3] = values.clone().try_into().map_err(|_| {
-                Error::UnsupportedDecoderLayer(
+            let Ok(values) = values.clone().try_into() else {
+                return Err(Error::UnsupportedDecoderLayer(
                     "MRoPE requires exactly three parsed sections".into(),
-                )
-            })?;
+                ));
+            };
             Ok((values, matches!(layout, RotaryEmbeddingLayout::InterleavedMultiSection(_))))
         },
     }

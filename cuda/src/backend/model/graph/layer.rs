@@ -3,7 +3,7 @@ use runtime::kv::{BlockTable, KvWritePlan};
 
 use super::super::layer::{LayerPrefill, PreparedLayer};
 use crate::{
-    Result,
+    PagedPrefillBatch, Result,
     backend::{
         attention::graph::{Configs, Dynamic, Geometry, Kernels, Nodes},
         block::CapturedLayer,
@@ -141,6 +141,24 @@ impl CapturedModelLayer {
                     ));
                 }
                 layer.execute_prefill(prefill, input, plan, table, start_position, output)
+            },
+            _ => Err(crate::Error::InvalidDecoderKernel("prefill layer kind differs from graph")),
+        }
+    }
+
+    pub fn execute_prefill_batch(
+        &mut self,
+        prefill: LayerPrefill<'_>,
+        input: &DeviceBuffer<bf16>,
+        batch: &PagedPrefillBatch,
+        output: &mut DeviceBuffer<bf16>,
+    ) -> Result<()> {
+        match (self, prefill) {
+            (Self::Moe(layer), LayerPrefill::Moe(prefill)) => {
+                layer.execute_prefill_batch(prefill, input, batch, output)
+            },
+            (Self::Dense(layer), LayerPrefill::Dense(prefill)) => {
+                layer.execute_prefill_batch(prefill, input, batch, output)
             },
             _ => Err(crate::Error::InvalidDecoderKernel("prefill layer kind differs from graph")),
         }

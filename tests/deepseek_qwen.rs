@@ -26,6 +26,8 @@ fn preserves_deepseek_qwen_greedy_digest() -> Result<()> {
             tool_choice: None,
             stream: false,
             max_tokens: Some(16),
+            min_tokens: None,
+            ignore_eos: None,
             temperature: Some(0.0),
             top_p: Some(1.0),
             top_k: Some(0),

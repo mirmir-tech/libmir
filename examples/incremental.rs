@@ -55,6 +55,8 @@ fn request(model: &str) -> ChatCompletionRequest {
         tool_choice: None,
         stream: true,
         max_tokens: Some(TOKEN_LIMIT),
+        min_tokens: None,
+        ignore_eos: None,
         temperature: Some(0.0),
         top_p: Some(1.0),
         top_k: Some(0),

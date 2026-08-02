@@ -4,8 +4,10 @@ use super::{
     BatchedDecodeDenseLayer, DecodeDenseSwiGlu, DenseSwiGluConfig, DenseSwiGluWeights,
     PrefillDenseSwiGlu,
 };
-use crate::{CudaBackend, Error, PagedKvCache, Result};
+use crate::{CudaBackend, Error, PagedKvCache, Result, kernels::BatchedSplitAttentionWorkspace};
 
+#[cfg(test)]
+mod tests;
 mod weights;
 
 use weights::DenseWeights;
@@ -60,12 +62,13 @@ impl DenseSwiGluLayerTemplate {
         PrefillDenseSwiGlu::new(&self.backend, self.config, tokens, self.weights.borrow())
     }
 
-    pub(in crate::backend) fn instantiate_batch_with_cache(
+    pub(in crate::backend) fn instantiate_batch_with_cache_workspace(
         &self,
         rows: usize,
         cache: PagedKvCache,
+        workspace: Option<BatchedSplitAttentionWorkspace>,
     ) -> Result<BatchedDecodeDenseLayer> {
-        BatchedDecodeDenseLayer::new(&self.backend, self.clone(), rows, cache)
+        BatchedDecodeDenseLayer::new(&self.backend, self.clone(), rows, cache, workspace)
     }
 
     pub(in crate::backend) fn weights(&self) -> DenseSwiGluWeights<'_> {

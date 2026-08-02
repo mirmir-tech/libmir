@@ -1,9 +1,11 @@
+mod pattern;
 mod unit;
 
 use mircuda::{
     CompileOptions, Compiler, DeviceBuffer, LaunchConfig, Stream, TypedKernel, bf16, cuda_export,
     cuda_kernel_file,
 };
+pub use pattern::{RoutePattern, RoutePatternGenerator, RoutePatternSpec};
 pub use unit::{RouterUnitSpec, RouterUnitTopK};
 
 use super::geometry::require;

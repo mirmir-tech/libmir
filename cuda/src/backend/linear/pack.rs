@@ -1,11 +1,7 @@
-use mircuda::{
-    DenseMatmulPlan, DenseMatmulSpec, DenseVectorPlan, DenseVectorSpec, DeviceBuffer, Stream, bf16,
-};
+use mircuda::{DeviceBuffer, bf16};
 
-use super::CudaBackend;
-use crate::{
-    CudaTensor, DenseExecution, DensePlanRequest, DenseRole, Error, ExecutionPhase, Result,
-};
+use super::{AutoBf16Plan, CudaBackend};
+use crate::{CudaTensor, DensePlanRequest, DenseRole, Error, ExecutionPhase, Result};
 
 /// Device-resident row concatenation of differently sized BF16 projections.
 #[derive(Clone, Debug)]
@@ -18,18 +14,11 @@ pub struct Bf16LinearPackWeights<const N: usize> {
 /// One GEMM producing `N` adjacent projections for every input row.
 #[derive(Debug)]
 pub struct Bf16LinearPack<const N: usize> {
-    plan: Bf16LinearPackPlan,
-    stream: Stream,
+    plan: AutoBf16Plan,
     tokens: usize,
     input_features: usize,
     output_features: [usize; N],
     packed_outputs: usize,
-}
-
-#[derive(Debug)]
-enum Bf16LinearPackPlan {
-    Matrix(DenseMatmulPlan<bf16>),
-    Vector(DenseVectorPlan<bf16>),
 }
 
 impl CudaBackend {
@@ -115,31 +104,8 @@ impl<const N: usize> Bf16LinearPack<N> {
             input_features,
             output_features: packed_outputs,
         };
-        let plan = match backend.execution_planner().plan_dense(request)?.execution() {
-            DenseExecution::Matrix => Bf16LinearPackPlan::Matrix(DenseMatmulPlan::new(
-                &backend.inner.context,
-                &backend.inner.stream,
-                DenseMatmulSpec::new(tokens, packed_outputs, input_features)?,
-            )?),
-            DenseExecution::Vector => Bf16LinearPackPlan::Vector(DenseVectorPlan::new(
-                &backend.inner.context,
-                &backend.inner.stream,
-                DenseVectorSpec::new(packed_outputs, input_features)?,
-            )?),
-            DenseExecution::BlockFp8Vector => {
-                return Err(Error::InvalidExecutionPlan(
-                    "packed BF16 projection cannot use block FP8 weights",
-                ));
-            },
-            DenseExecution::Fp8Int4Vector => {
-                return Err(Error::InvalidExecutionPlan(
-                    "packed BF16 projection cannot use FP8 plus INT4 weights",
-                ));
-            },
-        };
         Ok(Self {
-            plan,
-            stream: backend.inner.stream.clone(),
+            plan: AutoBf16Plan::new(backend, request)?,
             tokens,
             input_features,
             output_features,
@@ -165,14 +131,7 @@ impl<const N: usize> Bf16LinearPack<N> {
         if output.len() != expected {
             return Err(Error::InvalidDecoderKernel("packed BF16 output differs from plan"));
         }
-        match &mut self.plan {
-            Bf16LinearPackPlan::Matrix(plan) => {
-                Ok(plan.execute(&self.stream, input, &weights.packed, output, 1.0, 0.0)?)
-            },
-            Bf16LinearPackPlan::Vector(plan) => {
-                Ok(plan.execute(&self.stream, input, &weights.packed, output, 1.0, 0.0)?)
-            },
-        }
+        self.plan.execute(input, &weights.packed, output)
     }
 }
 

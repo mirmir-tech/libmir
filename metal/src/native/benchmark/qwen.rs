@@ -21,7 +21,7 @@ fn preserves_qwen3_qk_norm_greedy_tokens() -> Result<()> {
     let mut ignored = |_event| {};
     let mut model = LoadedModel::load(&manifest(&model_path()?), &mut ignored)?;
     let session = Uuid::new_v4();
-    let output = model.prefill(session, &PROMPT, SamplingLogits::None, &mut ignored)?;
+    let output = model.prefill(session, &PROMPT, SamplingLogits::None, None, &mut ignored)?;
     let mut token = greedy_token(&output.output)?;
     let mut generated = vec![token];
     for _ in 1..EXPECTED.len() {

@@ -27,10 +27,10 @@ impl ClampedRoutedAttention {
     ) -> Result<Self> {
         Ok(Self {
             norm: NormWeight::load_name(tensors, &bindings.input_norm.source)?,
-            query: BoundLinear::load_binding(tensors, bindings.query, stream)?,
-            key: BoundLinear::load_binding(tensors, bindings.key, stream)?,
-            value: BoundLinear::load_binding(tensors, bindings.value, stream)?,
-            output: BoundLinear::load_binding(tensors, bindings.attention_output, stream)?,
+            query: BoundLinear::load(tensors, bindings.query, stream)?,
+            key: BoundLinear::load(tensors, bindings.key, stream)?,
+            value: BoundLinear::load(tensors, bindings.value, stream)?,
+            output: BoundLinear::load(tensors, bindings.attention_output, stream)?,
             sinks: tensors.get(&bindings.attention_sinks.source)?,
             frequencies: Array::yarn_rope_frequencies(
                 config.head_dim,

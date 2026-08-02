@@ -19,13 +19,16 @@ extern "C" __global__ void libmir_cuda_paged_attention_batch_bf16(
     unsigned int max_blocks, unsigned int block_size,
     unsigned int query_heads, unsigned int kv_heads,
     unsigned int head_dim, unsigned int value_head_dim,
-    unsigned int window, float scale) {
+    unsigned int window, float scale, unsigned int split_threshold) {
   const unsigned int sequence = blockIdx.y;
   const unsigned int query_head = blockIdx.x;
   if (sequence >= batch_size || query_head >= query_heads) return;
   const unsigned int token_count = token_counts[sequence];
   const unsigned int block_count = block_counts[sequence];
-  if (token_count == 0 || block_count == 0 || block_count > max_blocks) return;
+  const unsigned int visible_tokens = window > 0
+      ? min(token_count, window) : token_count;
+  if (token_count == 0 || block_count == 0 || block_count > max_blocks ||
+      visible_tokens >= split_threshold) return;
 
   const unsigned int lane = threadIdx.x;
   const unsigned int kv_head = query_head / (query_heads / kv_heads);

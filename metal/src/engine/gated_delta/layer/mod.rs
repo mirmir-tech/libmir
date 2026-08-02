@@ -6,8 +6,8 @@ use models::layout::LinearAttentionConfig;
 
 use self::{decode::CompiledDecode, projection::split_qkv};
 use crate::engine::{
-    Array, Error, GatedDeltaInputs, GatedDeltaState, NormWeight, QuantizedLinear, Result, Stream,
-    fusion_planner::FusionPlanner,
+    Array, Error, GatedDeltaInputs, GatedDeltaState, NormWeight, Result, Stream,
+    binding::BoundLinear, fusion_planner::FusionPlanner,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -22,11 +22,11 @@ pub struct GatedDeltaLayerConfig {
 #[derive(Debug)]
 pub struct GatedDeltaLayer {
     config: GatedDeltaLayerConfig,
-    in_proj_qkv: QuantizedLinear,
-    in_proj_z: QuantizedLinear,
-    in_proj_b: QuantizedLinear,
-    in_proj_a: QuantizedLinear,
-    out_proj: QuantizedLinear,
+    in_proj_qkv: BoundLinear,
+    in_proj_z: BoundLinear,
+    in_proj_b: BoundLinear,
+    in_proj_a: BoundLinear,
+    out_proj: BoundLinear,
     conv_weight: Array,
     norm_weight: NormWeight,
     a_log: Array,

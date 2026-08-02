@@ -3,7 +3,10 @@ mod fixture;
 use mircuda::{DeviceBuffer, DeviceElement, bf16};
 
 use super::super::*;
-use crate::{CudaConfig, Result};
+use crate::{
+    CudaConfig, ExecutionPhase, PlanSource, Result,
+    backend::tuning::{MoeProfileExecution, MoeProfileRequest},
+};
 
 #[test]
 fn executes_affine_shared_and_routed_experts_for_prefill_and_decode() -> Result<()> {
@@ -17,12 +20,37 @@ fn executes_affine_shared_and_routed_experts_for_prefill_and_decode() -> Result<
     let mut output = allocate(&backend, 2 * config.hidden_size)?;
     moe.prepare(2)?.execute(&input, &mut output)?;
     assert!(read(&backend, &output)?.iter().all(|value| *value == bf16::ZERO));
+    measured(&backend, config, ExecutionPhase::Prefill, 2);
 
     let input = copy(&backend, &vec![bf16::ZERO; config.hidden_size])?;
     let mut output = allocate(&backend, config.hidden_size)?;
     moe.prepare(1)?.execute(&input, &mut output)?;
     assert!(read(&backend, &output)?.iter().all(|value| *value == bf16::ZERO));
+    measured(&backend, config, ExecutionPhase::Decode, 1);
     Ok(())
+}
+
+fn measured(
+    backend: &CudaBackend,
+    config: AffineSharedExpertMoeConfig,
+    phase: ExecutionPhase,
+    tokens: usize,
+) {
+    let request = MoeProfileRequest::affine(
+        phase,
+        tokens,
+        config.expert_count,
+        config.top_k,
+        config.hidden_size,
+        config.routed_intermediate_size,
+        config.group_size,
+        config.expert_bits,
+        config.activation,
+    );
+    assert!(matches!(
+        backend.auto_tuner().lookup_moe(request),
+        Some((MoeProfileExecution::Affine(_), PlanSource::MeasuredStartup))
+    ));
 }
 
 fn config() -> AffineSharedExpertMoeConfig {

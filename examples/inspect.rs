@@ -11,6 +11,8 @@ fn main() -> libmir::Result<()> {
     println!("id: {}", manifest.id);
     println!("context: {}", manifest.context_len);
     println!("quantization: {:?}", manifest.quantization);
+    println!("metadata: {:?}", descriptor.metadata());
+    println!("checkpoint encoding: {:?}", descriptor.checkpoint_encoding());
     println!("decoder: {:?}", descriptor.decoder());
     println!("generation: {:?}", descriptor.generation());
     Ok(())

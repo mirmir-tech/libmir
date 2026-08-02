@@ -1,12 +1,12 @@
 use mircuda::{DeviceBuffer, bf16};
 
 use super::{
-    AffineSharedExpertMoeConfig, AffineSharedExpertMoeWeights, scratch::AffineSharedMoeScratch,
+    AffineSharedExpertMoeConfig, AffineSharedExpertMoeWeights, routed::SharedRoutedExecution,
+    scratch::AffineSharedMoeScratch,
 };
 use crate::{
-    AffineQuantizedConfig, AffineQuantizedPairTensors, CudaBackend, Error, Result,
-    SelectedAffineGatedBf16Linear, SelectedAffineReduceBf16Linear,
-    backend::{AffineRouterBf16, linear::AffineProjection},
+    CudaBackend, DenseRole, Error, Result,
+    backend::linear::CheckpointProjection,
     kernels::{ElementwiseBf16, SigmoidMultiplyBf16},
 };
 
@@ -15,13 +15,11 @@ pub struct CudaAffineSharedExpertMoeExecution {
     backend: CudaBackend,
     config: AffineSharedExpertMoeConfig,
     tokens: usize,
-    router: AffineRouterBf16,
-    routed_gated: SelectedAffineGatedBf16Linear,
-    routed_down: SelectedAffineReduceBf16Linear,
-    shared_gate: AffineProjection,
-    shared_up: AffineProjection,
-    shared_down: AffineProjection,
-    shared_output_gate: AffineProjection,
+    routed: SharedRoutedExecution,
+    shared_gate: CheckpointProjection,
+    shared_up: CheckpointProjection,
+    shared_down: CheckpointProjection,
+    shared_output_gate: CheckpointProjection,
     shared_activation: ElementwiseBf16,
     output_add: ElementwiseBf16,
     sigmoid_multiply: SigmoidMultiplyBf16,
@@ -36,69 +34,38 @@ impl CudaAffineSharedExpertMoeExecution {
         weights: &AffineSharedExpertMoeWeights,
         tokens: usize,
     ) -> Result<Self> {
-        let expert = |input, output| {
-            AffineQuantizedConfig::new(input, output, config.group_size, config.expert_bits)
-        };
-        let shared = |input, output, weight| {
-            AffineProjection::new(
-                backend,
-                tokens,
-                input,
-                output,
-                config.group_size,
-                config.expert_bits,
-                weight,
-            )
+        let shared = |input, output, role, weight| {
+            CheckpointProjection::new(backend, tokens, input, output, role, weight)
         };
         Ok(Self {
             backend: backend.clone(),
             config,
             tokens,
-            router: backend.prepare_affine_router_bf16(
-                tokens,
-                AffineQuantizedConfig::new(
-                    config.hidden_size,
-                    config.expert_count,
-                    config.group_size,
-                    config.router_bits,
-                ),
-                config.top_k,
-            )?,
-            routed_gated: backend.prepare_batched_selected_affine_gated_bf16_linear(
-                tokens,
-                expert(config.hidden_size, config.routed_intermediate_size),
-                config.expert_count,
-                config.top_k,
-                config.activation,
-            )?,
-            routed_down: backend.prepare_batched_selected_affine_reduce_bf16_linear(
-                tokens,
-                expert(config.routed_intermediate_size, config.hidden_size),
-                config.expert_count,
-                config.top_k,
-            )?,
+            routed: SharedRoutedExecution::new(backend, config, weights, tokens)?,
             shared_gate: shared(
                 config.hidden_size,
                 config.shared_intermediate_size,
+                DenseRole::DenseGateUp,
                 &weights.shared_gate,
             )?,
             shared_up: shared(
                 config.hidden_size,
                 config.shared_intermediate_size,
+                DenseRole::DenseGateUp,
                 &weights.shared_up,
             )?,
             shared_down: shared(
                 config.shared_intermediate_size,
                 config.hidden_size,
+                DenseRole::DenseDown,
                 &weights.shared_down,
             )?,
-            shared_output_gate: AffineProjection::new(
+            shared_output_gate: CheckpointProjection::new(
                 backend,
                 tokens,
                 config.hidden_size,
                 1,
-                config.group_size,
-                config.router_bits,
+                DenseRole::Router,
                 &weights.shared_output_gate,
             )?,
             shared_activation: ElementwiseBf16::compile(
@@ -125,23 +92,7 @@ impl CudaAffineSharedExpertMoeExecution {
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
         self.validate(input, output)?;
-        let selection = self.router.execute(input, self.weights.router.tensors())?;
-        self.routed_gated.execute(
-            input,
-            selection.indices,
-            AffineQuantizedPairTensors {
-                gate: self.weights.routed_gate.tensors(),
-                up: self.weights.routed_up.tensors(),
-            },
-            &mut self.scratch.routed_intermediate,
-        )?;
-        self.routed_down.execute(
-            &self.scratch.routed_intermediate,
-            selection.indices,
-            selection.weights,
-            self.weights.routed_down.tensors(),
-            &mut self.scratch.routed_output,
-        )?;
+        self.routed.execute(&self.backend, &self.weights, input, &mut self.scratch)?;
         self.shared(input)?;
         self.output_add.add(
             &self.backend.inner.stream,

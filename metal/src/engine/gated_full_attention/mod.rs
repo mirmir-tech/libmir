@@ -3,8 +3,9 @@ mod load;
 use models::layout::{AttentionOutput, DecoderConfig, RotaryEmbeddingLayout};
 
 use super::{
-    Array, Error, KvCache, NormWeight, PagedContextMode, QuantizedLinear, Result, RopeOptions,
-    Stream, attention::apply_mrope, fused_gate_up::split_last, native_paged_attention_mode,
+    Array, Error, KvCache, NormWeight, PagedContextMode, Result, RopeOptions, Stream,
+    attention::apply_mrope, binding::BoundLinear, fused_gate_up::split_last,
+    native_paged_attention_mode,
 };
 
 #[derive(Debug, Clone)]
@@ -22,10 +23,10 @@ pub struct GatedFullAttentionConfig {
 #[derive(Debug)]
 pub struct GatedFullAttention {
     config: GatedFullAttentionConfig,
-    query: QuantizedLinear,
-    key: QuantizedLinear,
-    value: QuantizedLinear,
-    output: QuantizedLinear,
+    query: BoundLinear,
+    key: BoundLinear,
+    value: BoundLinear,
+    output: BoundLinear,
     query_norm: NormWeight,
     key_norm: NormWeight,
 }

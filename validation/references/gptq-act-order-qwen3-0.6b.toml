@@ -1,0 +1,39 @@
+# AlphaGaO/Qwen3-0.6B-GPTQ
+# revision 02ac74b3d895d6864aa7c7980a2de54e63a23b6e
+# oracle: MLX-LM dense QMM after independent GPTQ g_idx dequantization
+schema = 2
+family = "dense"
+model_type = "qwen3"
+dtypes = ["BF16"]
+vocab_size = 151936
+context_len = 40960
+kv_cache_blocks = 128
+prompt_tokens = [785, 6722, 315, 9625, 374]
+generated_tokens = [12095, 11, 323, 279, 6722, 315, 279, 3639, 4180, 374, 6515, 11, 422, 13, 356, 13]
+
+[gptq]
+bits = 4
+group_size = 128
+checkpoint_format = "gptq"
+symmetric = true
+activation_order = true
+scale_dtype = "F16"
+
+[tokenizer]
+vocabulary_entries = 151669
+max_token_id = 151668
+added_tokens = 27
+stop_token_ids = [151645, 151643, 128247]
+
+[first_logits]
+token_ids = [12095, 7407, 220, 9625, 304, 264, 279, 30083]
+scores = [16.479522705078125, 15.148487091064453, 14.859219551086426, 14.565713882446289, 14.263574600219727, 14.158040046691895, 14.112059593200684, 13.522300720214844]
+absolute_tolerance = 0.25
+
+[metal]
+max_load_active_bytes = 850000000
+max_decode_active_bytes = 850000000
+
+[cuda]
+max_load_active_bytes = 950000000
+max_decode_active_bytes = 950000000

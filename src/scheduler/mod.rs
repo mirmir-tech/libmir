@@ -1,31 +1,44 @@
+#[cfg(any(feature = "cuda", feature = "metal"))]
+mod generation;
+mod model;
+mod prefill;
 mod response;
+mod step;
+#[cfg(test)]
+mod tests;
 
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     sync::{Arc, Condvar, Mutex},
     time::{Duration, Instant},
 };
 
+pub use model::{ModelCoordinator, PendingModelDecode};
+pub use prefill::PrefillCoordinator;
 use runtime::{
     backend::{DecodeOutput, DecodeSequence, ModelHandle},
     scheduler::SchedulerConfig,
 };
+pub use step::GenerationStepState;
 
 use self::response::DecodeResponse;
 use crate::{Engine, Result};
+
+const REFILL_WAIT_MULTIPLIER: u64 = 25;
 
 pub struct DecodeCoordinator {
     engine: Engine,
     model: ModelHandle,
     config: SchedulerConfig,
+    step: Arc<GenerationStepState>,
     state: Mutex<State>,
     arrived: Condvar,
 }
 
 struct State {
     waiting: VecDeque<Pending>,
+    active: HashSet<uuid::Uuid>,
     running: bool,
-    refill_rows: usize,
     refill_steps: usize,
 }
 
@@ -33,18 +46,25 @@ struct Pending {
     sequence: DecodeSequence,
     response: Arc<DecodeResponse>,
     enqueued: Instant,
+    newly_active: bool,
 }
 
 impl DecodeCoordinator {
-    pub(super) fn new(engine: Engine, model: ModelHandle, config: SchedulerConfig) -> Self {
+    pub(super) fn new(
+        engine: Engine,
+        model: ModelHandle,
+        config: SchedulerConfig,
+        step: Arc<GenerationStepState>,
+    ) -> Self {
         Self {
             engine,
             model,
             config,
+            step,
             state: Mutex::new(State {
                 waiting: VecDeque::new(),
+                active: HashSet::new(),
                 running: false,
-                refill_rows: 2,
                 refill_steps: 0,
             }),
             arrived: Condvar::new(),
@@ -64,15 +84,29 @@ impl DecodeCoordinator {
         let Ok(mut state) = self.state.lock() else {
             return Err(scheduler_error("decode admission lock is poisoned"));
         };
+        let newly_active = state.active.insert(sequence.session_id);
+        if newly_active {
+            self.step.register_decode();
+        }
         state.waiting.push_back(Pending {
             sequence,
             response,
             enqueued: Instant::now(),
+            newly_active,
         });
         let leader = !state.running;
         state.running = true;
         self.arrived.notify_one();
         Ok(leader)
+    }
+
+    pub(super) fn release(&self, session_id: uuid::Uuid) {
+        if let Ok(mut state) = self.state.lock() {
+            if state.active.remove(&session_id) {
+                self.step.release_decode();
+            }
+            self.arrived.notify_all();
+        }
     }
 
     fn run(&self) {
@@ -103,11 +137,11 @@ impl DecodeCoordinator {
             return Err(scheduler_error("decode admission lock is poisoned"));
         };
         let limit = self.limit();
-        let target = state.target_rows(limit);
         let wait = state.refill_wait(self.config.decode_batch_wait_us);
-        let waited = self
-            .arrived
-            .wait_timeout_while(state, wait, |state| state.waiting.len() < target);
+        let waited = self.arrived.wait_timeout_while(state, wait, |state| {
+            let admitting = state.waiting.iter().any(|pending| pending.newly_active);
+            state.waiting.len() < collection_target(state.active.len(), admitting, limit)
+        });
         let Ok((mut state, _timeout)) = waited else {
             return Err(scheduler_error("decode admission wait is poisoned"));
         };
@@ -119,10 +153,16 @@ impl DecodeCoordinator {
         let oldest = pending.first().map_or(Duration::ZERO, |item| item.enqueued.elapsed());
         let rows = pending.len();
         let responses = pending.iter().map(|item| item.response.clone()).collect::<Vec<_>>();
+        let queue = pending.iter().map(|item| item.enqueued.elapsed()).collect::<Vec<_>>();
         let sequences = pending.into_iter().map(|item| item.sequence).collect();
         match self.engine.decode_sequences(&self.model, sequences) {
             Ok(outputs) if outputs.len() == responses.len() => {
-                for (response, output) in responses.into_iter().zip(outputs) {
+                for ((response, mut output), scheduler_queue) in
+                    responses.into_iter().zip(outputs).zip(queue)
+                {
+                    if let Some(timings) = output.timings.as_mut() {
+                        timings.scheduler_queue = scheduler_queue;
+                    }
                     response.complete(Ok(output));
                 }
             },
@@ -156,18 +196,9 @@ impl DecodeCoordinator {
 impl State {
     fn observe(&mut self, rows: usize) {
         if rows > 1 {
-            self.refill_rows = rows;
             self.refill_steps = 64;
         } else {
             self.refill_steps = self.refill_steps.saturating_sub(1);
-        }
-    }
-
-    fn target_rows(&self, limit: usize) -> usize {
-        if self.refill_steps == 0 {
-            2.min(limit)
-        } else {
-            self.refill_rows.min(limit)
         }
     }
 
@@ -175,7 +206,7 @@ impl State {
         Duration::from_micros(if self.refill_steps == 0 {
             base_us
         } else {
-            base_us.saturating_mul(8)
+            base_us.saturating_mul(REFILL_WAIT_MULTIPLIER)
         })
     }
 }
@@ -190,28 +221,11 @@ fn scheduler_error(message: &str) -> crate::Error {
     runtime::RuntimeError::Scheduler(message.into()).into()
 }
 
-#[cfg(test)]
-mod tests {
-    use std::{collections::VecDeque, time::Duration};
-
-    use super::State;
-
-    #[test]
-    fn successful_batch_retains_a_bounded_refill_hint() {
-        let mut state = State {
-            waiting: VecDeque::new(),
-            running: false,
-            refill_rows: 2,
-            refill_steps: 0,
-        };
-        assert_eq!(state.target_rows(16), 2);
-        assert_eq!(state.refill_wait(200), Duration::from_micros(200));
-        state.observe(4);
-        assert_eq!(state.target_rows(16), 4);
-        assert_eq!(state.refill_wait(200), Duration::from_micros(1_600));
-        for _ in 0..64 {
-            state.observe(1);
-        }
-        assert_eq!(state.target_rows(16), 2);
+fn collection_target(active: usize, admitting: bool, limit: usize) -> usize {
+    let active = active.min(limit).max(1);
+    if admitting && active < limit {
+        active + 1
+    } else {
+        active
     }
 }

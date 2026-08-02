@@ -1,9 +1,10 @@
 //! Prepared clamped-routed layer execution.
 
-use mircuda::Stream;
+use mircuda::{DeviceBuffer, Stream};
 
 use super::{
     ClampedRoutedConfig, ClampedRoutedQkvLowering,
+    experts::AutoClampedExperts,
     projection::{ClampedRoutedLinear, ClampedRoutedQkv},
     scratch::ClampedRoutedScratch,
     weights::ClampedRoutedLayerWeights,
@@ -16,6 +17,7 @@ use crate::{
     },
 };
 
+mod attention;
 mod execution;
 
 #[derive(Clone)]
@@ -37,9 +39,9 @@ pub(super) struct ClampedRoutedLayerExecution {
     router: ClampedRoutedLinear,
     top_k: RouterUnitTopK,
     kernels: ClampedRoutedKernels,
+    experts: Option<AutoClampedExperts>,
     attention: ClampedRoutedAttention,
     add: ElementwiseBf16,
-    scratch: ClampedRoutedScratch,
     stream: Stream,
     window: Option<usize>,
 }
@@ -65,12 +67,17 @@ impl ClampedRoutedLayerTemplate {
         &self,
         tokens: usize,
         storage: runtime::kv::KvStorageSpec,
+        phase: crate::ExecutionPhase,
     ) -> Result<ClampedRoutedLayerExecution> {
-        ClampedRoutedLayerExecution::new(self, tokens, storage)
+        ClampedRoutedLayerExecution::new(self, tokens, storage, phase)
     }
 
     pub(super) const fn weights(&self) -> &ClampedRoutedLayerWeights {
         &self.weights
+    }
+
+    pub(super) const fn window(&self) -> Option<usize> {
+        self.window
     }
 }
 
@@ -79,9 +86,19 @@ impl ClampedRoutedLayerExecution {
         template: &ClampedRoutedLayerTemplate,
         tokens: usize,
         storage: runtime::kv::KvStorageSpec,
+        phase: crate::ExecutionPhase,
     ) -> Result<Self> {
         let backend = &template.backend;
         let config = template.config;
+        let kernels = ClampedRoutedKernels::compile(&backend.inner.compiler, spec(config, tokens))?;
+        let experts = AutoClampedExperts::new(
+            backend,
+            config,
+            tokens,
+            phase,
+            &template.weights.experts,
+            kernels.clone(),
+        );
         Ok(Self {
             config,
             tokens,
@@ -118,20 +135,35 @@ impl ClampedRoutedLayerExecution {
                     top_k: config.top_k,
                 },
             )?,
-            kernels: ClampedRoutedKernels::compile(&backend.inner.compiler, spec(config, tokens))?,
+            kernels,
+            experts,
             attention: ClampedRoutedAttention::compile(
-                &backend.inner.compiler,
+                backend,
                 storage.cache.block_size,
                 config.query_heads,
                 config.kv_heads,
                 config.head_dim,
                 storage.cache.dtype,
+                template.window,
             )?,
             add: ElementwiseBf16::compile(&backend.inner.compiler, tokens * config.hidden)?,
-            scratch: ClampedRoutedScratch::new(backend, config, tokens)?,
             stream: backend.inner.stream.clone(),
             window: template.window,
         })
+    }
+
+    pub(super) fn prepare_rope(
+        &self,
+        positions: &DeviceBuffer<u32>,
+        scratch: &mut ClampedRoutedScratch,
+    ) -> Result<()> {
+        self.kernels.prepare_rope(
+            &self.stream,
+            positions,
+            &scratch.rope_inverse,
+            &mut scratch.rope_sines,
+            &mut scratch.rope_cosines,
+        )
     }
 }
 

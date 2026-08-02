@@ -70,3 +70,28 @@ extern "C" __global__ void libmir_cuda_store_paged_kv_batch_bf16(
                values[sequence * value_width + feature]);
   }
 }
+
+extern "C" __global__ void libmir_cuda_store_paged_kv_prefill_batch_bf16(
+    const __nv_bfloat16* keys, const __nv_bfloat16* values,
+    unsigned char* key_pages, unsigned char* value_pages,
+    const unsigned int* slot_mapping, unsigned int token_count,
+    unsigned int kv_heads, unsigned int key_head_dim,
+    unsigned int value_head_dim) {
+  const unsigned int key_width = kv_heads * key_head_dim;
+  const unsigned int value_width = kv_heads * value_head_dim;
+  const unsigned int width = max(key_width, value_width);
+  const unsigned int index = blockIdx.x * blockDim.x + threadIdx.x;
+  if (index >= token_count * width) return;
+  const unsigned int token = index / width;
+  const unsigned int feature = index % width;
+  const unsigned int page_token = slot_mapping[token];
+  if (page_token == 0xffffffffu) return;
+  if (feature < key_width) {
+    store_page(key_pages, page_token * key_width + feature,
+               keys[token * key_width + feature]);
+  }
+  if (feature < value_width) {
+    store_page(value_pages, page_token * value_width + feature,
+               values[token * value_width + feature]);
+  }
+}

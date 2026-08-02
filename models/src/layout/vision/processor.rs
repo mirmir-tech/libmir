@@ -51,11 +51,15 @@ impl ImageProcessorConfig {
         };
         let json = fs::read_to_string(path)?;
         let root: Value = serde_json::from_str(&json)?;
-        let value = root.get("image_processor").filter(|value| value.is_object()).unwrap_or(&root);
+        Self::from_value(&root, pipeline).map(Some)
+    }
+
+    pub fn from_value(root: &Value, pipeline: VisionPipeline) -> Result<Self> {
+        let value = root.get("image_processor").filter(|value| value.is_object()).unwrap_or(root);
         match pipeline {
-            VisionPipeline::PooledEncoder => parse_pooled(value).map(Self::Pooled).map(Some),
+            VisionPipeline::PooledEncoder => parse_pooled(value).map(Self::Pooled),
             VisionPipeline::SpatialMergeEncoder => {
-                parse_spatial_merge(value).map(Self::SpatialMerge).map(Some)
+                parse_spatial_merge(value).map(Self::SpatialMerge)
             },
         }
     }
@@ -133,9 +137,10 @@ fn float_triplet(value: &Value, field: &str) -> Result<[f64; 3]> {
                 .ok_or_else(|| invalid(format!("invalid image processor triplet {field}")))
         })
         .collect::<Result<_>>()?;
-    values
-        .try_into()
-        .map_err(|_values| invalid(format!("image processor {field} must contain three values")))
+    let Ok(values) = values.try_into() else {
+        return Err(invalid(format!("image processor {field} must contain three values")));
+    };
+    Ok(values)
 }
 
 fn invalid(message: impl Into<String>) -> ModelsError {

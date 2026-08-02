@@ -62,13 +62,21 @@ impl PreparedGeneration {
     pub(super) fn prefill(
         &self,
         session: &mut Session,
+        reserved_tokens: usize,
         sampling: SamplingLogits,
         progress: &mut dyn FnMut(ProgressEvent),
     ) -> Result<PrefillOutput> {
         match self {
-            Self::Text(prepared) => session.prefill(&prepared.tokens.token_ids, sampling, progress),
+            Self::Text(prepared) => session.prefill_generation_reserved(
+                &prepared.tokens.token_ids,
+                reserved_tokens,
+                sampling,
+                progress,
+            ),
             #[cfg(any(feature = "cuda", feature = "metal"))]
-            Self::Vision(prepared) => session.prefill_vision(prepared, sampling, progress),
+            Self::Vision(prepared) => {
+                session.prefill_vision_reserved(prepared, reserved_tokens, sampling, progress)
+            },
         }
     }
 }

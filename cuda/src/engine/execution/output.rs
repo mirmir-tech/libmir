@@ -79,7 +79,7 @@ pub(super) fn output_logits(backend: &CudaBackend, logits: &DeviceBuffer<bf16>) 
     })
 }
 
-pub(super) fn decode_output(output: Output) -> DecodeOutput {
+pub(in crate::engine) fn decode_output(output: Output) -> DecodeOutput {
     DecodeOutput {
         event: TokenEvent {
             token_id: output.token,
@@ -88,5 +88,6 @@ pub(super) fn decode_output(output: Output) -> DecodeOutput {
         },
         logits: output.logits,
         candidates: None,
+        timings: None,
     }
 }

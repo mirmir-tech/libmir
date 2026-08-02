@@ -5,7 +5,7 @@ use std::{
 
 use tokenizers::{Tokenizer, TruncationParams, TruncationStrategy};
 
-use super::{bpe, metadata, policy::TokenizerPolicy, tokenized};
+use super::{TokenizerAssets, bpe, metadata, policy::TokenizerPolicy, tokenized};
 use crate::{
     error::{ModelsError, Result},
     generation::GenerationConfig,
@@ -49,38 +49,37 @@ pub struct TextTokenizer {
     pub(super) inner: Tokenizer,
     path: PathBuf,
     kind: TokenizerKind,
-    added_tokens: BTreeMap<String, u32>,
-    configured_stop_token_ids: Vec<u32>,
-    eos_token_ids: Vec<u32>,
-    pad_token_id: Option<u32>,
+    pub(super) added_tokens: BTreeMap<String, u32>,
+    pub(super) configured_stop_token_ids: Vec<u32>,
+    pub(super) eos_token_ids: Vec<u32>,
+    pub(super) pad_token_id: Option<u32>,
     policy: TokenizerPolicy,
 }
 
 impl TextTokenizer {
     pub fn from_layout(layout: &ModelLayout) -> Result<Self> {
-        let path = layout
-            .tokenizer_path
-            .as_deref()
-            .ok_or_else(|| ModelsError::MissingFile(layout.root.join("tokenizer.json")))?;
+        let assets = TokenizerAssets::from_layout(layout)?;
+        let path = layout.root.join(&assets.primary);
         let configured_stop_token_ids =
             GenerationConfig::from_layout(layout)?.stop_token_ids().to_vec();
-        let (mut inner, kind) = if layout.vocab_path.as_deref() == Some(path) {
-            let merges_path = layout
-                .merges_path
+        let (mut inner, kind) = if assets.kind == TokenizerKind::BpeVocab {
+            let merges_path = assets
+                .merges
                 .as_deref()
+                .map(|merges| layout.root.join(merges))
                 .ok_or_else(|| ModelsError::MissingFile(layout.root.join("merges.txt")))?;
             let add_prefix_space = bpe::add_prefix_space(layout.tokenizer_config_path.as_deref())?;
             (
-                bpe::tokenizer_from_files(path, merges_path, add_prefix_space)?,
+                bpe::tokenizer_from_files(&path, &merges_path, add_prefix_space)?,
                 TokenizerKind::BpeVocab,
             )
-        } else if path.extension().is_some_and(|ext| ext == "model") {
+        } else if assets.kind == TokenizerKind::SentencePieceModel {
             (
-                super::sentencepiece::tokenizer_from_file(path)?,
+                super::sentencepiece::tokenizer_from_file(&path)?,
                 TokenizerKind::SentencePieceModel,
             )
         } else {
-            (Tokenizer::from_file(path)?, TokenizerKind::TokenizerJson)
+            (Tokenizer::from_file(&path)?, TokenizerKind::TokenizerJson)
         };
         let metadata = metadata::configure(
             &mut inner,
@@ -93,7 +92,7 @@ impl TextTokenizer {
         let pad_token_id = policy.pad_token.as_deref().and_then(|token| inner.token_to_id(token));
         Ok(Self {
             inner,
-            path: path.to_path_buf(),
+            path,
             kind,
             added_tokens,
             configured_stop_token_ids,

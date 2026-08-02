@@ -9,6 +9,7 @@ mod layers;
 mod shared_routed;
 
 pub use cache::DecoderCache;
+pub(super) use layers::prefill_evaluation_step;
 pub use layers::{
     LayerContext, LayerLoopOptions, LoweredLayer, LoweredPackedLayer, MixerKind, forward_layers,
     forward_packed_layers,
@@ -37,6 +38,20 @@ pub trait DecoderExecution: Debug + Send {
         stream: &Stream,
     ) -> Result<Array>;
 
+    fn supports_packed_prefill(&self) -> bool {
+        false
+    }
+
+    fn forward_packed_prefill_state(
+        &self,
+        _token_ids: &Array,
+        _caches: &mut [&mut DecoderCache],
+        _positions: &[i32],
+        _stream: &Stream,
+    ) -> Result<Array> {
+        Err(unsupported("packed prefill"))
+    }
+
     fn forward_greedy_decode(
         &self,
         token_ids: &Array,
@@ -54,6 +69,16 @@ pub trait DecoderExecution: Debug + Send {
         position: i32,
         stream: &Stream,
     ) -> Result<Array>;
+
+    fn forward_prefill_state(
+        &self,
+        token_ids: &Array,
+        cache: &mut DecoderCache,
+        position: i32,
+        stream: &Stream,
+    ) -> Result<Array> {
+        self.forward_prefill(token_ids, cache, position, stream)
+    }
 
     fn forward_pooled_multimodal(
         &self,
@@ -124,6 +149,24 @@ impl DecoderModel {
         self.execution.forward_packed_decode(token_ids, caches, positions, stream)
     }
 
+    pub(crate) fn supports_packed_prefill(&self) -> bool {
+        self.execution.supports_packed_prefill()
+    }
+
+    pub(crate) fn forward_packed_prefill_state(
+        &self,
+        token_ids: &Array,
+        caches: &mut [&mut DecoderCache],
+        positions: &[i32],
+        stream: &Stream,
+    ) -> Result<Array> {
+        if caches.len() != positions.len() {
+            return Err(Error::InvalidModel("packed cache and position row counts differ".into()));
+        }
+        self.execution
+            .forward_packed_prefill_state(token_ids, caches, positions, stream)
+    }
+
     pub(crate) fn forward_greedy_decode(
         &self,
         token_ids: &Array,
@@ -134,14 +177,14 @@ impl DecoderModel {
         self.execution.forward_greedy_decode(token_ids, cache, position, stream)
     }
 
-    pub(crate) fn forward_prefill(
+    pub(crate) fn forward_prefill_state(
         &self,
         token_ids: &Array,
         cache: &mut DecoderCache,
         position: i32,
         stream: &Stream,
     ) -> Result<Array> {
-        self.execution.forward_prefill(token_ids, cache, position, stream)
+        self.execution.forward_prefill_state(token_ids, cache, position, stream)
     }
 
     pub(crate) fn forward_pooled_multimodal(

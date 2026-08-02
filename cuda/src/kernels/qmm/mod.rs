@@ -1,52 +1,22 @@
+mod kernel;
+
+use kernel::{
+    AffineQmmFallbackKernel, AffineQmmInt4Kernel, AffineQmmInt8Kernel, AffineQmmScalarInt4Kernel,
+    AffineQmmScalarInt8Kernel,
+};
 use mircuda::{
-    CompileOptions, Compiler, DeviceBuffer, LaunchConfig, Stream, TypedKernel, bf16, cuda_export,
-    cuda_kernel_file,
+    CompileOptions, Compiler, DeviceBuffer, LaunchConfig, Stream, TypedKernel, bf16,
+    cuda_kernel_file, cuda_kernel_files,
 };
 
 use super::{
-    affine::AffineGemvSpec,
+    affine::{AffineGemvSpec, compile_options},
     geometry::{indexed, narrow, product, require},
 };
 use crate::{Error, Result};
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests;
-
-cuda_export!(
-    AffineQmmInt4Kernel = "libmir_cuda_affine_qmm_bf16_int4"(
-        input: &DeviceBuffer<bf16>, weight: &DeviceBuffer<u32>,
-        scales: &DeviceBuffer<bf16>, biases: &DeviceBuffer<bf16>,
-        output: &mut DeviceBuffer<bf16>, tokens: u32, input_features: u32,
-        output_features: u32, group_size: u32, matrix_index: u32,
-    )
-);
-
-cuda_export!(
-    AffineQmmScalarInt4Kernel = "libmir_cuda_affine_qmm_scalar_bf16_int4"(
-        input: &DeviceBuffer<bf16>, weight: &DeviceBuffer<u32>,
-        scales: &DeviceBuffer<bf16>, biases: &DeviceBuffer<bf16>,
-        output: &mut DeviceBuffer<bf16>, tokens: u32, input_features: u32,
-        output_features: u32, group_size: u32, matrix_index: u32,
-    )
-);
-
-cuda_export!(
-    AffineQmmScalarInt8Kernel = "libmir_cuda_affine_qmm_scalar_bf16_int8"(
-        input: &DeviceBuffer<bf16>, weight: &DeviceBuffer<u32>,
-        scales: &DeviceBuffer<bf16>, biases: &DeviceBuffer<bf16>,
-        output: &mut DeviceBuffer<bf16>, tokens: u32, input_features: u32,
-        output_features: u32, group_size: u32, matrix_index: u32,
-    )
-);
-
-cuda_export!(
-    AffineQmmInt8Kernel = "libmir_cuda_affine_qmm_bf16_int8"(
-        input: &DeviceBuffer<bf16>, weight: &DeviceBuffer<u32>,
-        scales: &DeviceBuffer<bf16>, biases: &DeviceBuffer<bf16>,
-        output: &mut DeviceBuffer<bf16>, tokens: u32, input_features: u32,
-        output_features: u32, group_size: u32, matrix_index: u32,
-    )
-);
 
 /// Fixed token and matrix geometry for affine quantized prefill.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -60,7 +30,9 @@ impl AffineQmmSpec {
         if tokens == 0 {
             return Err(Error::InvalidQuantizedGemv("token count must be non-zero"));
         }
-        if !matrix.input_features.is_multiple_of(16) || !matrix.group_size.is_multiple_of(16) {
+        if matches!(matrix.bits, 4 | 8)
+            && (!matrix.input_features.is_multiple_of(16) || !matrix.group_size.is_multiple_of(16))
+        {
             return Err(Error::InvalidQuantizedGemv(
                 "tensor-core prefill requires input and group alignment to 16",
             ));
@@ -92,23 +64,33 @@ enum QmmKernel {
     ScalarInt8(TypedKernel<AffineQmmScalarInt8Kernel>),
     Int4(TypedKernel<AffineQmmInt4Kernel>),
     Int8(TypedKernel<AffineQmmInt8Kernel>),
+    Fallback(TypedKernel<AffineQmmFallbackKernel>),
 }
 
 impl AffineQuantizedQmm {
     pub fn compile(compiler: &Compiler, spec: AffineQmmSpec) -> Result<Self> {
-        let scalar = spec.tokens < 32;
+        let scalar = spec.tokens < 32 || !matches!(spec.matrix.bits, 4 | 8);
         let source = if scalar {
-            cuda_kernel_file!("../../../kernels/affine_qmm_scalar_bf16.cu")
+            cuda_kernel_files!(
+                "affine_qmm_scalar_bf16.cu";
+                "../../../kernels/affine_packed.cuh",
+                "../../../kernels/affine_qmm_scalar_bf16.cu",
+            )
         } else {
             cuda_kernel_file!("../../../kernels/affine_qmm_bf16.cu")
         };
-        let module =
-            compiler.compile(source, &CompileOptions { fast_math: true, ..Default::default() })?;
+        let options = if scalar {
+            compile_options(spec.matrix.bits, true)
+        } else {
+            CompileOptions { fast_math: true, ..Default::default() }
+        };
+        let module = compiler.compile(source, &options)?;
         let kernel = match (scalar, spec.matrix.bits) {
             (true, 4) => QmmKernel::ScalarInt4(module.kernel()?),
             (true, 8) => QmmKernel::ScalarInt8(module.kernel()?),
             (false, 4) => QmmKernel::Int4(module.kernel()?),
             (false, 8) => QmmKernel::Int8(module.kernel()?),
+            (true, 2 | 3 | 5 | 6) => QmmKernel::Fallback(module.kernel()?),
             _ => return Err(Error::InvalidQuantizedGemv("unsupported weight precision")),
         };
         Ok(Self { kernel, spec })
@@ -154,11 +136,17 @@ impl AffineQuantizedQmm {
             },
             QmmKernel::Int4(kernel) => launch_kernel(kernel, stream, config, launch, dimensions),
             QmmKernel::Int8(kernel) => launch_kernel(kernel, stream, config, launch, dimensions),
+            QmmKernel::Fallback(kernel) => {
+                launch_kernel(kernel, stream, config, launch, dimensions)
+            },
         }
     }
 
     const fn scalar(&self) -> bool {
-        matches!(self.kernel, QmmKernel::ScalarInt4(_) | QmmKernel::ScalarInt8(_))
+        matches!(
+            self.kernel,
+            QmmKernel::ScalarInt4(_) | QmmKernel::ScalarInt8(_) | QmmKernel::Fallback(_)
+        )
     }
 
     #[must_use]

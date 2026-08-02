@@ -18,7 +18,10 @@ pub enum Quantization {
     Int4,
     Fp8,
     NvFp4,
+    Nf4,
+    Fp4,
     MxFp4,
+    MxFp8,
     Custom(String),
 }
 
@@ -26,7 +29,14 @@ impl Quantization {
     #[must_use]
     pub fn is_quantized(&self) -> bool {
         match self {
-            Self::Int4 | Self::Int8 | Self::Fp8 | Self::NvFp4 | Self::MxFp4 => true,
+            Self::Int4
+            | Self::Int8
+            | Self::Fp8
+            | Self::NvFp4
+            | Self::Nf4
+            | Self::Fp4
+            | Self::MxFp4
+            | Self::MxFp8 => true,
             Self::Custom(kind) => {
                 let kind = kind.to_ascii_lowercase();
                 kind.contains("bit")

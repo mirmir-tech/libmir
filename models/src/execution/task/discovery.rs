@@ -2,7 +2,7 @@ use super::{ModelTask, PoolingMode, SequenceScoringTask, sentence_transformers};
 use crate::{
     error::{ModelsError, Result},
     layout::{DecoderConfig, EncoderConfig, ModelLayout},
-    weights::{EncoderTensorSchema, TensorCatalog, TextTensorLayout},
+    weights::{EncoderBindingPlan, TensorCatalog, TextTensorLayout},
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -18,6 +18,7 @@ pub enum TaskExecutionPlan {
     SequenceScoring {
         encoder: EncoderConfig,
         task: SequenceScoringTask,
+        bindings: EncoderBindingPlan,
     },
 }
 
@@ -33,28 +34,21 @@ impl TaskExecutionPlan {
             });
         }
         if sequence_scoring_layout(catalog) {
-            let encoder = EncoderConfig::from_layout(layout)?;
-            if encoder.num_labels == 0 {
-                return Err(invalid("sequence scoring requires at least one label"));
-            }
-            let readiness = EncoderTensorSchema::discover(&encoder, catalog).readiness(catalog);
-            if !readiness.is_ready() {
-                return Err(invalid(format!(
-                    "sequence scoring tensor contract is incomplete: {} required tensors are missing",
-                    readiness.missing.len()
-                )));
-            }
-            return Ok(Self::SequenceScoring {
-                task: SequenceScoringTask {
-                    labels: encoder.num_labels,
-                    pooling: PoolingMode::Cls,
-                },
-                encoder,
-            });
+            return sequence_scoring(EncoderConfig::from_layout(layout)?, catalog);
         }
         Ok(Self::Generation {
             decoder: DecoderConfig::from_layout(layout)?,
         })
+    }
+
+    pub fn discover_remote_sequence_scoring(
+        config: &serde_json::Value,
+        catalog: &TensorCatalog,
+    ) -> Result<Option<Self>> {
+        if !sequence_scoring_layout(catalog) {
+            return Ok(None);
+        }
+        Ok(Some(sequence_scoring(EncoderConfig::from_value(config)?, catalog)?))
     }
 
     #[must_use]
@@ -65,6 +59,21 @@ impl TaskExecutionPlan {
             Self::SequenceScoring { task, .. } => ModelTask::SequenceScoring(*task),
         }
     }
+}
+
+fn sequence_scoring(encoder: EncoderConfig, catalog: &TensorCatalog) -> Result<TaskExecutionPlan> {
+    if encoder.num_labels == 0 {
+        return Err(invalid("sequence scoring requires at least one label"));
+    }
+    let bindings = EncoderBindingPlan::discover(&encoder, catalog)?;
+    Ok(TaskExecutionPlan::SequenceScoring {
+        task: SequenceScoringTask {
+            labels: encoder.num_labels,
+            pooling: PoolingMode::Cls,
+        },
+        encoder,
+        bindings,
+    })
 }
 
 fn sequence_scoring_layout(catalog: &TensorCatalog) -> bool {

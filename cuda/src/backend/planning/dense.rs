@@ -2,7 +2,7 @@ use super::{CudaExecutionPlanner, ExecutionPhase, PlanSource};
 use crate::{Error, Result};
 
 /// Semantic role of a dense projection.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum DenseRole {
     AttentionQkv,
     AttentionOutput,
@@ -13,16 +13,17 @@ pub enum DenseRole {
 }
 
 /// Model-level dense implementation selected for a fixed shape.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum DenseExecution {
     Matrix,
     Vector,
+    CublasLt,
     BlockFp8Vector,
     Fp8Int4Vector,
 }
 
 /// Complete generic key for a dense plan.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct DensePlanRequest {
     pub phase: ExecutionPhase,
     pub role: DenseRole,
@@ -52,13 +53,32 @@ impl DensePlan {
 
 impl CudaExecutionPlanner {
     pub fn plan_dense(self, request: DensePlanRequest) -> Result<DensePlan> {
+        self.plan_dense_with_weights(request, false)
+    }
+
+    pub(in crate::backend) fn plan_dense_with_prepared_weights(
+        self,
+        request: DensePlanRequest,
+    ) -> Result<DensePlan> {
+        self.plan_dense_with_weights(request, true)
+    }
+
+    fn plan_dense_with_weights(
+        self,
+        request: DensePlanRequest,
+        compressed_weights_available: bool,
+    ) -> Result<DensePlan> {
         validate(request)?;
         let sm12 = self.hardware().compute_capability().0 == 12;
         let output_head = request.role == DenseRole::OutputHead;
         let policy = self.policy();
-        let quantized = policy.numerical == super::CudaNumericalPolicy::Throughput
+        let quantized = compressed_weights_available
+            && policy.numerical == super::CudaNumericalPolicy::Throughput
             && policy.admission == super::CudaKernelAdmission::Experimental
-            && request.role == DenseRole::AttentionOutput
+            && matches!(
+                request.role,
+                DenseRole::AttentionOutput | DenseRole::DenseGateUp | DenseRole::DenseDown
+            )
             && request.phase == ExecutionPhase::Decode
             && request.tokens == 1
             && request.input_features.is_multiple_of(128)
@@ -72,28 +92,44 @@ impl CudaExecutionPlanner {
             super::CudaDenseVectorPolicy::Tuned => true,
             super::CudaDenseVectorPolicy::Role(role) => role == request.role,
         };
+        let vendor_selected = match policy.dense_vendor {
+            super::CudaDenseVendorPolicy::Disabled => false,
+            super::CudaDenseVendorPolicy::Tuned => true,
+            super::CudaDenseVendorPolicy::Role(role) => role == request.role,
+        };
+        let explicit_vendor = policy.numerical == super::CudaNumericalPolicy::Throughput
+            && policy.admission == super::CudaKernelAdmission::Experimental
+            && vendor_selected
+            && request.input_features.is_multiple_of(8)
+            && request.output_features.is_multiple_of(8);
+        let vendor = explicit_vendor;
         let experimental = policy.numerical == super::CudaNumericalPolicy::Throughput
             && policy.admission == super::CudaKernelAdmission::Experimental
             && selected
-            && tuned_decode_vector(request);
+            && request.phase == ExecutionPhase::Decode
+            && request.tokens == 1
+            && request.input_features.is_multiple_of(2);
+        let tuned_vector = sm12 && tuned_decode_attention_vector(request);
         let vector = sm12
             && request.phase == ExecutionPhase::Decode
             && request.tokens == 1
-            && (output_head || experimental);
+            && (output_head || tuned_vector || experimental);
         let plan = DensePlan {
             execution: if fp8_int4 {
                 DenseExecution::Fp8Int4Vector
             } else if block_fp8 {
                 DenseExecution::BlockFp8Vector
+            } else if vendor {
+                DenseExecution::CublasLt
             } else if vector {
                 DenseExecution::Vector
             } else {
                 DenseExecution::Matrix
             },
-            source: if block_fp8 || fp8_int4 || experimental {
+            source: if block_fp8 || fp8_int4 || experimental || explicit_vendor {
                 PlanSource::ExplicitPolicy
             } else if vector {
-                PlanSource::Tuned
+                PlanSource::Heuristic
             } else {
                 PlanSource::Fallback
             },
@@ -109,7 +145,9 @@ impl CudaExecutionPlanner {
             numerical_policy = ?policy.numerical,
             kernel_admission = ?policy.admission,
             dense_vector_policy = ?policy.dense_vectors,
+            dense_vendor_policy = ?policy.dense_vendor,
             dense_weight_policy = ?policy.dense_weights,
+            compressed_weights_available,
             phase = ?request.phase,
             role = ?request.role,
             tokens = request.tokens,
@@ -123,19 +161,15 @@ impl CudaExecutionPlanner {
     }
 }
 
-const fn tuned_decode_vector(request: DensePlanRequest) -> bool {
-    match request.role {
-        DenseRole::AttentionQkv => {
-            request.input_features == 2_816 && request.output_features >= 8_192
-        },
-        DenseRole::AttentionOutput => {
-            request.input_features == 4_096 && request.output_features == 2_816
-        },
-        DenseRole::DenseGateUp => {
-            request.input_features == 2_816 && request.output_features == 4_224
-        },
-        DenseRole::DenseDown | DenseRole::Router | DenseRole::OutputHead => false,
-    }
+const fn tuned_decode_attention_vector(request: DensePlanRequest) -> bool {
+    matches!(request.phase, ExecutionPhase::Decode)
+        && request.tokens == 1
+        && request.input_features.is_multiple_of(2)
+        && (matches!(
+            request.role,
+            DenseRole::AttentionQkv | DenseRole::AttentionOutput | DenseRole::Router
+        ) || (matches!(request.role, DenseRole::DenseDown)
+            && request.input_features / request.output_features >= 2))
 }
 
 fn validate(request: DensePlanRequest) -> Result<()> {

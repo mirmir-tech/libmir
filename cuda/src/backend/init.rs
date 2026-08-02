@@ -2,8 +2,10 @@ use std::sync::Arc;
 
 use mircuda::{Driver, MemoryPoolStats};
 
-use super::{CudaBackend, CudaExecutionPlanner, CudaHardwareProfile, CudaRuntime};
-use crate::{CudaConfig, Error, Result, TensorUploadBatch};
+use super::{
+    CudaBackend, CudaExecutionPlanner, CudaHardwareProfile, CudaRuntime, tuning::CudaAutoTuner,
+};
+use crate::{CudaConfig, Error, Result, TensorUploadBatch, kernels::DenseCast};
 
 impl CudaBackend {
     /// Initializes one CUDA device, explicit stream, memory pool, and plan
@@ -15,6 +17,7 @@ impl CudaBackend {
             nvrtc_include_paths,
             nvrtc_cache_directory,
             planning,
+            tuning,
             model_session: _,
         } = config;
         let driver = Driver::initialize()?;
@@ -36,6 +39,7 @@ impl CudaBackend {
             },
         )?;
         let planner = CudaExecutionPlanner::new(CudaHardwareProfile::from_device(&info)?, planning);
+        let tuner = CudaAutoTuner::new(&info, tuning);
         Ok(Self {
             inner: Arc::new(CudaRuntime {
                 device: info,
@@ -43,7 +47,9 @@ impl CudaBackend {
                 stream,
                 pool,
                 compiler,
+                mxfp8_scratch: std::sync::Mutex::new(std::collections::HashMap::new()),
                 planner,
+                tuner,
             }),
         })
     }
@@ -78,5 +84,9 @@ impl CudaBackend {
             self.inner.stream.clone(),
             self.inner.pool.clone(),
         )
+    }
+
+    pub(crate) fn prepare_dense_cast(&self) -> Result<DenseCast> {
+        DenseCast::compile(&self.inner.compiler)
     }
 }

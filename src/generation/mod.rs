@@ -4,23 +4,20 @@ use foundation::protocol::ChatCompletionRequest;
 use models::generation::{
     GenerationChannel, GenerationOverrides, GenerationSettings, GenerationToken, OutputNormalizer,
 };
-use runtime::{
-    backend::{CandidateLogitsTrace, LogitsTrace, SamplingLogits},
-    metrics::GenerationMetricsRecorder,
-    sampling::{Sampler, SamplerConfig},
-};
+use runtime::{metrics::GenerationMetricsRecorder, sampling::Sampler};
 
 use crate::{CancellationToken, Error, Model, ProgressEvent, Result};
 
 mod input;
 mod output;
+mod sampling;
 
 use input::PreparedGeneration;
 pub use output::GenerationOutput;
+use sampling::{choose, request_sampling, sampler_config};
 
 impl Model {
-    /// Generates a complete response and streams normalized token deltas to
-    /// `token`.
+    /// Generates and streams a complete normalized response.
     pub fn generate(
         &self,
         request: &ChatCompletionRequest,
@@ -71,6 +68,7 @@ impl Model {
         let mut metrics = GenerationMetricsRecorder::new();
         metrics.record_prompt(Duration::ZERO, prompt_tokens);
         let tokenizer = descriptor.tokenizer();
+        let stop_token_ids = tokenizer.stop_token_ids();
         let mut normalizer = OutputNormalizer::new(tokenizer, prepared.prompt_text());
         let mut text_decoder = tokenizer.decoder();
         let decoder = descriptor.decoder().ok_or(Error::TaskMismatch {
@@ -82,7 +80,7 @@ impl Model {
         let mut session = self.session();
         let sampling = request_sampling(settings, vocab_size, &mut sampler);
         let prefill_started = Instant::now();
-        let prefill = prepared.prefill(&mut session, sampling, progress)?;
+        let prefill = prepared.prefill(&mut session, settings.max_tokens, sampling, progress)?;
         cancellation.check()?;
         metrics.record_prefill(prefill_started.elapsed(), prompt_tokens);
         let mut history = sampling.requires_history().then(|| prepared.token_ids().to_vec());
@@ -98,33 +96,47 @@ impl Model {
         let mut reasoning = String::new();
         let mut tool_calls = String::new();
         let mut finish_reason = "max_tokens";
-        progress(ProgressEvent::decode_tokens(0, settings.max_tokens));
         while token_ids.len() < settings.max_tokens {
             cancellation.check()?;
             token_ids.push(next);
-            progress(ProgressEvent::decode_tokens(token_ids.len(), settings.max_tokens));
             if let Some(history) = history.as_mut() {
                 history.push(next);
             }
             let piece = text_decoder.step(next)?.unwrap_or_default();
-            if let Some(delta) = normalizer.push(next, piece) {
+            let delta = normalizer.push(next, piece);
+            if let Some(delta) = delta.as_ref() {
                 match delta.channel {
                     GenerationChannel::Content => text.push_str(&delta.text),
                     GenerationChannel::Reasoning => reasoning.push_str(&delta.text),
                     GenerationChannel::ToolCalls => tool_calls.push_str(&delta.text),
                 }
+            }
+            let stopped = should_stop(settings, token_ids.len(), next, &stop_token_ids);
+            if stopped {
+                finish_reason = "stop";
+            }
+            let finished = stopped || token_ids.len() == settings.max_tokens;
+            let pending = if finished {
+                None
+            } else {
+                let started = Instant::now();
+                let sampling = request_sampling(settings, vocab_size, &mut sampler);
+                Some((started, session.start_decode(next, sampling)?))
+            };
+            if token_ids.len() == 1 {
+                progress(ProgressEvent::decode_tokens(0, settings.max_tokens));
+            }
+            progress(ProgressEvent::decode_tokens(token_ids.len(), settings.max_tokens));
+            if let Some(delta) = delta {
                 token(delta);
             }
-            if tokenizer.stop_token_ids().contains(&next) {
-                finish_reason = "stop";
+            if finished {
                 break;
             }
-            if token_ids.len() == settings.max_tokens {
+            let Some((decode_started, pending)) = pending else {
                 break;
-            }
-            let decode_started = Instant::now();
-            let output =
-                session.decode(next, request_sampling(settings, vocab_size, &mut sampler))?;
+            };
+            let output = session.finish_decode(pending)?;
             metrics.record_decode(decode_started.elapsed());
             next = choose(
                 output.event.token_id,
@@ -151,89 +163,25 @@ impl Model {
     }
 }
 
+fn should_stop(
+    settings: GenerationSettings,
+    generated_tokens: usize,
+    token: u32,
+    stop_tokens: &[u32],
+) -> bool {
+    !settings.ignore_eos && generated_tokens >= settings.min_tokens && stop_tokens.contains(&token)
+}
+
 fn overrides(request: &ChatCompletionRequest) -> GenerationOverrides {
     GenerationOverrides {
         max_tokens: request.max_tokens,
+        min_tokens: request.min_tokens,
+        ignore_eos: request.ignore_eos,
         temperature: request.temperature,
         top_p: request.top_p,
         top_k: request.top_k,
         repetition_penalty: request.repetition_penalty,
     }
-}
-
-fn sampler_config(
-    settings: GenerationSettings,
-    seed: Option<u64>,
-    vocab_size: usize,
-) -> SamplerConfig {
-    SamplerConfig {
-        temperature: settings.temperature,
-        top_p: settings.top_p,
-        top_k: settings.top_k,
-        repetition_penalty: settings.repetition_penalty,
-        vocab_size: Some(vocab_size),
-        seed: seed.unwrap_or_else(|| SamplerConfig::default().seed),
-    }
-}
-
-fn request_sampling(
-    settings: GenerationSettings,
-    vocab_size: usize,
-    sampler: &mut Sampler,
-) -> SamplingLogits {
-    let mut sampling = sampling(settings, vocab_size);
-    match &mut sampling {
-        SamplingLogits::SampleTopK { draw, .. } | SamplingLogits::Sample { draw, .. } => {
-            *draw = sampler.draw_unit_f32();
-        },
-        SamplingLogits::None | SamplingLogits::Full | SamplingLogits::TopK { .. } => {},
-    }
-    sampling
-}
-
-fn sampling(settings: GenerationSettings, vocab_size: usize) -> SamplingLogits {
-    let greedy = (settings.temperature <= f32::EPSILON || settings.top_k == 1)
-        && settings.repetition_penalty <= 1.0;
-    if greedy {
-        return SamplingLogits::None;
-    }
-    if settings.repetition_penalty <= 1.0 && settings.top_k > 0 && settings.top_k < vocab_size {
-        if settings.top_p < 1.0 {
-            return SamplingLogits::Sample {
-                vocab_size,
-                temperature: settings.temperature,
-                top_p: settings.top_p,
-                top_k: settings.top_k,
-                draw: 0.0,
-            };
-        }
-        return SamplingLogits::SampleTopK {
-            k: settings.top_k,
-            vocab_size,
-            temperature: settings.temperature,
-            draw: 0.0,
-        };
-    }
-    SamplingLogits::Full
-}
-
-fn choose(
-    token: Option<u32>,
-    logits: Option<&LogitsTrace>,
-    candidates: Option<&CandidateLogitsTrace>,
-    history: &[u32],
-    sampler: &mut Sampler,
-) -> Result<u32> {
-    if let Some(token) = token {
-        return Ok(token);
-    }
-    if let Some(candidates) = candidates {
-        return Ok(sampler.sample_candidates_with_history(candidates, history)?);
-    }
-    let logits = logits.ok_or_else(|| {
-        runtime::RuntimeError::Backend("backend returned neither a token nor logits".into())
-    })?;
-    Ok(sampler.sample_with_history(logits, history)?)
 }
 
 #[cfg(test)]

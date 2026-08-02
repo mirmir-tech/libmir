@@ -7,17 +7,22 @@ description = "CUDA inference backend for libmir"
 repository.workspace = true
 
 [dependencies]
+architecture = { package = "libmir-admission", version = "0.3.0", path = "../admission" }
 async-trait.workspace = true
 foundation = { package = "libmir-core", version = "0.3.0", path = "../core" }
 mircuda.workspace = true
 models = { package = "libmir-models", version = "0.3.0", path = "../models" }
 runtime = { package = "libmir-runtime", version = "0.3.0", path = "../runtime" }
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1.1", features = ["fs"] }
+
 [dev-dependencies]
-serde_json.workspace = true
 
 [lints]
 workspace = true

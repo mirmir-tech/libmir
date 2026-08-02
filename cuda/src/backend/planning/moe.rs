@@ -2,13 +2,13 @@ use super::{CudaExecutionPlanner, ExecutionPhase, PlanSource};
 use crate::{Error, Result};
 
 /// Quantized expert representation consumed by a planned `MoE` operation.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum MoeQuantization {
     NvFp4,
 }
 
 /// Model-level routed expert implementation.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum MoeExecution {
     DirectW4A4,
     HybridW4A4,
@@ -19,7 +19,7 @@ pub enum MoeExecution {
 }
 
 /// Generic routed-expert selection key.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct MoePlanRequest {
     pub phase: ExecutionPhase,
     pub quantization: MoeQuantization,
@@ -75,9 +75,7 @@ impl CudaExecutionPlanner {
     pub fn plan_moe(self, request: MoePlanRequest) -> Result<MoePlan> {
         validate(request)?;
         let policy = self.policy();
-        let weight_only = request.phase == ExecutionPhase::Decode
-            && request.tokens > 1
-            && policy.moe_batch == super::CudaMoeBatchPolicy::W4A16;
+        let weight_only = policy.moe_batch == super::CudaMoeBatchPolicy::W4A16;
         let forced_bucketed = request.phase == ExecutionPhase::Decode
             && request.tokens > 1
             && policy.moe_batch == super::CudaMoeBatchPolicy::W4A4Bucketed;
@@ -106,7 +104,7 @@ impl CudaExecutionPlanner {
             && policy.moe_batch == super::CudaMoeBatchPolicy::Auto
             && routed_pairs <= 20;
         let execution = match request.phase {
-            ExecutionPhase::Decode if weight_only => MoeExecution::SelectedWeightOnly,
+            _ if weight_only => MoeExecution::SelectedWeightOnly,
             ExecutionPhase::Decode if forced_bucketed => MoeExecution::Bucketed,
             ExecutionPhase::Decode if fused => MoeExecution::FusedIndexedGrouped,
             ExecutionPhase::Decode if direct => MoeExecution::DirectW4A4,
@@ -119,7 +117,7 @@ impl CudaExecutionPlanner {
         let source = if fused || direct || hybrid || weight_only || forced_bucketed {
             PlanSource::ExplicitPolicy
         } else if tuned_hybrid || self.hardware().compute_capability().0 == 12 {
-            PlanSource::Tuned
+            PlanSource::Heuristic
         } else {
             PlanSource::Fallback
         };

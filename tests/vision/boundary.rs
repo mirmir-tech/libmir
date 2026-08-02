@@ -80,7 +80,10 @@ fn attention_bytes(patches: usize, heads: usize) -> Result<u64> {
         .and_then(|value| value.checked_mul(patches as u128))
         .and_then(|value| value.checked_mul(heads as u128))
         .ok_or_else(overflow)?;
-    u64::try_from(bytes).map_err(|error| backend_error(&error.to_string()).into())
+    match u64::try_from(bytes) {
+        Ok(bytes) => Ok(bytes),
+        Err(error) => Err(backend_error(&error.to_string()).into()),
+    }
 }
 
 fn merge_factor(model: &libmir::Model) -> Result<usize> {
@@ -109,12 +112,15 @@ fn spatial_image(
 }
 
 fn solid_png(side: usize) -> Result<Vec<u8>> {
-    let side = u32::try_from(side).map_err(|error| backend_error(&error.to_string()))?;
+    let side = match u32::try_from(side) {
+        Ok(side) => side,
+        Err(error) => return Err(backend_error(&error.to_string()).into()),
+    };
     let image = RgbImage::from_pixel(side, side, Rgb([0, 0, 0]));
     let mut encoded = Cursor::new(Vec::new());
-    DynamicImage::ImageRgb8(image)
-        .write_to(&mut encoded, ImageFormat::Png)
-        .map_err(|error| backend_error(&error.to_string()))?;
+    if let Err(error) = DynamicImage::ImageRgb8(image).write_to(&mut encoded, ImageFormat::Png) {
+        return Err(backend_error(&error.to_string()).into());
+    }
     Ok(encoded.into_inner())
 }
 
@@ -132,6 +138,8 @@ fn request(model: &libmir::Model) -> ChatCompletionRequest {
         tool_choice: None,
         stream: false,
         max_tokens: Some(1),
+        min_tokens: None,
+        ignore_eos: None,
         temperature: Some(0.0),
         top_p: Some(1.0),
         top_k: Some(0),

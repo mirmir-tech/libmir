@@ -43,14 +43,14 @@ fn waiting_decode_runs_between_prefill_steps() -> Result<()> {
     let mut second = queue.acquire_prefill()?;
     second.push("vision-1");
     drop(second);
-    decode
-        .join()
-        .map_err(|_| Error::State("decode test thread panicked".into()))??;
+    let Ok(decoded) = decode.join() else {
+        return Err(Error::State("decode test thread panicked".into()));
+    };
+    decoded?;
 
-    let events = queue
-        .runner
-        .lock()
-        .map_err(|_| Error::State("CUDA model runner lock is poisoned".into()))?;
+    let Ok(events) = queue.runner.lock() else {
+        return Err(Error::State("CUDA model runner lock is poisoned".into()));
+    };
     assert_eq!(*events, ["vision-0", "decode", "vision-1"]);
     drop(events);
     Ok(())
@@ -58,11 +58,11 @@ fn waiting_decode_runs_between_prefill_steps() -> Result<()> {
 
 fn wait_for_decode<T>(queue: &RunnerQueue<T>) -> Result<()> {
     for _attempt in 0..10_000 {
-        let waiting = queue
-            .state
-            .lock()
-            .map_err(|_| Error::State("CUDA runner queue lock is poisoned".into()))?
-            .waiting_decode;
+        let Ok(state) = queue.state.lock() else {
+            return Err(Error::State("CUDA runner queue lock is poisoned".into()));
+        };
+        let waiting = state.waiting_decode;
+        drop(state);
         if waiting != 0 {
             return Ok(());
         }

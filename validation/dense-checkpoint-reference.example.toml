@@ -1,0 +1,31 @@
+# Copy this file for one real checkpoint and replace every example value with
+# an independently established reference. Do not use generated output from the
+# implementation under test as its own oracle.
+schema = 2
+family = "dense"
+model_type = "reference-model-type"
+dtypes = ["BF16"]
+vocab_size = 32000
+context_len = 4096
+kv_cache_blocks = 128
+prompt_tokens = [1, 2, 3, 4]
+generated_tokens = [5, 6, 7, 8]
+
+[tokenizer]
+vocabulary_entries = 32000
+max_token_id = 31999
+added_tokens = 0
+stop_token_ids = [2]
+
+[first_logits]
+token_ids = [5, 42, 17, 9]
+scores = [12.5, 11.25, 10.0, 9.75]
+absolute_tolerance = 0.05
+
+[metal]
+max_load_active_bytes = 8000000000
+max_decode_active_bytes = 8500000000
+
+[cuda]
+max_load_active_bytes = 8000000000
+max_decode_active_bytes = 8500000000

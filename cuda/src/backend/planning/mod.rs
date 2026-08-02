@@ -16,7 +16,7 @@ pub use moe::{MoeExecution, MoePlan, MoePlanRequest, MoeQuantization};
 pub use output::{OutputHeadExecution, OutputHeadPlan, OutputHeadPlanRequest};
 
 /// Inference phase used as part of an execution-plan key.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum ExecutionPhase {
     Decode,
     Prefill,
@@ -47,6 +47,7 @@ pub struct CudaPlanningPolicy {
     pub numerical: CudaNumericalPolicy,
     pub admission: CudaKernelAdmission,
     pub dense_vectors: CudaDenseVectorPolicy,
+    pub dense_vendor: CudaDenseVendorPolicy,
     pub dense_weights: CudaDenseWeightPolicy,
     pub moe_fusion: CudaMoeFusionPolicy,
     pub moe_batch: CudaMoeBatchPolicy,
@@ -83,6 +84,15 @@ pub enum CudaDenseVectorPolicy {
     Role(DenseRole),
 }
 
+/// Experimental vendor-library candidates admitted for measured dense roles.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum CudaDenseVendorPolicy {
+    #[default]
+    Disabled,
+    Tuned,
+    Role(DenseRole),
+}
+
 /// Experimental routed-MoE fusion candidates admitted by policy.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub enum CudaMoeFusionPolicy {
@@ -104,6 +114,7 @@ pub enum CudaMoeBatchPolicy {
     W4A4Hybrid,
     /// Group decode assignments by expert before native W4A4 execution.
     W4A4Bucketed,
+    /// Force exact weight-only NVFP4 execution for every phase and batch size.
     W4A16,
 }
 
@@ -202,8 +213,10 @@ impl CudaHardwareProfile {
 /// Origin of a selected execution strategy.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum PlanSource {
-    Tuned,
     ExplicitPolicy,
+    Heuristic,
+    MeasuredCache,
+    MeasuredStartup,
     Fallback,
 }
 

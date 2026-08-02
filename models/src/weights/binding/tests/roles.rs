@@ -13,6 +13,21 @@ fn rejects_a_physical_shape_that_violates_the_semantic_role() -> Result<()> {
 }
 
 #[test]
+fn rejects_a_dense_bias_with_a_different_dtype() -> Result<()> {
+    let decoder = dense_decoder()?;
+    let catalog = TensorCatalog {
+        tensors: vec![
+            tensor("model.layers.0.self_attn.q_proj.weight", "BF16", vec![32, 32]),
+            tensor("model.layers.0.self_attn.q_proj.bias", "F16", vec![32]),
+        ],
+    };
+    let spec = SemanticModelSpec::discover(&decoder, &catalog)?;
+
+    assert!(WeightBindingPlan::discover(&spec, &catalog).is_err());
+    Ok(())
+}
+
+#[test]
 fn exposes_typed_roles_with_semantic_shapes() -> Result<()> {
     let decoder = dense_decoder()?;
     let catalog = TensorCatalog {

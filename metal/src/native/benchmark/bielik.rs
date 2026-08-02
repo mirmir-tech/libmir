@@ -24,7 +24,7 @@ fn preserves_bielik_greedy_tokens_through_kv_decode() -> Result<()> {
     let mut ignored = |_event| {};
     let mut model = LoadedModel::load(&model, &mut ignored)?;
     let session = Uuid::new_v4();
-    let output = model.prefill(session, &PROMPT, SamplingLogits::None, &mut ignored)?;
+    let output = model.prefill(session, &PROMPT, SamplingLogits::None, None, &mut ignored)?;
     let mut token = greedy_token(&output.output)?;
     let mut generated = vec![token];
     for _ in 1..EXPECTED.len() {

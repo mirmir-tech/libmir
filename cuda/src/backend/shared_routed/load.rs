@@ -1,6 +1,6 @@
 use models::{
     layout::{AttentionLayerType, DecoderConfig},
-    weights::{HybridDecoderLayerBindings, HybridMixerBindings, WeightBindingPlan},
+    weights::{HybridDecoderLayerBindings, HybridMixerBindings, TensorCatalog, WeightBindingPlan},
 };
 
 use super::SharedRoutedLayerTemplate;
@@ -17,11 +17,26 @@ pub(super) fn build_layer(
     backend: &CudaBackend,
     decoder: &DecoderConfig,
     tensors: &CudaTensorSet,
+    catalog: &TensorCatalog,
     layer: usize,
     bindings: HybridDecoderLayerBindings<'_>,
     norm_shift: f32,
 ) -> Result<SharedRoutedLayerTemplate> {
-    let moe_weights = AffineSharedExpertMoeWeights::load_bindings(tensors, bindings.feed_forward)?;
+    let experts = decoder
+        .num_experts
+        .ok_or_else(|| Error::UnsupportedDecoderLayer("missing parsed expert count".into()))?;
+    let routed = decoder.moe_intermediate_size.ok_or_else(|| {
+        Error::UnsupportedDecoderLayer("missing parsed routed expert width".into())
+    })?;
+    let moe_weights = AffineSharedExpertMoeWeights::load_bindings(
+        backend,
+        tensors,
+        catalog,
+        bindings.feed_forward,
+        experts,
+        decoder.hidden_size,
+        routed,
+    )?;
     let moe = moe_config(decoder, &moe_weights)?;
     let epsilon = decoder.rms_norm_eps.to_string().parse()?;
     match decoder.layer_type(layer) {
@@ -46,14 +61,17 @@ pub(super) fn build_layer(
                         .and_then(|value| width.checked_add(value))
                 })
                 .ok_or(Error::InvalidDecoderKernel("linear attention width overflow"))?;
-            let format = weights.qkv.infer_config(1, decoder.hidden_size, mixed_width)?;
+            let (group_size, bits) = weights
+                .qkv
+                .affine_format(1, decoder.hidden_size, mixed_width)?
+                .unwrap_or((0, 0));
             let attention = AffineGatedDeltaLayerConfig::from_linear_attention(
                 decoder.hidden_size,
                 linear,
-                format.group_size,
-                format.bits,
+                group_size,
+                bits,
                 decoder.rms_norm_eps,
-                norm_shift,
+                0.0,
             )?;
             let config = AffineGatedDeltaMoeLayerConfig {
                 attention,
@@ -103,14 +121,10 @@ fn full_layer(
         .checked_mul(decoder.layer_head_dim(layer))
         .and_then(|width| width.checked_mul(2))
         .ok_or(Error::InvalidDecoderKernel("gated query width overflow"))?;
-    let format = weights.query.infer_config(1, decoder.hidden_size, query)?;
-    let attention = AffineGatedFullAttentionConfig::from_decoder(
-        decoder,
-        layer,
-        format.group_size,
-        format.bits,
-        norm_shift,
-    )?;
+    let (group_size, bits) =
+        weights.query.affine_format(1, decoder.hidden_size, query)?.unwrap_or((0, 0));
+    let attention =
+        AffineGatedFullAttentionConfig::from_decoder(decoder, layer, group_size, bits, norm_shift)?;
     let config = AffineGatedFullAttentionMoeLayerConfig {
         attention,
         moe,
@@ -144,17 +158,17 @@ fn moe_config(
     let shared = decoder.shared_expert_intermediate_size.ok_or_else(|| {
         Error::UnsupportedDecoderLayer("missing parsed shared expert width".into())
     })?;
-    let expert = weights.routed_gate.infer_config(expert_count, decoder.hidden_size, routed)?;
-    let router_format = weights.router.infer_config(1, decoder.hidden_size, expert_count)?;
+    let (group_size, expert_bits, router_bits) =
+        weights.storage_format(expert_count, decoder.hidden_size, routed, shared)?;
     Ok(AffineSharedExpertMoeConfig {
         hidden_size: decoder.hidden_size,
         routed_intermediate_size: routed,
         shared_intermediate_size: shared,
         expert_count,
         top_k,
-        group_size: expert.group_size,
-        expert_bits: expert.bits,
-        router_bits: router_format.bits,
+        group_size,
+        expert_bits,
+        router_bits,
         activation: GatedActivation::try_from(decoder)?,
     })
 }

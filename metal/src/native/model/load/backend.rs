@@ -59,6 +59,7 @@ pub(super) fn validate_kv_storage(
 pub(super) fn load_vision_model(
     config: Option<&VisionConfig>,
     tensors_ready: bool,
+    bindings: Option<&WeightBindingPlan>,
     tensors: &ModelTensors,
     stream: &Stream,
 ) -> Result<Option<LoadedVisionModel>> {
@@ -67,16 +68,21 @@ pub(super) fn load_vision_model(
     }
     match config {
         Some(VisionConfig::PooledEncoder(config)) => {
-            PooledVisionTower::load(tensors, config, stream)
-                .map(LoadedVisionModel::PooledEncoder)
-                .map(Some)
-                .map_err(Into::into)
+            let projection = bindings
+                .and_then(|plan| {
+                    plan.binding(&models::weights::LogicalTensorRole::VisionProjection)
+                })
+                .ok_or_else(|| {
+                    Error::UnsupportedModel("pooled vision projection binding is missing".into())
+                })?;
+            Ok(Some(LoadedVisionModel::PooledEncoder(PooledVisionTower::load(
+                tensors, config, projection, stream,
+            )?)))
         },
         Some(VisionConfig::SpatialMergeEncoder(config)) => {
-            SpatialMergeVisionTower::load(tensors, config, stream)
-                .map(LoadedVisionModel::SpatialMergeEncoder)
-                .map(Some)
-                .map_err(Into::into)
+            Ok(Some(LoadedVisionModel::SpatialMergeEncoder(SpatialMergeVisionTower::load(
+                tensors, config, stream,
+            )?)))
         },
         None => Ok(None),
     }
@@ -132,7 +138,6 @@ fn load_dense_routed(
         decoder,
         bindings,
         lowering.layers(),
-        affine_group_size(bindings)?,
         KV_CACHE_STEP,
         stream,
     )?))
@@ -150,16 +155,7 @@ fn load_dense(
         decoder,
         bindings,
         lowering.layers(),
-        affine_group_size(bindings)?,
         KV_CACHE_STEP,
         stream,
     )?))
-}
-
-fn affine_group_size(bindings: &WeightBindingPlan) -> Result<usize> {
-    bindings.affine_group_size().ok_or_else(|| {
-        Error::UnsupportedModel(
-            "Metal affine lowering requires one binding-derived group size".into(),
-        )
-    })
 }

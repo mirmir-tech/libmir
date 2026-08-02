@@ -1,13 +1,22 @@
 use mircuda::{
-    CompileOptions, Compiler, DeviceBuffer, LaunchConfig, Stream, TypedKernel, bf16, cuda_export,
-    cuda_kernel_file,
+    Compiler, DeviceBuffer, LaunchConfig, Stream, TypedKernel, bf16, cuda_export, cuda_kernel_files,
 };
 
-use super::super::geometry::{narrow, product, require};
+use super::{
+    super::geometry::{narrow, product, require},
+    compile_options,
+};
 use crate::{Error, Result};
 
 cuda_export!(
     Int4Kernel = "libmir_cuda_affine_embedding_bf16_int4"(
+        weight: &DeviceBuffer<u32>, scales: &DeviceBuffer<bf16>, biases: &DeviceBuffer<bf16>,
+        selected: &DeviceBuffer<u32>, output: &mut DeviceBuffer<bf16>, selected_start: u32,
+        tokens: u32, vocab: u32, hidden: u32, group_size: u32, output_scale: f32,
+    )
+);
+cuda_export!(
+    FallbackKernel = "libmir_cuda_affine_embedding_bf16_fallback"(
         weight: &DeviceBuffer<u32>, scales: &DeviceBuffer<bf16>, biases: &DeviceBuffer<bf16>,
         selected: &DeviceBuffer<u32>, output: &mut DeviceBuffer<bf16>, selected_start: u32,
         tokens: u32, vocab: u32, hidden: u32, group_size: u32, output_scale: f32,
@@ -40,16 +49,22 @@ pub struct AffineEmbedding {
 enum Kernel {
     Int4(TypedKernel<Int4Kernel>),
     Int8(TypedKernel<Int8Kernel>),
+    Fallback(TypedKernel<FallbackKernel>),
 }
 
 impl AffineEmbedding {
     pub fn compile(compiler: &Compiler, spec: AffineEmbeddingSpec) -> Result<Self> {
         validate(spec)?;
-        let source = cuda_kernel_file!("../../../kernels/affine_embedding_bf16.cu");
-        let module = compiler.compile(source, &CompileOptions::default())?;
+        let source = cuda_kernel_files!(
+            "affine_embedding_bf16.cu";
+            "../../../kernels/affine_packed.cuh",
+            "../../../kernels/affine_embedding_bf16.cu",
+        );
+        let module = compiler.compile(source, &compile_options(spec.bits, false))?;
         let kernel = match spec.bits {
             4 => Kernel::Int4(module.kernel()?),
             8 => Kernel::Int8(module.kernel()?),
+            2 | 3 | 5 | 6 => Kernel::Fallback(module.kernel()?),
             _ => return Err(Error::InvalidQuantizedGemv("unsupported embedding precision")),
         };
         Ok(Self { kernel, spec })
@@ -70,12 +85,13 @@ impl AffineEmbedding {
         if tokens == 0 {
             return Err(Error::InvalidQuantizedGemv("embedding token batch is empty"));
         }
-        let values_per_word = 32 / self.spec.bits;
-        require(
-            "affine embedding weight",
-            product(self.spec.vocab, self.spec.hidden / values_per_word)?,
-            weight.len(),
-        )?;
+        let packed_words = self
+            .spec
+            .hidden
+            .checked_mul(self.spec.bits)
+            .ok_or(Error::InvalidQuantizedGemv("embedding packed row overflow"))?
+            / 32;
+        require("affine embedding weight", product(self.spec.vocab, packed_words)?, weight.len())?;
         let groups = product(self.spec.vocab, self.spec.hidden / self.spec.group_size)?;
         require("affine embedding scales", groups, scales.len())?;
         require("affine embedding biases", groups, biases.len())?;
@@ -109,21 +125,22 @@ impl AffineEmbedding {
         Ok(match &self.kernel {
             Kernel::Int4(kernel) => kernel.launch(stream, launch, arguments),
             Kernel::Int8(kernel) => kernel.launch(stream, launch, arguments),
+            Kernel::Fallback(kernel) => kernel.launch(stream, launch, arguments),
         }?)
     }
 }
 
 fn validate(spec: AffineEmbeddingSpec) -> Result<()> {
-    let values_per_word = match spec.bits {
-        4 => 8,
-        8 => 4,
-        _ => return Err(Error::InvalidQuantizedGemv("unsupported embedding precision")),
-    };
+    let packed_bits = spec
+        .hidden
+        .checked_mul(spec.bits)
+        .ok_or(Error::InvalidQuantizedGemv("embedding packed row overflow"))?;
     if spec.vocab == 0
         || spec.hidden == 0
         || spec.group_size == 0
+        || !matches!(spec.bits, 2 | 3 | 4 | 5 | 6 | 8)
         || !spec.hidden.is_multiple_of(spec.group_size)
-        || !spec.hidden.is_multiple_of(values_per_word)
+        || !packed_bits.is_multiple_of(32)
         || !spec.output_scale.is_finite()
         || spec.output_scale <= 0.0
     {

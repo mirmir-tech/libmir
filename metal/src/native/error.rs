@@ -46,6 +46,8 @@ pub(super) enum Error {
     PendingToken { expected: u32, actual: u32 },
     #[error("invalid native MLX decode batch: {0}")]
     InvalidDecodeBatch(String),
+    #[error("invalid native MLX prefill batch: {0}")]
+    InvalidPrefillBatch(String),
     #[error("native MLX worker failed: {0}")]
     Worker(#[from] WorkerFailure),
     #[error("native MLX worker channel closed")]
@@ -90,6 +92,7 @@ impl From<Error> for runtime::RuntimeError {
             | Error::NoPrefixLogits
             | Error::PendingToken { .. }
             | Error::InvalidDecodeBatch(_)
+            | Error::InvalidPrefillBatch(_)
             | Error::Worker(_)
             | Error::WorkerClosed
             | Error::WorkerReceive(_)

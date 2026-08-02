@@ -25,7 +25,7 @@ impl BlockFp8LinearSpec {
     pub fn new(input_features: usize, output_features: usize) -> Result<Self> {
         if input_features == 0
             || output_features == 0
-            || !input_features.is_multiple_of(128)
+            || !input_features.is_multiple_of(64)
             || !output_features.is_multiple_of(128)
         {
             return Err(Error::InvalidDecoderKernel("invalid block FP8 linear geometry"));
@@ -39,7 +39,7 @@ impl BlockFp8LinearSpec {
     }
 
     pub fn scale_elements(self) -> Result<usize> {
-        product(self.output_features, self.input_features / 128)
+        product(self.output_features, self.input_features.div_ceil(128))
     }
 }
 
@@ -81,7 +81,7 @@ impl BlockFp8LinearKernels {
             LaunchConfig {
                 grid: (
                     narrow(self.spec.output_features)?,
-                    narrow(self.spec.input_features / 128)?,
+                    narrow(self.spec.input_features.div_ceil(128))?,
                     1,
                 ),
                 block: (128, 1, 1),
@@ -129,5 +129,19 @@ impl BlockFp8LinearKernels {
     fn validate_weight(&self, weight: &DeviceBuffer<u8>, scales: &DeviceBuffer<f32>) -> Result<()> {
         require("block FP8 weight", self.spec.weight_elements()?, weight.len())?;
         require("block FP8 scales", self.spec.scale_elements()?, scales.len())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BlockFp8LinearSpec;
+
+    #[test]
+    fn admits_one_half_block_tail_and_allocates_its_scale() -> crate::Result<()> {
+        let spec = BlockFp8LinearSpec::new(2_880, 201_088)?;
+        assert_eq!(spec.scale_elements()?, 201_088 * 23);
+        assert!(BlockFp8LinearSpec::new(2_816, 201_088).is_ok());
+        assert!(BlockFp8LinearSpec::new(2_817, 201_088).is_err());
+        Ok(())
     }
 }

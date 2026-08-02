@@ -1,3 +1,4 @@
+mod boundary;
 mod load;
 mod plan;
 mod session;
@@ -7,16 +8,16 @@ mod tests;
 use models::{
     layout::DecoderConfig,
     semantic::{FeedForwardSpec, MixerSpec, SemanticModelSpec},
-    weights::WeightBindingPlan,
+    weights::{TensorCatalog, WeightBindingPlan},
 };
 use runtime::kv::{CacheConfig, KvStorageSpec};
 
 use self::load::{build_layer, infer_norm_shift, required_norm};
 pub use self::session::CudaSharedRoutedModelSession;
 use crate::{
-    AffineQuantizedEmbedding, AffineQuantizedWeight, CudaAffineGatedDeltaMoeLayer,
-    CudaAffineGatedFullAttentionMoeLayer, CudaAffineGatedFullAttentionState, CudaAffineOutputHead,
-    CudaBackend, CudaGatedDeltaState, CudaTensor, CudaTensorSet, Error, Result,
+    CudaAffineGatedDeltaMoeLayer, CudaAffineGatedFullAttentionMoeLayer,
+    CudaAffineGatedFullAttentionState, CudaBackend, CudaGatedDeltaState, CudaTensor, CudaTensorSet,
+    Error, Result, backend::linear::CheckpointProjectionWeight,
 };
 
 #[derive(Clone, Debug)]
@@ -31,15 +32,15 @@ pub enum CudaSharedRoutedLayerState {
     Full(Box<CudaAffineGatedFullAttentionState>),
 }
 
-/// Structurally assembled affine shared-routed model weights with per-layer
-/// mixers.
+/// Structurally assembled dense or affine shared-routed model weights with
+/// per-layer mixers.
 #[derive(Clone, Debug)]
 pub struct CudaSharedRoutedModelTemplate {
     backend: CudaBackend,
     decoder: DecoderConfig,
-    embedding: AffineQuantizedWeight,
+    embedding: CheckpointProjectionWeight,
     final_norm: CudaTensor,
-    output: AffineQuantizedWeight,
+    output: CheckpointProjectionWeight,
     layers: Vec<SharedRoutedLayerTemplate>,
     cache: CacheConfig,
     max_sequence_blocks: usize,
@@ -47,11 +48,13 @@ pub struct CudaSharedRoutedModelTemplate {
 }
 
 impl CudaSharedRoutedModelTemplate {
+    #[allow(clippy::too_many_arguments)]
     pub fn from_tensors(
         backend: &CudaBackend,
         decoder: &DecoderConfig,
         semantic: &SemanticModelSpec,
         tensors: &CudaTensorSet,
+        catalog: &TensorCatalog,
         bindings: &WeightBindingPlan,
         cache: CacheConfig,
         max_sequence_blocks: usize,
@@ -74,14 +77,18 @@ impl CudaSharedRoutedModelTemplate {
             ));
         }
         let boundary = bindings.decoder_boundary()?;
-        let embedding = AffineQuantizedWeight::load_binding(tensors, boundary.embedding)?;
-        embedding.infer_config(1, decoder.hidden_size, decoder.vocab_size)?;
+        let embedding = CheckpointProjectionWeight::load_binding_prepared(
+            backend,
+            tensors,
+            boundary.embedding,
+        )?;
+        embedding.affine_format(1, decoder.hidden_size, decoder.vocab_size)?;
         let output = if decoder.tie_word_embeddings {
             embedding.clone()
         } else {
-            AffineQuantizedWeight::load_binding(tensors, boundary.output)?
+            CheckpointProjectionWeight::load_binding_prepared(backend, tensors, boundary.output)?
         };
-        output.infer_config(1, decoder.hidden_size, decoder.vocab_size)?;
+        output.affine_format(1, decoder.hidden_size, decoder.vocab_size)?;
         let final_norm = required_norm(tensors, &boundary.final_norm.source, decoder.hidden_size)?;
         let norm_shift = infer_norm_shift(tensors, decoder, bindings)?;
         let layers = (0..decoder.num_hidden_layers)
@@ -90,6 +97,7 @@ impl CudaSharedRoutedModelTemplate {
                     backend,
                     decoder,
                     tensors,
+                    catalog,
                     layer,
                     bindings.hybrid_decoder_layer(layer)?,
                     norm_shift,
@@ -119,15 +127,17 @@ impl CudaSharedRoutedModelTemplate {
         self.norm_shift
     }
 
-    pub fn prepare_embedding(&self) -> Result<AffineQuantizedEmbedding> {
-        let config =
-            self.embedding
-                .infer_config(1, self.decoder.hidden_size, self.decoder.vocab_size)?;
-        self.backend.prepare_affine_embedding(config, 1.0)
+    fn prepare_embedding(&self) -> Result<boundary::SharedRoutedEmbedding> {
+        boundary::SharedRoutedEmbedding::new(
+            &self.backend,
+            self.decoder.hidden_size,
+            self.decoder.vocab_size,
+            &self.embedding,
+        )
     }
 
-    pub fn prepare_output_head(&self) -> Result<CudaAffineOutputHead> {
-        CudaAffineOutputHead::from_weight(
+    fn prepare_output_head(&self) -> Result<boundary::SharedRoutedOutputHead> {
+        boundary::SharedRoutedOutputHead::new(
             &self.backend,
             self.decoder.hidden_size,
             self.decoder.vocab_size,
@@ -160,11 +170,6 @@ impl CudaSharedRoutedModelTemplate {
 
     pub fn instantiate(&self) -> Result<CudaSharedRoutedModelSession> {
         CudaSharedRoutedModelSession::new(self)
-    }
-
-    #[must_use]
-    pub const fn embedding_weight(&self) -> &AffineQuantizedWeight {
-        &self.embedding
     }
 
     #[must_use]

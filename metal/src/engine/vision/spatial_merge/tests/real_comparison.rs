@@ -43,9 +43,7 @@ fn required_path(name: &str) -> Result<PathBuf> {
 }
 
 fn comparison_rgb() -> Result<Vec<u8>> {
-    (0..64 * 64 * 3)
-        .map(|index| u8::try_from(index % 251).map_err(Error::from))
-        .collect()
+    (0..64 * 64 * 3).map(|index| Ok(u8::try_from(index % 251)?)).collect()
 }
 
 fn f32_bytes(values: &[f32]) -> Vec<u8> {

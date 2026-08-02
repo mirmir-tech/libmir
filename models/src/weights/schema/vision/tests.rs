@@ -15,6 +15,12 @@ fn pooled_schema_covers_every_encoder_layer() {
 }
 
 #[test]
+fn pooled_schema_accepts_root_scoped_mlx_names() {
+    let schema = VisionTensorSchema::discover(&VisionConfig::PooledEncoder(pooled_config()));
+    assert!(schema.readiness(&catalog_for(&schema, 1)).is_ready());
+}
+
+#[test]
 fn spatial_merge_schema_reports_a_missing_block_tensor() {
     let schema =
         VisionTensorSchema::discover(&VisionConfig::SpatialMergeEncoder(spatial_merge_config()));
@@ -35,9 +41,41 @@ fn spatial_merge_schema_accepts_alternate_vision_tower_prefix() {
     assert!(schema.readiness(&catalog_for(&schema, 1)).is_ready());
 }
 
+#[test]
+fn readiness_reports_distinct_physical_dtypes() {
+    let schema = VisionTensorSchema::discover(&VisionConfig::PooledEncoder(pooled_config()));
+    let mut catalog = catalog_for(&schema, 0);
+    for tensor in &mut catalog.tensors {
+        tensor.dtype = if tensor.name.ends_with("std_scale") {
+            "F32"
+        } else {
+            "F16"
+        }
+        .into();
+    }
+
+    assert_eq!(schema.readiness(&catalog).dtypes, ["F16", "F32"]);
+}
+
+#[test]
+fn pooled_bound_projection_does_not_claim_its_packed_container_as_dense() {
+    let schema = VisionTensorSchema::discover(&VisionConfig::PooledEncoder(pooled_config()));
+    let mut catalog = catalog_for(&schema, 1);
+    let mut found = false;
+    for tensor in &mut catalog.tensors {
+        if tensor.name == "embed_vision.embedding_projection.weight" {
+            tensor.dtype = "U32".into();
+            found = true;
+        }
+    }
+
+    assert!(found);
+    assert_eq!(schema.readiness(&catalog).dtypes, ["BF16"]);
+}
+
 fn catalog_for(schema: &VisionTensorSchema, alias: usize) -> TensorCatalog {
-    TensorCatalog {
-        tensors: schema
+    TensorCatalog::new(
+        schema
             .requirements
             .iter()
             .filter_map(|requirement| requirement.aliases.get(alias))
@@ -50,7 +88,7 @@ fn catalog_for(schema: &VisionTensorSchema, alias: usize) -> TensorCatalog {
                 data_offsets: [0, 0],
             })
             .collect(),
-    }
+    )
 }
 
 fn pooled_config() -> PooledVisionConfig {

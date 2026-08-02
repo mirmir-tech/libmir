@@ -18,6 +18,7 @@ use crate::{
 
 mod assertions;
 mod batch;
+mod long_prefill;
 mod long_profile;
 mod policy;
 mod profile;

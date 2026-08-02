@@ -4,6 +4,7 @@ use serde_json::json;
 
 use super::*;
 
+mod individual;
 mod moe;
 
 const HIDDEN: usize = 32;
@@ -29,8 +30,13 @@ fn discovers_complete_hybrid_linear_and_softmax_binding_views() -> Result<()> {
         return Err(invalid("expected softmax mixer bindings"));
     };
     assert_eq!(softmax.query.logical_shape.as_deref(), Some([64, 32].as_slice()));
+    let RoutedExpertBindings::SeparateGateUp { gate, .. } =
+        plan.hybrid_decoder_layer(0)?.feed_forward.routed
+    else {
+        return Err(invalid("expected separate routed expert projections"));
+    };
     assert!(matches!(
-        plan.hybrid_decoder_layer(0)?.feed_forward.routed_gate.transforms.as_slice(),
+        gate.transforms.as_slice(),
         [BindingTransform::StackedExperts { count: 8 }]
     ));
     Ok(())
@@ -49,6 +55,32 @@ fn rejects_ambiguous_shared_expert_grammar() -> Result<()> {
     let spec = SemanticModelSpec::discover(&decoder, &catalog)?;
 
     assert!(WeightBindingPlan::discover(&spec, &catalog).is_err());
+    Ok(())
+}
+
+#[test]
+fn discovers_fused_dense_shared_routed_experts() -> Result<()> {
+    let decoder = decoder()?;
+    let mut catalog = catalog();
+    catalog.tensors.retain(|tensor| !tensor.name.contains(".mlp.switch_mlp."));
+    for layer in 0..2 {
+        let prefix = format!("model.language_model.layers.{layer}.mlp.experts");
+        dense(&mut catalog.tensors, &format!("{prefix}.gate_up_proj"), &[8, 32, HIDDEN]);
+        dense(&mut catalog.tensors, &format!("{prefix}.down_proj"), &[8, HIDDEN, 16]);
+    }
+    for tensor in &mut catalog.tensors {
+        if tensor.name.ends_with("linear_attn.conv1d.weight") {
+            tensor.shape = vec![32, 1, 4];
+        }
+    }
+    catalog.tensors.sort_by(|left, right| left.name.cmp(&right.name));
+    let spec = SemanticModelSpec::discover(&decoder, &catalog)?;
+    let plan = WeightBindingPlan::discover(&spec, &catalog)?;
+
+    assert!(matches!(
+        plan.hybrid_decoder_layer(0)?.feed_forward.routed,
+        RoutedExpertBindings::InterleavedGateUp { .. }
+    ));
     Ok(())
 }
 

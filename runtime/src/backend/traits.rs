@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use async_trait::async_trait;
 use foundation::model::ModelManifest;
 use serde::{Deserialize, Serialize};
@@ -110,6 +112,7 @@ pub struct PrefillRequest {
     pub session_id: Uuid,
     pub prompt_tokens: Vec<u32>,
     pub block_table: BlockTable,
+    pub cached_tokens: usize,
     pub sampling_logits: SamplingLogits,
 }
 
@@ -136,6 +139,16 @@ pub struct DecodeOutput {
     pub event: TokenEvent,
     pub logits: Option<LogitsTrace>,
     pub candidates: Option<CandidateLogitsTrace>,
+    pub timings: Option<DecodeTimings>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+pub struct DecodeTimings {
+    pub scheduler_queue: Duration,
+    pub backend_wait: Duration,
+    pub backend_execution: Duration,
+    pub device_execution: Option<Duration>,
+    pub batch_rows: usize,
 }
 
 #[derive(Debug, Clone)]

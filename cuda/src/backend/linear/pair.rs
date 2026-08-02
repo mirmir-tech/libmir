@@ -1,11 +1,7 @@
-use mircuda::{
-    DenseMatmulPlan, DenseMatmulSpec, DenseVectorPlan, DenseVectorSpec, DeviceBuffer, Stream, bf16,
-};
+use mircuda::{DeviceBuffer, bf16};
 
-use super::CudaBackend;
-use crate::{
-    CudaTensor, DenseExecution, DensePlanRequest, DenseRole, Error, ExecutionPhase, Result,
-};
+use super::{AutoBf16Plan, CudaBackend};
+use crate::{CudaTensor, DensePlanRequest, DenseRole, Error, ExecutionPhase, Result};
 
 /// Device-resident concatenation of two equally shaped BF16 linear weights.
 #[derive(Clone, Debug)]
@@ -18,17 +14,10 @@ pub struct Bf16LinearPairWeights {
 /// One GEMM producing two adjacent projections for every input row.
 #[derive(Debug)]
 pub struct Bf16LinearPair {
-    plan: Bf16LinearPairPlan,
-    stream: Stream,
+    plan: AutoBf16Plan,
     tokens: usize,
     input_features: usize,
     output_features: usize,
-}
-
-#[derive(Debug)]
-enum Bf16LinearPairPlan {
-    Matrix(DenseMatmulPlan<bf16>),
-    Vector(DenseVectorPlan<bf16>),
 }
 
 impl CudaBackend {
@@ -73,6 +62,20 @@ impl Bf16LinearPairWeights {
             output_features: *output_features,
         })
     }
+
+    pub(in crate::backend) const fn input_features(&self) -> usize {
+        self.input_features
+    }
+
+    pub(in crate::backend) fn packed_output_features(&self) -> Result<usize> {
+        self.output_features
+            .checked_mul(2)
+            .ok_or(Error::InvalidDecoderKernel("packed BF16 output size overflow"))
+    }
+
+    pub(in crate::backend) const fn packed(&self) -> &DeviceBuffer<bf16> {
+        &self.packed
+    }
 }
 
 impl Bf16LinearPair {
@@ -93,31 +96,8 @@ impl Bf16LinearPair {
             input_features,
             output_features: packed_outputs,
         };
-        let plan = match backend.execution_planner().plan_dense(request)?.execution() {
-            DenseExecution::Matrix => Bf16LinearPairPlan::Matrix(DenseMatmulPlan::new(
-                &backend.inner.context,
-                &backend.inner.stream,
-                DenseMatmulSpec::new(tokens, packed_outputs, input_features)?,
-            )?),
-            DenseExecution::Vector => Bf16LinearPairPlan::Vector(DenseVectorPlan::new(
-                &backend.inner.context,
-                &backend.inner.stream,
-                DenseVectorSpec::new(packed_outputs, input_features)?,
-            )?),
-            DenseExecution::BlockFp8Vector => {
-                return Err(Error::InvalidExecutionPlan(
-                    "paired BF16 projection cannot use block FP8 weights",
-                ));
-            },
-            DenseExecution::Fp8Int4Vector => {
-                return Err(Error::InvalidExecutionPlan(
-                    "paired BF16 projection cannot use FP8 plus INT4 weights",
-                ));
-            },
-        };
         Ok(Self {
-            plan,
-            stream: backend.inner.stream.clone(),
+            plan: AutoBf16Plan::new(backend, request)?,
             tokens,
             input_features,
             output_features,
@@ -143,14 +123,7 @@ impl Bf16LinearPair {
         if output.len() != expected {
             return Err(Error::InvalidDecoderKernel("paired BF16 output differs from plan"));
         }
-        match &mut self.plan {
-            Bf16LinearPairPlan::Matrix(plan) => {
-                Ok(plan.execute(&self.stream, input, &weights.packed, output, 1.0, 0.0)?)
-            },
-            Bf16LinearPairPlan::Vector(plan) => {
-                Ok(plan.execute(&self.stream, input, &weights.packed, output, 1.0, 0.0)?)
-            },
-        }
+        self.plan.execute(input, &weights.packed, output)
     }
 }
 

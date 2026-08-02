@@ -1,6 +1,9 @@
 use super::*;
 
+mod attention;
 mod output;
+mod vendor;
+mod weights;
 
 fn planner_with_policy(major: u32, policy: CudaPlanningPolicy) -> Result<CudaExecutionPlanner> {
     Ok(CudaExecutionPlanner::new(
@@ -19,66 +22,7 @@ fn planner(major: u32) -> Result<CudaExecutionPlanner> {
 }
 
 #[test]
-fn attention_policy_selects_tuned_sm12_split_kv() -> Result<()> {
-    let request = AttentionPlanRequest {
-        max_context_tokens: 4_096,
-        query_heads: 32,
-        kv_heads: 8,
-        head_dim: 128,
-        value_head_dim: 128,
-    };
-    let tuned = planner(12)?.plan_attention(request)?;
-    assert_eq!(
-        tuned.execution(),
-        AttentionExecution::SplitKv {
-            partition_tokens: 64,
-            threshold_tokens: 65
-        }
-    );
-    assert_eq!(tuned.source(), PlanSource::Tuned);
-    assert_eq!(planner(11)?.plan_attention(request)?.execution(), AttentionExecution::Direct);
-    let wide = AttentionPlanRequest {
-        head_dim: 256,
-        value_head_dim: 256,
-        ..request
-    };
-    assert_eq!(
-        planner(12)?.plan_attention(wide)?.execution(),
-        AttentionExecution::SplitKv {
-            partition_tokens: 64,
-            threshold_tokens: 128
-        }
-    );
-    let direct = planner_with_policy(
-        12,
-        CudaPlanningPolicy {
-            attention: CudaAttentionPolicy::Direct,
-            ..CudaPlanningPolicy::default()
-        },
-    )?;
-    assert_eq!(direct.plan_attention(request)?.execution(), AttentionExecution::Direct);
-    let explicit = planner_with_policy(
-        11,
-        CudaPlanningPolicy {
-            attention: CudaAttentionPolicy::SplitKv {
-                partition_tokens: 128,
-                threshold_tokens: 384,
-            },
-            ..CudaPlanningPolicy::default()
-        },
-    )?;
-    assert_eq!(
-        explicit.plan_attention(request)?.execution(),
-        AttentionExecution::SplitKv {
-            partition_tokens: 128,
-            threshold_tokens: 384
-        }
-    );
-    Ok(())
-}
-
-#[test]
-fn sm12_uses_validated_vector_only_for_decode_output() -> Result<()> {
+fn sm12_uses_validated_vectors_for_decode_output_and_attention() -> Result<()> {
     let output = DensePlanRequest {
         phase: ExecutionPhase::Decode,
         role: DenseRole::OutputHead,
@@ -89,14 +33,14 @@ fn sm12_uses_validated_vector_only_for_decode_output() -> Result<()> {
     assert_eq!(planner(12)?.plan_dense(output)?.execution(), DenseExecution::Vector);
     let attention =
         planner(12)?.plan_dense(DensePlanRequest { role: DenseRole::AttentionQkv, ..output })?;
-    assert_eq!(attention.execution(), DenseExecution::Matrix);
-    assert_eq!(attention.source(), PlanSource::Fallback);
+    assert_eq!(attention.execution(), DenseExecution::Vector);
+    assert_eq!(attention.source(), PlanSource::Heuristic);
     assert_eq!(planner(11)?.plan_dense(output)?.execution(), DenseExecution::Matrix);
     Ok(())
 }
 
 #[test]
-fn explicit_policy_admits_only_tuned_decode_vectors() -> Result<()> {
+fn explicit_policy_admits_generic_decode_vectors() -> Result<()> {
     let planner = planner_with_policy(
         12,
         CudaPlanningPolicy {
@@ -116,17 +60,37 @@ fn explicit_policy_admits_only_tuned_decode_vectors() -> Result<()> {
     let plan = planner.plan_dense(qkv)?;
     assert_eq!(plan.execution(), DenseExecution::Vector);
     assert_eq!(plan.source(), PlanSource::ExplicitPolicy);
+    for (role, input_features, output_features) in
+        [(DenseRole::AttentionQkv, 2_880, 5_120), (DenseRole::AttentionOutput, 4_096, 2_880)]
+    {
+        assert_eq!(
+            planner
+                .plan_dense(DensePlanRequest {
+                    role,
+                    input_features,
+                    output_features,
+                    ..qkv
+                })?
+                .execution(),
+            DenseExecution::Vector
+        );
+    }
     for request in [
         DensePlanRequest { phase: ExecutionPhase::Prefill, ..qkv },
-        DensePlanRequest {
-            role: DenseRole::DenseDown,
-            output_features: 2_816,
-            ..qkv
-        },
-        DensePlanRequest { input_features: 4_096, ..qkv },
+        DensePlanRequest { tokens: 2, ..qkv },
     ] {
         assert_eq!(planner.plan_dense(request)?.execution(), DenseExecution::Matrix);
     }
+    assert_eq!(
+        planner
+            .plan_dense(DensePlanRequest {
+                role: DenseRole::DenseDown,
+                input_features: 4_096,
+                ..qkv
+            })?
+            .execution(),
+        DenseExecution::Vector
+    );
     Ok(())
 }
 
@@ -193,18 +157,6 @@ fn phase_selects_current_nvfp4_strategy() -> Result<()> {
         },
     )?;
     assert_eq!(fused.plan_moe(request)?.execution(), MoeExecution::FusedIndexedGrouped);
-    let weight_only = planner_with_policy(
-        12,
-        CudaPlanningPolicy {
-            moe_batch: CudaMoeBatchPolicy::W4A16,
-            ..CudaPlanningPolicy::default()
-        },
-    )?;
-    assert_eq!(
-        weight_only.plan_moe(MoePlanRequest { tokens: 8, ..request })?.execution(),
-        MoeExecution::SelectedWeightOnly
-    );
-    assert_eq!(weight_only.plan_moe(request)?.execution(), MoeExecution::IndexedGrouped);
     let bucketed = planner_with_policy(
         12,
         CudaPlanningPolicy {
@@ -226,6 +178,43 @@ fn phase_selects_current_nvfp4_strategy() -> Result<()> {
             })?
             .execution(),
         MoeExecution::Bucketed
+    );
+    Ok(())
+}
+
+#[test]
+fn explicit_w4a16_covers_prefill_and_every_decode_depth() -> Result<()> {
+    let planner = planner_with_policy(
+        12,
+        CudaPlanningPolicy {
+            moe_batch: CudaMoeBatchPolicy::W4A16,
+            ..CudaPlanningPolicy::default()
+        },
+    )?;
+    let request = MoePlanRequest {
+        phase: ExecutionPhase::Decode,
+        quantization: MoeQuantization::NvFp4,
+        tokens: 1,
+        experts: 128,
+        top_k: 4,
+        hidden_features: 2_816,
+        intermediate_features: 1_408,
+    };
+    for tokens in [1, 8] {
+        assert_eq!(
+            planner.plan_moe(MoePlanRequest { tokens, ..request })?.execution(),
+            MoeExecution::SelectedWeightOnly
+        );
+    }
+    assert_eq!(
+        planner
+            .plan_moe(MoePlanRequest {
+                phase: ExecutionPhase::Prefill,
+                tokens: 128,
+                ..request
+            })?
+            .execution(),
+        MoeExecution::SelectedWeightOnly
     );
     Ok(())
 }

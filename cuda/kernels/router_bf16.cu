@@ -102,3 +102,16 @@ extern "C" __global__ void libmir_cuda_router_topk_fp32(
         probability * __bfloat162float(expert_scale[expert]));
   }
 }
+
+extern "C" __global__ void libmir_cuda_router_route_pattern(
+    unsigned int* selected, unsigned int tokens, unsigned int experts,
+    unsigned int top_k, unsigned int pattern) {
+  const unsigned int assignment = blockIdx.x * blockDim.x + threadIdx.x;
+  const unsigned int assignments = tokens * top_k;
+  if (assignment >= assignments) return;
+  const unsigned int token = assignment / top_k;
+  const unsigned int slot = assignment - token * top_k;
+  selected[assignment] = pattern == 0u
+      ? (token * top_k + slot) % experts
+      : slot;
+}

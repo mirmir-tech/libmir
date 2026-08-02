@@ -10,8 +10,7 @@ use crate::{CudaAttentionPolicy, CudaConfig, CudaPlanningPolicy, Result};
 const TOKENS: usize = 513;
 const BLOCK_SIZE: usize = 16;
 const KV_HEADS: usize = 2;
-const QUERY_HEADS: usize = 4;
-const HEAD_DIM: usize = 16;
+const HEAD_DIM: usize = 64;
 
 #[test]
 fn split_kv_matches_direct_attention() -> Result<()> {
@@ -26,13 +25,20 @@ fn split_kv_matches_direct_attention() -> Result<()> {
         ..CudaConfig::default()
     })?;
     for dtype in [KvCacheDType::BFloat16, KvCacheDType::Fp8E4M3] {
-        compare(&backend, dtype, None)?;
-        compare(&backend, dtype, Some(300))?;
+        for query_heads in [2, 4, 6, 16] {
+            compare(&backend, dtype, query_heads, None)?;
+            compare(&backend, dtype, query_heads, Some(300))?;
+        }
     }
     Ok(())
 }
 
-fn compare(backend: &CudaBackend, dtype: KvCacheDType, window: Option<usize>) -> Result<()> {
+fn compare(
+    backend: &CudaBackend,
+    dtype: KvCacheDType,
+    query_heads: usize,
+    window: Option<usize>,
+) -> Result<()> {
     let blocks = TOKENS.div_ceil(BLOCK_SIZE);
     let storage = KvStorageSpec::new(
         CacheConfig {
@@ -47,14 +53,14 @@ fn compare(backend: &CudaBackend, dtype: KvCacheDType, window: Option<usize>) ->
     let width = TOKENS * KV_HEADS * HEAD_DIM;
     let keys = copy(backend, &values(width, 29, 14, 31.0)?)?;
     let value_input = copy(backend, &values(width, 37, 18, 23.0)?)?;
-    let query = copy(backend, &values(QUERY_HEADS * HEAD_DIM, 17, 8, 11.0)?)?;
+    let query = copy(backend, &values(query_heads * HEAD_DIM, 17, 8, 11.0)?)?;
     let table = block_table(blocks)?;
     let plan = KvWritePlan::prefill(Uuid::nil(), 0, &table, 0, TOKENS)?;
     cache.store(&plan, &keys, &value_input)?;
-    let output_len = QUERY_HEADS * HEAD_DIM;
+    let output_len = query_heads * HEAD_DIM;
     let mut direct = backend.inner.pool.allocate::<bf16>(&backend.inner.stream, output_len)?;
     let mut split = backend.inner.pool.allocate::<bf16>(&backend.inner.stream, output_len)?;
-    let mut attention = backend.prepare_paged_attention_bf16(&cache, QUERY_HEADS, blocks)?;
+    let mut attention = backend.prepare_paged_attention_bf16(&cache, query_heads, blocks)?;
     attention.execute_direct(&query, &cache, &table, &mut direct, window, 0.25)?;
     attention.execute_split(&query, &cache, &table, &mut split, window, 0.25)?;
     let direct = read(backend, &direct)?;
@@ -64,7 +70,10 @@ fn compare(backend: &CudaBackend, dtype: KvCacheDType, window: Option<usize>) ->
         .zip(split)
         .map(|(direct, split)| (direct.to_f32() - split.to_f32()).abs())
         .fold(0.0_f32, f32::max);
-    assert!(max_error <= 0.015_625, "{dtype:?} {window:?} max error: {max_error}");
+    assert!(
+        max_error <= 0.015_625,
+        "{dtype:?} GQA {query_heads}/{KV_HEADS} {window:?} max error: {max_error}"
+    );
     Ok(())
 }
 

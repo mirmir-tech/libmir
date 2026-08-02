@@ -1,5 +1,6 @@
 use models::weights::{
-    RoutedDecoderLayerBindings, RoutedExpertBindings, TensorBinding, TensorStorage,
+    BlockProjectionLayout, BlockQuantization, RoutedDecoderLayerBindings, RoutedExpertBindings,
+    TensorBinding, TensorStorage,
 };
 
 use super::{ClampedRoutedConfig, ClampedRoutedExpertWeights, NativeExpertWeights, tensor};
@@ -30,8 +31,15 @@ pub(super) fn load(
             "native clamped-routed requires interleaved gate/up expert bindings",
         ));
     };
-    let (gate_up_scales, gate_up_bias) = block_companions(gate_up)?;
-    let (down_scales, down_bias) = block_companions(down)?;
+    let (gate_up_scales, gate_up_bias) = block_companions(
+        gate_up,
+        BlockProjectionLayout::FusedGateUpBank {
+            experts: config.experts,
+            interleaved: true,
+        },
+    )?;
+    let (down_scales, down_bias) =
+        block_companions(down, BlockProjectionLayout::MatrixBank { matrices: config.experts })?;
     let experts = ClampedRoutedExpertWeights::Native(Box::new(NativeExpertWeights {
         gate_up_blocks: tensor(tensors, &gate_up.source)?,
         gate_up_scales: tensor(tensors, gate_up_scales)?,
@@ -49,11 +57,72 @@ pub(super) fn load(
     ))
 }
 
-fn block_companions(binding: &TensorBinding) -> Result<(&str, &str)> {
-    let TensorStorage::BlockQuantized { scales, bias: Some(bias), .. } = &binding.storage else {
+fn block_companions(
+    binding: &TensorBinding,
+    expected: BlockProjectionLayout,
+) -> Result<(&str, &str)> {
+    let TensorStorage::BlockQuantized {
+        format: BlockQuantization::MXFP4,
+        scales,
+        bias: Some(bias),
+        ..
+    } = &binding.storage
+    else {
         return Err(crate::Error::InvalidDecoderKernel(
-            "native clamped-routed expert binding requires block scales and bias",
+            "native clamped-routed expert binding requires MXFP4 scales and bias",
         ));
     };
+    if binding.block_projection_layout() != Some(expected) {
+        return Err(crate::Error::InvalidDecoderKernel(
+            "native clamped-routed expert binding has the wrong matrix-bank layout",
+        ));
+    }
     Ok((scales, bias))
+}
+
+#[cfg(test)]
+mod tests {
+    use models::weights::{
+        BindingTransform, ExpertProjectionRole, LayerTensorRole, LogicalTensorRole, TensorPacking,
+    };
+
+    use super::*;
+
+    #[test]
+    fn requires_typed_interleaved_expert_bank() -> Result<()> {
+        let valid = binding(TensorPacking::InterleavedGateUp);
+        let expected = BlockProjectionLayout::FusedGateUpBank { experts: 8, interleaved: true };
+        assert_eq!(block_companions(&valid, expected)?, ("scales", "bias"));
+
+        let invalid = binding(TensorPacking::Separate);
+        assert!(block_companions(&invalid, expected).is_err());
+        Ok(())
+    }
+
+    fn binding(packing: TensorPacking) -> TensorBinding {
+        TensorBinding {
+            role: LogicalTensorRole::Layer {
+                index: 0,
+                tensor: LayerTensorRole::ExpertProjection {
+                    expert: None,
+                    projection: ExpertProjectionRole::GateUp,
+                },
+            },
+            source: "blocks".into(),
+            shape: vec![8, 64, 1, 16],
+            logical_shape: Some(vec![8, 64, 32]),
+            transforms: vec![
+                BindingTransform::StackedExperts { count: 8 },
+                BindingTransform::FusedGateUp { interleaved: true },
+            ],
+            storage: TensorStorage::BlockQuantized {
+                format: BlockQuantization::MXFP4,
+                scales: "scales".into(),
+                global_scale: None,
+                input_scale: None,
+                bias: Some("bias".into()),
+                packing,
+            },
+        }
+    }
 }

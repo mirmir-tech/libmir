@@ -7,8 +7,8 @@ use super::{
     validation::validate_execution,
 };
 use crate::{
-    CudaBackend, CudaTensor, Error, Result,
-    backend::linear::AffineProjection,
+    CudaBackend, CudaTensor, DenseRole, Error, Result,
+    backend::linear::CheckpointProjection,
     kernels::{GatedAttentionSplit, Mrope, MropeSpec, ShiftedRmsNorm, SigmoidElementwiseBf16},
 };
 
@@ -17,10 +17,10 @@ pub struct CudaAffineGatedFullAttentionExecution {
     backend: CudaBackend,
     config: AffineGatedFullAttentionConfig,
     tokens: usize,
-    query: AffineProjection,
-    key: AffineProjection,
-    value: AffineProjection,
-    output: AffineProjection,
+    query: CheckpointProjection,
+    key: CheckpointProjection,
+    value: CheckpointProjection,
+    output: CheckpointProjection,
     split: GatedAttentionSplit,
     query_norm: ShiftedRmsNorm,
     key_norm: ShiftedRmsNorm,
@@ -41,16 +41,8 @@ impl CudaAffineGatedFullAttentionExecution {
         if tokens == 0 {
             return Err(Error::InvalidDecoderKernel("empty gated attention execution"));
         }
-        let projection = |input, output, weight| {
-            AffineProjection::new(
-                backend,
-                tokens,
-                input,
-                output,
-                config.group_size,
-                config.bits,
-                weight,
-            )
+        let projection = |input, output, role, weight| {
+            CheckpointProjection::new(backend, tokens, input, output, role, weight)
         };
         let query_width = config.query_width()?;
         let key_value_width = config.key_value_width()?;
@@ -81,10 +73,30 @@ impl CudaAffineGatedFullAttentionExecution {
             backend: backend.clone(),
             config,
             tokens,
-            query: projection(config.hidden_size, checked(query_width, 2)?, &weights.query)?,
-            key: projection(config.hidden_size, key_value_width, &weights.key)?,
-            value: projection(config.hidden_size, key_value_width, &weights.value)?,
-            output: projection(query_width, config.hidden_size, &weights.output)?,
+            query: projection(
+                config.hidden_size,
+                checked(query_width, 2)?,
+                DenseRole::AttentionQkv,
+                &weights.query,
+            )?,
+            key: projection(
+                config.hidden_size,
+                key_value_width,
+                DenseRole::AttentionQkv,
+                &weights.key,
+            )?,
+            value: projection(
+                config.hidden_size,
+                key_value_width,
+                DenseRole::AttentionQkv,
+                &weights.value,
+            )?,
+            output: projection(
+                query_width,
+                config.hidden_size,
+                DenseRole::AttentionOutput,
+                &weights.output,
+            )?,
             split: GatedAttentionSplit::compile(
                 &backend.inner.compiler,
                 tokens,

@@ -1,16 +1,29 @@
+mod admission;
+mod automatic_cache;
 mod cache;
+mod cache_cohort;
+mod decode;
 mod descriptor;
 mod helpers;
 mod library;
 mod lifecycle;
 mod memory;
+mod memory_admission;
+mod memory_policy;
+mod prefill;
+mod remote;
 mod vision;
+mod warmup;
 
 use std::{
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{Arc, Condvar, Mutex},
 };
 
+pub use admission::{
+    AdmissionCheck, AdmissionCheckKind, AdmissionStatus, BackendAdmissionReport,
+    CheckpointEncoding, MODEL_FORMAT_REGISTRY_SCHEMA_VERSION, WeightEncoding,
+};
 use foundation::{
     model::{BackendTarget, ModelManifest},
     protocol::ChatCompletionRequest,
@@ -20,14 +33,16 @@ use models::{
     execution::{DecoderExecutionContract, ModelTask, TaskExecutionPlan},
     generation::{GenerationConfig, GenerationOverrides, GenerationSettings},
     layout::{DecoderConfig, ImageProcessorConfig, ModelLayout, ModelMetadata, VisionConfig},
-    tokenizer::{TextTokenizer, TokenizedPrompt},
+    tokenizer::{TextTokenizer, TokenizedPrompt, TokenizerValidation},
     weights::{TensorCatalog, TensorReadiness, VisionTensorSchema},
 };
+pub use remote::{RemoteModelContract, RemoteTaskMetadata, RemoteVisionContract};
 use runtime::{backend::ModelHandle, kv::KvCache};
 pub use vision::{IMAGE_PLACEHOLDER, PreparedVisionPrompt};
 
 use self::helpers::{model_id, validate_context};
-use crate::{Engine, Error, Result, RuntimeConfig, Session, scheduler::DecodeCoordinator};
+pub use self::library::ModelLoadOptions;
+use crate::{Engine, Error, Result, RuntimeConfig, Session, scheduler::ModelCoordinator};
 
 /// Parsed model metadata and assets, ready for prompt preparation or backend
 /// loading.
@@ -43,6 +58,7 @@ pub struct ModelDescriptor {
     image_processor: Option<ImageProcessorConfig>,
     template: ChatTemplate,
     tokenizer: TextTokenizer,
+    tokenizer_validation: TokenizerValidation,
 }
 
 #[derive(Debug, Clone)]
@@ -57,7 +73,8 @@ pub struct PreparedPrompt {
 /// Lazily initialized inference library configured for one accelerator backend.
 #[derive(Debug, Clone)]
 pub struct Library {
-    engine: Arc<Mutex<Option<Engine>>>,
+    state: Arc<Mutex<library::LibraryState>>,
+    memory: memory_admission::ModelMemoryManager,
     config: RuntimeConfig,
 }
 
@@ -73,7 +90,10 @@ struct ModelInner {
     handle: ModelHandle,
     config: RuntimeConfig,
     cache: Mutex<KvCache>,
-    coordinator: DecodeCoordinator,
+    cache_ready: Condvar,
+    cache_cohort: cache_cohort::CacheCohort,
+    coordinator: ModelCoordinator,
+    _memory: memory_admission::ModelMemoryLease,
 }
 
 impl ModelDescriptor {
@@ -103,6 +123,9 @@ impl ModelDescriptor {
             .map(|vision| ImageProcessorConfig::from_layout(&layout, vision.pipeline()))
             .transpose()?
             .flatten();
+        let tokenizer = TextTokenizer::from_layout(&layout)?;
+        let tokenizer_validation =
+            descriptor::validate_tokenizer(&task_plan, vision.as_ref(), &tokenizer)?;
         Ok(Self {
             decoder,
             execution,
@@ -112,7 +135,8 @@ impl ModelDescriptor {
             vision_readiness,
             image_processor,
             template: ChatTemplate::from_layout(&layout)?,
-            tokenizer: TextTokenizer::from_layout(&layout)?,
+            tokenizer,
+            tokenizer_validation,
             layout,
             metadata,
         })
@@ -209,13 +233,6 @@ impl Model {
     /// Renders, tokenizes, and validates a chat request for this model.
     pub fn prepare(&self, request: &ChatCompletionRequest) -> Result<PreparedPrompt> {
         self.inner.descriptor.prepare(request)
-    }
-
-    pub(crate) fn decode_sequence(
-        &self,
-        sequence: runtime::backend::DecodeSequence,
-    ) -> Result<runtime::backend::DecodeOutput> {
-        self.inner.coordinator.submit(sequence)
     }
 }
 

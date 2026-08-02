@@ -30,9 +30,10 @@ pub fn load_vision_tensors(
             tensors.push(tensor);
         }
     }
+    let cast = backend.prepare_dense_cast()?;
     let mut upload = backend.begin_tensor_upload();
     for tensor in tensors {
-        upload.enqueue(tensor)?;
+        upload.enqueue_as_bf16(tensor, &cast)?;
     }
     upload.finish()
 }

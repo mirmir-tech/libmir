@@ -8,8 +8,8 @@ cuda_export!(pub(super) QkvKernel = "libmir_cuda_clamped_routed_qkv_bf16"(
     k_bias: &DeviceBuffer<bf16>, v_bias: &DeviceBuffer<bf16>,
     query: &mut DeviceBuffer<bf16>, key: &mut DeviceBuffer<bf16>,
     value: &mut DeviceBuffer<bf16>, tokens: u32, query_heads: u32,
-    kv_heads: u32, head_dim: u32, start_position: u32, theta: f32,
-    factor: f32, initial_context: f32, beta_fast: f32, beta_slow: f32,
+    kv_heads: u32, head_dim: u32, rope_sines: &DeviceBuffer<f32>,
+    rope_cosines: &DeviceBuffer<f32>, concentration: f32,
 ));
 cuda_export!(pub(super) QkvSplitKernel = "libmir_cuda_clamped_routed_qkv_split_bf16"(
     q_input: &DeviceBuffer<bf16>, k_input: &DeviceBuffer<bf16>,
@@ -17,8 +17,13 @@ cuda_export!(pub(super) QkvSplitKernel = "libmir_cuda_clamped_routed_qkv_split_b
     k_bias: &DeviceBuffer<bf16>, v_bias: &DeviceBuffer<bf16>,
     query: &mut DeviceBuffer<bf16>, key: &mut DeviceBuffer<bf16>,
     value: &mut DeviceBuffer<bf16>, tokens: u32, query_heads: u32,
-    kv_heads: u32, head_dim: u32, start_position: u32, theta: f32,
-    factor: f32, initial_context: f32, beta_fast: f32, beta_slow: f32,
+    kv_heads: u32, head_dim: u32, rope_sines: &DeviceBuffer<f32>,
+    rope_cosines: &DeviceBuffer<f32>, concentration: f32,
+));
+cuda_export!(pub(super) RopeKernel = "libmir_cuda_clamped_routed_rope_angles"(
+    positions: &DeviceBuffer<u32>, inverse_frequencies: &DeviceBuffer<f32>,
+    sines: &mut DeviceBuffer<f32>, cosines: &mut DeviceBuffer<f32>,
+    tokens: u32, half_head_dim: u32,
 ));
 
 impl ClampedRoutedKernels {
@@ -31,14 +36,15 @@ impl ClampedRoutedKernels {
         query: &mut DeviceBuffer<bf16>,
         key: &mut DeviceBuffer<bf16>,
         value: &mut DeviceBuffer<bf16>,
-        start: usize,
+        rope_sines: &DeviceBuffer<f32>,
+        rope_cosines: &DeviceBuffer<f32>,
+        concentration: f32,
     ) -> Result<()> {
         let biases = bias_buffers(biases)?;
-        let width = self.spec.query_heads * self.spec.head_dim
-            + 2 * self.spec.kv_heads * self.spec.head_dim;
+        let elements = qkv_elements(self.spec);
         Ok(self.qkv.launch(
             stream,
-            linear_launch(self.spec.tokens * width)?,
+            linear_launch(elements)?,
             (
                 packed,
                 biases[0],
@@ -51,12 +57,9 @@ impl ClampedRoutedKernels {
                 narrow(self.spec.query_heads)?,
                 narrow(self.spec.kv_heads)?,
                 narrow(self.spec.head_dim)?,
-                narrow(start)?,
-                self.spec.theta,
-                self.spec.factor,
-                self.spec.initial_context,
-                self.spec.beta_fast,
-                self.spec.beta_slow,
+                rope_sines,
+                rope_cosines,
+                concentration,
             ),
         )?)
     }
@@ -70,14 +73,15 @@ impl ClampedRoutedKernels {
         query: &mut DeviceBuffer<bf16>,
         key: &mut DeviceBuffer<bf16>,
         value: &mut DeviceBuffer<bf16>,
-        start: usize,
+        rope_sines: &DeviceBuffer<f32>,
+        rope_cosines: &DeviceBuffer<f32>,
+        concentration: f32,
     ) -> Result<()> {
         let biases = bias_buffers(biases)?;
-        let width = self.spec.query_heads * self.spec.head_dim
-            + 2 * self.spec.kv_heads * self.spec.head_dim;
+        let elements = qkv_elements(self.spec);
         Ok(self.qkv_split.launch(
             stream,
-            linear_launch(self.spec.tokens * width)?,
+            linear_launch(elements)?,
             (
                 inputs[0],
                 inputs[1],
@@ -92,15 +96,35 @@ impl ClampedRoutedKernels {
                 narrow(self.spec.query_heads)?,
                 narrow(self.spec.kv_heads)?,
                 narrow(self.spec.head_dim)?,
-                narrow(start)?,
-                self.spec.theta,
-                self.spec.factor,
-                self.spec.initial_context,
-                self.spec.beta_fast,
-                self.spec.beta_slow,
+                rope_sines,
+                rope_cosines,
+                concentration,
             ),
         )?)
     }
+
+    pub(crate) fn prepare_rope(
+        &self,
+        stream: &Stream,
+        positions: &DeviceBuffer<u32>,
+        inverse: &DeviceBuffer<f32>,
+        sines: &mut DeviceBuffer<f32>,
+        cosines: &mut DeviceBuffer<f32>,
+    ) -> Result<()> {
+        let half = self.spec.head_dim / 2;
+        let elements = self.spec.tokens * half;
+        Ok(self.rope.launch(
+            stream,
+            linear_launch(elements)?,
+            (positions, inverse, sines, cosines, narrow(self.spec.tokens)?, narrow(half)?),
+        )?)
+    }
+}
+
+const fn qkv_elements(spec: super::ClampedRoutedSpec) -> usize {
+    let rotary = (spec.query_heads + spec.kv_heads) * (spec.head_dim / 2);
+    let values = spec.kv_heads * spec.head_dim;
+    spec.tokens * (rotary + values)
 }
 
 fn bias_buffers(biases: &[crate::CudaTensor; 3]) -> Result<[&DeviceBuffer<bf16>; 3]> {

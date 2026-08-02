@@ -1,6 +1,8 @@
 mod batch;
 mod execution;
+mod generation;
 mod load;
+mod prefill_output;
 mod runtime;
 mod vision;
 mod worker;
@@ -14,6 +16,7 @@ use std::{
 };
 
 use ::runtime::{RuntimeError, backend::ModelHandle};
+pub use generation::MetalGenerationStepOutput;
 
 use self::worker::ModelClient;
 use super::{
@@ -55,8 +58,9 @@ impl MetalBackend {
     /// Creates a backend after validating the requested global K/V storage
     /// format.
     pub fn try_new(config: MetalConfig) -> std::result::Result<Self, RuntimeError> {
-        crate::engine::KvPageFormat::resolve(config.kv_cache.dtype)
-            .map_err(|error| RuntimeError::Backend(error.to_string()))?;
+        if let Err(error) = crate::engine::KvPageFormat::resolve(config.kv_cache.dtype) {
+            return Err(RuntimeError::Backend(error.to_string()));
+        }
         Ok(Self::new(config))
     }
 
@@ -108,13 +112,23 @@ impl MetalBackend {
         })?)
     }
 
+    pub fn finish_startup_tuning(
+        &self,
+        model: &ModelHandle,
+    ) -> std::result::Result<(), RuntimeError> {
+        Ok(self.with_model(&model.id, move |loaded| {
+            loaded.stream().finish_startup_tuning();
+            Ok(())
+        })?)
+    }
+
     pub fn release_session(
         &self,
         model: &ModelHandle,
         session: uuid::Uuid,
     ) -> std::result::Result<(), RuntimeError> {
         Ok(self.with_model(&model.id, move |loaded| {
-            loaded.release_session(session);
+            loaded.release_session(session)?;
             Ok(())
         })?)
     }

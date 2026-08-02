@@ -8,12 +8,15 @@ use crate::{
     kernels::geometry::{narrow, product, require},
 };
 
+mod execution;
 mod graph;
+mod shape;
 
 pub use graph::{
     MergeAttentionArguments, SplitAttentionArguments, SplitAttentionConfigs, SplitAttentionKernels,
     SplitAttentionNodes,
 };
+pub(super) use shape::tensor_queries;
 
 cuda_export!(
     pub(crate) SplitAttentionKernel = "libmir_cuda_paged_attention_split_bf16"(
@@ -41,19 +44,13 @@ pub struct SplitPagedAttention {
     split: TypedKernel<SplitAttentionKernel>,
     merge: TypedKernel<MergeAttentionKernel>,
     spec: PagedAttentionSpec,
+    grouped_queries: bool,
+    tensor_queries: bool,
     partition_tokens: usize,
     max_partitions: usize,
 }
 
 impl SplitPagedAttention {
-    fn threads(&self) -> u32 {
-        if self.spec.head_dim <= 128 && self.spec.value_head_dim <= 128 {
-            128
-        } else {
-            256
-        }
-    }
-
     pub fn compile(
         compiler: &mircuda::Compiler,
         spec: PagedAttentionSpec,
@@ -65,12 +62,31 @@ impl SplitPagedAttention {
         }
         let max_tokens = product(spec.max_blocks, spec.block_size)?;
         let max_partitions = max_tokens.div_ceil(partition_tokens);
+        let query_group = spec.query_heads / spec.kv_heads;
+        let grouped_queries = query_group > 1
+            && query_group <= 8
+            && spec.head_dim <= 128
+            && spec.value_head_dim <= 128;
+        let tensor_queries = tensor_queries(spec, query_group, grouped_queries);
         let source = cuda_kernel_file!("../../../../kernels/paged_attention_split_bf16.cu");
-        let module = compiler.compile(source, &compile_options(spec.dtype)?)?;
+        let mut options = compile_options(spec.dtype)?;
+        if grouped_queries {
+            options.extra_options.push("-DLIBMIR_SPLIT_GQA=1".into());
+            if tensor_queries {
+                options.extra_options.push("-DLIBMIR_SPLIT_GQA_WMMA=1".into());
+            }
+            options.extra_options.push(format!("-DLIBMIR_QUERY_GROUP={query_group}"));
+            options
+                .extra_options
+                .push(format!("-DLIBMIR_WARP_VALUE_ITEMS={}", spec.value_head_dim.div_ceil(32)));
+        }
+        let module = compiler.compile(source, &options)?;
         Ok(Self {
             split: module.kernel()?,
             merge: module.kernel()?,
             spec,
+            grouped_queries,
+            tensor_queries,
             partition_tokens,
             max_partitions,
         })
@@ -95,7 +111,7 @@ impl SplitPagedAttention {
             query, block_table, workspace, output, token_count, block_count, window, scale,
         )?;
         let split_config = LaunchConfig {
-            grid: (narrow(product(self.spec.query_heads, active)?)?, 1, 1),
+            grid: (narrow(product(self.split_heads(), active)?)?, 1, 1),
             block: (self.threads(), 1, 1),
             shared_memory_bytes: 0,
         };
@@ -128,7 +144,7 @@ impl SplitPagedAttention {
         let merge_config = LaunchConfig {
             grid: (narrow(self.spec.query_heads)?, 1, 1),
             block: (self.threads(), 1, 1),
-            shared_memory_bytes: 0,
+            shared_memory_bytes: narrow(active * size_of::<f32>())?,
         };
         Ok(self.merge.launch(
             stream,
@@ -154,6 +170,10 @@ impl SplitPagedAttention {
             self.spec.query_heads * self.max_partitions * self.spec.value_head_dim,
             self.spec.query_heads * self.max_partitions,
         )
+    }
+
+    pub(crate) const fn spec(&self) -> PagedAttentionSpec {
+        self.spec
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -12,10 +12,23 @@ impl KvSessionState {
         cache: &mut KvCache,
         prompt_tokens: &[u32],
     ) -> Result<KvPrefillStep> {
+        self.prepare_uncached_prefill_with_reserve_in_place(cache, prompt_tokens, 0)
+    }
+
+    pub fn prepare_uncached_prefill_with_reserve_in_place(
+        &mut self,
+        cache: &mut KvCache,
+        prompt_tokens: &[u32],
+        reserved_tokens: usize,
+    ) -> Result<KvPrefillStep> {
         if !self.table.is_empty() {
             self.release(cache)?;
         }
-        let block_count = prompt_tokens.len().div_ceil(cache.block_size());
+        let capacity_tokens =
+            prompt_tokens.len().checked_add(reserved_tokens).ok_or_else(|| {
+                crate::error::RuntimeError::KvCache("session token capacity overflow".into())
+            })?;
+        let block_count = capacity_tokens.div_ceil(cache.block_size());
         let allocated = cache.allocate_blocks(block_count)?;
         let mut table = BlockTable::with_block_size(cache.block_size());
         for block in allocated.blocks().iter().copied() {

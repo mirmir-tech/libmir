@@ -2,9 +2,16 @@ SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 .DEFAULT_GOAL := help
 
-.PHONY: help docs docs-open examples check-base check-metal check-cuda cuda-checkpoint cuda-profile
+.PHONY: help docs docs-open examples check-base check-metal check-cuda cuda-checkpoint \
+	cuda-quality cuda-dense-gate cuda-profile
 
 CUDA_NVFP4_MODEL ?= $(firstword $(wildcard $(HOME)/.cache/huggingface/hub/models--nvidia--Gemma-4-26B-A4B-NVFP4/snapshots/*))
+CUDA_QUALITY_MODEL ?= $(firstword $(wildcard $(HOME)/.cache/mirmir/huggingface/hub/models--Qwen--Qwen3-4B/snapshots/*))
+CUDA_QUALITY_MODES ?= throughput block-fp8-gate-up fp8-int4-gate-up
+DENSE_FIXTURE_FAMILY ?=
+DENSE_MODEL ?=
+DENSE_REFERENCE ?=
+DENSE_CUDA_POLICY ?= stable
 HOST_OS := $(shell uname -s)
 ifeq ($(HOST_OS),Darwin)
 DOC_PACKAGES := --workspace --all-features
@@ -45,8 +52,39 @@ cuda-checkpoint: ## Validate native NVFP4 against the local NVIDIA checkpoint.
 	@LIBMIR_CUDA_NVFP4_MODEL="$(CUDA_NVFP4_MODEL)" \
 		cargo test -p libmir-cuda checkpoint_
 
+cuda-quality: ## Gate experimental CUDA dense modes against stable BF16 logits.
+	@test -d "$(CUDA_QUALITY_MODEL)" || { printf 'CUDA quality checkpoint not found.\n' >&2; exit 2; }
+	@for mode in $(CUDA_QUALITY_MODES); do \
+		LIBMIR_CUDA_GATE_THROUGHPUT_QUALITY="$$mode" \
+		LIBMIR_CUDA_QUALITY_MODEL="$(CUDA_QUALITY_MODEL)" \
+		cargo test --release -p libmir-cuda checkpoint_throughput_quality_report \
+			-- --nocapture || exit $$?; \
+	done
+
+cuda-dense-gate: ## Run one configured CUDA dense-checkpoint V2-V4 matrix row.
+	@test -n "$(DENSE_FIXTURE_FAMILY)" || { printf 'DENSE_FIXTURE_FAMILY is required.\n' >&2; exit 2; }
+	@test -d "$(DENSE_MODEL)" || { printf 'DENSE_MODEL is not a checkpoint directory.\n' >&2; exit 2; }
+	@test -f "$(DENSE_REFERENCE)" || { printf 'DENSE_REFERENCE is not a file.\n' >&2; exit 2; }
+	@case "$(DENSE_FIXTURE_FAMILY)" in \
+		dense) model_env=MIRMIR_DENSE_MODEL; reference_env=MIRMIR_DENSE_REFERENCE ;; \
+		dense_and_routed) model_env=MIRMIR_DENSE_AND_ROUTED_MODEL; \
+			reference_env=MIRMIR_DENSE_AND_ROUTED_REFERENCE ;; \
+		shared_routed) model_env=MIRMIR_SHARED_ROUTED_DENSE_MODEL; \
+			reference_env=MIRMIR_SHARED_ROUTED_DENSE_REFERENCE ;; \
+		clamped_routed) model_env=MIRMIR_CLAMPED_ROUTED_DENSE_MODEL; \
+			reference_env=MIRMIR_CLAMPED_ROUTED_DENSE_REFERENCE ;; \
+		*) printf 'Unknown DENSE_FIXTURE_FAMILY: %s\n' "$(DENSE_FIXTURE_FAMILY)" >&2; exit 2 ;; \
+	esac; \
+	env MIRMIR_DENSE_FIXTURE_FAMILY="$(DENSE_FIXTURE_FAMILY)" \
+		MIRMIR_DENSE_CUDA_POLICY="$(DENSE_CUDA_POLICY)" \
+		"$$model_env=$(DENSE_MODEL)" "$$reference_env=$(DENSE_REFERENCE)" \
+		cargo test --release --features cuda --test dense_checkpoints \
+			validates_dense_checkpoint_matrix_v2_to_v4 -- --ignored --nocapture
+
 cuda-profile: ## Profile libmir-owned CUDA inference kernels.
 	@cargo run --release -p libmir-cuda --example affine-gemv
 	@cargo run --release -p libmir-cuda --example affine-qmm
 	@cargo run --release -p libmir-cuda --example selected-affine-pair
 	@cargo run --release -p libmir-cuda --example selected-moe
+	@cargo run --release -p libmir-cuda --example selected-dense-moe
+	@cargo run --release -p libmir-cuda --example output-head

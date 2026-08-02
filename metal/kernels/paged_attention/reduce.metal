@@ -1,19 +1,20 @@
-constexpr uint SIMD_GROUPS = 32;
+constexpr uint DIMENSION_GROUPS = 32;
+constexpr uint SIMD_GROUPS = REDUCTION_GROUPS;
 uint lane = thread_index_in_simdgroup;
 uint simd_group = simdgroup_index_in_threadgroup;
 uint query_head = threadgroup_position_in_grid.y;
-constexpr uint VALUES_PER_THREAD = HEAD_DIM / SIMD_GROUPS;
+constexpr uint VALUES_PER_THREAD = HEAD_DIM / DIMENSION_GROUPS;
 thread float accumulator[VALUES_PER_THREAD];
-threadgroup float outputs[SIMD_GROUPS * SIMD_GROUPS];
+threadgroup float outputs[DIMENSION_GROUPS * SIMD_GROUPS];
 uint statistic = query_head * BLOCKS;
 float maximum = -INFINITY;
-for (uint chunk = 0; chunk < BLOCKS / SIMD_GROUPS; ++chunk) {
-  maximum = metal::max(maximum, maximums[statistic + lane + SIMD_GROUPS * chunk]);
+for (uint chunk = 0; chunk < BLOCKS / DIMENSION_GROUPS; ++chunk) {
+  maximum = metal::max(maximum, maximums[statistic + lane + DIMENSION_GROUPS * chunk]);
 }
 maximum = simd_max(maximum);
 float normalizer = 0.0f;
-for (uint chunk = 0; chunk < BLOCKS / SIMD_GROUPS; ++chunk) {
-  uint block = lane + SIMD_GROUPS * chunk;
+for (uint chunk = 0; chunk < BLOCKS / DIMENSION_GROUPS; ++chunk) {
+  uint block = lane + DIMENSION_GROUPS * chunk;
   float factor = metal::fast::exp(maximums[statistic + block] - maximum);
   normalizer += factor * sums[statistic + block];
 }
@@ -30,13 +31,18 @@ for (uint chunk = 0; chunk < BLOCKS / SIMD_GROUPS; ++chunk) {
 for (uint index = 0; index < VALUES_PER_THREAD; ++index) {
   outputs[lane * SIMD_GROUPS + simd_group] = accumulator[index];
   threadgroup_barrier(mem_flags::mem_threadgroup);
-  accumulator[index] = simd_sum(outputs[simd_group * SIMD_GROUPS + lane]);
-  accumulator[index] = normalizer == 0.0f ? accumulator[index] : accumulator[index] / normalizer;
-  threadgroup_barrier(mem_flags::mem_threadgroup);
-}
-if (lane == 0) {
-  uint output_base = query_head * HEAD_DIM + simd_group * VALUES_PER_THREAD;
-  for (uint index = 0; index < VALUES_PER_THREAD; ++index) {
-    output[output_base + index] = T(accumulator[index]);
+  for (uint dimension_group = simd_group;
+       dimension_group < DIMENSION_GROUPS;
+       dimension_group += SIMD_GROUPS) {
+    float value =
+        lane < SIMD_GROUPS ? outputs[dimension_group * SIMD_GROUPS + lane] : 0.0f;
+    value = simd_sum(value);
+    if (lane == 0) {
+      uint output_base =
+          query_head * HEAD_DIM + dimension_group * VALUES_PER_THREAD;
+      output[output_base + index] =
+          T(normalizer == 0.0f ? value : value / normalizer);
+    }
   }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
 }

@@ -178,6 +178,27 @@ impl DecodeMoeBlockExecutor {
         }
     }
 
+    pub fn execute_prefill_batch(
+        &mut self,
+        prefill: &mut PrefillMoeBlockBf16,
+        input: &DeviceBuffer<bf16>,
+        batch: &crate::PagedPrefillBatch,
+        output: &mut DeviceBuffer<bf16>,
+    ) -> Result<()> {
+        let state = self
+            .state
+            .as_mut()
+            .ok_or(Error::InvalidDecoderKernel("CUDA block executor is unavailable"))?;
+        match state {
+            State::Prepared { block, weights } => {
+                prefill.execute_batch(block, input, weights.borrow(), batch, output)
+            },
+            State::Captured(_) => Err(Error::InvalidDecoderKernel(
+                "CUDA prefill must complete before decode graph capture",
+            )),
+        }
+    }
+
     fn execute_state(
         &mut self,
         state: State,

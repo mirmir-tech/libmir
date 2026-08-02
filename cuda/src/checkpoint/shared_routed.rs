@@ -3,7 +3,10 @@ use std::collections::HashSet;
 use models::{
     layout::DecoderConfig,
     semantic::SemanticModelSpec,
-    weights::{TensorCatalog, TensorInfo, WeightBindingPlan},
+    weights::{
+        LayerTensorRole, LogicalTensorRole, TensorCatalog, TensorInfo, TensorStorage,
+        WeightBindingPlan,
+    },
 };
 
 use super::{SharedRoutedModelLoadConfig, model::payload_bytes};
@@ -39,25 +42,32 @@ impl CudaBackend {
             ));
         }
         let source = shared_routed_source(bindings, decoder.num_hidden_layers, catalog)?;
+        let raw = raw_sources(bindings);
+        let cast = self.prepare_dense_cast()?;
         let mut upload = self.begin_tensor_upload();
         for tensor in &source {
-            upload.enqueue(tensor)?;
+            if raw.contains(tensor.name.as_str()) {
+                upload.enqueue(tensor)?;
+            } else {
+                upload.enqueue_float_as_bf16(tensor, &cast)?;
+            }
         }
         let tensors = upload.finish()?;
         let bytes = payload_bytes(source.iter().copied())?;
-        progress(bytes, format!("uploaded {} affine shared-routed tensors", source.len()));
+        progress(bytes, format!("uploaded {} shared-routed checkpoint tensors", source.len()));
         tracing::debug!(
             backend = "cuda",
             layers = decoder.num_hidden_layers,
             tensors = source.len(),
             bytes,
-            "loaded affine shared-routed mixed-mixer model template"
+            "loaded shared-routed mixed-mixer model template"
         );
         CudaSharedRoutedModelTemplate::from_tensors(
             self,
             decoder,
             semantic,
             &tensors,
+            catalog,
             bindings,
             load.cache,
             load.max_sequence_blocks,
@@ -70,6 +80,20 @@ fn shared_routed_source<'a>(
     layers: usize,
     catalog: &'a TensorCatalog,
 ) -> Result<Vec<&'a TensorInfo>> {
+    let individual = bindings
+        .tensors
+        .iter()
+        .filter(|binding| {
+            matches!(
+                binding.role,
+                LogicalTensorRole::Layer {
+                    tensor: LayerTensorRole::ExpertProjection { expert: Some(_), .. },
+                    ..
+                }
+            )
+        })
+        .flat_map(|binding| binding.physical_sources())
+        .collect::<HashSet<_>>();
     let mut names = bindings.decoder_boundary()?.physical_sources();
     for layer in 0..layers {
         names.extend(bindings.hybrid_decoder_layer(layer)?.physical_sources());
@@ -77,8 +101,30 @@ fn shared_routed_source<'a>(
     let mut seen = HashSet::new();
     names
         .into_iter()
+        .filter(|name| !individual.contains(name))
         .filter(|name| seen.insert(*name))
         .map(|name| required(catalog, name))
+        .collect()
+}
+
+fn raw_sources(bindings: &WeightBindingPlan) -> HashSet<&str> {
+    bindings
+        .tensors
+        .iter()
+        .filter(|binding| {
+            matches!(
+                binding.storage,
+                TensorStorage::AffineQuantized { .. }
+                    | TensorStorage::BlockQuantized { .. }
+                    | TensorStorage::Float8 { .. }
+                    | TensorStorage::PackedInt8 { .. }
+                    | TensorStorage::PackedInt4 { .. }
+                    | TensorStorage::Awq { .. }
+                    | TensorStorage::Gptq { .. }
+                    | TensorStorage::BitsAndBytes4Bit { .. }
+            )
+        })
+        .flat_map(|binding| binding.physical_sources())
         .collect()
 }
 

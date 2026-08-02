@@ -4,10 +4,14 @@ mod scratch;
 use mircuda::Stream;
 
 use self::scratch::PrefillBlockScratch;
-use super::{DecodeMoeBlockConfig, NvFp4ExpertBank, validate};
+use super::{
+    DecodeMoeBlockConfig, NvFp4ExpertBank,
+    experts::{ExpertWeights, Experts},
+    validate,
+};
 use crate::{
-    Bf16Linear, Bf16LinearPair, BucketedNvFp4MoeBf16, CudaBackend, Error, ExecutionPhase,
-    MoeExecution, MoePlanRequest, PrefillAttentionBf16, Result, RmsNormBf16, RouterBf16,
+    Bf16Linear, Bf16LinearPair, CudaBackend, Error, ExecutionPhase, PrefillAttentionBf16, Result,
+    RmsNormBf16, RouterBf16,
     kernels::{ElementwiseBf16, PackedGatedBf16, RouterSpec},
 };
 
@@ -22,7 +26,7 @@ pub struct PrefillMoeBlockBf16 {
     post_dense_norm: RmsNormBf16,
     router: RouterBf16,
     pre_expert_norm: RmsNormBf16,
-    experts: BucketedNvFp4MoeBf16,
+    experts: Experts,
     post_expert_norm: RmsNormBf16,
     post_feed_forward_norm: RmsNormBf16,
     hidden_ops: ElementwiseBf16,
@@ -43,17 +47,25 @@ impl CudaBackend {
         down: NvFp4ExpertBank,
         tokens: usize,
     ) -> Result<PrefillMoeBlockBf16> {
-        PrefillMoeBlockBf16::new(self, config, gate, up, down, tokens)
+        PrefillMoeBlockBf16::new(
+            self,
+            config,
+            &ExpertWeights::NvFp4 {
+                gate,
+                up,
+                down,
+                activation_mode: models::weights::BlockActivationMode::WeightAndActivation,
+            },
+            tokens,
+        )
     }
 }
 
 impl PrefillMoeBlockBf16 {
-    fn new(
+    pub(super) fn new(
         backend: &CudaBackend,
         config: DecodeMoeBlockConfig,
-        gate: NvFp4ExpertBank,
-        up: NvFp4ExpertBank,
-        down: NvFp4ExpertBank,
+        expert_weights: &ExpertWeights,
         tokens: usize,
     ) -> Result<Self> {
         validate(config)?;
@@ -64,17 +76,6 @@ impl PrefillMoeBlockBf16 {
         let dense = config.dense_intermediate;
         let epsilon = config.attention.rms_norm_epsilon;
         let hidden_elements = elements(tokens, hidden)?;
-        let expert_plan = backend.execution_planner().plan_moe(MoePlanRequest::nvfp4(
-            ExecutionPhase::Prefill,
-            tokens,
-            config.experts,
-            config.top_k,
-            hidden,
-            config.expert_intermediate,
-        ))?;
-        if expert_plan.execution() != MoeExecution::Bucketed {
-            return Err(Error::InvalidExecutionPlan("prefill block requires bucketed MoE"));
-        }
         let norm = || RmsNormBf16::new(backend, tokens, hidden, epsilon);
         Ok(Self {
             attention: backend.prepare_prefill_attention_bf16(config.attention, tokens)?,
@@ -100,13 +101,13 @@ impl PrefillMoeBlockBf16 {
                 tokens,
             )?,
             pre_expert_norm: norm()?,
-            experts: backend.prepare_bucketed_nvfp4_moe_bf16(
+            experts: Experts::new(
+                backend,
+                ExecutionPhase::Prefill,
                 tokens,
                 config.top_k,
                 config.activation,
-                gate,
-                up,
-                down,
+                expert_weights,
             )?,
             post_expert_norm: norm()?,
             post_feed_forward_norm: norm()?,

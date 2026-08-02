@@ -2,7 +2,7 @@ use super::{CudaAttentionPolicy, CudaExecutionPlanner, PlanSource};
 use crate::{Error, Result};
 
 /// Complete shape key used to select paged decode attention.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct AttentionPlanRequest {
     pub max_context_tokens: usize,
     pub query_heads: usize,
@@ -12,7 +12,7 @@ pub struct AttentionPlanRequest {
 }
 
 /// Prepared attention strategy used by a stable CUDA graph.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum AttentionExecution {
     Direct,
     SplitKv {
@@ -53,10 +53,41 @@ impl CudaExecutionPlanner {
             {
                 (
                     AttentionExecution::SplitKv {
-                        partition_tokens: 64,
-                        threshold_tokens: 128,
+                        partition_tokens: 256,
+                        threshold_tokens: 512,
                     },
-                    PlanSource::Tuned,
+                    PlanSource::Heuristic,
+                )
+            },
+            CudaAttentionPolicy::Auto
+                if self.hardware().compute_capability().0 == 12
+                    && request.max_context_tokens >= 512
+                    && request.query_heads > request.kv_heads
+                    && request.query_heads / request.kv_heads >= 4
+                    && request.head_dim == 64
+                    && request.value_head_dim == 64 =>
+            {
+                (
+                    AttentionExecution::SplitKv {
+                        partition_tokens: 384,
+                        threshold_tokens: 65,
+                    },
+                    PlanSource::Heuristic,
+                )
+            },
+            CudaAttentionPolicy::Auto
+                if self.hardware().compute_capability().0 == 12
+                    && request.max_context_tokens >= 512
+                    && request.query_heads > request.kv_heads
+                    && request.head_dim <= 128
+                    && request.value_head_dim <= 128 =>
+            {
+                (
+                    AttentionExecution::SplitKv {
+                        partition_tokens: 256,
+                        threshold_tokens: 65,
+                    },
+                    PlanSource::Heuristic,
                 )
             },
             CudaAttentionPolicy::Auto
@@ -70,7 +101,7 @@ impl CudaExecutionPlanner {
                         partition_tokens: 64,
                         threshold_tokens: 65,
                     },
-                    PlanSource::Tuned,
+                    PlanSource::Heuristic,
                 )
             },
             CudaAttentionPolicy::Auto
@@ -82,7 +113,7 @@ impl CudaExecutionPlanner {
                         partition_tokens: 256,
                         threshold_tokens: 512,
                     },
-                    PlanSource::Tuned,
+                    PlanSource::Heuristic,
                 )
             },
             CudaAttentionPolicy::Auto => (AttentionExecution::Direct, PlanSource::Fallback),

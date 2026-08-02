@@ -19,6 +19,17 @@ fn auto_selects_validated_refinement_and_gates_experiments() -> Result<()> {
             .execution(),
         OutputHeadExecution::AutoRefined
     );
+    let gpt_oss = OutputHeadPlanRequest {
+        input_features: 2_880,
+        output_features: 201_088,
+    };
+    assert_eq!(planner(12)?.plan_output_head(gpt_oss)?.execution(), OutputHeadExecution::Bf16);
+    assert_eq!(
+        planner_with_policy(12, experimental(CudaOutputHeadPolicy::Auto))?
+            .plan_output_head(gpt_oss)?
+            .execution(),
+        OutputHeadExecution::AutoRefined
+    );
     assert_execution(request, CudaOutputHeadPolicy::Bf16, OutputHeadExecution::Bf16)?;
     for (policy, execution) in [
         (CudaOutputHeadPolicy::Fp8Blockwise, OutputHeadExecution::Fp8Blockwise),

@@ -16,8 +16,8 @@ use super::{
     },
 };
 use crate::{
-    DenseSwiGluLayerLoadConfig, Error, NvFp4MoeLayerLoadConfig, Result,
-    SharedRoutedModelLoadConfig,
+    CudaArchitecture, CudaDecoderRuntime, DenseSwiGluLayerLoadConfig, Error,
+    NvFp4MoeLayerLoadConfig, Result, SharedRoutedModelLoadConfig,
     backend::{CudaSequenceScoringModel, CudaTextEmbeddingModel},
     engine::{
         CudaEngine, batch::DecodeBuckets, lowering::CudaDecoderPlan, runner::RunnerQueue,
@@ -103,8 +103,11 @@ impl CudaEngine {
         report: &mut dyn FnMut(u64, String),
     ) -> Result<ModelRunner> {
         if let Some(encoder) = encoder {
+            let TaskExecutionPlan::SequenceScoring { bindings, .. } = task else {
+                return Err(Error::State("CUDA encoder bindings are missing".into()));
+            };
             return Ok(runner(ModelExecution::SequenceScoring(Box::new(
-                CudaSequenceScoringModel::load(&self.backend, encoder, catalog)?,
+                CudaSequenceScoringModel::load(&self.backend, encoder, catalog, bindings)?,
             ))));
         }
         let decoder =
@@ -117,27 +120,38 @@ impl CudaEngine {
         let contract =
             contract.ok_or_else(|| Error::State("CUDA decoder contract is missing".into()))?;
         let plan = CudaDecoderPlan::lower(&contract.semantic);
-        if plan.all_shared_routed() && plan.has_linear_mixer() && plan.has_softmax_mixer() {
-            let template = self.backend.load_shared_routed_model_template_with_progress(
-                decoder,
-                &contract.semantic,
-                catalog,
-                &contract.bindings,
-                SharedRoutedModelLoadConfig {
-                    cache: self.cache,
-                    max_sequence_blocks: blocks,
-                },
-                report,
-            )?;
-            return Ok(generation(MixedMixerExecution::new(template)));
+        let CudaArchitecture::Generation(runtime) =
+            crate::admit_architecture(task, Some(&contract.semantic))?
+        else {
+            return Err(Error::State("CUDA admitted a non-generation runtime".into()));
+        };
+        match runtime {
+            CudaDecoderRuntime::SharedRouted => {
+                let template = self.backend.load_shared_routed_model_template_with_progress(
+                    decoder,
+                    &contract.semantic,
+                    catalog,
+                    &contract.bindings,
+                    SharedRoutedModelLoadConfig {
+                        cache: self.cache,
+                        max_sequence_blocks: blocks,
+                    },
+                    report,
+                )?;
+                Ok(generation(MixedMixerExecution::new(template)))
+            },
+            CudaDecoderRuntime::ClampedRouted => {
+                let ring_sessions = self.scheduler.max_batch_requests;
+                let template = self.backend.load_clamped_routed_model_template_with_progress(
+                    decoder, contract, catalog, self.cache, blocks, ring_sessions, report,
+                )?;
+                Ok(generation(SinkAttentionExecution::new(&template)?))
+            },
+            CudaDecoderRuntime::Dense | CudaDecoderRuntime::DenseAndRouted => self
+                .load_standard_runner(
+                    manifest, decoder, &plan, runtime, contract, catalog, blocks, report,
+                ),
         }
-        if plan.all_unshared_clamped_routed() {
-            let template = self.backend.load_clamped_routed_model_template_with_progress(
-                decoder, contract, catalog, self.cache, blocks, report,
-            )?;
-            return Ok(generation(SinkAttentionExecution::new(template)));
-        }
-        self.load_standard_runner(manifest, decoder, &plan, contract, catalog, blocks, report)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -146,6 +160,7 @@ impl CudaEngine {
         manifest: &ModelManifest,
         decoder: &models::layout::DecoderConfig,
         plan: &CudaDecoderPlan,
+        runtime: CudaDecoderRuntime,
         contract: &DecoderExecutionContract,
         catalog: &TensorCatalog,
         blocks: usize,
@@ -153,19 +168,20 @@ impl CudaEngine {
     ) -> Result<ModelRunner> {
         let bindings = &contract.bindings;
         let nvfp4 = bindings.uses_block_format(BlockFormat::NvFp4);
-        let int8 = bindings.uses_packed_int8();
-        let template = if plan.all_dense_and_routed() && nvfp4 {
+        let projection_format = super::projection::format(bindings);
+        let moe_load = NvFp4MoeLayerLoadConfig {
+            cache: self.cache,
+            max_sequence_blocks: blocks,
+        };
+        let template = if runtime == CudaDecoderRuntime::DenseAndRouted && nvfp4 {
             self.backend.load_nvfp4_moe_model_template_with_bindings(
-                decoder,
-                bindings,
-                catalog,
-                NvFp4MoeLayerLoadConfig {
-                    cache: self.cache,
-                    max_sequence_blocks: blocks,
-                },
-                report,
+                decoder, bindings, catalog, moe_load, report,
             )?
-        } else if plan.all_dense() {
+        } else if runtime == CudaDecoderRuntime::DenseAndRouted {
+            self.backend.load_dense_moe_model_template_with_bindings(
+                decoder, bindings, catalog, moe_load, report,
+            )?
+        } else if runtime == CudaDecoderRuntime::Dense {
             self.backend.load_dense_swiglu_model_template_with_bindings(
                 decoder,
                 bindings,
@@ -173,14 +189,8 @@ impl CudaEngine {
                 DenseSwiGluLayerLoadConfig {
                     cache: self.cache,
                     max_sequence_blocks: blocks,
-                    qkv_normalization: plan.graph_normalization()?,
-                    projection_format: if nvfp4 {
-                        crate::ProjectionFormat::NvFp4
-                    } else if int8 {
-                        crate::ProjectionFormat::Int8
-                    } else {
-                        crate::ProjectionFormat::Bf16
-                    },
+                    qkv_normalization: crate::engine::lowering::graph_normalization(plan)?,
+                    projection_format,
                 },
                 report,
             )?
@@ -194,13 +204,15 @@ impl CudaEngine {
                 }
                 .into(),
                 geometry: format!("layers={}", plan.layers().len()),
-                requirement: "the available graph decoder admits uniform dense layers or dense-plus-routed NVFP4 layers",
+                requirement: "the graph decoder requires uniform dense or dense-plus-routed layers",
             });
         };
         report(u64::MAX, "preparing CUDA execution runner".into());
         let caches = template.allocate_shared_kv()?;
         let mut session =
             template.instantiate_with_config_and_caches(self.session_config, &caches)?;
+        session.prepare_packed_prefill_batch(self.scheduler.max_batch_requests)?;
+        session.prepare_packed_output_buckets(self.scheduler.max_batch_requests)?;
         session.warmup(Uuid::nil(), self.cache, manifest.context_len)?;
         let selected = session.sample(runtime::backend::SamplingLogits::None)?;
         let _token = self.backend.read_token(selected)?;
@@ -218,7 +230,6 @@ impl CudaEngine {
         })
     }
 }
-
 fn runner(execution: ModelExecution) -> ModelRunner {
     ModelRunner { execution, batches: None, selected: None }
 }

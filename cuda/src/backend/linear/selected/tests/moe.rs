@@ -12,8 +12,8 @@ const EXPERTS: usize = 3;
 const SELECTED: usize = 2;
 
 #[test]
-fn matches_selected_gated_and_reduced_int4_and_int8() -> Result<()> {
-    for bits in [4, 8] {
+fn matches_selected_gated_and_reduced_native_mlx_widths() -> Result<()> {
+    for bits in [2, 3, 4, 5, 6, 8] {
         check_moe(bits)?;
     }
     Ok(())
@@ -60,7 +60,7 @@ fn check_moe(bits: usize) -> Result<()> {
         let gate_one = rounded_activation(1.0, activation);
         let expected = [
             rounded(rounded(gate_three * 3.0) * 0.25 + rounded(gate_one) * 0.75),
-            rounded(rounded(gate_three * 4.0) * 0.25 + rounded(gate_one * 2.0) * 0.75),
+            rounded(rounded(gate_three) * 0.25 + rounded(gate_one * 2.0) * 0.75),
         ];
         for (actual, expected) in actual.iter().zip(expected) {
             assert!((actual.to_f32() - expected).abs() < 0.04);
@@ -92,7 +92,7 @@ fn fixture(bits: usize) -> Result<(PathBuf, Vec<TensorInfo>)> {
     append_bank(&path, &mut bytes, &mut infos, "gate", bits, WIDTH, |expert, _| expert + 1)?;
     append_bank(&path, &mut bytes, &mut infos, "up", bits, WIDTH, |_, _| 1)?;
     append_bank(&path, &mut bytes, &mut infos, "down", bits, HIDDEN, |expert, row| {
-        expert + row + 1
+        (expert + row) % 3 + 1
     })?;
     fs::write(&path, bytes)?;
     Ok((path, infos))
@@ -107,17 +107,12 @@ fn append_bank(
     output: usize,
     value: impl Fn(usize, usize) -> usize,
 ) -> Result<()> {
-    let values_per_word = 32 / bits;
-    let words_per_row = WIDTH / values_per_word;
+    let words_per_row = WIDTH * bits / 32;
     let start = u64::try_from(bytes.len())?;
     for expert in 0..EXPERTS {
         for row in 0..output {
             let quantized = u32::try_from(value(expert, row))?;
-            let word = (0..values_per_word)
-                .fold(0_u32, |packed, lane| packed | (quantized << (lane * bits)));
-            for _ in 0..words_per_row {
-                bytes.extend_from_slice(&word.to_le_bytes());
-            }
+            append_packed_row(bytes, quantized, bits);
         }
     }
     let weight_end = u64::try_from(bytes.len())?;
@@ -140,6 +135,20 @@ fn append_bank(
         info(&format!("{name}.biases"), path, "BF16", group_shape, scale_end, end),
     ]);
     Ok(())
+}
+
+fn append_packed_row(bytes: &mut Vec<u8>, value: u32, bits: usize) {
+    let mut words = vec![0_u32; WIDTH * bits / 32];
+    for index in 0..WIDTH {
+        let bit = index * bits;
+        words[bit / 32] |= value << (bit % 32);
+        if bit % 32 + bits > 32 {
+            words[bit / 32 + 1] |= value >> (32 - bit % 32);
+        }
+    }
+    for word in words {
+        bytes.extend_from_slice(&word.to_le_bytes());
+    }
 }
 
 fn append_bf16(bytes: &mut Vec<u8>, values: &[f32]) {

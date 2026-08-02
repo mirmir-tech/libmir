@@ -8,6 +8,14 @@ pub struct QuantizedEmbedding {
 }
 
 impl QuantizedEmbedding {
+    pub(in crate::engine) const fn from_quantized(
+        arrays: QuantizedArrays,
+        group_size: i32,
+        bits: i32,
+    ) -> Self {
+        Self { arrays, group_size, bits }
+    }
+
     pub fn load(tensors: &ModelTensors, prefix: &str, group_size: i32) -> Result<Self> {
         Self::load_names(
             tensors,

@@ -12,22 +12,27 @@ repository.workspace = true
 name = "vision"
 path = "tests/vision/mod.rs"
 
+[[test]]
+name = "dense_checkpoints"
+path = "tests/dense_checkpoints/mod.rs"
+
 [workspace]
 members = [
+    "admission",
     "core",
     "cuda",
     "metal",
     "models",
     "runtime",
 ]
-default-members = [".", "core", "models", "runtime"]
+default-members = [".", "admission", "core", "models", "runtime"]
 resolver = "3"
 
 [workspace.package]
 version = "0.3.0"
 edition = "2024"
 license = "Apache-2.0"
-repository = "https://codeberg.org/mirmir/libmir"
+repository = "https://github.com/mirmir-tech/libmir"
 
 [workspace.dependencies]
 async-trait = "0.1"
@@ -46,25 +51,39 @@ tokenizers = { version = "0.22", default-features = false, features = ["fancy-re
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 
 [features]
 default = []
-cuda = ["dep:cuda"]
-metal = ["dep:metal"]
+cuda = ["dep:cuda", "dep:nvml-wrapper", "dep:sysinfo"]
+metal = ["dep:macmon", "dep:metal"]
 
 [dependencies]
+architecture = { package = "libmir-admission", version = "0.3.0", path = "admission" }
 async-trait.workspace = true
 foundation = { package = "libmir-core", version = "0.3.0", path = "core" }
 cuda = { package = "libmir-cuda", version = "0.3.0", path = "cuda", optional = true }
 metal = { package = "libmir-metal", version = "0.3.0", path = "metal", optional = true }
 models = { package = "libmir-models", version = "0.3.0", path = "models" }
 runtime = { package = "libmir-runtime", version = "0.3.0", path = "runtime" }
+serde_json.workspace = true
+sysinfo = { workspace = true, optional = true }
 thiserror.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+nvml-wrapper = { version = "0.12.1", optional = true }
+
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+macmon = { version = "0.8.1", default-features = false, optional = true }
+
 [dev-dependencies]
+blake3.workspace = true
 image.workspace = true
+serde.workspace = true
+toml.workspace = true
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true
