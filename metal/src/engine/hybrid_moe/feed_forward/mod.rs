@@ -1,7 +1,7 @@
 use super::{HybridMoeLayerConfig, weights::LayerWeights};
 use crate::engine::{
     Array, FusedExpertGateUp, FusedGateUp, Result, Stream, fusion_planner::FusionPlanner,
-    lowering::FeedForwardLowering,
+    gate_up_tuning, lowering::FeedForwardLowering,
 };
 
 mod expert;
@@ -29,18 +29,9 @@ pub(super) fn dense(
     stream: &Stream,
 ) -> Result<Array> {
     let hidden = weights.pre_dense_norm.apply(input, config.rms_norm_eps, stream)?;
-    let fused = (input.shape()?.get(1) == Some(&1))
-        .then_some(fused_gate_up)
-        .flatten()
-        .map(|gate_up| gate_up.forward(&hidden, stream))
-        .transpose()?;
-    let (gate, up) = match fused {
-        Some(output) => (output.gate, output.up),
-        None => (
-            weights.dense.gate.forward(&hidden, stream)?,
-            weights.dense.up.forward(&hidden, stream)?,
-        ),
-    };
+    let fused = gate_up_tuning::is_single_token(input)?.then_some(fused_gate_up).flatten();
+    let (gate, up) =
+        gate_up_tuning::forward(&weights.dense.gate, &weights.dense.up, fused, &hidden, stream)?;
     let activated = gate.gelu_approx_mul(&up, stream)?;
     let output = weights.dense.down.forward(&activated, stream)?;
     weights.post_dense_norm.apply(&output, config.rms_norm_eps, stream)
@@ -104,20 +95,12 @@ mod tests {
         stream.synchronize()?;
         let normalized = weights.pre_expert_norm.apply(&input, config.rms_norm_eps, &stream)?;
         let expanded = normalized.expand_dims(&[-2, -3], &stream)?;
-        let gate_ms = measure(iters, warmup, &stream, || {
-            weights.experts.gate.gather(&expanded, &route.indices, false, &stream)
+        let gate_up_ms = measure(iters, warmup, &stream, || {
+            Ok(weights.experts.gather_gate_up(&expanded, &route.indices, false, &stream)?.0)
         })?;
-        let up_ms = measure(iters, warmup, &stream, || {
-            weights.experts.up.gather(&expanded, &route.indices, false, &stream)
-        })?;
-        let activated = weights
-            .experts
-            .gate
-            .gather(&expanded, &route.indices, false, &stream)?
-            .gelu_approx_mul(
-                &weights.experts.up.gather(&expanded, &route.indices, false, &stream)?,
-                &stream,
-            )?;
+        let (gate, up) =
+            weights.experts.gather_gate_up(&expanded, &route.indices, false, &stream)?;
+        let activated = gate.gelu_approx_mul(&up, &stream)?;
         let down_ms = measure(iters, warmup, &stream, || {
             weights.experts.down.gather(&activated, &route.indices, false, &stream)
         })?;
@@ -129,7 +112,7 @@ mod tests {
             forward(&input, &weights, config, None, None, &stream)
         })?;
         println!(
-            "hybrid_moe_bench layer={index} iters={iters} warmup={warmup} prepared_gate_up=0 router_ms={router_ms:.4} routing_ms={routing_ms:.4} gate_ms={gate_ms:.4} up_ms={up_ms:.4} down_ms={down_ms:.4} dense_ms={dense_ms:.4} full_moe_ms={full_moe_ms:.4} full_feed_forward_ms={full_feed_forward_ms:.4}"
+            "hybrid_moe_bench layer={index} iters={iters} warmup={warmup} prepared_gate_up=0 router_ms={router_ms:.4} routing_ms={routing_ms:.4} gate_up_ms={gate_up_ms:.4} down_ms={down_ms:.4} dense_ms={dense_ms:.4} full_moe_ms={full_moe_ms:.4} full_feed_forward_ms={full_feed_forward_ms:.4}"
         );
         Ok(())
     }

@@ -1,9 +1,10 @@
 use std::{env, hint::black_box, io::Write, time::Instant};
 
+use tracing_subscriber::util::SubscriberInitExt;
+
 use crate::engine::{Array, PagedAttention, Result, Stream, attention::PagedAttentionScratch};
 
 const PAGE_SIZE: usize = 16;
-const QUERY_HEADS: usize = 16;
 const ITERATIONS: usize = 20;
 const SAMPLES: usize = 7;
 const WARMUP: usize = 4;
@@ -24,11 +25,17 @@ struct Inputs {
 #[test]
 #[ignore = "synthetic GPU benchmark"]
 fn benchmarks_paged_sdpa_decode_matrix() -> Result<()> {
+    drop(
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .finish()
+            .try_init(),
+    );
     let stream = Stream::new_gpu()?;
-    let (head_dim, kv_heads) = dimensions();
+    let (head_dim, query_heads, kv_heads) = dimensions();
     let mut report = std::io::stderr().lock();
     for context in contexts()? {
-        let inputs = Inputs::new(context, head_dim, kv_heads)?;
+        let inputs = Inputs::new(context, head_dim, query_heads, kv_heads)?;
         warm(&inputs, &stream)?;
         let (contiguous, paged) = samples(&inputs, &stream)?;
         writeln!(
@@ -41,8 +48,9 @@ fn benchmarks_paged_sdpa_decode_matrix() -> Result<()> {
 }
 
 impl Inputs {
-    fn new(context: usize, head_dim: usize, kv_heads: usize) -> Result<Self> {
+    fn new(context: usize, head_dim: usize, query_heads: usize, kv_heads: usize) -> Result<Self> {
         let head_dim_i32 = i32::try_from(head_dim)?;
+        let query_heads_i32 = i32::try_from(query_heads)?;
         let kv_heads_i32 = i32::try_from(kv_heads)?;
         let context_i32 = i32::try_from(context)?;
         let pages = context.div_ceil(PAGE_SIZE);
@@ -52,14 +60,14 @@ impl Inputs {
         if fragmented {
             table.reverse();
         }
-        let query = super::patterned(QUERY_HEADS * head_dim, 17);
+        let query = super::patterned(query_heads * head_dim, 17);
         let page_length = kv_heads * pages * PAGE_SIZE * head_dim;
         let key_pages = super::patterned(page_length, 31);
         let value_pages = super::patterned(page_length, 47);
         let keys = compact_pages(&key_pages, kv_heads, context, head_dim, &table)?;
         let values = compact_pages(&value_pages, kv_heads, context, head_dim, &table)?;
         Ok(Self {
-            query: Array::from_f32(&query, &[1, 16, 1, head_dim_i32])?,
+            query: Array::from_f32(&query, &[1, query_heads_i32, 1, head_dim_i32])?,
             keys: Array::from_f32(&keys, &[1, kv_heads_i32, context_i32, head_dim_i32])?,
             values: Array::from_f32(&values, &[1, kv_heads_i32, context_i32, head_dim_i32])?,
             key_pages: Array::from_f32(&key_pages, &[kv_heads_i32, pages_i32, 16, head_dim_i32])?,
@@ -181,9 +189,9 @@ fn contexts() -> Result<Vec<usize>> {
         .collect()
 }
 
-fn dimensions() -> (usize, usize) {
+fn dimensions() -> (usize, usize, usize) {
     if matches!(env::var("MIRMIR_PAGED_BENCH_GLOBAL").as_deref(), Ok("1" | "true" | "TRUE")) {
-        return (512, 2);
+        return (512, 16, 2);
     }
     let head_dim = env::var("MIRMIR_PAGED_BENCH_HEAD_DIM")
         .ok()
@@ -193,7 +201,11 @@ fn dimensions() -> (usize, usize) {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(8);
-    (head_dim, kv_heads)
+    let query_heads = env::var("MIRMIR_PAGED_BENCH_QUERY_HEADS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(16);
+    (head_dim, query_heads, kv_heads)
 }
 
 fn fragmented() -> bool {

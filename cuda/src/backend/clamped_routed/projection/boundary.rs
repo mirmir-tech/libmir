@@ -2,9 +2,9 @@ use mircuda::{DeviceBuffer, bf16};
 
 use super::super::ClampedRoutedConfig;
 use crate::{
-    AffineQuantizedEmbedding, AffineQuantizedWeight, Bf16Embedding, Bf16Projection,
-    CudaAffineOutputHead, CudaBackend, CudaTensor, DensePlanRequest, DenseRole, Error,
-    ExecutionPhase, Result,
+    AffineQuantizedEmbedding, AffineQuantizedWeight, Bf16Embedding, CudaAffineOutputHead,
+    CudaBackend, CudaOutputHead, CudaTensor, Error, Result,
+    backend::output::CudaOutputHeadTemplate,
 };
 
 #[derive(Clone)]
@@ -18,8 +18,14 @@ pub(in crate::backend::clamped_routed) enum ClampedRoutedEmbedding {
     Mlx(AffineQuantizedEmbedding),
 }
 
+#[derive(Clone, Debug)]
+pub(in crate::backend::clamped_routed) enum ClampedRoutedOutputProjection {
+    Native(Box<CudaOutputHeadTemplate>),
+    Mlx(Box<AffineQuantizedWeight>),
+}
+
 pub(in crate::backend::clamped_routed) enum ClampedRoutedOutput {
-    Native(Bf16Projection),
+    Native(Box<CudaOutputHead>),
     Mlx(Box<CudaAffineOutputHead>),
 }
 
@@ -70,19 +76,13 @@ impl ClampedRoutedOutput {
     pub(in crate::backend::clamped_routed) fn new(
         backend: &CudaBackend,
         config: ClampedRoutedConfig,
-        weight: &ClampedRoutedBoundaryProjection,
+        weight: &ClampedRoutedOutputProjection,
     ) -> Result<Self> {
         match weight {
-            ClampedRoutedBoundaryProjection::Native(_) => backend
-                .prepare_bf16_projection(DensePlanRequest {
-                    phase: ExecutionPhase::Decode,
-                    role: DenseRole::OutputHead,
-                    tokens: 1,
-                    input_features: config.hidden,
-                    output_features: config.vocab,
-                })
-                .map(Self::Native),
-            ClampedRoutedBoundaryProjection::Mlx(weight) => {
+            ClampedRoutedOutputProjection::Native(template) => {
+                template.instantiate(backend).map(Box::new).map(Self::Native)
+            },
+            ClampedRoutedOutputProjection::Mlx(weight) => {
                 CudaAffineOutputHead::from_weight(backend, config.hidden, config.vocab, weight)
                     .map(Box::new)
                     .map(Self::Mlx)
@@ -93,17 +93,12 @@ impl ClampedRoutedOutput {
     pub(in crate::backend::clamped_routed) fn execute(
         &mut self,
         input: &DeviceBuffer<bf16>,
-        weight: &ClampedRoutedBoundaryProjection,
         output: &mut DeviceBuffer<bf16>,
+        sampling: runtime::backend::SamplingLogits,
     ) -> Result<()> {
-        match (self, weight) {
-            (Self::Native(operation), ClampedRoutedBoundaryProjection::Native(weight)) => {
-                operation.execute(input, weight, output)
-            },
-            (Self::Mlx(operation), ClampedRoutedBoundaryProjection::Mlx(_)) => {
-                operation.execute(input, output)
-            },
-            _ => Err(Error::InvalidExecutionPlan("clamped-routed output layout changed")),
+        match self {
+            Self::Native(operation) => operation.execute(input, output, sampling),
+            Self::Mlx(operation) => operation.execute(input, output),
         }
     }
 }

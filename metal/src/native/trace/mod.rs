@@ -90,6 +90,8 @@ fn actions(model: &LoadedModel) -> Vec<TraceAction> {
     let (fused_attention, fused_key_value, fused_gate_up, fused_expert_gate_up) =
         model.fusion_summary();
     let prefix_entries = model.prefix_cache_capacity();
+    let prefix_bytes = model.prefix_cache_byte_capacity();
+    let prefix_resident_bytes = model.prefix_cache_resident_bytes();
     vec![
         TraceAction::new(
             "inspect",
@@ -137,7 +139,7 @@ fn actions(model: &LoadedModel) -> Vec<TraceAction> {
         TraceAction::new(
             "prefix_cache",
             format!(
-                "device-resident K/V and logits snapshots use longest-token-prefix LRU with {prefix_entries} entries"
+                "device-resident K/V and logits snapshots use longest-token-prefix LRU with {prefix_entries} sequence groups, {prefix_resident_bytes} resident bytes, and a {prefix_bytes}-byte budget"
             ),
         ),
         TraceAction::new(

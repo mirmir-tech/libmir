@@ -1,10 +1,14 @@
 use mircuda::{DeviceBuffer, bf16};
-use runtime::kv::{BlockTable, KvBackendStorage, KvWritePlan};
+use runtime::kv::{BlockTable, KvWritePlan};
 
 use super::{ClampedRoutedLayerExecution, ClampedRoutedLayerTemplate};
 use crate::{
-    CudaTensor, Error, PagedKvCache, Result,
-    backend::clamped_routed::weights::ClampedRoutedExpertWeights,
+    CudaTensor, Error, PagedKvCache, PagedPrefillBatch, Result,
+    backend::{
+        clamped_routed::{scratch::ClampedRoutedScratch, weights::ClampedRoutedExpertWeights},
+        linear::SelectedDenseMoeBf16,
+    },
+    kernels::{ClampedRoutedBatchSplitDecode, ClampedRoutedSplitDecode},
 };
 
 impl ClampedRoutedLayerExecution {
@@ -17,136 +21,185 @@ impl ClampedRoutedLayerExecution {
         write: &KvWritePlan,
         table: &BlockTable,
         table_device: &DeviceBuffer<u32>,
+        ring_table_device: &DeviceBuffer<u32>,
+        ring_slot: usize,
         start: usize,
+        cached_until: usize,
+        scratch: &mut ClampedRoutedScratch,
+        dense_experts: &mut Option<SelectedDenseMoeBf16>,
+        split_decode: &mut Option<ClampedRoutedSplitDecode>,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
         let weights = template.weights();
-        self.input_norm
-            .execute(input, &weights.input_norm, &mut self.scratch.normalized)?;
-        self.qkv.execute(&self.kernels, &self.stream, &mut self.scratch, start)?;
-        cache.store(write, &self.scratch.key, &self.scratch.value)?;
-        self.attend(cache, table, table_device, bf16s(&weights.sinks)?, start)?;
-        self.output.execute(&self.scratch.attended, &mut self.scratch.projected)?;
+        self.input_norm.execute(input, &weights.input_norm, &mut scratch.normalized)?;
+        self.qkv.execute(&self.kernels, &self.stream, scratch)?;
+        if !cache.is_windowed() {
+            let mut missing = write.clone();
+            missing.skip_prefix(cached_until.saturating_sub(start));
+            cache.store_for_session(&missing, ring_slot, &scratch.key, &scratch.value)?;
+        }
+        let table_device = if cache.is_windowed() {
+            ring_table_device
+        } else {
+            table_device
+        };
+        self.attend(
+            cache,
+            &scratch.key,
+            &scratch.value,
+            table,
+            table_device,
+            bf16s(&weights.sinks)?,
+            start,
+            &scratch.query,
+            &mut scratch.attended,
+            split_decode,
+        )?;
+        if cache.is_windowed() {
+            cache.store_for_session(write, ring_slot, &scratch.key, &scratch.value)?;
+        }
+        self.execute_tail(input, weights, scratch, dense_experts, output)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::backend::clamped_routed) fn execute_batch(
+        &mut self,
+        template: &ClampedRoutedLayerTemplate,
+        input: &DeviceBuffer<bf16>,
+        cache: &mut PagedKvCache,
+        batch: &PagedPrefillBatch,
+        scratch: &mut ClampedRoutedScratch,
+        dense_experts: &mut Option<SelectedDenseMoeBf16>,
+        batch_split_decode: &mut Option<ClampedRoutedBatchSplitDecode>,
+        output: &mut DeviceBuffer<bf16>,
+    ) -> Result<()> {
+        let weights = template.weights();
+        self.input_norm.execute(input, &weights.input_norm, &mut scratch.normalized)?;
+        self.qkv.execute(&self.kernels, &self.stream, scratch)?;
+        if !cache.is_windowed() {
+            cache.store_prefill_batch(batch, &scratch.key, &scratch.value)?;
+        }
+        let split = (!cache.is_windowed())
+            .then_some(batch_split_decode.as_mut())
+            .flatten()
+            .map(|split| {
+                split.execute(
+                    &self.stream,
+                    &scratch.query,
+                    cache.key_pages(),
+                    cache.value_pages(),
+                    batch,
+                    bf16s(&weights.sinks)?,
+                    &mut scratch.attended,
+                    self.window,
+                    self.config.scale,
+                )
+            })
+            .transpose()?
+            .unwrap_or(false);
+        if !split {
+            let tables = if cache.is_windowed() {
+                batch.ring_tables()
+            } else {
+                batch.tables()
+            };
+            self.attention.execute_prefill_batch(
+                &self.stream,
+                &scratch.query,
+                &scratch.key,
+                &scratch.value,
+                cache.key_pages(),
+                cache.value_pages(),
+                batch,
+                tables,
+                bf16s(&weights.sinks)?,
+                &mut scratch.normalized,
+                &mut scratch.attended,
+                self.window,
+                self.config.scale,
+            )?;
+        }
+        if cache.is_windowed() {
+            cache.store_prefill_batch(batch, &scratch.key, &scratch.value)?;
+        }
+        self.execute_tail(input, weights, scratch, dense_experts, output)
+    }
+
+    fn execute_tail(
+        &mut self,
+        input: &DeviceBuffer<bf16>,
+        weights: &super::super::weights::ClampedRoutedLayerWeights,
+        scratch: &mut ClampedRoutedScratch,
+        dense_experts: &mut Option<SelectedDenseMoeBf16>,
+        output: &mut DeviceBuffer<bf16>,
+    ) -> Result<()> {
+        self.output.execute(&scratch.attended, &mut scratch.projected)?;
         self.kernels.add_bias(
             &self.stream,
-            &self.scratch.projected,
+            &scratch.projected,
             bf16s(&weights.output_bias)?,
-            &mut self.scratch.biased,
+            &mut scratch.biased,
             self.config.hidden,
         )?;
-        self.add
-            .add(&self.stream, input, &self.scratch.biased, &mut self.scratch.residual)?;
-        self.post_norm.execute(
-            &self.scratch.residual,
-            &weights.post_norm,
-            &mut self.scratch.normalized,
-        )?;
-        self.router.execute(&self.scratch.normalized, &mut self.scratch.router)?;
+        self.add.add(&self.stream, input, &scratch.biased, &mut scratch.residual)?;
+        self.post_norm
+            .execute(&scratch.residual, &weights.post_norm, &mut scratch.normalized)?;
+        self.router.execute(&scratch.normalized, &mut scratch.router)?;
         self.kernels.add_bias(
             &self.stream,
-            &self.scratch.router,
+            &scratch.router,
             bf16s(&weights.router_bias)?,
-            &mut self.scratch.router_biased,
+            &mut scratch.router_biased,
             self.config.experts,
         )?;
         self.top_k.execute(
             &self.stream,
-            &self.scratch.router_biased,
-            &mut self.scratch.selected,
-            &mut self.scratch.routing,
+            &scratch.router_biased,
+            &mut scratch.selected,
+            &mut scratch.routing,
         )?;
-        self.experts(&weights.experts)?;
-        self.add.add(&self.stream, &self.scratch.residual, &self.scratch.moe, output)
+        self.experts(&weights.experts, scratch, dense_experts)?;
+        self.add.add(&self.stream, &scratch.residual, &scratch.moe, output)
     }
 
-    fn experts(&mut self, weights: &ClampedRoutedExpertWeights) -> Result<()> {
-        match weights {
-            ClampedRoutedExpertWeights::Native(weights) => {
-                self.kernels.gate_up_native(
-                    &self.stream,
-                    &self.scratch.normalized,
-                    u8s(&weights.gate_up_blocks)?,
-                    u8s(&weights.gate_up_scales)?,
-                    bf16s(&weights.gate_up_bias)?,
-                    &self.scratch.selected,
-                    &mut self.scratch.activated,
-                )?;
-                self.kernels.down_native(
-                    &self.stream,
-                    &self.scratch.activated,
-                    u8s(&weights.down_blocks)?,
-                    u8s(&weights.down_scales)?,
-                    bf16s(&weights.down_bias)?,
-                    &self.scratch.selected,
-                    &self.scratch.routing,
-                    &mut self.scratch.moe,
-                )
-            },
-            ClampedRoutedExpertWeights::Mlx(weights) => {
-                self.kernels.gate_up_mlx(
-                    &self.stream,
-                    &self.scratch.normalized,
-                    u32s(&weights.gate_blocks)?,
-                    u8s(&weights.gate_scales)?,
-                    bf16s(&weights.gate_bias)?,
-                    u32s(&weights.up_blocks)?,
-                    u8s(&weights.up_scales)?,
-                    bf16s(&weights.up_bias)?,
-                    &self.scratch.selected,
-                    &mut self.scratch.activated,
-                )?;
-                self.kernels.down_mlx(
-                    &self.stream,
-                    &self.scratch.activated,
-                    u32s(&weights.down_blocks)?,
-                    u8s(&weights.down_scales)?,
-                    bf16s(&weights.down_bias)?,
-                    &self.scratch.selected,
-                    &self.scratch.routing,
-                    &mut self.scratch.moe,
-                )
-            },
-        }
-    }
-
-    fn attend(
+    fn experts(
         &mut self,
-        cache: &PagedKvCache,
-        table: &BlockTable,
-        table_device: &DeviceBuffer<u32>,
-        sinks: &DeviceBuffer<bf16>,
-        start: usize,
+        weights: &ClampedRoutedExpertWeights,
+        scratch: &mut ClampedRoutedScratch,
+        dense_experts: &mut Option<SelectedDenseMoeBf16>,
     ) -> Result<()> {
-        let blocks = table.blocks().len();
-        if self.tokens == 1 {
-            self.attention.execute(
-                &self.stream,
-                &self.scratch.query,
-                cache.key_pages(),
-                cache.value_pages(),
-                table_device,
-                sinks,
-                &mut self.scratch.attended,
-                table.token_len(),
-                blocks,
-                self.window,
-                self.config.scale,
-            )
-        } else {
-            self.attention.execute_prefill(
-                &self.stream,
-                &self.scratch.query,
-                cache.key_pages(),
-                cache.value_pages(),
-                table_device,
-                sinks,
-                &mut self.scratch.attended,
-                self.tokens,
-                start,
-                blocks,
-                self.window,
-                self.config.scale,
-            )
+        match weights {
+            ClampedRoutedExpertWeights::Native(_) | ClampedRoutedExpertWeights::Mlx(_) => {
+                let partial = scratch
+                    .route_partial
+                    .as_mut()
+                    .ok_or(Error::InvalidExecutionPlan("clamped MXFP4 partial was not prepared"))?;
+                self.experts
+                    .as_mut()
+                    .ok_or(Error::InvalidExecutionPlan("clamped MXFP4 execution was not prepared"))?
+                    .execute(
+                        weights,
+                        &scratch.normalized,
+                        &scratch.selected,
+                        &scratch.routing,
+                        &mut scratch.activated,
+                        partial,
+                        &mut scratch.moe,
+                    )
+            },
+            ClampedRoutedExpertWeights::Dense(weights) => dense_experts
+                .as_mut()
+                .ok_or(Error::InvalidExecutionPlan(
+                    "dense clamped-routed execution was not prepared",
+                ))?
+                .execute(
+                    &scratch.normalized,
+                    &scratch.selected,
+                    &scratch.routing,
+                    weights,
+                    &mut scratch.activated,
+                    &mut scratch.moe,
+                ),
         }
     }
 }
@@ -155,19 +208,5 @@ fn bf16s(tensor: &CudaTensor) -> Result<&DeviceBuffer<bf16>> {
     tensor.as_bf16().ok_or_else(|| Error::DTypeMismatch {
         name: tensor.name().into(),
         expected: "BF16",
-    })
-}
-
-fn u8s(tensor: &CudaTensor) -> Result<&DeviceBuffer<u8>> {
-    tensor.as_u8().ok_or_else(|| Error::DTypeMismatch {
-        name: tensor.name().into(),
-        expected: "U8",
-    })
-}
-
-fn u32s(tensor: &CudaTensor) -> Result<&DeviceBuffer<u32>> {
-    tensor.as_u32().ok_or_else(|| Error::DTypeMismatch {
-        name: tensor.name().into(),
-        expected: "U32",
     })
 }

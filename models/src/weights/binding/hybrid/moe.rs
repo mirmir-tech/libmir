@@ -47,6 +47,10 @@ pub struct HybridMoeRouterBindings<'a> {
 #[derive(Debug)]
 pub enum HybridMoeExpertBindings<'a> {
     Stacked(HybridMoeDenseBindings<'a>),
+    FusedStacked {
+        gate_up: &'a TensorBinding,
+        down: &'a TensorBinding,
+    },
     Individual {
         gate: Vec<&'a TensorBinding>,
         up: Vec<&'a TensorBinding>,
@@ -117,6 +121,9 @@ impl HybridMoeLayerBindings<'_> {
             HybridMoeExpertBindings::Stacked(experts) => {
                 bindings.extend([experts.gate, experts.up, experts.down]);
             },
+            HybridMoeExpertBindings::FusedStacked { gate_up, down } => {
+                bindings.extend([gate_up, down]);
+            },
             HybridMoeExpertBindings::Individual { gate, up, down } => {
                 bindings.extend(gate);
                 bindings.extend(up);
@@ -135,6 +142,11 @@ fn experts(plan: &WeightBindingPlan, index: usize) -> Result<HybridMoeExpertBind
         stacked(ExpertProjectionRole::Down),
     ) {
         return Ok(HybridMoeExpertBindings::Stacked(HybridMoeDenseBindings { gate, up, down }));
+    }
+    if let (Some(gate_up), Some(down)) =
+        (stacked(ExpertProjectionRole::GateUp), stacked(ExpertProjectionRole::Down))
+    {
+        return Ok(HybridMoeExpertBindings::FusedStacked { gate_up, down });
     }
     let collect = |projection| {
         let mut found =

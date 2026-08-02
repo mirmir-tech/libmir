@@ -13,6 +13,8 @@ pub enum ModelsError {
     InvalidConfig(String),
     #[error("invalid safetensors payload range: {0}")]
     InvalidTensorRange(String),
+    #[error("invalid safetensors header: {0}")]
+    InvalidSafeTensorsHeader(String),
     #[error("invalid model integer: {0}")]
     InvalidInteger(#[from] std::num::TryFromIntError),
     #[error("invalid tokenizer token id: {0}")]

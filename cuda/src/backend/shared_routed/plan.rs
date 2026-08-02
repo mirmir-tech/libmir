@@ -2,10 +2,13 @@ use mircuda::{DeviceBuffer, PinnedBuffer, bf16};
 use runtime::kv::{BlockTable, KvWritePlan};
 use uuid::Uuid;
 
-use super::{CudaSharedRoutedLayerState, CudaSharedRoutedModelTemplate, SharedRoutedLayerTemplate};
+use super::{
+    CudaSharedRoutedLayerState, CudaSharedRoutedModelTemplate, SharedRoutedLayerTemplate,
+    boundary::SharedRoutedEmbedding,
+};
 use crate::{
-    AffineQuantizedEmbedding, CudaAffineGatedDeltaMoeExecution,
-    CudaAffineGatedFullAttentionMoeExecution, Error, Result, kernels::VisionEmbeddingSplice,
+    CudaAffineGatedDeltaMoeExecution, CudaAffineGatedFullAttentionMoeExecution, Error, Result,
+    kernels::VisionEmbeddingSplice,
 };
 
 #[derive(Debug)]
@@ -83,7 +86,7 @@ impl SharedRoutedExecutionPlan {
     pub(super) fn execute(
         &mut self,
         template: &CudaSharedRoutedModelTemplate,
-        embedding: &AffineQuantizedEmbedding,
+        embedding: &SharedRoutedEmbedding,
         states: &mut [CudaSharedRoutedLayerState],
         session_id: Uuid,
         table: &BlockTable,
@@ -91,13 +94,7 @@ impl SharedRoutedExecutionPlan {
         image_span: Option<(usize, usize)>,
         image: Option<&DeviceBuffer<bf16>>,
     ) -> Result<&DeviceBuffer<bf16>> {
-        embedding.execute_batch(
-            &self.token_ids,
-            0,
-            self.tokens,
-            template.embedding.tensors(),
-            &mut self.first,
-        )?;
+        embedding.execute_batch(&self.token_ids, self.tokens, &mut self.first)?;
         if let Some(image) = image {
             let (start, end) = image_span.ok_or(Error::InvalidVisionKernel(
                 "shared-routed image embedding has no prompt span",

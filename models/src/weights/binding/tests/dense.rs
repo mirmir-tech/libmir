@@ -110,12 +110,20 @@ fn affine(projection: FeedForwardProjectionRole, source: &str, scales: &str) -> 
         logical_shape: None,
         transforms: Vec::new(),
         storage: TensorStorage::AffineQuantized {
-            dtype: "U32".into(),
-            bits: Some(4),
+            format: GroupedAffineQuantization {
+                bits: AffineBits::Four,
+                group_size: 32,
+                group_axis: AffineGroupAxis::Input,
+                signedness: AffineSignedness::Unsigned,
+                zero_point: AffineZeroPointMode::None,
+                packing: AffinePacking::Mlx,
+                storage_dtype: AffineStorageDType::U32,
+                scale_dtype: AffineParameterDType::F16,
+                bias_dtype: None,
+            },
             scales: scales.into(),
             biases: None,
             output_bias: None,
-            group_size: Some(32),
         },
     }
 }

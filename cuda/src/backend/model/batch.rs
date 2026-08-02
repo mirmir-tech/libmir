@@ -1,11 +1,13 @@
 use mircuda::{DeviceBuffer, Graph, PinnedBuffer, Stream, bf16};
 use runtime::{backend::SamplingLogits, kv::BlockTable};
 
-use super::layer::{BatchedLayer, DecoderLayerTemplate};
+use super::layer::{BatchedLayer, DecoderLayerTemplate, allocate_batch_attention_workspace};
 use crate::{
-    Bf16Embedding, CudaBackend, CudaTensor, DecodeAttentionConfig, DeviceBatchSamplerBf16, Error,
+    CudaBackend, CudaTensor, DecodeAttentionConfig, DeviceBatchSamplerBf16, Error,
     PagedDecodeBatch, PagedKvCache, Result, RmsNormBf16,
-    backend::output::{CudaBatchOutputHead, CudaOutputHeadTemplate},
+    backend::model::boundary::{
+        ModelBatchOutputHead, ModelEmbedding, ModelEmbeddingTemplate, ModelOutputHeadTemplate,
+    },
 };
 
 /// Fixed-capacity model decode bucket with device-resident row state.
@@ -16,20 +18,20 @@ pub struct CudaDecodeBatch {
 }
 
 struct BatchResources {
-    embedding: Bf16Embedding,
-    embedding_weight: CudaTensor,
+    embedding: ModelEmbedding,
     tokens: DeviceBuffer<u32>,
     token_staging: PinnedBuffer<u32>,
     paging: PagedDecodeBatch,
     layers: Vec<BatchedLayer>,
     final_norm: RmsNormBf16,
     final_norm_weight: CudaTensor,
-    output_head: CudaBatchOutputHead,
+    output_head: ModelBatchOutputHead,
     sampler: DeviceBatchSamplerBf16,
     first: DeviceBuffer<bf16>,
     second: DeviceBuffer<bf16>,
     normalized: DeviceBuffer<bf16>,
     logits: DeviceBuffer<bf16>,
+    logit_softcap: Option<crate::kernels::LogitSoftcap>,
 }
 
 enum BatchState {
@@ -38,15 +40,15 @@ enum BatchState {
 }
 
 pub(super) struct DecodeBatchSource<'a> {
-    pub(super) embedding: CudaTensor,
+    pub(super) embedding: ModelEmbeddingTemplate,
     pub(super) final_norm: CudaTensor,
-    pub(super) output_head: &'a CudaOutputHeadTemplate,
+    pub(super) output_head: &'a ModelOutputHeadTemplate,
     pub(super) layers: &'a [DecoderLayerTemplate],
     pub(super) caches: &'a [PagedKvCache],
     pub(super) attention: DecodeAttentionConfig,
     pub(super) vocab: usize,
     pub(super) hidden: usize,
-    pub(super) embedding_scale: f32,
+    pub(super) logit_softcap: Option<f32>,
 }
 
 impl CudaDecodeBatch {
@@ -67,17 +69,21 @@ impl CudaDecodeBatch {
             attention,
             vocab,
             hidden,
-            embedding_scale,
+            logit_softcap,
         } = source;
         if layers.len() != caches.len() {
             return Err(Error::InvalidDecoderKernel("CUDA batch cache count differs from layers"));
         }
+        let attention_workspace =
+            allocate_batch_attention_workspace(backend, layers, caches, batch_size)?;
         let elements = batch_size
             .checked_mul(hidden)
             .ok_or(Error::InvalidDecoderKernel("CUDA decode batch activation overflow"))?;
+        let logit_elements = batch_size
+            .checked_mul(vocab)
+            .ok_or(Error::InvalidDecoderKernel("CUDA decode batch logits overflow"))?;
         let resources = BatchResources {
-            embedding: backend.prepare_bf16_embedding(vocab, hidden, embedding_scale)?,
-            embedding_weight: embedding,
+            embedding: embedding.instantiate(backend)?,
             tokens: backend.inner.pool.allocate(&backend.inner.stream, batch_size)?,
             token_staging: backend.inner.context.allocate_pinned(batch_size)?,
             paging: backend.prepare_paged_decode_batch(
@@ -88,7 +94,9 @@ impl CudaDecodeBatch {
             layers: layers
                 .iter()
                 .zip(caches)
-                .map(|(layer, cache)| layer.instantiate_batch(batch_size, cache.clone()))
+                .map(|(layer, cache)| {
+                    layer.instantiate_batch(batch_size, cache.clone(), attention_workspace.clone())
+                })
                 .collect::<Result<Vec<_>>>()?,
             final_norm: backend.prepare_rms_norm_bf16(
                 batch_size,
@@ -96,17 +104,21 @@ impl CudaDecodeBatch {
                 attention.rms_norm_epsilon,
             )?,
             final_norm_weight: final_norm,
-            output_head: CudaBatchOutputHead::new(backend, output_head, batch_size)?,
+            output_head: output_head.instantiate_batch(backend, batch_size)?,
             sampler: backend.prepare_device_batch_sampler_bf16(vocab, batch_size)?,
             first: backend.inner.pool.allocate(&backend.inner.stream, elements)?,
             second: backend.inner.pool.allocate(&backend.inner.stream, elements)?,
             normalized: backend.inner.pool.allocate(&backend.inner.stream, elements)?,
-            logits: backend.inner.pool.allocate(
-                &backend.inner.stream,
-                batch_size
-                    .checked_mul(vocab)
-                    .ok_or(Error::InvalidDecoderKernel("CUDA decode batch logits overflow"))?,
-            )?,
+            logits: backend.inner.pool.allocate(&backend.inner.stream, logit_elements)?,
+            logit_softcap: logit_softcap
+                .map(|cap| {
+                    crate::kernels::LogitSoftcap::compile(
+                        &backend.inner.compiler,
+                        logit_elements,
+                        cap,
+                    )
+                })
+                .transpose()?,
         };
         Ok(Self {
             state: Some(BatchState::Direct(resources)),
@@ -115,7 +127,6 @@ impl CudaDecodeBatch {
         })
     }
 
-    /// Enqueues a complete model decode for one fixed bucket.
     pub fn decode(
         &mut self,
         tokens: &[u32],
@@ -141,7 +152,6 @@ impl CudaDecodeBatch {
         self.logits_result()
     }
 
-    /// Samples each logits row on the device using its own bounded policy.
     pub fn sample(&mut self, policies: &[SamplingLogits]) -> Result<&DeviceBuffer<u32>> {
         self.with_state_mut(|resources| {
             resources.sampler.sample(&resources.logits, policies)?;
@@ -150,7 +160,6 @@ impl CudaDecodeBatch {
         Ok(self.state()?.sampler.selected())
     }
 
-    /// Uploads one exact bucket and produces its embedded input activations.
     pub fn prepare(&mut self, tokens: &[u32], tables: &[&BlockTable]) -> Result<()> {
         if tokens.len() != self.batch_size || tables.len() != self.batch_size {
             return Err(Error::InvalidDecoderKernel("CUDA decode rows differ from bucket size"));
@@ -164,13 +173,9 @@ impl CudaDecodeBatch {
             resources.token_staging.copy_from_slice(tokens)?;
             stream.copy_to_device(&mut resources.token_staging, &mut resources.tokens)?;
             resources.paging.prepare(tables)?;
-            resources.embedding.execute_batch(
-                &resources.tokens,
-                0,
-                rows,
-                &resources.embedding_weight,
-                &mut resources.first,
-            )
+            resources
+                .embedding
+                .execute_batch(&resources.tokens, 0, rows, &mut resources.first)
         })
     }
 
@@ -231,5 +236,9 @@ fn execute(resources: &mut BatchResources) -> Result<()> {
         &resources.final_norm_weight,
         &mut resources.normalized,
     )?;
-    resources.output_head.execute(&resources.normalized, &mut resources.logits)
+    resources.output_head.execute(&resources.normalized, &mut resources.logits)?;
+    if let Some(softcap) = &resources.logit_softcap {
+        softcap.execute(resources.output_head.stream(), &mut resources.logits)?;
+    }
+    Ok(())
 }

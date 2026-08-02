@@ -15,9 +15,10 @@ impl CudaTextEmbeddingModel {
     ) -> Result<Self> {
         validate(config)?;
         let names = required_names(config, layout);
+        let cast = backend.prepare_dense_cast()?;
         let mut upload = backend.begin_tensor_upload();
         for name in &names {
-            upload.enqueue(required(catalog, name)?)?;
+            upload.enqueue_as_bf16(required(catalog, name)?, &cast)?;
         }
         Ok(Self {
             backend: backend.clone(),

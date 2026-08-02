@@ -1,4 +1,5 @@
 mod execution;
+mod routed;
 mod scratch;
 #[cfg(all(test, target_os = "linux"))]
 mod tests;
@@ -31,17 +32,23 @@ impl AffineSharedExpertMoeConfig {
             || self.expert_count > 256
             || self.top_k == 0
             || self.top_k > self.expert_count
-            || self.group_size == 0
-            || !self.hidden_size.is_multiple_of(self.group_size)
-            || !self.routed_intermediate_size.is_multiple_of(self.group_size)
-            || !self.shared_intermediate_size.is_multiple_of(self.group_size)
-            || !matches!(self.expert_bits, 4 | 8)
-            || !matches!(self.router_bits, 4 | 8)
+            || !valid_storage(self.group_size, self.expert_bits, self.router_bits)
+            || (self.group_size > 0
+                && (!self.hidden_size.is_multiple_of(self.group_size)
+                    || !self.routed_intermediate_size.is_multiple_of(self.group_size)
+                    || !self.shared_intermediate_size.is_multiple_of(self.group_size)))
         {
             return Err(Error::InvalidDecoderKernel("invalid affine shared-expert MoE config"));
         }
         Ok(())
     }
+}
+
+const fn valid_storage(group_size: usize, expert_bits: usize, router_bits: usize) -> bool {
+    (group_size == 0 && expert_bits == 0 && router_bits == 0)
+        || (group_size > 0
+            && matches!(expert_bits, 2 | 3 | 4 | 5 | 6 | 8)
+            && matches!(router_bits, 2 | 3 | 4 | 5 | 6 | 8))
 }
 
 #[derive(Clone, Debug)]

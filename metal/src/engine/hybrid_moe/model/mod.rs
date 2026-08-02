@@ -3,22 +3,26 @@ use std::time::Instant;
 use models::{layout::DecoderConfig, weights::WeightBindingPlan};
 
 use super::{HybridMoeLayer, HybridMoeLayerConfig, layer::profile_components};
+#[cfg(test)]
+use crate::engine::QuantizedEmbedding;
 use crate::engine::{
-    Array, DecoderCache, ExpertFusionDecision, ModelTensors, QuantizedEmbedding, Result, Stream,
-    binding::affine_embedding,
+    Array, DecoderCache, ExpertFusionDecision, ModelTensors, Result, Stream,
+    binding::BoundEmbedding,
     configure_expert_fusion, decode_graph,
     fusion_planner::FusionPlanner,
     lowering::{FeedForwardLowering, LayerLowering, MixerLowering},
 };
 
 mod prefill;
+#[cfg(test)]
+mod tests;
 
 #[derive(Debug)]
 pub struct HybridMoeModel {
     pub(super) layers: Vec<HybridMoeLayer>,
     cache_windows: Vec<Option<usize>>,
     cache_step: usize,
-    pub(super) embedding: QuantizedEmbedding,
+    pub(super) embedding: BoundEmbedding,
     pub(super) final_norm: Array,
     pub(super) embed_scale: f32,
     pub(super) hidden_size: usize,
@@ -32,7 +36,6 @@ impl HybridMoeModel {
         decoder: &DecoderConfig,
         bindings: &WeightBindingPlan,
         lowering: &[LayerLowering],
-        group_size: usize,
         cache_step: usize,
         stream: &Stream,
     ) -> Result<Self> {
@@ -49,7 +52,7 @@ impl HybridMoeModel {
         let mut layers = Vec::with_capacity(decoder.num_hidden_layers);
         let mut cache_windows = Vec::with_capacity(decoder.num_hidden_layers);
         for (index, lowered) in lowering.iter().enumerate() {
-            let config = HybridMoeLayerConfig::from_decoder(index, decoder, group_size)?;
+            let config = HybridMoeLayerConfig::from_decoder(index, decoder, 1)?;
             let layer_bindings = bindings.hybrid_moe_layer(index)?;
             layers.push(HybridMoeLayer::load_bindings(
                 tensors, &layer_bindings, *lowered, config, stream,
@@ -64,7 +67,7 @@ impl HybridMoeModel {
             layers,
             cache_windows,
             cache_step,
-            affine_embedding(tensors, boundary.embedding)?,
+            BoundEmbedding::load(tensors, boundary.embedding, stream)?,
             tensors.get(&boundary.final_norm.source)?,
             decoder,
             stream,
@@ -79,11 +82,11 @@ impl HybridMoeModel {
         cache_step: usize,
         stream: &Stream,
     ) -> Result<Self> {
-        let embedding = QuantizedEmbedding::load(
+        let embedding = BoundEmbedding::Affine(QuantizedEmbedding::load(
             tensors,
             "language_model.model.embed_tokens",
             i32::try_from(group_size)?,
-        )?;
+        )?);
         let mut layers = Vec::with_capacity(decoder.num_hidden_layers);
         let mut cache_windows = Vec::with_capacity(decoder.num_hidden_layers);
         for index in 0..decoder.num_hidden_layers {
@@ -106,7 +109,7 @@ impl HybridMoeModel {
         mut layers: Vec<HybridMoeLayer>,
         cache_windows: Vec<Option<usize>>,
         cache_step: usize,
-        embedding: QuantizedEmbedding,
+        embedding: BoundEmbedding,
         final_norm: Array,
         decoder: &DecoderConfig,
         stream: &Stream,

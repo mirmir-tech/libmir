@@ -1,9 +1,9 @@
-use models::weights::LinearAttentionBindings;
+use models::weights::{LinearAttentionBindings, TensorBinding};
 
 use super::{CompiledDecode, GatedDeltaLayer, GatedDeltaLayerConfig};
 use crate::engine::{
-    ModelTensors, NormWeight, QuantizedLinear, Result, Stream,
-    binding::{adjusted_norm, affine_linear},
+    Array, ModelTensors, NormWeight, QuantizedLinear, Result, Stream,
+    binding::{BoundLinear, adjusted_norm},
 };
 
 impl GatedDeltaLayer {
@@ -39,18 +39,18 @@ impl GatedDeltaLayer {
     ) -> Result<Self> {
         let mut layer = Self {
             config,
-            in_proj_qkv: affine_linear(tensors, bindings.qkv)?,
-            in_proj_z: affine_linear(tensors, bindings.gate)?,
-            in_proj_b: affine_linear(tensors, bindings.beta)?,
-            in_proj_a: affine_linear(tensors, bindings.alpha)?,
-            out_proj: affine_linear(tensors, bindings.output)?,
-            conv_weight: tensors.get(&bindings.convolution.source)?,
+            in_proj_qkv: BoundLinear::load(tensors, bindings.qkv, stream)?,
+            in_proj_z: BoundLinear::load(tensors, bindings.gate, stream)?,
+            in_proj_b: BoundLinear::load(tensors, bindings.beta, stream)?,
+            in_proj_a: BoundLinear::load(tensors, bindings.alpha, stream)?,
+            out_proj: BoundLinear::load(tensors, bindings.output, stream)?,
+            conv_weight: convolution(tensors, bindings.convolution, stream)?,
             norm_weight: adjusted_norm(tensors, bindings.norm, norm_shift, stream)?,
             a_log: tensors.get(&bindings.decay_log.source)?,
             dt_bias: tensors.get(&bindings.time_bias.source)?,
             compiled_decode: None,
         };
-        layer.compiled_decode = Some(CompiledDecode::new(&layer, stream)?);
+        layer.compiled_decode = CompiledDecode::new(&layer, stream)?;
         Ok(layer)
     }
 
@@ -76,9 +76,19 @@ impl GatedDeltaLayer {
             compiled_decode: None,
         };
         if let Some(stream) = stream {
-            layer.compiled_decode = Some(CompiledDecode::new(&layer, stream)?);
+            layer.compiled_decode = CompiledDecode::new(&layer, stream)?;
         }
         Ok(layer)
+    }
+}
+
+fn convolution(tensors: &ModelTensors, binding: &TensorBinding, stream: &Stream) -> Result<Array> {
+    let weight = tensors.get(&binding.source)?;
+    match binding.shape.as_slice() {
+        [channels, 1, kernel] => {
+            weight.reshape(&[i32::try_from(*channels)?, i32::try_from(*kernel)?, 1], stream)
+        },
+        _ => Ok(weight),
     }
 }
 
@@ -87,6 +97,6 @@ fn linear(
     prefix: &str,
     name: &str,
     group_size: i32,
-) -> Result<QuantizedLinear> {
-    QuantizedLinear::load(tensors, &format!("{prefix}.{name}"), group_size)
+) -> Result<BoundLinear> {
+    QuantizedLinear::load(tensors, &format!("{prefix}.{name}"), group_size).map(BoundLinear::Affine)
 }

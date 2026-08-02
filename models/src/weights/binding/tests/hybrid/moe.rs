@@ -26,6 +26,28 @@ fn discovers_complete_stacked_hybrid_moe_bindings() -> Result<()> {
 }
 
 #[test]
+fn discovers_fused_stacked_hybrid_moe_bindings() -> Result<()> {
+    let decoder = decoder()?;
+    let mut catalog = catalog();
+    catalog.tensors.retain(|tensor| {
+        !tensor.name.contains("experts.switch_glu.gate_proj")
+            && !tensor.name.contains("experts.switch_glu.up_proj")
+    });
+    catalog
+        .tensors
+        .push(tensor("model.language_model.layers.0.experts.gate_up_proj", &[4, 32, HIDDEN]));
+    catalog.tensors.sort_by(|left, right| left.name.cmp(&right.name));
+    let spec = SemanticModelSpec::discover(&decoder, &catalog)?;
+
+    let plan = WeightBindingPlan::discover(&spec, &catalog)?;
+    assert!(matches!(
+        plan.hybrid_moe_layer(0)?.experts,
+        HybridMoeExpertBindings::FusedStacked { .. }
+    ));
+    Ok(())
+}
+
+#[test]
 fn rejects_incomplete_hybrid_moe_grammar() -> Result<()> {
     let decoder = decoder()?;
     let mut catalog = catalog();
@@ -133,12 +155,19 @@ fn tensor(name: &str, shape: &[usize]) -> TensorInfo {
 fn nvfp4(tensors: &mut Vec<TensorInfo>, expert: usize, projection: &str, shape: &[usize]) {
     let prefix = format!("model.layers.0.experts.{expert}.{projection}");
     let (output, input) = (shape[0], shape[1]);
+    let mut weight = tensor(&format!("{prefix}.weight"), &[output, input / 2]);
+    weight.dtype = "U8".into();
+    let mut scale = tensor(&format!("{prefix}.weight_scale"), &[output, input / 16]);
+    scale.dtype = "F8_E4M3".into();
     tensors.extend([
-        tensor(&format!("{prefix}.weight"), &[output, input / 2]),
-        tensor(&format!("{prefix}.weight_scale"), &[output, input / 16]),
+        weight,
+        scale,
         tensor(&format!("{prefix}.weight_scale_2"), &[]),
         tensor(&format!("{prefix}.input_scale"), &[]),
     ]);
+    for tensor in tensors.iter_mut().rev().take(2) {
+        tensor.dtype = "F32".into();
+    }
 }
 
 fn invalid(message: &str) -> crate::ModelsError {

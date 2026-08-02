@@ -33,9 +33,11 @@ extern "C" __global__ void libmir_cuda_gated_nvfp4(
   float value = 0.0f;
   if (lane < 16u) {
     const unsigned int index = row * columns + feature;
+    const float activated = __bfloat162float(__float2bfloat16_rn(
+        libmir_gated_nvfp4_activate(
+            __bfloat162float(gate[index]), activation)));
     value = __bfloat162float(__float2bfloat16_rn(
-        libmir_gated_nvfp4_activate(__bfloat162float(gate[index]), activation) *
-        __bfloat162float(up[index])));
+        activated * __bfloat162float(up[index])));
   }
   float amax = fabsf(value);
   for (int offset = 16; offset > 0; offset >>= 1) {
@@ -51,12 +53,16 @@ extern "C" __global__ void libmir_cuda_gated_nvfp4(
   __syncthreads();
   if (lane < 8u) {
     const unsigned int first = row * columns + block * 16u + lane * 2u;
+    const float first_activated = __bfloat162float(__float2bfloat16_rn(
+        libmir_gated_nvfp4_activate(
+            __bfloat162float(gate[first]), activation)));
+    const float second_activated = __bfloat162float(__float2bfloat16_rn(
+        libmir_gated_nvfp4_activate(
+            __bfloat162float(gate[first + 1u]), activation)));
     const float first_value = __bfloat162float(__float2bfloat16_rn(
-        libmir_gated_nvfp4_activate(__bfloat162float(gate[first]), activation) *
-        __bfloat162float(up[first])));
+        first_activated * __bfloat162float(up[first])));
     const float second_value = __bfloat162float(__float2bfloat16_rn(
-        libmir_gated_nvfp4_activate(__bfloat162float(gate[first + 1u]), activation) *
-        __bfloat162float(up[first + 1u])));
+        second_activated * __bfloat162float(up[first + 1u])));
     __nv_fp4x2_e2m1 converted(
         make_float2(first_value / divisor, second_value / divisor));
     packed[row * columns / 2u + block * 8u + lane] = converted.__x;

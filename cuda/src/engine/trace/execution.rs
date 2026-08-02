@@ -1,6 +1,8 @@
 use models::{
     execution::TaskExecutionPlan,
-    weights::{BlockFormat, ExpertProjectionLayout},
+    weights::{
+        BlockFormat, ExpertProjectionLayout, LayerTensorRole, LogicalTensorRole, TensorStorage,
+    },
 };
 use runtime::{kv::CacheConfig, trace::TraceAction};
 
@@ -30,14 +32,20 @@ pub(super) fn mlp_layout(model: &LoadedModel) -> &'static str {
     let Some(plan) = decoder_plan(model) else {
         return "packed gated exact-GELU encoder feed-forward";
     };
-    if plan.all_dense_and_routed() {
+    if plan.all_dense_and_routed() && uses_nvfp4(model) {
         "dense gated MLP plus routed NVFP4 experts"
-    } else if plan.all_dense() && dense_nvfp4(model) {
+    } else if plan.all_dense_and_routed() {
+        "dense gated MLP plus routed BF16 experts"
+    } else if plan.all_dense() && uses_nvfp4(model) {
         "native NVFP4 gate/up and down projections"
     } else if plan.all_dense() {
         "paired BF16 gate/up plus BF16 down projection"
+    } else if plan.all_shared_routed() && routed_experts_dense(model) {
+        "BF16 shared expert plus routed BF16 SwiGLU experts"
     } else if plan.all_shared_routed() {
         "shared expert plus routed SwiGLU experts"
+    } else if plan.all_unshared_clamped_routed() && routed_experts_dense(model) {
+        "clamped routed SwiGLU over BF16 experts"
     } else if plan.all_unshared_clamped_routed() && clamped_routed_mlx(model) {
         "clamped routed SwiGLU over split MLX MXFP4 experts"
     } else if plan.all_unshared_clamped_routed() {
@@ -104,14 +112,20 @@ fn model_kernels(model: &LoadedModel) -> &'static str {
     let Some(plan) = decoder_plan(model) else {
         return "CUTLASS F16 encoder projections and native bidirectional attention";
     };
-    if plan.all_dense_and_routed() {
+    if plan.all_dense_and_routed() && uses_nvfp4(model) {
         "CUTLASS NVFP4 routed-MoE kernels"
-    } else if plan.all_dense() && dense_nvfp4(model) {
+    } else if plan.all_dense_and_routed() {
+        "CUDA BF16 dense and selected-expert kernels"
+    } else if plan.all_dense() && uses_nvfp4(model) {
         "CUTLASS native NVFP4 dense SwiGLU kernels"
     } else if plan.all_dense() {
         "CUTLASS BF16 dense SwiGLU kernels"
+    } else if plan.all_shared_routed() && routed_experts_dense(model) {
+        "CUDA mixed attention with BF16 shared and routed experts"
     } else if plan.all_shared_routed() {
         "CUDA mixed softmax/linear attention with shared routed experts"
+    } else if plan.all_unshared_clamped_routed() && routed_experts_dense(model) {
+        "CUDA BF16, YaRN, sink-attention, and clamped SwiGLU kernels"
     } else if plan.all_unshared_clamped_routed() {
         "CUDA MXFP4, YaRN, sink-attention, and clamped SwiGLU kernels"
     } else {
@@ -139,12 +153,25 @@ fn decode_action(model: &LoadedModel) -> &'static str {
     }
 }
 
-fn dense_nvfp4(model: &LoadedModel) -> bool {
-    decoder_plan(model).is_some_and(|plan| plan.all_dense())
-        && model
-            .contract
-            .as_ref()
-            .is_some_and(|contract| contract.bindings.uses_block_format(BlockFormat::NvFp4))
+fn uses_nvfp4(model: &LoadedModel) -> bool {
+    model
+        .contract
+        .as_ref()
+        .is_some_and(|contract| contract.bindings.uses_block_format(BlockFormat::NvFp4))
+}
+
+fn routed_experts_dense(model: &LoadedModel) -> bool {
+    model.contract.as_ref().is_some_and(|contract| {
+        contract.bindings.tensors.iter().any(|binding| {
+            matches!(
+                binding.role,
+                LogicalTensorRole::Layer {
+                    tensor: LayerTensorRole::ExpertProjection { .. },
+                    ..
+                }
+            ) && matches!(binding.storage, TensorStorage::Dense { .. })
+        })
+    })
 }
 
 fn decoder_plan(model: &LoadedModel) -> Option<CudaDecoderPlan> {

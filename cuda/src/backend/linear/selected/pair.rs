@@ -30,7 +30,17 @@ impl SelectedAffinePairBf16Linear {
         expert_count: usize,
         selected_count: usize,
     ) -> Result<Self> {
-        let spec = SelectedAffinePairSpec::new(matrix, expert_count, selected_count)?;
+        Self::new_batch(backend, matrix, expert_count, selected_count, 1)
+    }
+
+    pub(in crate::backend) fn new_batch(
+        backend: &CudaBackend,
+        matrix: AffineGemvSpec,
+        expert_count: usize,
+        selected_count: usize,
+        tokens: usize,
+    ) -> Result<Self> {
+        let spec = SelectedAffinePairSpec::new_batch(matrix, expert_count, selected_count, tokens)?;
         Ok(Self {
             operation: SelectedAffinePair::compile(&backend.inner.compiler, spec)?,
             stream: backend.inner.stream.clone(),
@@ -74,12 +84,14 @@ impl SelectedAffinePairBf16Linear {
     /// Elements required by each output buffer.
     pub fn output_elements(&self) -> Result<usize> {
         let spec = self.operation.spec();
-        spec.matrix.output_features.checked_mul(spec.selected_count).ok_or_else(|| {
-            Error::InvalidTensorSize {
+        spec.matrix
+            .output_features
+            .checked_mul(spec.selected_count)
+            .and_then(|elements| elements.checked_mul(spec.tokens))
+            .ok_or_else(|| Error::InvalidTensorSize {
                 name: "selected affine pair output".into(),
                 expected: usize::MAX,
                 actual: 0,
-            }
-        })
+            })
     }
 }

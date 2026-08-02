@@ -7,7 +7,7 @@ use super::{
 use crate::{
     BatchedDecodeAttentionBf16, CudaBackend, Error, PagedDecodeBatch, PagedKvCache, Result,
     RmsNormBf16,
-    kernels::{ElementwiseBf16, PackedGatedBf16},
+    kernels::{BatchedSplitAttentionWorkspace, ElementwiseBf16, PackedGatedBf16},
 };
 
 /// Fixed-shape dense `SwiGLU` layer for independent decode rows.
@@ -37,6 +37,7 @@ impl BatchedDecodeDenseSwiGlu {
         rows: usize,
         cache: PagedKvCache,
         weights: DenseSwiGluWeights<'_>,
+        workspace: Option<BatchedSplitAttentionWorkspace>,
     ) -> Result<Self> {
         validate(config)?;
         if rows == 0 {
@@ -47,12 +48,13 @@ impl BatchedDecodeDenseSwiGlu {
             .checked_mul(hidden)
             .ok_or(Error::InvalidDecoderKernel("batched dense hidden size overflow"))?;
         Ok(Self {
-            attention: BatchedDecodeAttentionBf16::new_with_cache_and_weights(
+            attention: BatchedDecodeAttentionBf16::new_with_cache_weights_workspace(
                 backend,
                 config.attention,
                 rows,
                 cache,
                 Some(weights.attention),
+                workspace,
             )?,
             post_attention_norm: RmsNormBf16::new(
                 backend,
@@ -94,6 +96,7 @@ impl BatchedDecodeDenseSwiGlu {
             &mut self.scratch.residual,
         )?;
         let separate = self.gate_up.execute(
+            &self.stream,
             &self.scratch.residual,
             &self.post_attention_norm,
             weights.post_attention_norm,
@@ -129,8 +132,12 @@ impl BatchedDecodeDenseSwiGlu {
             )?;
         }
         if !fused_down {
-            self.down
-                .execute(&self.scratch.activated, weights.down, &mut self.scratch.mlp)?;
+            self.down.execute(
+                &self.stream,
+                &self.scratch.activated,
+                weights.down,
+                &mut self.scratch.mlp,
+            )?;
         }
         self.hidden_ops
             .add(&self.stream, &self.scratch.residual, &self.scratch.mlp, output)
@@ -143,6 +150,7 @@ impl BatchedDecodeDenseLayer {
         template: DenseSwiGluLayerTemplate,
         rows: usize,
         cache: PagedKvCache,
+        workspace: Option<BatchedSplitAttentionWorkspace>,
     ) -> Result<Self> {
         let block = BatchedDecodeDenseSwiGlu::new_with_cache(
             backend,
@@ -150,6 +158,7 @@ impl BatchedDecodeDenseLayer {
             rows,
             cache,
             template.weights(),
+            workspace,
         )?;
         Ok(Self { block, template })
     }

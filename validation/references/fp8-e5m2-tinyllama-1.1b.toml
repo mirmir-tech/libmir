@@ -1,0 +1,37 @@
+# ulkaa/TinyLlama-1.1B-Chat-v1.0-fp8_e5m2
+# source revision 3a5a55c8e1a9e3ee0e2adb85e8f4272105efd6aa
+# oracle: Transformers 5.14.1 BF16 execution after independent E5M2 dequantization
+schema = 2
+family = "dense"
+model_type = "llama"
+dtypes = ["BF16"]
+vocab_size = 32000
+context_len = 2048
+kv_cache_blocks = 128
+prompt_tokens = [785]
+generated_tokens = [29871, 29896, 29900, 29900, 29900, 29900, 29900, 29900, 29900, 29900, 29900, 29900, 29900, 29900, 29900, 29900]
+
+[float8]
+format = "F8_E5M2"
+scale_mode = "none"
+scale_granularity = "none"
+
+[tokenizer]
+vocabulary_entries = 32000
+max_token_id = 31999
+added_tokens = 3
+stop_token_ids = [2]
+
+[first_logits]
+token_ids = [29871, 390, 317, 322, 278, 263, 450, 323]
+scores = [-4.7996645, -5.4559145, -5.5184145, -5.5496645, -5.5496645, -5.7371645, -5.8309145, -5.8934145]
+absolute_tolerance = 0.5
+normalized = true
+
+[metal]
+max_load_active_bytes = 1200000000
+max_decode_active_bytes = 1200000000
+
+[cuda]
+max_load_active_bytes = 1450000000
+max_decode_active_bytes = 1450000000

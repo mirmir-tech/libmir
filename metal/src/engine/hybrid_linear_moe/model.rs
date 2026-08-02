@@ -5,9 +5,8 @@ use models::{
 
 use super::layer::HybridLinearMoeLayer;
 use crate::engine::{
-    Array, DecoderCache, Error, ExpertFusionDecision, ModelTensors, NormWeight, QuantizedEmbedding,
-    QuantizedLinear, Result, Stream,
-    binding::{adjusted_norm, affine_embedding, affine_linear},
+    Array, DecoderCache, Error, ExpertFusionDecision, ModelTensors, NormWeight, Result, Stream,
+    binding::{BoundEmbedding, BoundLinear, adjusted_norm},
     configure_expert_fusion, decode_graph,
     decoder::{LayerContext, LayerLoopOptions, forward_layers},
     fusion_planner::FusionPlanner,
@@ -19,8 +18,8 @@ pub struct HybridLinearMoeModel {
     pub(super) layers: Vec<HybridLinearMoeLayer>,
     mixers: Vec<MixerLowering>,
     cache_step: usize,
-    pub(super) embedding: QuantizedEmbedding,
-    pub(super) output: QuantizedLinear,
+    pub(super) embedding: BoundEmbedding,
+    pub(super) output: BoundLinear,
     pub(super) final_norm: NormWeight,
     pub(super) rms_norm_eps: f32,
     pub(super) hidden_size: usize,
@@ -69,8 +68,8 @@ impl HybridLinearMoeModel {
             layers,
             mixers: lowering.iter().map(|layer| layer.mixer).collect(),
             cache_step,
-            embedding: affine_embedding(tensors, boundary.embedding)?,
-            output: affine_linear(tensors, boundary.output)?,
+            embedding: BoundEmbedding::load(tensors, boundary.embedding, stream)?,
+            output: BoundLinear::load(tensors, boundary.output, stream)?,
             final_norm: adjusted_norm(tensors, boundary.final_norm, norm_shift, stream)?,
             rms_norm_eps: decoder.rms_norm_eps.to_string().parse()?,
             hidden_size: decoder.hidden_size,

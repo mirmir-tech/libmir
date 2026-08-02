@@ -4,41 +4,45 @@ use models::weights::SharedRoutedFeedForwardBindings;
 
 use super::{
     Array, Error, FusedExpertGateUp, FusedGateUp, ModelTensors, QuantizedLinear, Result, Stream,
-    binding::affine_linear,
+    binding::BoundLinear,
     fusion_planner::{FusionPlanner, ProjectionBiases},
+    gate_up_tuning,
     lowering::FeedForwardLowering,
+    route_tuning::{self, ExpertActivation, RoutingSpec},
 };
+
+mod routed;
+use routed::RoutedGateUp;
 
 #[derive(Debug, Clone, Copy)]
 pub struct SharedExpertMoeConfig {
     pub expert_count: usize,
     pub top_k: usize,
+    pub intermediate: usize,
 }
 
 #[derive(Debug)]
 pub struct SharedExpertMoe {
     config: SharedExpertMoeConfig,
-    router: QuantizedLinear,
-    routed_gate: QuantizedLinear,
-    routed_up: QuantizedLinear,
-    routed_down: QuantizedLinear,
-    fused_routed_gate_up: Option<FusedExpertGateUp>,
-    shared_gate: QuantizedLinear,
-    shared_up: QuantizedLinear,
+    router: BoundLinear,
+    routed_gate_up: RoutedGateUp,
+    routed_down: BoundLinear,
+    shared_gate: BoundLinear,
+    shared_up: BoundLinear,
     fused_shared_gate_up: Option<FusedGateUp>,
-    shared_down: QuantizedLinear,
-    shared_output_gate: QuantizedLinear,
+    shared_down: BoundLinear,
+    shared_output_gate: BoundLinear,
     fuse_shared_gate_up: bool,
 }
 
 impl SharedExpertMoeConfig {
-    pub fn new(expert_count: usize, top_k: usize) -> Result<Self> {
-        if expert_count == 0 || top_k == 0 || top_k > expert_count {
+    pub fn new(expert_count: usize, top_k: usize, intermediate: usize) -> Result<Self> {
+        if expert_count == 0 || top_k == 0 || top_k > expert_count || intermediate == 0 {
             return Err(Error::InvalidModel(format!(
                 "invalid shared-expert MoE dimensions: expert_count={expert_count}, top_k={top_k}"
             )));
         }
-        Ok(Self { expert_count, top_k })
+        Ok(Self { expert_count, top_k, intermediate })
     }
 }
 
@@ -61,10 +65,12 @@ impl SharedExpertMoe {
         Ok(Self {
             config,
             router: linear(tensors, prefix, "gate", group_size)?,
-            routed_gate,
-            routed_up,
+            routed_gate_up: RoutedGateUp::Separate {
+                gate: routed_gate,
+                up: routed_up,
+                fused: None,
+            },
             routed_down: linear(tensors, prefix, "switch_mlp.down_proj", group_size)?,
-            fused_routed_gate_up: None,
             shared_gate,
             shared_up,
             fused_shared_gate_up: None,
@@ -81,24 +87,21 @@ impl SharedExpertMoe {
         lowering: FeedForwardLowering,
         stream: &Stream,
     ) -> Result<Self> {
-        let routed_gate = affine_linear(tensors, bindings.routed_gate)?;
-        let routed_up = affine_linear(tensors, bindings.routed_up)?;
-        let shared_gate = affine_linear(tensors, bindings.shared_gate)?;
-        let shared_up = affine_linear(tensors, bindings.shared_up)?;
+        let (routed_gate_up, routed_down) = RoutedGateUp::load(tensors, bindings.routed, stream)?;
+        let shared_gate = BoundLinear::load(tensors, bindings.shared_gate, stream)?;
+        let shared_up = BoundLinear::load(tensors, bindings.shared_up, stream)?;
         let fusion = FusionPlanner::new(stream)
             .projections(lowering, projection_biases(&shared_gate, &shared_up));
         Ok(Self {
             config,
-            router: affine_linear(tensors, bindings.router)?,
-            routed_gate,
-            routed_up,
-            routed_down: affine_linear(tensors, bindings.routed_down)?,
-            fused_routed_gate_up: None,
+            router: BoundLinear::load(tensors, bindings.router, stream)?,
+            routed_gate_up,
+            routed_down,
             shared_gate,
             shared_up,
             fused_shared_gate_up: None,
-            shared_down: affine_linear(tensors, bindings.shared_down)?,
-            shared_output_gate: affine_linear(tensors, bindings.shared_output_gate)?,
+            shared_down: BoundLinear::load(tensors, bindings.shared_down, stream)?,
+            shared_output_gate: BoundLinear::load(tensors, bindings.shared_output_gate, stream)?,
             fuse_shared_gate_up: fusion.gate_up,
         })
     }
@@ -111,23 +114,21 @@ impl SharedExpertMoe {
     }
 
     pub(crate) fn enable_routed_gate_up(&mut self, stream: &Stream) -> Result<bool> {
-        if self.fused_routed_gate_up.is_some() {
+        if self.routed_gate_up.is_fused() {
             return Ok(true);
         }
-        self.fused_routed_gate_up =
-            self.routed_gate.fuse_expert_gate_up(&self.routed_up, stream)?;
+        let routed = self.routed_gate_up.enable(stream)?;
         self.fused_shared_gate_up = self
             .fuse_shared_gate_up
             .then(|| self.shared_gate.fuse_gate_up(&self.shared_up, stream))
             .transpose()?
             .flatten();
-        self.fused_routed_gate_up.as_ref().map_or(Ok(()), FusedExpertGateUp::warm)?;
         self.fused_shared_gate_up.as_ref().map_or(Ok(()), FusedGateUp::warm)?;
-        Ok(self.fused_routed_gate_up.is_some())
+        Ok(routed)
     }
 
     pub(crate) fn fused_routed_gate_up_bytes(&self) -> Result<Option<usize>> {
-        let routed = self.routed_gate.fused_expert_gate_up_bytes(&self.routed_up)?;
+        let routed = self.routed_gate_up.fused_bytes()?;
         if !self.fuse_shared_gate_up {
             return Ok(routed);
         }
@@ -141,7 +142,7 @@ impl SharedExpertMoe {
     }
 
     pub(crate) const fn has_fused_routed_gate_up(&self) -> bool {
-        self.fused_routed_gate_up.is_some()
+        self.routed_gate_up.is_fused()
     }
 
     fn routed(
@@ -151,15 +152,45 @@ impl SharedExpertMoe {
         weights: &Array,
         stream: &Stream,
     ) -> Result<Array> {
-        if should_sort(indices)? {
-            let sorted = input.sort_expert_inputs(indices, stream)?;
-            let output = self.routed_mlp(&sorted.input, &sorted.indices, true, stream)?;
-            return sorted.restore(&output, stream)?.weighted_sum(weights, -2, stream);
-        }
-        let input = input.expand_dims(&[-2, -3], stream)?;
-        self.routed_mlp(&input, indices, false, stream)?
-            .squeeze_axis(-2, stream)?
-            .weighted_sum(weights, -2, stream)
+        let (group_size, bits) = self.routed_gate_up.tuning_format();
+        let spec = RoutingSpec {
+            experts: self.config.expert_count,
+            intermediate: self.config.intermediate,
+            group_size,
+            bits,
+            activation: ExpertActivation::Silu,
+            fused_unsorted: self.routed_gate_up.is_fused(),
+        };
+        route_tuning::forward(
+            spec,
+            input,
+            indices,
+            stream,
+            (
+                || {
+                    let sorted = input.sort_expert_inputs(indices, stream)?;
+                    let output = self.routed_mlp(&sorted.input, &sorted.indices, true, stream)?;
+                    sorted.restore(&output, stream)?.weighted_sum(weights, -2, stream)
+                },
+                || {
+                    let sorted = input.sort_expert_inputs(indices, stream)?;
+                    let output = self.routed_mlp(&sorted.input, &sorted.indices, true, stream)?;
+                    sorted.restore_weighted(&output, weights, stream)
+                },
+                || {
+                    let grouped =
+                        input.group_expert_inputs(indices, self.config.expert_count, stream)?;
+                    let output = self.routed_mlp(&grouped.input, &grouped.indices, true, stream)?;
+                    grouped.restore_weighted(&output, weights, stream)
+                },
+                || {
+                    let input = input.expand_dims(&[-2, -3], stream)?;
+                    self.routed_mlp(&input, indices, false, stream)?
+                        .squeeze_axis(-2, stream)?
+                        .weighted_sum(weights, -2, stream)
+                },
+            ),
+        )
     }
 
     fn routed_mlp(
@@ -169,46 +200,32 @@ impl SharedExpertMoe {
         sorted: bool,
         stream: &Stream,
     ) -> Result<Array> {
-        let fused = (!sorted).then_some(self.fused_routed_gate_up.as_ref()).flatten();
-        let (gate, up) = fused.map_or_else(
-            || {
-                Ok((
-                    self.routed_gate.gather(input, indices, sorted, stream)?,
-                    self.routed_up.gather(input, indices, sorted, stream)?,
-                ))
-            },
-            |fused| fused.forward(input, indices, stream),
-        )?;
+        let (gate, up) = self.routed_gate_up.gather(input, indices, sorted, stream)?;
         let activated = gate.silu_mul(&up, stream)?;
         self.routed_down.gather(&activated, indices, sorted, stream)
     }
 
     fn shared(&self, input: &Array, stream: &Stream) -> Result<Array> {
-        let (gate, up) = self.fused_shared_gate_up.as_ref().map_or_else(
-            || {
-                Ok((
-                    self.shared_gate.forward(input, stream)?,
-                    self.shared_up.forward(input, stream)?,
-                ))
-            },
-            |fused| fused.forward_pair(input, stream),
-        )?;
+        let fused = self.fused_shared_gate_up.as_ref();
+        let (gate, up) = if gate_up_tuning::is_single_token(input)? {
+            gate_up_tuning::forward(&self.shared_gate, &self.shared_up, fused, input, stream)?
+        } else {
+            fused.map_or_else(
+                || {
+                    Ok((
+                        self.shared_gate.forward(input, stream)?,
+                        self.shared_up.forward(input, stream)?,
+                    ))
+                },
+                |fused| fused.forward_pair(input, stream),
+            )?
+        };
         let output = self.shared_down.forward(&gate.silu_mul(&up, stream)?, stream)?;
         self.shared_output_gate.forward(input, stream)?.sigmoid_mul(&output, stream)
     }
 }
 
-fn should_sort(indices: &Array) -> Result<bool> {
-    indices
-        .shape()?
-        .into_iter()
-        .try_fold(1_usize, |count, dimension| {
-            count.checked_mul(usize::try_from(dimension)?).ok_or(Error::ShapeOverflow)
-        })
-        .map(|count| count >= 64)
-}
-
-fn projection_biases(gate: &QuantizedLinear, up: &QuantizedLinear) -> ProjectionBiases {
+fn projection_biases(gate: &BoundLinear, up: &BoundLinear) -> ProjectionBiases {
     ProjectionBiases::new([false, false], None, [gate.has_bias(), up.has_bias()])
 }
 
@@ -217,8 +234,8 @@ fn linear(
     prefix: &str,
     name: &str,
     group_size: i32,
-) -> Result<QuantizedLinear> {
-    QuantizedLinear::load(tensors, &format!("{prefix}.{name}"), group_size)
+) -> Result<BoundLinear> {
+    QuantizedLinear::load(tensors, &format!("{prefix}.{name}"), group_size).map(BoundLinear::Affine)
 }
 
 #[cfg(test)]

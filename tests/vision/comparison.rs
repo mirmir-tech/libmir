@@ -43,12 +43,13 @@ fn records_vision_prefill_and_greedy_decode() -> Result<()> {
         token_ids.push(next);
     }
     let report = report(&model, &prefill, logits, &token_ids);
-    std::fs::write(&report_path, report).map_err(|error| {
-        runtime::RuntimeError::Backend(format!(
+    if let Err(error) = std::fs::write(&report_path, report) {
+        return Err(runtime::RuntimeError::Backend(format!(
             "failed to write comparison report {}: {error}",
             report_path.display()
         ))
-    })?;
+        .into());
+    }
     Ok(())
 }
 
@@ -72,6 +73,8 @@ fn request(model: &libmir::Model) -> ChatCompletionRequest {
         tool_choice: None,
         stream: false,
         max_tokens: Some(GENERATED_TOKENS),
+        min_tokens: None,
+        ignore_eos: None,
         temperature: Some(0.0),
         top_p: Some(1.0),
         top_k: Some(0),
@@ -81,20 +84,23 @@ fn request(model: &libmir::Model) -> ChatCompletionRequest {
 }
 
 fn argmax(logits: &LogitsTrace) -> Result<u32> {
-    logits
+    let Some((index, _)) = logits
         .values
         .iter()
         .copied()
         .enumerate()
         .filter(|(_, value)| value.is_finite())
         .max_by(|left, right| left.1.partial_cmp(&right.1).unwrap_or(Ordering::Equal))
-        .map(|(index, _)| index)
-        .map(u32::try_from)
-        .transpose()
-        .map_err(|error| runtime::RuntimeError::Backend(error.to_string()))?
-        .ok_or_else(|| {
-            runtime::RuntimeError::Backend("prefill logits contain no finite value".into()).into()
-        })
+    else {
+        return Err(runtime::RuntimeError::Backend(
+            "prefill logits contain no finite value".into(),
+        )
+        .into());
+    };
+    match u32::try_from(index) {
+        Ok(index) => Ok(index),
+        Err(error) => Err(runtime::RuntimeError::Backend(error.to_string()).into()),
+    }
 }
 
 fn report(

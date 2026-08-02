@@ -64,7 +64,10 @@ impl ModelClient {
                 }
             }
         });
-        let worker = worker.map_err(Error::WorkerSpawn)?;
+        let worker = match worker {
+            Ok(worker) => worker,
+            Err(error) => return Err(Error::WorkerSpawn(error)),
+        };
         loop {
             match event_receiver.recv()? {
                 StartEvent::Progress(event) => progress(event),

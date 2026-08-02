@@ -14,6 +14,8 @@ fn resolves_checkpoint_defaults_and_explicit_overrides() -> Result<()> {
     }))?;
     let settings = config.resolve(GenerationOverrides {
         max_tokens: Some(12),
+        min_tokens: Some(8),
+        ignore_eos: Some(true),
         temperature: Some(0.2),
         top_p: Some(0.8),
         top_k: Some(16),
@@ -21,6 +23,8 @@ fn resolves_checkpoint_defaults_and_explicit_overrides() -> Result<()> {
     })?;
 
     assert_eq!(settings.max_tokens, 12);
+    assert_eq!(settings.min_tokens, 8);
+    assert!(settings.ignore_eos);
     assert!((settings.temperature - 0.2).abs() < f32::EPSILON);
     assert!((settings.top_p - 0.8).abs() < f32::EPSILON);
     assert_eq!(settings.top_k, 16);
@@ -71,6 +75,8 @@ fn checkpoint_and_user_values_override_generic_sampling_defaults() -> Result<()>
 fn request_overrides_preserve_loaded_model_settings() -> Result<()> {
     let loaded = GenerationConfig::default().resolve(GenerationOverrides {
         max_tokens: Some(20_048),
+        min_tokens: None,
+        ignore_eos: None,
         temperature: Some(1.0),
         top_p: Some(0.95),
         top_k: Some(64),
@@ -88,4 +94,15 @@ fn request_overrides_preserve_loaded_model_settings() -> Result<()> {
         512
     );
     Ok(())
+}
+
+#[test]
+fn rejects_minimum_larger_than_generation_limit() {
+    let result = GenerationConfig::default().resolve(GenerationOverrides {
+        max_tokens: Some(8),
+        min_tokens: Some(9),
+        ..GenerationOverrides::default()
+    });
+
+    assert!(result.is_err());
 }

@@ -1,4 +1,5 @@
 use models::{
+    execution::TaskExecutionPlan,
     layout::DecoderConfig,
     semantic::{
         ActivationSpec, AttentionOutputSpec, FeedForwardSpec, LinearAttentionSpec, MixerSpec,
@@ -26,6 +27,13 @@ fn materializes_dense_layers_without_model_identity() -> Result<()> {
         }]
     );
     assert_eq!(lowering.runtime(), DecoderRuntime::Dense);
+    assert_eq!(
+        crate::admit_architecture(
+            &TaskExecutionPlan::Generation { decoder: dense_decoder()? },
+            Some(&spec),
+        )?,
+        crate::MetalArchitecture::Generation(DecoderRuntime::Dense)
+    );
     Ok(())
 }
 
@@ -90,17 +98,7 @@ fn rejects_an_activation_the_dense_operator_does_not_implement() -> Result<()> {
 }
 
 fn dense_spec() -> Result<SemanticModelSpec> {
-    let decoder = DecoderConfig::from_value(&json!({
-        "hidden_size": 8,
-        "intermediate_size": 16,
-        "num_hidden_layers": 1,
-        "num_attention_heads": 2,
-        "num_key_value_heads": 1,
-        "head_dim": 4,
-        "vocab_size": 32,
-        "hidden_act": "silu",
-        "model_type": "misleading"
-    }))?;
+    let decoder = dense_decoder()?;
     let catalog = TensorCatalog {
         tensors: vec![TensorInfo {
             name: "model.layers.0.input_layernorm.weight".into(),
@@ -112,4 +110,18 @@ fn dense_spec() -> Result<SemanticModelSpec> {
         }],
     };
     Ok(SemanticModelSpec::discover(&decoder, &catalog)?)
+}
+
+fn dense_decoder() -> Result<DecoderConfig> {
+    Ok(DecoderConfig::from_value(&json!({
+        "hidden_size": 8,
+        "intermediate_size": 16,
+        "num_hidden_layers": 1,
+        "num_attention_heads": 2,
+        "num_key_value_heads": 1,
+        "head_dim": 4,
+        "vocab_size": 32,
+        "hidden_act": "silu",
+        "model_type": "misleading"
+    }))?)
 }

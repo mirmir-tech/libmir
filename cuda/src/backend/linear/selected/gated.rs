@@ -11,7 +11,7 @@ use crate::{
 };
 
 /// Gated MLP activation derived from model metadata.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum GatedActivation {
     GeluTanh,
     Silu,
@@ -55,6 +55,15 @@ impl From<GatedActivation> for crate::kernels::GatedActivation {
         match value {
             GatedActivation::GeluTanh => Self::GeluTanh,
             GatedActivation::Silu => Self::Silu,
+        }
+    }
+}
+
+impl From<GatedActivation> for crate::kernels::DenseGatedActivation {
+    fn from(value: GatedActivation) -> Self {
+        match value {
+            GatedActivation::GeluTanh => Self::GELU_TANH,
+            GatedActivation::Silu => Self::SILU,
         }
     }
 }

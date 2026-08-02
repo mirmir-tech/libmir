@@ -1,8 +1,16 @@
+mod dense;
 mod gated;
+mod kernel;
 mod nvfp4;
 mod pair;
 mod reduce;
+#[cfg(all(test, target_os = "linux"))]
+mod tests;
 
+pub use dense::{
+    DenseExpertCanonicalizer, DenseGateUpLayout, DenseGatedActivation, SelectedDenseDispatch,
+    SelectedDenseGateLaunch, SelectedDenseMoe, SelectedDenseMoeSpec, SelectedDenseReduceLaunch,
+};
 pub use gated::{
     GatedActivation, SelectedAffineGated, SelectedAffineGatedLaunch, SelectedAffineGatedSpec,
 };

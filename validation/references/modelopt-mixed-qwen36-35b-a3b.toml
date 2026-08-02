@@ -1,0 +1,49 @@
+# nvidia/Qwen3.6-35B-A3B-NVFP4
+# source revision 491c2f1ea524c639598bf8fa787a93fed5a6fbce
+# oracle: vLLM 0.25.1, mixed ModelOpt, BF16 activations, greedy eager execution
+schema = 2
+family = "shared_routed"
+model_type = "qwen3_5_moe"
+dtypes = ["BF16"]
+vocab_size = 248320
+context_len = 262144
+kv_cache_blocks = 128
+prompt_tokens = [785]
+generated_tokens = [266, 85, 547, 14352, 1573, 308, 198, 8442, 91174, 2595, 1981, 198, 785, 266, 85, 547]
+
+[tokenizer]
+vocabulary_entries = 248077
+max_token_id = 248076
+added_tokens = 33
+stop_token_ids = [248046, 248044]
+
+[first_logits]
+token_ids = [266]
+scores = [-2.7362728]
+absolute_tolerance = 0.25
+normalized = true
+
+[float8]
+format = "F8_E4M3"
+scale_mode = "multiplier"
+scale_granularity = "tensor"
+scale_dtype = "F32"
+activation_scale = "static_tensor"
+input_scale_dtype = "F32"
+
+[nvfp4]
+block_size = 16
+storage_dtype = "U8"
+scale_encoding = "F8_E4M3"
+scale_dtype = "F8_E4M3"
+global_scale_dtype = "F32"
+input_scale_dtype = "F32"
+routed_layout = "individual_experts"
+
+[cuda]
+max_load_active_bytes = 90000000000
+max_decode_active_bytes = 91000000000
+
+[[cuda.generated_token_ties]]
+position = 5
+token_ids = [308, 368]

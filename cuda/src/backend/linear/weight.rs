@@ -1,4 +1,4 @@
-use models::weights::{TensorBinding, TensorStorage};
+use models::weights::{AffineParameterDType, AffineStorageDType, TensorBinding, TensorStorage};
 
 use crate::{
     AffineQuantizedConfig, AffineQuantizedTensors, CudaTensor, CudaTensorDType, CudaTensorSet,
@@ -22,12 +22,22 @@ impl AffineQuantizedWeight {
     }
 
     pub(crate) fn load_binding(tensors: &CudaTensorSet, binding: &TensorBinding) -> Result<Self> {
-        let TensorStorage::AffineQuantized { scales, biases: Some(biases), .. } = &binding.storage
+        let TensorStorage::AffineQuantized { format, scales, biases: Some(biases), .. } =
+            &binding.storage
         else {
             return Err(Error::InvalidQuantizedGemv(
                 "binding is not an affine weight with zero-point biases",
             ));
         };
+        if !format.is_mlx_layout()
+            || !format.has_additive_bias()
+            || format.storage_dtype != AffineStorageDType::U32
+            || format.scale_dtype != AffineParameterDType::BF16
+        {
+            return Err(Error::InvalidQuantizedGemv(
+                "binding is not a CUDA-native MLX affine format",
+            ));
+        }
         Ok(Self {
             weight: required(tensors, &binding.source)?,
             scales: required(tensors, scales)?,
@@ -43,11 +53,18 @@ impl AffineQuantizedWeight {
         group_size: usize,
         bits: usize,
     ) -> Result<()> {
-        let values_per_word = 32_usize
-            .checked_div(bits)
-            .filter(|value| *value != 0)
-            .ok_or(Error::InvalidQuantizedGemv("invalid affine precision"))?;
-        let packed = input / values_per_word;
+        if input == 0
+            || group_size == 0
+            || bits == 0
+            || !input.is_multiple_of(group_size)
+            || !input.checked_mul(bits).is_some_and(|width| width.is_multiple_of(32))
+        {
+            return Err(Error::InvalidQuantizedGemv("invalid affine storage geometry"));
+        }
+        let packed = input
+            .checked_mul(bits)
+            .ok_or(Error::InvalidQuantizedGemv("affine packed width overflow"))?
+            / 32;
         let groups = input / group_size;
         shape(&self.weight, expected(matrices, output, packed))?;
         shape(&self.scales, expected(matrices, output, groups))?;

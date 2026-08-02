@@ -34,6 +34,40 @@ __device__ float libmir_qkv_normalized(
   return __bfloat162float(__float2bfloat16_rn(value * inverse_rms * scale));
 }
 
+__device__ void libmir_qkv_transform(
+    const __nv_bfloat16* input, const __nv_bfloat16* weight,
+    __nv_bfloat16* output, unsigned int head_dim, unsigned int rotary_dim,
+    unsigned int pairing_dim, unsigned int position, float theta,
+    float inverse_rms, unsigned int normalize) {
+  const unsigned int half = pairing_dim / 2u;
+  const unsigned int rotary_pairs = rotary_dim / 2u;
+  for (unsigned int pair = threadIdx.x; pair < half; pair += blockDim.x) {
+    const float first =
+        libmir_qkv_normalized(input, weight, pair, inverse_rms, normalize);
+    const float second =
+        libmir_qkv_normalized(input, weight, pair + half, inverse_rms, normalize);
+    if (pair >= rotary_pairs) {
+      output[pair] = __float2bfloat16_rn(first);
+      output[pair + half] = __float2bfloat16_rn(second);
+      continue;
+    }
+    const float frequency = powf(theta, -2.0f * pair / pairing_dim);
+    float sine;
+    float cosine;
+    sincosf(position * frequency, &sine, &cosine);
+    output[pair] = __float2bfloat16_rn(
+        fmaf(-second, sine, first * cosine));
+    output[pair + half] = __float2bfloat16_rn(
+        fmaf(first, sine, second * cosine));
+  }
+  for (unsigned int dimension = pairing_dim + threadIdx.x;
+       dimension < head_dim; dimension += blockDim.x) {
+    output[dimension] = __float2bfloat16_rn(
+        libmir_qkv_normalized(
+            input, weight, dimension, inverse_rms, normalize));
+  }
+}
+
 extern "C" __global__ void libmir_cuda_qkv_postprocess_bf16(
     const __nv_bfloat16* query_input, const __nv_bfloat16* key_input,
     const __nv_bfloat16* value_input, const __nv_bfloat16* query_weight,
@@ -85,34 +119,15 @@ extern "C" __global__ void libmir_cuda_qkv_postprocess_bf16(
       + (token * (query ? query_heads : kv_heads) + head) * head_dim;
   const float inverse_rms = normalize
       ? libmir_qkv_inverse_rms(input, head_dim, epsilon) : 1.0f;
-  const unsigned int half = pairing_dim / 2u;
-  for (unsigned int dimension = threadIdx.x; dimension < head_dim;
-       dimension += blockDim.x) {
-    const unsigned int pair = dimension % half;
-    if (dimension >= pairing_dim || pair >= rotary_dim / 2u) {
-      output[dimension] = __float2bfloat16_rn(
-          libmir_qkv_normalized(input, weight, dimension, inverse_rms, normalize));
-      continue;
-    }
-    const float first =
-        libmir_qkv_normalized(input, weight, pair, inverse_rms, normalize);
-    const float second =
-        libmir_qkv_normalized(input, weight, pair + half, inverse_rms, normalize);
-    const float frequency = powf(theta, -2.0f * pair / pairing_dim);
-    float sine;
-    float cosine;
-    sincosf((start_position + token) * frequency, &sine, &cosine);
-    const float value = dimension < half
-        ? fmaf(-second, sine, first * cosine)
-        : fmaf(first, sine, second * cosine);
-    output[dimension] = __float2bfloat16_rn(value);
-  }
+  libmir_qkv_transform(
+      input, weight, output, head_dim, rotary_dim, pairing_dim,
+      start_position + token, theta, inverse_rms, normalize);
 }
 
 extern "C" __global__ void libmir_cuda_qkv_postprocess_batch_bf16(
     const __nv_bfloat16* query_input, const __nv_bfloat16* key_input,
     const __nv_bfloat16* value_input, const __nv_bfloat16* query_weight,
-    const __nv_bfloat16* key_weight, const unsigned int* token_counts,
+    const __nv_bfloat16* key_weight, const unsigned int* positions,
     __nv_bfloat16* query_output, __nv_bfloat16* key_output,
     __nv_bfloat16* value_output, unsigned int tokens,
     unsigned int query_heads, unsigned int kv_heads,
@@ -161,27 +176,8 @@ extern "C" __global__ void libmir_cuda_qkv_postprocess_batch_bf16(
       + (token * (query ? query_heads : kv_heads) + head) * head_dim;
   const float inverse_rms = normalize
       ? libmir_qkv_inverse_rms(input, head_dim, epsilon) : 1.0f;
-  const unsigned int half = pairing_dim / 2u;
-  const unsigned int position = token_counts[token] - 1u;
-  for (unsigned int dimension = threadIdx.x; dimension < head_dim;
-       dimension += blockDim.x) {
-    const unsigned int pair = dimension % half;
-    if (dimension >= pairing_dim || pair >= rotary_dim / 2u) {
-      output[dimension] = __float2bfloat16_rn(
-          libmir_qkv_normalized(input, weight, dimension, inverse_rms, normalize));
-      continue;
-    }
-    const float first =
-        libmir_qkv_normalized(input, weight, pair, inverse_rms, normalize);
-    const float second =
-        libmir_qkv_normalized(input, weight, pair + half, inverse_rms, normalize);
-    const float frequency = powf(theta, -2.0f * pair / pairing_dim);
-    float sine;
-    float cosine;
-    sincosf(position * frequency, &sine, &cosine);
-    const float value = dimension < half
-        ? fmaf(-second, sine, first * cosine)
-        : fmaf(first, sine, second * cosine);
-    output[dimension] = __float2bfloat16_rn(value);
-  }
+  const unsigned int position = positions[token];
+  libmir_qkv_transform(
+      input, weight, output, head_dim, rotary_dim, pairing_dim, position,
+      theta, inverse_rms, normalize);
 }

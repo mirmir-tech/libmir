@@ -1,5 +1,5 @@
 use super::*;
-use crate::engine::QuantizedArrays;
+use crate::engine::{QuantizedArrays, QuantizedLinear};
 
 #[test]
 fn executes_gated_grouped_query_attention_on_the_gpu_stream() -> Result<()> {
@@ -35,9 +35,9 @@ fn executes_gated_grouped_query_attention_on_the_gpu_stream() -> Result<()> {
     Ok(())
 }
 
-fn linear(output_width: i32, stream: &Stream) -> Result<QuantizedLinear> {
+fn linear(output_width: i32, stream: &Stream) -> Result<BoundLinear> {
     let dense =
         Array::from_f32(&vec![0.0; usize::try_from(output_width * 64)?], &[output_width, 64])?;
     let arrays: QuantizedArrays = dense.quantize(64, 4, stream)?;
-    Ok(QuantizedLinear::from_quantized(arrays, 64, 4))
+    Ok(BoundLinear::Affine(QuantizedLinear::from_quantized(arrays, 64, 4)))
 }

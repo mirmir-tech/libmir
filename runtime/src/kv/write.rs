@@ -12,6 +12,7 @@ pub struct KvPageId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KvBlockWrite {
     pub page: KvPageId,
+    pub table_index: usize,
     pub local_start: usize,
     pub local_end: usize,
     pub page_start: usize,
@@ -65,6 +66,7 @@ impl KvWritePlan {
             if start < end {
                 writes.push(KvBlockWrite {
                     page: KvPageId::new(session_id, layer, block),
+                    table_index: index,
                     local_start: start - token_offset,
                     local_end: end - token_offset,
                     page_start: start - block_start,
@@ -99,6 +101,23 @@ impl KvWritePlan {
     pub fn is_empty(&self) -> bool {
         self.writes.is_empty()
     }
+
+    /// Drops writes for a local prefix while preserving tensor-relative
+    /// offsets for the remaining suffix.
+    pub fn skip_prefix(&mut self, token_count: usize) {
+        let skipped = token_count.min(self.token_count);
+        self.writes.retain_mut(|write| {
+            if write.local_end <= skipped {
+                return false;
+            }
+            if write.local_start < skipped {
+                let delta = skipped - write.local_start;
+                write.local_start = skipped;
+                write.page_start += delta;
+            }
+            true
+        });
+    }
 }
 
 #[cfg(test)]
@@ -122,6 +141,7 @@ mod tests {
             &[
                 KvBlockWrite {
                     page: KvPageId::new(session_id, 3, BlockId(7)),
+                    table_index: 0,
                     local_start: 0,
                     local_end: 1,
                     page_start: 1,
@@ -129,12 +149,37 @@ mod tests {
                 },
                 KvBlockWrite {
                     page: KvPageId::new(session_id, 3, BlockId(8)),
+                    table_index: 1,
                     local_start: 1,
                     local_end: 3,
                     page_start: 0,
                     page_end: 2,
                 },
             ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn skips_cached_prefix_without_rebasing_tensor_offsets() -> Result<()> {
+        let session_id = Uuid::new_v4();
+        let mut table = BlockTable::with_block_size(2);
+        table.push(BlockId(7));
+        table.push(BlockId(8));
+        let mut plan = KvWritePlan::prefill(session_id, 3, &table, 0, 4)?;
+
+        plan.skip_prefix(3);
+
+        assert_eq!(
+            plan.writes(),
+            &[KvBlockWrite {
+                page: KvPageId::new(session_id, 3, BlockId(8)),
+                table_index: 1,
+                local_start: 3,
+                local_end: 4,
+                page_start: 1,
+                page_end: 2,
+            }]
         );
         Ok(())
     }

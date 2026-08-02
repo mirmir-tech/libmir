@@ -71,7 +71,7 @@ impl VisionConfig {
         Self::from_value(&value)
     }
 
-    pub(crate) fn from_value(root: &Value) -> Result<Option<Self>> {
+    pub fn from_value(root: &Value) -> Result<Option<Self>> {
         let Some(vision) = root.get("vision_config").filter(|value| value.is_object()) else {
             return Ok(None);
         };

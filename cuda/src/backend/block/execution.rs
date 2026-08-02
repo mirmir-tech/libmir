@@ -42,6 +42,7 @@ impl DecodeMoeBlockBf16 {
             &self.scratch.normalized,
             selection.indices,
             selection.weights,
+            &self.expert_weights,
             &mut self.scratch.expert,
         )?;
         self.post_expert_norm.execute(

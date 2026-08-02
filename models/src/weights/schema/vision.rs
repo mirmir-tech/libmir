@@ -1,6 +1,8 @@
 use crate::{
     layout::{PooledVisionConfig, SpatialMergeVisionConfig, VisionConfig},
-    weights::{TensorCatalog, TensorReadiness, TensorRequirement, VisionTensorSchema},
+    weights::{
+        TensorCatalog, TensorReadiness, TensorRequirement, VisionTensorSchema, model_tensor_aliases,
+    },
 };
 
 impl VisionTensorSchema {
@@ -14,17 +16,7 @@ impl VisionTensorSchema {
 
     #[must_use]
     pub fn readiness(&self, catalog: &TensorCatalog) -> TensorReadiness {
-        let missing: Vec<String> = self
-            .requirements
-            .iter()
-            .filter(|requirement| !requirement.is_present(catalog))
-            .map(TensorRequirement::missing_label)
-            .collect();
-        TensorReadiness {
-            required: self.requirements.len(),
-            present: self.requirements.len() - missing.len(),
-            missing,
-        }
+        super::readiness(&self.requirements, catalog)
     }
 }
 
@@ -35,7 +27,7 @@ fn pooled_encoder(config: &PooledVisionConfig) -> VisionTensorSchema {
             "vision position table",
             "model.vision_tower.patch_embedder.position_embedding_table",
         ),
-        one("vision text projection", "model.embed_vision.embedding_projection.weight"),
+        bound("vision text projection", "model.embed_vision.embedding_projection.weight"),
     ];
     if config.standardize {
         requirements.extend([
@@ -139,14 +131,17 @@ fn spatial_merge_one(label: &str, suffix: impl AsRef<str>) -> TensorRequirement 
 }
 
 fn one(label: &str, name: impl Into<String>) -> TensorRequirement {
-    TensorRequirement::any(label, vec![name.into()])
+    TensorRequirement::any(label, model_tensor_aliases(name))
+}
+
+fn bound(label: &str, name: impl Into<String>) -> TensorRequirement {
+    TensorRequirement::bound(label, model_tensor_aliases(name))
 }
 
 fn linear(label: &str, prefix: &str) -> TensorRequirement {
-    TensorRequirement::any(
-        label,
-        vec![format!("{prefix}.linear.weight"), format!("{prefix}.weight")],
-    )
+    let mut aliases = model_tensor_aliases(format!("{prefix}.linear.weight"));
+    aliases.extend(model_tensor_aliases(format!("{prefix}.weight")));
+    TensorRequirement::any(label, aliases)
 }
 
 #[cfg(test)]

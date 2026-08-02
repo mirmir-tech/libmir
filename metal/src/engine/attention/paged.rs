@@ -8,6 +8,7 @@ pub struct ScratchSpec {
     pub(crate) kv_heads: usize,
     pub(crate) page_capacity: usize,
     pub(crate) blocks: usize,
+    pub(crate) reduction_groups: usize,
     pub(crate) head_dim: usize,
     pub(crate) page_size: usize,
     pub(crate) scale_bits: u32,
@@ -71,12 +72,18 @@ impl ScratchState {
             .grid([32, spec.query_heads, spec.blocks])
             .threadgroup([32, spec.query_heads / spec.kv_heads, 1]);
         self.partial_kernel = Some(library.export(function)?.prepare_aliasing(dispatch)?);
-        self.reduce_dispatch =
-            Some(mirtal::Dispatch::new([1_024, spec.query_heads, 1], [1_024, 1, 1]).templates([
+        self.reduce_dispatch = Some(
+            mirtal::Dispatch::new(
+                [32 * spec.reduction_groups, spec.query_heads, 1],
+                [32 * spec.reduction_groups, 1, 1],
+            )
+            .templates([
                 mirtal::TemplateArg::dtype("T", spec.dtype),
                 mirtal::TemplateArg::int("HEAD_DIM", i32::try_from(spec.head_dim)?),
                 mirtal::TemplateArg::int("BLOCKS", i32::try_from(spec.blocks)?),
-            ]));
+                mirtal::TemplateArg::int("REDUCTION_GROUPS", i32::try_from(spec.reduction_groups)?),
+            ]),
+        );
         self.reduce_output = Some([mirtal::OutputSpec::new(
             mirtal::Shape::new([1, spec.query_heads, 1, spec.head_dim])?,
             spec.dtype,

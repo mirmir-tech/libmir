@@ -1,4 +1,4 @@
-use mircuda::{DeviceBuffer, bf16};
+use mircuda::{DeviceBuffer, Stream, bf16};
 
 use super::weight::CudaOutputHeadTemplate;
 use crate::{
@@ -10,6 +10,7 @@ use crate::{
 pub struct CudaBatchOutputHead {
     projection: Bf16Projection,
     weight: CudaTensor,
+    stream: Stream,
 }
 
 impl CudaBatchOutputHead {
@@ -27,6 +28,7 @@ impl CudaBatchOutputHead {
                 output_features: template.output_features,
             })?,
             weight: template.exact.clone(),
+            stream: backend.inner.stream.clone(),
         })
     }
 
@@ -36,5 +38,9 @@ impl CudaBatchOutputHead {
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
         self.projection.execute(input, &self.weight, output)
+    }
+
+    pub(crate) const fn stream(&self) -> &Stream {
+        &self.stream
     }
 }

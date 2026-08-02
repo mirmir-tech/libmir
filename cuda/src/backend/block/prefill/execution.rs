@@ -1,9 +1,9 @@
 use mircuda::{DeviceBuffer, bf16};
 use runtime::kv::{BlockTable, KvWritePlan};
 
-use super::PrefillMoeBlockBf16;
+use super::{super::experts::ExpertWeights, PrefillMoeBlockBf16};
 use crate::{
-    DecodeMoeBlockBf16, DecodeMoeBlockWeights, Result,
+    DecodeMoeBlockBf16, DecodeMoeBlockWeights, PagedPrefillBatch, Result,
     backend::{attention::ImageAttentionSpan, block::scalar},
 };
 
@@ -44,6 +44,34 @@ impl PrefillMoeBlockBf16 {
             &mut self.scratch.attention,
             image,
         )?;
+        self.execute_tail(input, weights, &state.expert_weights, output)
+    }
+
+    pub fn execute_batch(
+        &mut self,
+        state: &mut DecodeMoeBlockBf16,
+        input: &DeviceBuffer<bf16>,
+        weights: DecodeMoeBlockWeights<'_>,
+        batch: &PagedPrefillBatch,
+        output: &mut DeviceBuffer<bf16>,
+    ) -> Result<()> {
+        self.attention.execute_batch(
+            &mut state.attention,
+            input,
+            weights.attention,
+            batch,
+            &mut self.scratch.attention,
+        )?;
+        self.execute_tail(input, weights, &state.expert_weights, output)
+    }
+
+    fn execute_tail(
+        &mut self,
+        input: &DeviceBuffer<bf16>,
+        weights: DecodeMoeBlockWeights<'_>,
+        expert_weights: &ExpertWeights,
+        output: &mut DeviceBuffer<bf16>,
+    ) -> Result<()> {
         self.post_attention_norm.execute(
             &self.scratch.attention,
             weights.post_attention_norm,
@@ -56,7 +84,7 @@ impl PrefillMoeBlockBf16 {
             &mut self.scratch.hidden,
         )?;
         self.execute_dense(weights)?;
-        self.execute_experts(weights)?;
+        self.execute_experts(weights, expert_weights)?;
         self.hidden_ops.add(
             &self.stream,
             &self.scratch.dense,
@@ -111,7 +139,11 @@ impl PrefillMoeBlockBf16 {
         )
     }
 
-    fn execute_experts(&mut self, weights: DecodeMoeBlockWeights<'_>) -> Result<()> {
+    fn execute_experts(
+        &mut self,
+        weights: DecodeMoeBlockWeights<'_>,
+        expert_weights: &ExpertWeights,
+    ) -> Result<()> {
         let selection = self.router.execute(&self.scratch.hidden, weights.router)?;
         self.pre_expert_norm.execute(
             &self.scratch.hidden,
@@ -122,6 +154,7 @@ impl PrefillMoeBlockBf16 {
             &self.scratch.normalized,
             selection.indices,
             selection.weights,
+            expert_weights,
             &mut self.scratch.expert,
         )?;
         self.post_expert_norm.execute(

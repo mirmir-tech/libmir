@@ -21,6 +21,12 @@ pub(super) fn dense_weight() -> Result<CudaDenseWeightPolicy, Box<dyn std::error
         Some("attention-output-residual") => {
             Ok(CudaDenseWeightPolicy::Fp8Int4Role(DenseRole::AttentionOutput))
         },
+        Some("dense-down") => Ok(CudaDenseWeightPolicy::BlockFp8Role(DenseRole::DenseDown)),
+        Some("dense-down-residual") => Ok(CudaDenseWeightPolicy::Fp8Int4Role(DenseRole::DenseDown)),
+        Some("dense-gate-up") => Ok(CudaDenseWeightPolicy::BlockFp8Role(DenseRole::DenseGateUp)),
+        Some("dense-gate-up-residual") => {
+            Ok(CudaDenseWeightPolicy::Fp8Int4Role(DenseRole::DenseGateUp))
+        },
         _ => Err("invalid LIBMIR_CUDA_PROFILE_BLOCK_FP8_ROLE".into()),
     }
 }

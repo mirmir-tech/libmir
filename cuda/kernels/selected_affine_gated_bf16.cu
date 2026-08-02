@@ -97,3 +97,60 @@ __device__ __forceinline__ void libmir_cuda_selected_affine_gated_bf16_impl(
 
 LIBMIR_CUDA_SELECTED_GATED(libmir_cuda_selected_affine_gated_bf16_int4, 4, 16)
 LIBMIR_CUDA_SELECTED_GATED(libmir_cuda_selected_affine_gated_bf16_int8, 8, 8)
+
+extern "C" __global__ void libmir_cuda_selected_affine_gated_bf16_fallback(
+    const unsigned short* input, const unsigned int* selected,
+    const unsigned int* gate_weight, const unsigned short* gate_scales,
+    const unsigned short* gate_biases, const unsigned int* up_weight,
+    const unsigned short* up_scales, const unsigned short* up_biases,
+    unsigned short* output, unsigned int input_features, unsigned int output_features,
+    unsigned int group_size, unsigned int expert_count, unsigned int activation) {
+  constexpr unsigned int bits = LIBMIR_AFFINE_BITS;
+  const unsigned int row = blockIdx.x * 8u + threadIdx.y;
+  const unsigned int slot = blockIdx.y;
+  const unsigned int token = blockIdx.z;
+  if (row >= output_features) return;
+  input += token * input_features;
+  const unsigned int selected_index = token * gridDim.y + slot;
+  const unsigned int expert = selected[selected_index];
+  const unsigned int output_index = selected_index * output_features + row;
+  if (expert >= expert_count) {
+    if (threadIdx.x == 0) output[output_index] = 0;
+    return;
+  }
+  const unsigned int words_per_row =
+      libmir_cuda_affine_words<bits>(input_features);
+  const unsigned int groups_per_row = input_features / group_size;
+  const unsigned int expert_row = expert * output_features + row;
+  const unsigned int* gate_row = gate_weight + expert_row * words_per_row;
+  const unsigned int* up_row = up_weight + expert_row * words_per_row;
+  const unsigned int group_base = expert_row * groups_per_row;
+  float gate_sum = 0.0f;
+  float up_sum = 0.0f;
+  for (unsigned int feature = threadIdx.x; feature < input_features; feature += 32u) {
+    const unsigned int group = group_base + feature / group_size;
+    const float value = libmir_cuda_gated_bf16_to_float(input[feature]);
+    const float gate_quantized =
+        static_cast<float>(libmir_cuda_affine_unpack<bits>(gate_row, feature));
+    const float up_quantized =
+        static_cast<float>(libmir_cuda_affine_unpack<bits>(up_row, feature));
+    gate_sum += value * (
+        libmir_cuda_gated_bf16_to_float(gate_scales[group]) * gate_quantized +
+        libmir_cuda_gated_bf16_to_float(gate_biases[group]));
+    up_sum += value * (
+        libmir_cuda_gated_bf16_to_float(up_scales[group]) * up_quantized +
+        libmir_cuda_gated_bf16_to_float(up_biases[group]));
+  }
+  for (int offset = 16; offset > 0; offset >>= 1) {
+    gate_sum += __shfl_down_sync(0xffffffffu, gate_sum, offset);
+    up_sum += __shfl_down_sync(0xffffffffu, up_sum, offset);
+  }
+  if (threadIdx.x == 0) {
+    const float gate =
+        libmir_cuda_gated_bf16_to_float(libmir_cuda_gated_float_to_bf16(gate_sum));
+    const float up =
+        libmir_cuda_gated_bf16_to_float(libmir_cuda_gated_float_to_bf16(up_sum));
+    output[output_index] = libmir_cuda_gated_float_to_bf16(
+        libmir_cuda_gated_activate(gate, activation) * up);
+  }
+}

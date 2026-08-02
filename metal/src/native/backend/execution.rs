@@ -2,7 +2,9 @@ use std::time::Instant;
 
 use runtime::{
     Result as RuntimeResult,
-    backend::{DecodeOutput, ModelHandle, PrefillOutput, SamplingLogits, TokenEvent},
+    backend::{
+        DecodeOutput, DecodeTimings, ModelHandle, PrefillOutput, SamplingLogits, TokenEvent,
+    },
     kv::BlockTable,
 };
 use uuid::Uuid;
@@ -53,6 +55,7 @@ impl MetalBackend {
         let model_id = lookup.clone();
         let tokens = prompt_tokens.to_vec();
         let blocks = block_table.blocks().len();
+        let block_size = block_table.block_size();
         let execution_sampling =
             execution_sampling(sampling_logits, self.config.fusion.device_token_pipeline.enabled());
         self.with_model_progress(
@@ -64,6 +67,7 @@ impl MetalBackend {
                     session_id,
                     &tokens,
                     blocks,
+                    block_size,
                     sampling_logits,
                     execution_sampling,
                     started,
@@ -112,43 +116,17 @@ fn execute_prefill(
     session_id: Uuid,
     prompt_tokens: &[u32],
     blocks: usize,
+    block_size: Option<usize>,
     sampling_logits: SamplingLogits,
     execution_sampling: SamplingLogits,
     started: Instant,
     progress: &mut dyn FnMut(MetalProgressEvent),
 ) -> Result<PrefillOutput> {
-    let native = loaded.prefill(session_id, prompt_tokens, execution_sampling, progress)?;
-    let prefix_cache_tokens = native.prefix_cache_tokens;
-    let output = output::materialize(loaded, native.output, sampling_logits)?;
-    let cached_tokens = loaded.session_cached_tokens(session_id)?;
-    let prefix_cache = if prefix_cache_tokens > 0 {
-        format!("device prefix hit for {prefix_cache_tokens} tokens")
-    } else {
-        "device prefix miss".into()
-    };
-    let trace = format!(
-        "native prefill: {} tokens, {}, {} runtime KV blocks, {} cached tokens, {:.3}ms",
-        prompt_tokens.len(),
-        prefix_cache,
-        blocks,
-        cached_tokens,
-        started.elapsed().as_secs_f64() * 1000.0
-    );
-    tracing::debug!(
-        model_id,
-        session_id = %session_id,
-        prompt_tokens = prompt_tokens.len(),
-        cached_tokens,
-        prefix_cache_tokens,
-        "native MLX prefill completed"
-    );
-    Ok(PrefillOutput {
-        accepted_tokens: prompt_tokens.len(),
-        next_token: output.next_token,
-        trace: Some(trace),
-        logits: output.logits,
-        candidates: output.candidates,
-    })
+    let native =
+        loaded.prefill(session_id, prompt_tokens, execution_sampling, block_size, progress)?;
+    super::prefill_output::materialize_prefill_parts(
+        loaded, model_id, session_id, prompt_tokens, blocks, sampling_logits, native, started,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -166,8 +144,9 @@ fn execute_decode(
     let native = loaded.decode(session_id, token_id, execution_sampling)?;
     let output = output::materialize(loaded, native, sampling_logits)?;
     let cached_tokens = loaded.session_cached_tokens(session_id)?;
-    let trace = decode_trace(profile, block_table, cached_tokens, started.elapsed());
-    tracing::debug!(
+    let elapsed = started.elapsed();
+    let trace = decode_trace(profile, block_table, cached_tokens, elapsed);
+    tracing::trace!(
         model_id,
         session_id = %session_id,
         token_id,
@@ -182,6 +161,11 @@ fn execute_decode(
         },
         logits: output.logits,
         candidates: output.candidates,
+        timings: profile.then(|| DecodeTimings {
+            backend_execution: elapsed,
+            batch_rows: 1,
+            ..DecodeTimings::default()
+        }),
     })
 }
 

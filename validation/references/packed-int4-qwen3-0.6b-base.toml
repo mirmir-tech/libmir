@@ -1,0 +1,42 @@
+# CarlOwOs/Qwen3-0.6B-Base-W4A16
+# revision 3ee4424c11872469051f0317e0eb237766ce9d48
+# oracle: Transformers 4.57.6 BF16 after compressed-tensors 0.17.0 decompression
+schema = 2
+family = "dense"
+model_type = "qwen3"
+dtypes = ["BF16"]
+vocab_size = 151936
+context_len = 32768
+kv_cache_blocks = 128
+prompt_tokens = [785, 6722, 315, 9625, 374]
+generated_tokens = [12095, 13, 576, 6722, 315, 9856, 374, 19846, 13, 576, 6722, 315, 15344, 374, 21718, 13]
+
+[packed_int4]
+bits = 4
+scale_strategy = "group"
+group_size = 128
+signedness = "offset_binary"
+zero_point = "none"
+activation_order = "none"
+packing = "dense_little_endian"
+storage_dtype = "I32"
+scale_dtype = "BF16"
+
+[tokenizer]
+vocabulary_entries = 151669
+max_token_id = 151668
+added_tokens = 26
+stop_token_ids = [151643, 128247, 151645]
+
+[first_logits]
+token_ids = [12095, 30743, 1304, 7407, 32671, 320, 198, 2130]
+scores = [20.625, 18.75, 18.375, 18.125, 18.0, 17.75, 17.625, 17.625]
+absolute_tolerance = 0.25
+
+[metal]
+max_load_active_bytes = 900000000
+max_decode_active_bytes = 900000000
+
+[cuda]
+max_load_active_bytes = 950000000
+max_decode_active_bytes = 950000000

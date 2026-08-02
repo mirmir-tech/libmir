@@ -7,11 +7,13 @@ use crate::{Error, Result};
 
 mod experts;
 mod qkv;
+mod routes;
 #[cfg(all(test, target_os = "linux"))]
 mod tests;
 
 use experts::{DownKernel, DownMlxKernel, GateUpKernel, GateUpMlxKernel};
-use qkv::{QkvKernel, QkvSplitKernel};
+use qkv::{QkvKernel, QkvSplitKernel, RopeKernel};
+use routes::{DownMlxRoutesKernel, DownRoutesKernel, ReduceRoutesKernel};
 
 cuda_export!(BiasKernel = "libmir_cuda_clamped_routed_add_bias_bf16"(
     input: &DeviceBuffer<bf16>, bias: &DeviceBuffer<bf16>,
@@ -39,11 +41,15 @@ pub struct ClampedRoutedSpec {
 pub struct ClampedRoutedKernels {
     qkv: TypedKernel<QkvKernel>,
     qkv_split: TypedKernel<QkvSplitKernel>,
+    rope: TypedKernel<RopeKernel>,
     bias: TypedKernel<BiasKernel>,
     gate_up: TypedKernel<GateUpKernel>,
     down: TypedKernel<DownKernel>,
+    down_routes: TypedKernel<DownRoutesKernel>,
     gate_up_mlx: TypedKernel<GateUpMlxKernel>,
     down_mlx: TypedKernel<DownMlxKernel>,
+    down_mlx_routes: TypedKernel<DownMlxRoutesKernel>,
+    reduce_routes: TypedKernel<ReduceRoutesKernel>,
     spec: ClampedRoutedSpec,
 }
 
@@ -67,11 +73,15 @@ impl ClampedRoutedKernels {
         Ok(Self {
             qkv: module.kernel()?,
             qkv_split: module.kernel()?,
+            rope: module.kernel()?,
             bias: module.kernel()?,
             gate_up: module.kernel()?,
             down: module.kernel()?,
+            down_routes: module.kernel()?,
             gate_up_mlx: module.kernel()?,
             down_mlx: module.kernel()?,
+            down_mlx_routes: module.kernel()?,
+            reduce_routes: module.kernel()?,
             spec,
         })
     }

@@ -1,0 +1,46 @@
+# RedHatAI/Qwen2.5-0.5B-FP8-dynamic
+# source revision fb2c26b7b486f5ff9c810b225c810d826898c923
+# oracle: vLLM 0.22.1+7b9cb5b7, compressed-tensors FP8, greedy eager execution
+schema = 2
+family = "dense"
+model_type = "qwen2"
+dtypes = ["BF16"]
+vocab_size = 151936
+context_len = 32768
+kv_cache_blocks = 128
+prompt_tokens = [785]
+generated_tokens = [6364, 3409]
+
+[float8]
+format = "F8_E4M3"
+scale_mode = "multiplier"
+scale_granularity = "output_channel"
+scale_dtype = "BF16"
+activation_scale = "dynamic_token"
+
+[tokenizer]
+vocabulary_entries = 151665
+max_token_id = 151664
+added_tokens = 22
+stop_token_ids = [151643, 128247, 151645]
+
+[first_logits]
+token_ids = [6364, 431, 730, 1205, 356, 7071, 393, 434]
+scores = [-3.1893415, -3.2518415, -4.3143415, -4.5018415, -4.7518415, -4.8768415, -5.1893415, -5.2518415]
+absolute_tolerance = 0.35
+normalized = true
+
+[cuda]
+max_load_active_bytes = 950000000
+max_decode_active_bytes = 950000000
+
+[metal]
+max_load_active_bytes = 650000000
+max_decode_active_bytes = 650000000
+generated_tokens = [2701, 374]
+
+[metal.first_logits]
+token_ids = [2701, 40389, 79683, 7071, 6364, 1429, 1887, 3150]
+scores = [-2.61162, -4.36162, -4.61162, -4.61162, -4.92412, -4.92412, -4.98662, -5.23662]
+absolute_tolerance = 0.35
+normalized = true

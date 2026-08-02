@@ -1,0 +1,91 @@
+schema_version = 2
+
+[[format]]
+id = "dense_bf16"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "dense_f16"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "dense_f32"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "affine_2"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "affine_3"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "affine_4"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "affine_5"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "affine_6"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "affine_8"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "packed_int8"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "packed_int4"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "awq"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "gptq"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "fp8_e4m3"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "fp8_e5m2"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "mxfp4"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "mxfp8"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "nvfp4"
+metal = "partial"
+cuda = "partial"

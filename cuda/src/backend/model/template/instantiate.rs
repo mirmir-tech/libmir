@@ -43,7 +43,7 @@ impl CudaMoeModelTemplate {
                 attention,
                 vocab: self.decoder.vocab_size,
                 hidden: self.decoder.hidden_size,
-                embedding_scale: self.embedding_scale,
+                logit_softcap: self.logit_softcap,
             },
             batch_size,
         )
@@ -96,10 +96,10 @@ impl CudaMoeModelTemplate {
         CudaMoeModelSession::new(
             self.backend.clone(),
             hidden,
-            self.backend.prepare_bf16_embedding(vocab, hidden, self.embedding_scale)?,
+            self.embedding.instantiate(&self.backend)?,
             self.backend.prepare_rms_norm_bf16(1, hidden, epsilon)?,
             self.output_head.instantiate(&self.backend)?,
-            self.embedding.clone(),
+            self.output_head.clone(),
             self.final_norm.clone(),
             layers,
             self.backend.prepare_device_sampler_bf16(vocab)?,
@@ -113,6 +113,7 @@ impl CudaMoeModelTemplate {
             prefill_first,
             prefill_second,
             logits,
+            self.logit_softcap,
         )
     }
 }

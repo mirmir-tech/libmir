@@ -112,10 +112,9 @@ impl CudaSpatialMergeVisionTower {
             grid_width: image.grid_width,
         };
         let cached = {
-            let mut pool = self
-                .runners
-                .lock()
-                .map_err(|_| Error::State("spatial-merge runner pool is poisoned".into()))?;
+            let Ok(mut pool) = self.runners.lock() else {
+                return Err(Error::State("spatial-merge runner pool is poisoned".into()));
+            };
             pool.available
                 .iter()
                 .rposition(|(candidate, _runner)| *candidate == geometry)
@@ -127,10 +126,11 @@ impl CudaSpatialMergeVisionTower {
         } else {
             let runner =
                 runner::SpatialMergeRunner::new(&self.backend, &self.config, &self.tensors, image)?;
-            self.runners
-                .lock()
-                .map_err(|_| Error::State("spatial-merge runner pool is poisoned".into()))?
-                .created += 1;
+            let Ok(mut pool) = self.runners.lock() else {
+                return Err(Error::State("spatial-merge runner pool is poisoned".into()));
+            };
+            pool.created += 1;
+            drop(pool);
             runner
         };
         Ok(SpatialRunnerLease {
@@ -142,10 +142,9 @@ impl CudaSpatialMergeVisionTower {
 
     #[cfg(all(test, target_os = "linux"))]
     fn runner_pool_stats(&self) -> Result<(usize, usize)> {
-        let pool = self
-            .runners
-            .lock()
-            .map_err(|_| Error::State("spatial-merge runner pool is poisoned".into()))?;
+        let Ok(pool) = self.runners.lock() else {
+            return Err(Error::State("spatial-merge runner pool is poisoned".into()));
+        };
         Ok((pool.created, pool.available.len()))
     }
 }

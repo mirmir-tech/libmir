@@ -31,16 +31,20 @@ extern "C" __global__ void libmir_cuda_quantize_block_fp8_weight(
   const unsigned int block = blockIdx.y;
   const unsigned int column = block * kBlock + threadIdx.x;
   const unsigned int index = row * columns + column;
-  const float value = __bfloat162float(source[index]);
+  const float value =
+      column < columns ? __bfloat162float(source[index]) : 0.0f;
   __shared__ float maxima[kWarps];
   const float maximum = block_max(fabsf(value), maxima);
   __shared__ float scale;
   if (threadIdx.x == 0u) {
     scale = maximum == 0.0f ? 1.0f : maximum / 448.0f;
-    scales[row * (columns / kBlock) + block] = scale;
+    const unsigned int column_blocks = (columns + kBlock - 1u) / kBlock;
+    scales[row * column_blocks + block] = scale;
   }
   __syncthreads();
-  weight[index] = __nv_fp8_e4m3(value / scale).__x;
+  if (column < columns) {
+    weight[index] = __nv_fp8_e4m3(value / scale).__x;
+  }
 }
 
 extern "C" __global__ void libmir_cuda_block_fp8x4_bf16_linear(
@@ -48,6 +52,7 @@ extern "C" __global__ void libmir_cuda_block_fp8x4_bf16_linear(
     const float* scales, __nv_bfloat16* output, unsigned int rows,
     unsigned int columns) {
   constexpr unsigned int kRowsPerWarp = 8;
+  const unsigned int column_blocks = (columns + kBlock - 1u) / kBlock;
   const unsigned int lane = threadIdx.x & 31u;
   const unsigned int warp = threadIdx.x >> 5u;
   const unsigned int first_row =
@@ -71,7 +76,7 @@ extern "C" __global__ void libmir_cuda_block_fp8x4_bf16_linear(
         dot = fmaf(values.y, quantized.y, dot);
         dot = fmaf(values.z, quantized.z, dot);
         dot = fmaf(values.w, quantized.w, dot);
-        const float scale = scales[row * (columns / kBlock) + group / 32u];
+        const float scale = scales[row * column_blocks + group / 32u];
         sums[item] = fmaf(dot, scale, sums[item]);
       }
     }

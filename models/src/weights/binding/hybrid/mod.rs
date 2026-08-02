@@ -1,6 +1,7 @@
 use super::{
     AttentionProjectionRole, ExpertProjectionRole, FeedForwardProjectionRole, LayerTensorRole,
     LinearAttentionTensorRole, LogicalTensorRole, TensorBinding, WeightBindingPlan,
+    view::{RoutedExpertBindings, sources},
 };
 use crate::error::{ModelsError, Result};
 
@@ -46,9 +47,7 @@ pub struct GatedSoftmaxBindings<'a> {
 #[derive(Debug, Clone, Copy)]
 pub struct SharedRoutedFeedForwardBindings<'a> {
     pub router: &'a TensorBinding,
-    pub routed_gate: &'a TensorBinding,
-    pub routed_up: &'a TensorBinding,
-    pub routed_down: &'a TensorBinding,
+    pub routed: RoutedExpertBindings<'a>,
     pub shared_gate: &'a TensorBinding,
     pub shared_up: &'a TensorBinding,
     pub shared_down: &'a TensorBinding,
@@ -101,17 +100,16 @@ impl<'a> GatedSoftmaxBindings<'a> {
 }
 
 impl<'a> SharedRoutedFeedForwardBindings<'a> {
-    fn bindings(self) -> [&'a TensorBinding; 8] {
-        [
+    fn bindings(self) -> Vec<&'a TensorBinding> {
+        let mut bindings = vec![
             self.router,
-            self.routed_gate,
-            self.routed_up,
-            self.routed_down,
             self.shared_gate,
             self.shared_up,
             self.shared_down,
             self.shared_output_gate,
-        ]
+        ];
+        bindings.extend(self.routed.bindings());
+        bindings
     }
 }
 
@@ -160,13 +158,34 @@ fn feed_forward(
     let expert = |projection| {
         layer(plan, index, LayerTensorRole::ExpertProjection { expert: None, projection })
     };
+    let optional_expert = |projection| {
+        optional(plan, index, LayerTensorRole::ExpertProjection { expert: None, projection })
+    };
     let shared =
         |projection| layer(plan, index, LayerTensorRole::SharedExpertProjection { projection });
     Ok(SharedRoutedFeedForwardBindings {
         router: layer(plan, index, LayerTensorRole::Router)?,
-        routed_gate: expert(ExpertProjectionRole::Gate)?,
-        routed_up: expert(ExpertProjectionRole::Up)?,
-        routed_down: expert(ExpertProjectionRole::Down)?,
+        routed: if let Some(gate_up) = optional_expert(ExpertProjectionRole::GateUp) {
+            RoutedExpertBindings::InterleavedGateUp {
+                gate_up,
+                down: expert(ExpertProjectionRole::Down)?,
+            }
+        } else if optional_expert(ExpertProjectionRole::Down).is_some() {
+            RoutedExpertBindings::SeparateGateUp {
+                gate: expert(ExpertProjectionRole::Gate)?,
+                up: expert(ExpertProjectionRole::Up)?,
+                down: expert(ExpertProjectionRole::Down)?,
+            }
+        } else {
+            let routed = RoutedExpertBindings::Individual { tensors: &plan.tensors, layer: index };
+            let gate = routed.individual(ExpertProjectionRole::Gate);
+            let up = routed.individual(ExpertProjectionRole::Up);
+            let down = routed.individual(ExpertProjectionRole::Down);
+            if gate.is_empty() || gate.len() != up.len() || gate.len() != down.len() {
+                return Err(invalid(index, "incomplete individual expert projection set"));
+            }
+            routed
+        },
         shared_gate: shared(FeedForwardProjectionRole::Gate)?,
         shared_up: shared(FeedForwardProjectionRole::Up)?,
         shared_down: shared(FeedForwardProjectionRole::Down)?,
@@ -226,8 +245,4 @@ fn optional(
 
 fn invalid(index: usize, reason: &str) -> ModelsError {
     ModelsError::InvalidConfig(format!("invalid hybrid decoder layer {index}: {reason}"))
-}
-
-fn sources<'a>(bindings: impl IntoIterator<Item = &'a TensorBinding>) -> Vec<&'a str> {
-    bindings.into_iter().flat_map(TensorBinding::physical_sources).collect()
 }

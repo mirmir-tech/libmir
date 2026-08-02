@@ -36,8 +36,8 @@ mod tests {
 
     #[test]
     fn discovers_a_rootless_text_checkpoint_from_tensor_structure() {
-        let catalog = TensorCatalog {
-            tensors: [
+        let catalog = TensorCatalog::new(
+            [
                 "embed_tokens.weight",
                 "layers.0.self_attn.q_proj.weight",
                 "layers.0.mlp.gate_proj.weight",
@@ -53,7 +53,7 @@ mod tests {
                 data_offsets: [0, 0],
             })
             .collect(),
-        };
+        );
 
         assert_eq!(
             TextTensorLayout::discover(&catalog)

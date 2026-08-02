@@ -1,4 +1,4 @@
-use models::{layout::PooledVisionConfig, vision::PooledPreprocessedImage};
+use models::{layout::PooledVisionConfig, vision::PooledPreprocessedImage, weights::TensorBinding};
 
 use super::{embedding::PatchEmbedding, layer::EncoderLayer, pooler::VisionPooler};
 use crate::engine::{Array, Error, ModelTensors, Result, Stream};
@@ -16,6 +16,7 @@ impl PooledVisionTower {
     pub fn load(
         tensors: &ModelTensors,
         config: &PooledVisionConfig,
+        projection: &TensorBinding,
         stream: &Stream,
     ) -> Result<Self> {
         validate_config(config)?;
@@ -43,6 +44,7 @@ impl PooledVisionTower {
                 config.pooling_kernel_size,
                 config.standardize,
                 eps,
+                projection,
                 stream,
             )?,
             patch_width: 3 * config.patch_size * config.patch_size,

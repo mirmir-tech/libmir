@@ -85,7 +85,7 @@ fn block_expert(projection: ExpertProjectionRole, source: &str) -> TensorBinding
         logical_shape: None,
         transforms: Vec::new(),
         storage: TensorStorage::BlockQuantized {
-            format: BlockFormat::MxFp4,
+            format: BlockQuantization::MXFP4,
             scales: if projection == ExpertProjectionRole::GateUp {
                 "custom.gate_up.scale".into()
             } else {

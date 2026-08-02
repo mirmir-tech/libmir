@@ -48,18 +48,18 @@ impl CudaExecutionPlanner {
             return Err(Error::InvalidExecutionPlan("output-head dimensions are empty"));
         }
         let policy = self.policy();
+        let experimental = policy.numerical == CudaNumericalPolicy::Throughput
+            && policy.admission == CudaKernelAdmission::Experimental;
         if policy.output_head == CudaOutputHeadPolicy::Auto
             && self.hardware().compute_capability().0 == 12
-            && tuned_refinement(request)
+            && (tuned_refinement(request) || (experimental && tuned_throughput_refinement(request)))
         {
             return Ok(OutputHeadPlan {
                 execution: OutputHeadExecution::AutoRefined,
-                source: PlanSource::Tuned,
+                source: PlanSource::Heuristic,
             });
         }
-        let fp8 = policy.numerical == CudaNumericalPolicy::Throughput
-            && policy.admission == CudaKernelAdmission::Experimental
-            && self.hardware().compute_capability().0 >= 12;
+        let fp8 = experimental && self.hardware().compute_capability().0 >= 12;
         Ok(
             if fp8
                 && !matches!(
@@ -96,4 +96,8 @@ const fn tuned_refinement(request: OutputHeadPlanRequest) -> bool {
         (request.input_features, request.output_features),
         (2_816, 262_144) | (4_096, 151_936)
     )
+}
+
+const fn tuned_throughput_refinement(request: OutputHeadPlanRequest) -> bool {
+    request.input_features == 2_880 && request.output_features == 201_088
 }

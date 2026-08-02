@@ -1,6 +1,9 @@
 use std::{fs, path::Path};
 
-use models::layout::{PooledImageProcessorConfig, PooledVisionConfig};
+use models::{
+    layout::{PooledImageProcessorConfig, PooledVisionConfig},
+    weights::{LogicalTensorRole, TensorBinding, TensorStorage},
+};
 use serde_json::{Map, Value, json};
 
 use super::{PooledVisionTower, pooler::VisionPooler, rope::VisionRope};
@@ -54,7 +57,8 @@ fn execute_synthetic_tower(root: &Path) -> Result<()> {
     let load_stream = Stream::new_cpu()?;
     let tensors = ModelTensors::load(root, &load_stream)?;
     let stream = Stream::new_gpu()?;
-    let tower = PooledVisionTower::load(&tensors, &test_config(), &stream)?;
+    let projection = projection_binding();
+    let tower = PooledVisionTower::load(&tensors, &test_config(), &projection, &stream)?;
     let image = test_processor().preprocess_rgb(&[255, 128, 0], 1, 1)?;
     let output = tower.forward_preprocessed(&image, &stream)?;
 
@@ -63,19 +67,26 @@ fn execute_synthetic_tower(root: &Path) -> Result<()> {
     Ok(())
 }
 
+fn projection_binding() -> TensorBinding {
+    TensorBinding {
+        role: LogicalTensorRole::VisionProjection,
+        source: "embed_vision.embedding_projection.weight".into(),
+        shape: vec![4, 4],
+        logical_shape: Some(vec![4, 4]),
+        transforms: Vec::new(),
+        storage: TensorStorage::Dense { dtype: "F32".into(), bias: None },
+    }
+}
+
 fn write_tower_weights(path: &Path) -> Result<()> {
     let mut tensors = vec![
-        tensor("model.vision_tower.patch_embedder.input_proj.weight", &[4, 3], identity(4, 3)),
-        tensor(
-            "model.vision_tower.patch_embedder.position_embedding_table",
-            &[2, 2, 4],
-            zeros(16),
-        ),
-        tensor("model.vision_tower.std_bias", &[4], zeros(4)),
-        tensor("model.vision_tower.std_scale", &[4], vec![1.0; 4]),
-        tensor("model.embed_vision.embedding_projection.weight", &[4, 4], identity(4, 4)),
+        tensor("vision_tower.patch_embedder.input_proj.weight", &[4, 3], identity(4, 3)),
+        tensor("vision_tower.patch_embedder.position_embedding_table", &[2, 2, 4], zeros(16)),
+        tensor("vision_tower.std_bias", &[4], zeros(4)),
+        tensor("vision_tower.std_scale", &[4], vec![1.0; 4]),
+        tensor("embed_vision.embedding_projection.weight", &[4, 4], identity(4, 4)),
     ];
-    let prefix = "model.vision_tower.encoder.layers.0";
+    let prefix = "vision_tower.encoder.layers.0";
     for name in [
         "input_layernorm",
         "post_attention_layernorm",

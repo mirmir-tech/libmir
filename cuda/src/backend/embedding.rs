@@ -124,7 +124,12 @@ impl AffineQuantizedEmbedding {
         tensors: AffineQuantizedTensors<'_>,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
-        let packed = self.config.input_features / (32 / self.config.bits);
+        let packed_bits = self
+            .config
+            .input_features
+            .checked_mul(self.config.bits)
+            .ok_or(Error::InvalidQuantizedGemv("affine packed width overflow"))?;
+        let packed = packed_bits / 32;
         let groups = self.config.input_features / self.config.group_size;
         validate(tensors.weight, &[self.config.output_features, packed], "U32")?;
         validate(tensors.scales, &[self.config.output_features, groups], "BF16")?;
@@ -151,13 +156,11 @@ impl AffineQuantizedEmbedding {
     }
 
     pub fn validate_token(&self, token: u32) -> Result<()> {
-        if usize::try_from(token)? < self.config.output_features {
+        let vocab = self.config.output_features;
+        if usize::try_from(token)? < vocab {
             Ok(())
         } else {
-            Err(Error::InvalidToken {
-                token,
-                vocab: self.config.output_features,
-            })
+            Err(Error::InvalidToken { token, vocab })
         }
     }
 }

@@ -40,5 +40,5 @@ fn slice_axis(
 
 fn dimension(value: usize, label: &str) -> Result<i32> {
     i32::try_from(value)
-        .map_err(|_| Error::InvalidModel(format!("pooled vision {label} exceeds i32")))
+        .map_or_else(|_| Err(Error::InvalidModel(format!("pooled vision {label} exceeds i32"))), Ok)
 }

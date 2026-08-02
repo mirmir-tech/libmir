@@ -1,35 +1,16 @@
 use mircuda::{
-    CompileOptions, Compiler, DeviceBuffer, KernelSignature, LaunchConfig, Stream, TypedKernel,
-    bf16, cuda_export, cuda_kernel_file,
+    Compiler, DeviceBuffer, KernelSignature, LaunchConfig, Stream, TypedKernel, bf16,
+    cuda_kernel_files,
 };
 
-use super::super::{
-    affine::AffineGemvSpec,
-    geometry::{narrow, product, require},
+use super::{
+    super::{
+        affine::{AffineGemvSpec, compile_options},
+        geometry::{narrow, product, require},
+    },
+    kernel::{SelectedGatedFallbackKernel, SelectedGatedInt4Kernel, SelectedGatedInt8Kernel},
 };
 use crate::{Error, Result};
-
-cuda_export!(
-    SelectedGatedInt4Kernel = "libmir_cuda_selected_affine_gated_bf16_int4"(
-        input: &DeviceBuffer<bf16>, selected: &DeviceBuffer<u32>,
-        gate_weight: &DeviceBuffer<u32>, gate_scales: &DeviceBuffer<bf16>,
-        gate_biases: &DeviceBuffer<bf16>, up_weight: &DeviceBuffer<u32>,
-        up_scales: &DeviceBuffer<bf16>, up_biases: &DeviceBuffer<bf16>,
-        output: &mut DeviceBuffer<bf16>, input_features: u32, output_features: u32,
-        group_size: u32, expert_count: u32, activation: u32,
-    )
-);
-
-cuda_export!(
-    SelectedGatedInt8Kernel = "libmir_cuda_selected_affine_gated_bf16_int8"(
-        input: &DeviceBuffer<bf16>, selected: &DeviceBuffer<u32>,
-        gate_weight: &DeviceBuffer<u32>, gate_scales: &DeviceBuffer<bf16>,
-        gate_biases: &DeviceBuffer<bf16>, up_weight: &DeviceBuffer<u32>,
-        up_scales: &DeviceBuffer<bf16>, up_biases: &DeviceBuffer<bf16>,
-        output: &mut DeviceBuffer<bf16>, input_features: u32, output_features: u32,
-        group_size: u32, expert_count: u32, activation: u32,
-    )
-);
 
 /// Gated MLP activation applied after separately rounded BF16 projections.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -111,16 +92,21 @@ pub struct SelectedAffineGated {
 enum GatedKernel {
     Int4(TypedKernel<SelectedGatedInt4Kernel>),
     Int8(TypedKernel<SelectedGatedInt8Kernel>),
+    Fallback(TypedKernel<SelectedGatedFallbackKernel>),
 }
 
 impl SelectedAffineGated {
     pub fn compile(compiler: &Compiler, spec: SelectedAffineGatedSpec) -> Result<Self> {
-        let source = cuda_kernel_file!("../../../kernels/selected_affine_gated_bf16.cu");
-        let module =
-            compiler.compile(source, &CompileOptions { fast_math: true, ..Default::default() })?;
+        let source = cuda_kernel_files!(
+            "selected_affine_gated_bf16.cu";
+            "../../../kernels/affine_packed.cuh",
+            "../../../kernels/selected_affine_gated_bf16.cu",
+        );
+        let module = compiler.compile(source, &compile_options(spec.matrix.bits, true))?;
         let kernel = match spec.matrix.bits {
             4 => GatedKernel::Int4(module.kernel()?),
             8 => GatedKernel::Int8(module.kernel()?),
+            2 | 3 | 5 | 6 => GatedKernel::Fallback(module.kernel()?),
             _ => return Err(Error::InvalidQuantizedGemv("unsupported weight precision")),
         };
         Ok(Self { kernel, spec })
@@ -152,6 +138,9 @@ impl SelectedAffineGated {
         match &self.kernel {
             GatedKernel::Int4(kernel) => launch_kernel(kernel, stream, config, launch, dimensions),
             GatedKernel::Int8(kernel) => launch_kernel(kernel, stream, config, launch, dimensions),
+            GatedKernel::Fallback(kernel) => {
+                launch_kernel(kernel, stream, config, launch, dimensions)
+            },
         }
     }
 

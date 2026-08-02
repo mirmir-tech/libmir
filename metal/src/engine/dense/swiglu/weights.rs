@@ -1,16 +1,14 @@
 use models::weights::DenseDecoderLayerBindings;
 
-use super::config::DenseSwiGluLayerConfig;
-use crate::engine::{
-    Array, ModelTensors, NormWeight, QuantizedLinear, Result, Stream, binding::affine_linear,
-};
+use super::{config::DenseSwiGluLayerConfig, projection::BoundLinear};
+use crate::engine::{Array, ModelTensors, NormWeight, Result, Stream};
 
 #[derive(Debug)]
 pub(super) struct AttentionWeights {
-    pub(super) query: QuantizedLinear,
-    pub(super) key: QuantizedLinear,
-    pub(super) value: QuantizedLinear,
-    pub(super) output: QuantizedLinear,
+    pub(super) query: BoundLinear,
+    pub(super) key: BoundLinear,
+    pub(super) value: BoundLinear,
+    pub(super) output: BoundLinear,
     pub(super) query_norm: Option<NormWeight>,
     pub(super) key_norm: Option<NormWeight>,
     pub(super) rope_frequencies: Option<Array>,
@@ -18,9 +16,9 @@ pub(super) struct AttentionWeights {
 
 #[derive(Debug)]
 pub(super) struct MlpWeights {
-    pub(super) gate: QuantizedLinear,
-    pub(super) up: QuantizedLinear,
-    pub(super) down: QuantizedLinear,
+    pub(super) gate: BoundLinear,
+    pub(super) up: BoundLinear,
+    pub(super) down: BoundLinear,
 }
 
 #[derive(Debug)]
@@ -50,18 +48,18 @@ impl DenseSwiGluWeights {
                 &bindings.post_attention_norm.source,
             )?,
             attention: AttentionWeights {
-                query: affine_linear(tensors, bindings.attention.query)?,
-                key: affine_linear(tensors, bindings.attention.key)?,
-                value: affine_linear(tensors, bindings.attention.value)?,
-                output: affine_linear(tensors, bindings.attention.output)?,
+                query: BoundLinear::load(tensors, bindings.attention.query, stream)?,
+                key: BoundLinear::load(tensors, bindings.attention.key, stream)?,
+                value: BoundLinear::load(tensors, bindings.attention.value, stream)?,
+                output: BoundLinear::load(tensors, bindings.attention.output, stream)?,
                 query_norm: norm(bindings.attention.query_norm)?,
                 key_norm: norm(bindings.attention.key_norm)?,
                 rope_frequencies: rope_frequencies(config, stream)?,
             },
             mlp: MlpWeights {
-                gate: affine_linear(tensors, bindings.gate)?,
-                up: affine_linear(tensors, bindings.up)?,
-                down: affine_linear(tensors, bindings.down)?,
+                gate: BoundLinear::load(tensors, bindings.gate, stream)?,
+                up: BoundLinear::load(tensors, bindings.up, stream)?,
+                down: BoundLinear::load(tensors, bindings.down, stream)?,
             },
         })
     }

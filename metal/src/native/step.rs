@@ -12,7 +12,6 @@ pub(super) struct DeferredToken {
 
 impl DeferredToken {
     pub(super) fn enqueue(&self) -> Result<()> {
-        self.sampled.async_eval()?;
         Ok(self.next_logits.async_eval()?)
     }
 
@@ -34,7 +33,7 @@ pub(super) fn forward_token(
     forward_ids(model, stream, state, &token_ids, position, greedy)
 }
 
-pub(super) fn forward_prefill(
+pub(super) fn forward_prefill_state(
     model: &DecoderModel,
     stream: &Stream,
     state: &mut SessionState,
@@ -44,7 +43,26 @@ pub(super) fn forward_prefill(
     let length = i32::try_from(tokens.len())?;
     let token_ids = Array::from_u32(tokens, &[1, length])?;
     let position = i32::try_from(position)?;
-    Ok(model.forward_prefill(&token_ids, &mut state.cache, position, stream)?)
+    Ok(model.forward_prefill_state(&token_ids, &mut state.cache, position, stream)?)
+}
+
+pub(super) fn forward_packed_prefill_state(
+    model: &DecoderModel,
+    stream: &Stream,
+    states: &mut [&mut SessionState],
+    positions: &[usize],
+    tokens: &[u32],
+    sequence: usize,
+) -> Result<Array> {
+    let batch = states.len();
+    let token_ids = Array::from_u32(tokens, &[i32::try_from(batch)?, i32::try_from(sequence)?])?;
+    let positions = positions
+        .iter()
+        .copied()
+        .map(i32::try_from)
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut caches = states.iter_mut().map(|state| &mut state.cache).collect::<Vec<_>>();
+    Ok(model.forward_packed_prefill_state(&token_ids, &mut caches, &positions, stream)?)
 }
 
 fn forward_ids(
@@ -75,7 +93,6 @@ pub(super) fn output(
     }
     let deferred = deferred_token(model, stream, state, &logits, sampling)?;
     deferred.enqueue()?;
-    stream.synchronize()?;
     let token_id = deferred.sampled.to_vec_u32_on_stream(stream)?;
     let token_id = *token_id
         .first()
@@ -93,6 +110,7 @@ fn deferred_token(
     let sampled = device_token(logits, sampling, stream)?.ok_or_else(|| {
         Error::InvalidDecodeBatch("batch row does not use device token sampling".into())
     })?;
+    sampled.async_eval()?;
     let next_logits = forward_ids(
         model,
         stream,

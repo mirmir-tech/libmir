@@ -78,22 +78,32 @@ impl PagedStore {
         self.release()
     }
 
-    pub(super) fn snapshot(&self) -> Result<Self> {
+    pub(super) fn snapshot_at(&self, tokens: usize) -> Result<Self> {
         let storage = self
             .storage
             .as_ref()
             .map(|storage| -> Result<Storage> {
+                let pages = tokens.div_ceil(self.page_size);
+                if pages > storage.page_ids.len() {
+                    return Err(Error::InvalidModel(
+                        "paged snapshot exceeds initialized storage".into(),
+                    ));
+                }
+                let page_ids = storage.page_ids[..pages].to_vec();
                 let mut arena = lock(&storage.arena)?;
-                for page in &storage.page_ids {
+                for page in &page_ids {
                     arena.references[usize::try_from(*page)?] += 1;
                 }
                 drop(arena);
                 Ok(Storage {
                     arena: Arc::clone(&storage.arena),
                     table: Array::from_native(storage.table.native().clone())?,
-                    page_ids: storage.page_ids.clone(),
+                    identity: page_ids
+                        .iter()
+                        .enumerate()
+                        .all(|(index, page)| usize::try_from(*page) == Ok(index)),
+                    page_ids,
                     table_capacity: storage.table_capacity,
-                    identity: storage.identity,
                 })
             })
             .transpose()?;
@@ -107,6 +117,11 @@ impl PagedStore {
             quantized_page_write: None,
             format: self.format,
         })
+    }
+
+    #[cfg(test)]
+    pub(super) fn page_count(&self) -> usize {
+        self.storage.as_ref().map_or(0, |storage| storage.page_ids.len())
     }
 
     pub(super) fn update(
@@ -196,6 +211,7 @@ impl PagedStore {
             scratch: Arc::clone(&self.attention_scratch),
             page_size: self.page_size,
             context_tokens: tokens,
+            fragmented: !storage.identity,
         })
     }
 

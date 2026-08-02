@@ -34,23 +34,27 @@ extern "C" __global__ void libmir_cuda_gated_bf16(
     activated = 0.5f * value *
         (1.0f + tanhf(0.7978845608f * (value + 0.044715f * cube)));
   }
-  output[index] = __float2bfloat16_rn(activated * __bfloat162float(up[index]));
+  const __nv_bfloat16 rounded = __float2bfloat16_rn(activated);
+  output[index] = __float2bfloat16_rn(
+      __bfloat162float(rounded) * __bfloat162float(up[index]));
 }
 
 extern "C" __global__ void libmir_cuda_packed_gated_bf16(
     const __nv_bfloat16* gate_input, const __nv_bfloat16* up_input,
     __nv_bfloat16* output, unsigned int columns, unsigned int elements,
-    unsigned int separate_inputs, unsigned int activation) {
+    unsigned int layout, unsigned int activation) {
   const unsigned int index = blockIdx.x * blockDim.x + threadIdx.x;
   if (index >= elements) return;
   const unsigned int row = index / columns;
   const unsigned int column = index % columns;
-  const unsigned int gate_index = separate_inputs != 0u
+  const unsigned int gate_index = layout == 1u
       ? row * columns + column
-      : row * columns * 2u + column;
-  const unsigned int up_index = separate_inputs != 0u
+      : layout == 2u
+          ? row * columns * 2u + column * 2u
+          : row * columns * 2u + column;
+  const unsigned int up_index = layout == 1u
       ? row * columns + column
-      : gate_index + columns;
+      : layout == 2u ? gate_index + 1u : gate_index + columns;
   const float value = __bfloat162float(gate_input[gate_index]);
   float activated;
   if (activation == 1u) {
@@ -60,8 +64,9 @@ extern "C" __global__ void libmir_cuda_packed_gated_bf16(
     activated = 0.5f * value *
         (1.0f + tanhf(0.7978845608f * (value + 0.044715f * cube)));
   }
+  const __nv_bfloat16 rounded = __float2bfloat16_rn(activated);
   output[index] = __float2bfloat16_rn(
-      activated * __bfloat162float(up_input[up_index]));
+      __bfloat162float(rounded) * __bfloat162float(up_input[up_index]));
 }
 
 extern "C" __global__ void libmir_cuda_weighted_reduce_bf16(

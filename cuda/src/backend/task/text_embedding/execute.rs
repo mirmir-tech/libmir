@@ -103,11 +103,11 @@ pub(super) fn rope(
 }
 
 pub(super) fn epsilon(config: &models::layout::DecoderConfig) -> Result<f32> {
-    config.rms_norm_eps.to_string().parse().map_err(Into::into)
+    Ok(config.rms_norm_eps.to_string().parse()?)
 }
 
 pub(super) fn theta(config: &models::layout::DecoderConfig) -> Result<f32> {
-    config.rope_theta.unwrap_or(10_000.0).to_string().parse().map_err(Into::into)
+    Ok(config.rope_theta.unwrap_or(10_000.0).to_string().parse()?)
 }
 
 pub(super) fn buffer(backend: &crate::CudaBackend, elements: usize) -> Result<DeviceBuffer<bf16>> {

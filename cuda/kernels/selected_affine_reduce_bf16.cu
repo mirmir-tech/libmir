@@ -80,3 +80,57 @@ __device__ __forceinline__ void libmir_cuda_selected_affine_reduce_bf16_impl(
 
 LIBMIR_CUDA_SELECTED_REDUCE(libmir_cuda_selected_affine_reduce_bf16_int4, 4, 16)
 LIBMIR_CUDA_SELECTED_REDUCE(libmir_cuda_selected_affine_reduce_bf16_int8, 8, 8)
+
+extern "C" __global__ void libmir_cuda_selected_affine_reduce_bf16_fallback(
+    const unsigned short* input, const unsigned int* selected,
+    const unsigned short* routing_weights, const unsigned int* weight,
+    const unsigned short* scales, const unsigned short* biases,
+    unsigned short* output, unsigned int input_features, unsigned int output_features,
+    unsigned int group_size, unsigned int expert_count, unsigned int selected_count) {
+  constexpr unsigned int bits = LIBMIR_AFFINE_BITS;
+  const unsigned int row = blockIdx.x * 8u + threadIdx.y;
+  const unsigned int token = blockIdx.y;
+  if (row >= output_features) return;
+  input += token * selected_count * input_features;
+  selected += token * selected_count;
+  routing_weights += token * selected_count;
+  output += token * output_features;
+  const unsigned int words_per_row =
+      libmir_cuda_affine_words<bits>(input_features);
+  const unsigned int groups_per_row = input_features / group_size;
+  float reduced = 0.0f;
+  for (unsigned int slot = 0; slot < selected_count; ++slot) {
+    const unsigned int expert = selected[slot];
+    float sum = 0.0f;
+    if (expert < expert_count) {
+      const unsigned int expert_row = expert * output_features + row;
+      const unsigned int* row_weight = weight + expert_row * words_per_row;
+      const unsigned int group_base = expert_row * groups_per_row;
+      const unsigned int input_slot = slot * input_features;
+      for (unsigned int feature = threadIdx.x;
+           feature < input_features;
+           feature += 32u) {
+        const unsigned int group = group_base + feature / group_size;
+        const float value =
+            libmir_cuda_reduce_bf16_to_float(input[input_slot + feature]);
+        const float quantized =
+            static_cast<float>(libmir_cuda_affine_unpack<bits>(row_weight, feature));
+        sum += value * (
+            libmir_cuda_reduce_bf16_to_float(scales[group]) * quantized +
+            libmir_cuda_reduce_bf16_to_float(biases[group]));
+      }
+    }
+    for (int offset = 16; offset > 0; offset >>= 1) {
+      sum += __shfl_down_sync(0xffffffffu, sum, offset);
+    }
+    if (threadIdx.x == 0 && expert < expert_count) {
+      const float projected =
+          libmir_cuda_reduce_bf16_to_float(libmir_cuda_reduce_float_to_bf16(sum));
+      reduced += projected *
+          libmir_cuda_reduce_bf16_to_float(routing_weights[slot]);
+    }
+  }
+  if (threadIdx.x == 0) {
+    output[row] = libmir_cuda_reduce_float_to_bf16(reduced);
+  }
+}

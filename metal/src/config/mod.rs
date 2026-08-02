@@ -6,6 +6,7 @@ mod fusion;
 pub use cache::MetalCacheConfig;
 pub use diagnostics::MetalDiagnosticsConfig;
 pub use fusion::{FeatureToggle, FusionMode, MetalFusionConfig};
+pub use runtime::tuning::{TuningConfig as MetalTuningConfig, TuningMode as MetalTuningMode};
 
 #[derive(Debug, Clone)]
 pub struct MetalConfig {
@@ -14,6 +15,7 @@ pub struct MetalConfig {
     pub diagnostics: MetalDiagnosticsConfig,
     pub fusion: MetalFusionConfig,
     pub kv_cache: runtime::kv::CacheConfig,
+    pub tuning: MetalTuningConfig,
 }
 
 impl Default for MetalConfig {
@@ -24,6 +26,7 @@ impl Default for MetalConfig {
             diagnostics: MetalDiagnosticsConfig::default(),
             fusion: MetalFusionConfig::default(),
             kv_cache: runtime::kv::CacheConfig::new(4_096),
+            tuning: MetalTuningConfig::default(),
         }
     }
 }

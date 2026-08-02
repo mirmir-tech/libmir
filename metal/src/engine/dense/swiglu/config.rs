@@ -12,11 +12,10 @@ pub(super) struct DenseSwiGluLayerConfig {
     pub(super) rope_scaling: Option<RopeScaling>,
     pub(super) rope_attention_factor: f32,
     pub(super) rms_norm_eps: f32,
-    pub(super) group_size: i32,
 }
 
 impl DenseSwiGluLayerConfig {
-    pub(super) fn from_decoder(decoder: &DecoderConfig, group_size: usize) -> Result<Self> {
+    pub(super) fn from_decoder(decoder: &DecoderConfig) -> Result<Self> {
         if decoder.num_experts.is_some() {
             return Err(Error::InvalidModel("dense SwiGLU path does not support MoE".into()));
         }
@@ -45,25 +44,18 @@ impl DenseSwiGluLayerConfig {
                 .and_then(RopeScaling::yarn)
                 .map_or(Ok(1.0), |values| values.4.to_string().parse())?,
             rms_norm_eps: decoder.rms_norm_eps.to_string().parse()?,
-            group_size: i32::try_from(group_size)?,
         };
-        config.validate(decoder.hidden_size)?;
+        config.validate()?;
         Ok(config)
     }
 
-    fn validate(self, hidden_size: usize) -> Result<()> {
-        if [self.heads, self.kv_heads, self.head_dim, self.group_size]
+    fn validate(self) -> Result<()> {
+        if [self.heads, self.kv_heads, self.head_dim]
             .into_iter()
             .any(|dimension| dimension <= 0)
         {
             return Err(Error::InvalidModel(format!(
                 "non-positive dense SwiGLU dimensions: {self:?}"
-            )));
-        }
-        let attention_width = i64::from(self.heads) * i64::from(self.head_dim);
-        if attention_width != i64::try_from(hidden_size)? {
-            return Err(Error::InvalidModel(format!(
-                "dense SwiGLU attention width {attention_width} does not match hidden size {hidden_size}"
             )));
         }
         if !self.rope_base.is_finite()

@@ -1,0 +1,36 @@
+# southfreebird/Qwen2.5-0.5B-Instruct-FP8
+# source revision ab05f7643cc3f73ce1983dfe8ab216c01b34bb25
+# oracle: vLLM 0.25.1, compressed-tensors static FP8, greedy eager execution
+schema = 2
+family = "dense"
+model_type = "qwen2"
+dtypes = ["BF16"]
+vocab_size = 152064
+context_len = 65536
+kv_cache_blocks = 128
+prompt_tokens = [785]
+generated_tokens = [2701, 374, 264, 3175, 62626, 3405, 504, 264, 8453, 14667, 7006, 13, 5209, 3293, 279, 4396]
+
+[float8]
+format = "F8_E4M3"
+scale_mode = "multiplier"
+scale_granularity = "tensor"
+scale_dtype = "BF16"
+activation_scale = "static_tensor"
+input_scale_dtype = "BF16"
+
+[tokenizer]
+vocabulary_entries = 151665
+max_token_id = 151664
+added_tokens = 22
+stop_token_ids = [151645, 151643, 128247]
+
+[first_logits]
+token_ids = [2701, 220, 330, 472, 364, 729, 1550, 3491]
+scores = [-1.5401628, -3.1651628, -3.7901628, -4.727663, -4.727663, -4.790163, -4.915163, -5.040163]
+absolute_tolerance = 0.5
+normalized = true
+
+[cuda]
+max_load_active_bytes = 850000000
+max_decode_active_bytes = 850000000

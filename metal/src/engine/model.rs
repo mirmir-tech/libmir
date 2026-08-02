@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use models::layout::ModelLayout;
+use models::{layout::ModelLayout, weights::alternate_model_tensor_name};
 
 use super::{Array, Error, Result, Stream, TensorFile};
 
@@ -70,15 +70,24 @@ impl ModelTensors {
     }
 
     pub fn get(&self, name: &str) -> Result<Array> {
-        for file in &self.files {
-            if file.contains(name)? {
-                return file.get(name);
-            }
+        if let Some(tensor) = self.get_exact(name)? {
+            return Ok(tensor);
+        }
+        let alternate = alternate_model_tensor_name(name);
+        if let Some(tensor) = self.get_exact(&alternate)? {
+            return Ok(tensor);
         }
         Err(Error::MissingTensor(name.to_owned()))
     }
 
     pub fn get_optional(&self, name: &str) -> Result<Option<Array>> {
+        if let Some(tensor) = self.get_exact(name)? {
+            return Ok(Some(tensor));
+        }
+        self.get_exact(&alternate_model_tensor_name(name))
+    }
+
+    fn get_exact(&self, name: &str) -> Result<Option<Array>> {
         for file in &self.files {
             if file.contains(name)? {
                 return file.get(name).map(Some);
@@ -88,6 +97,13 @@ impl ModelTensors {
     }
 
     pub fn contains(&self, name: &str) -> Result<bool> {
+        Ok(
+            self.contains_exact(name)?
+                || self.contains_exact(&alternate_model_tensor_name(name))?,
+        )
+    }
+
+    fn contains_exact(&self, name: &str) -> Result<bool> {
         for file in &self.files {
             if file.contains(name)? {
                 return Ok(true);

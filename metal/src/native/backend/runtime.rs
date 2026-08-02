@@ -29,6 +29,7 @@ impl Backend for MetalBackend {
                 BackendCapability::Embeddings,
                 BackendCapability::SequenceScoring,
                 BackendCapability::Quantization("int4 affine weights".into()),
+                BackendCapability::Quantization("bitsandbytes NF4/FP4".into()),
             ],
         }
     }

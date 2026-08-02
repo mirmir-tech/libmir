@@ -1,0 +1,21 @@
+schema = 1
+
+[[fixtures]]
+family = "dense"
+model_env = "MIRMIR_DENSE_MODEL"
+reference_env = "MIRMIR_DENSE_REFERENCE"
+
+[[fixtures]]
+family = "dense_and_routed"
+model_env = "MIRMIR_DENSE_AND_ROUTED_MODEL"
+reference_env = "MIRMIR_DENSE_AND_ROUTED_REFERENCE"
+
+[[fixtures]]
+family = "shared_routed"
+model_env = "MIRMIR_SHARED_ROUTED_DENSE_MODEL"
+reference_env = "MIRMIR_SHARED_ROUTED_DENSE_REFERENCE"
+
+[[fixtures]]
+family = "clamped_routed"
+model_env = "MIRMIR_CLAMPED_ROUTED_DENSE_MODEL"
+reference_env = "MIRMIR_CLAMPED_ROUTED_DENSE_REFERENCE"

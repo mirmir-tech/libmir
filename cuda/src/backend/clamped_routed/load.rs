@@ -13,6 +13,7 @@ use super::{
 use crate::{CudaBackend, CudaTensorSet, Error, Result};
 
 impl CudaBackend {
+    #[allow(clippy::too_many_arguments)]
     pub fn load_clamped_routed_model_template_with_progress(
         &self,
         decoder: &DecoderConfig,
@@ -20,6 +21,7 @@ impl CudaBackend {
         catalog: &TensorCatalog,
         cache: CacheConfig,
         max_sequence_blocks: usize,
+        ring_sessions: usize,
         progress: &mut dyn FnMut(u64, String),
     ) -> Result<CudaClampedRoutedModelTemplate> {
         let semantic = &contract.semantic;
@@ -32,11 +34,14 @@ impl CudaBackend {
         let config = ClampedRoutedConfig::from_semantic(semantic)?;
         let layout = ClampedRoutedLayout::discover(bindings)?;
         let capabilities = ClampedRoutedCapabilityPlan::lower(config, layout, cache.dtype)?;
+        if ring_sessions == 0 {
+            return Err(Error::InvalidPagedKv("windowed KV session capacity is empty"));
+        }
         let boundary_bindings = bindings.decoder_boundary()?;
         let boundary_names = owned_names(boundary_bindings.physical_sources());
         let boundary = upload_names(self, catalog, &boundary_names)?;
         let (embedding, final_norm, output) =
-            weights::boundary(layout, &boundary, boundary_bindings, config)?;
+            weights::boundary(self, layout, &boundary, boundary_bindings, config)?;
         let mut completed = bytes_for_names(catalog, &boundary_names)?;
         progress(completed, "clamped-routed model boundary tensors".into());
         let mut layers = Vec::with_capacity(decoder.num_hidden_layers);
@@ -80,6 +85,7 @@ impl CudaBackend {
             config,
             cache,
             max_sequence_blocks,
+            ring_sessions,
         })
     }
 }
@@ -89,9 +95,10 @@ fn upload_names(
     catalog: &TensorCatalog,
     names: &[String],
 ) -> Result<CudaTensorSet> {
+    let cast = backend.prepare_dense_cast()?;
     let mut upload = backend.begin_tensor_upload();
     for name in names {
-        upload.enqueue(required_any(catalog, &[name])?)?;
+        upload.enqueue_float_as_bf16(required_any(catalog, &[name])?, &cast)?;
     }
     upload.finish()
 }

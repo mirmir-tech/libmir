@@ -108,3 +108,42 @@ extern "C" __global__ void libmir_cuda_affine_gemv_bf16_int8(
       group_size,
       matrix_index);
 }
+
+extern "C" __global__ void libmir_cuda_affine_gemv_bf16_fallback(
+    const unsigned short* input,
+    const unsigned int* weight,
+    const unsigned short* scales,
+    const unsigned short* biases,
+    unsigned short* output,
+    unsigned int input_features,
+    unsigned int output_features,
+    unsigned int group_size,
+    unsigned int matrix_index) {
+  const unsigned int row = blockIdx.x * blockDim.y + threadIdx.y;
+  if (row >= output_features) {
+    return;
+  }
+  constexpr unsigned int bits = LIBMIR_AFFINE_BITS;
+  const unsigned int words_per_row =
+      libmir_cuda_affine_words<bits>(input_features);
+  const unsigned int groups_per_row = input_features / group_size;
+  const unsigned int matrix_row = matrix_index * output_features + row;
+  const unsigned int* row_weight = weight + matrix_row * words_per_row;
+  const unsigned int group_base = matrix_row * groups_per_row;
+  float sum = 0.0f;
+  for (unsigned int feature = threadIdx.x; feature < input_features; feature += 32u) {
+    const unsigned int group = group_base + feature / group_size;
+    const float scale = libmir_cuda_bf16_to_float(scales[group]);
+    const float bias = libmir_cuda_bf16_to_float(biases[group]);
+    const float quantized =
+        static_cast<float>(libmir_cuda_affine_unpack<bits>(row_weight, feature));
+    sum += libmir_cuda_bf16_to_float(input[feature]) *
+        (scale * quantized + bias);
+  }
+  for (int offset = 16; offset > 0; offset >>= 1) {
+    sum += __shfl_down_sync(0xffffffffu, sum, offset);
+  }
+  if (threadIdx.x == 0) {
+    output[row] = libmir_cuda_float_to_bf16(sum);
+  }
+}

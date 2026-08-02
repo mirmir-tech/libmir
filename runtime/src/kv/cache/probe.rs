@@ -3,33 +3,41 @@ use crate::kv::{BlockHash, KvCache, PrefixProbe};
 impl KvCache {
     #[must_use]
     pub fn probe_prefix(&self, model: &str, tokens: &[u32]) -> PrefixProbe {
-        self.probe_prefix_inner(model, tokens)
+        self.probe_prefix_inner(model, tokens).0
     }
 
     pub(crate) fn probe_prefix_recorded(&mut self, model: &str, tokens: &[u32]) -> PrefixProbe {
-        let probe = self.probe_prefix_inner(model, tokens);
+        let (probe, hashes) = self.probe_prefix_inner(model, tokens);
+        for hash in hashes {
+            self.prefix.touch(hash);
+        }
         self.counters.record_prefix_probe(probe.cached_tokens, probe.missing_tokens);
         probe
     }
 
-    fn probe_prefix_inner(&self, model: &str, tokens: &[u32]) -> PrefixProbe {
+    fn probe_prefix_inner(&self, model: &str, tokens: &[u32]) -> (PrefixProbe, Vec<BlockHash>) {
         let mut cached_blocks = Vec::new();
+        let mut hashes = Vec::new();
         let mut cached_tokens = 0;
         let mut parent = None;
         for chunk in tokens.chunks(self.config.block_size) {
             let hash = BlockHash::from_tokens(model, parent, chunk);
-            let Some(block) = self.prefix.get(hash) else {
+            let Some(block) = self.prefix.peek(hash) else {
                 break;
             };
             cached_blocks.push(block);
+            hashes.push(hash);
             cached_tokens += chunk.len();
             parent = Some(hash);
         }
-        PrefixProbe {
-            cached_blocks,
-            cached_tokens,
-            missing_tokens: tokens.len().saturating_sub(cached_tokens),
-            last_hash: parent,
-        }
+        (
+            PrefixProbe {
+                cached_blocks,
+                cached_tokens,
+                missing_tokens: tokens.len().saturating_sub(cached_tokens),
+                last_hash: parent,
+            },
+            hashes,
+        )
     }
 }

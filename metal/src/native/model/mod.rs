@@ -23,8 +23,10 @@ use crate::engine::{
 mod batch;
 #[allow(clippy::self_named_module_files)]
 mod load;
+mod memory;
 
 pub(super) use batch::DecodeInput;
+pub(super) use memory::cache_prefix_snapshot;
 
 pub(super) const KV_CACHE_STEP: usize = 256;
 const PREFILL_STEP: usize = 512;
@@ -128,8 +130,10 @@ impl LoadedModel {
         self.sessions.values().map(|state| state.position).sum()
     }
 
-    pub(super) fn release_session(&mut self, session: Uuid) {
+    pub(super) fn release_session(&mut self, session: Uuid) -> Result<()> {
         let _removed = self.sessions.remove(&session);
+        let _reclaimed = Self::reclaim_prefill_allocator_cache()?;
+        Ok(())
     }
 
     pub(super) const fn prefix_cache_enabled(&self) -> bool {
@@ -138,6 +142,14 @@ impl LoadedModel {
 
     pub(super) const fn prefix_cache_capacity(&self) -> usize {
         self.prefixes.capacity()
+    }
+
+    pub(super) const fn prefix_cache_byte_capacity(&self) -> usize {
+        self.prefixes.byte_capacity()
+    }
+
+    pub(super) fn prefix_cache_resident_bytes(&self) -> usize {
+        self.prefixes.resident_bytes()
     }
 
     pub(super) fn clear_prefix_cache(&mut self) {

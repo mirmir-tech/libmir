@@ -27,12 +27,27 @@ pub(super) fn ensure(
     let storage = store.storage.as_mut().ok_or(Error::NullHandle("paged storage"))?;
     let arena_handle = Arc::clone(&storage.arena);
     let mut arena = lock(&arena_handle)?;
+    let first = offset / store.page_size;
+    let last = (offset + sequence - 1) / store.page_size;
+    let existing = storage.page_ids.len();
+    let shared = (first..=last.min(existing.saturating_sub(1)))
+        .filter(|logical| {
+            storage
+                .page_ids
+                .get(*logical)
+                .and_then(|page| usize::try_from(*page).ok())
+                .is_some_and(|page| arena.references[page] > 1)
+        })
+        .count();
+    let free = arena.references.iter().filter(|count| **count == 0).count();
+    let additional = needed.saturating_sub(existing).saturating_add(shared);
+    let required = arena.capacity.saturating_add(additional.saturating_sub(free));
+    ensure_capacity(&mut arena, required.max(store.reserve_pages), store.allocation_step, stream)?;
     if needed > storage.table_capacity {
         storage.table_capacity = round(needed + store.allocation_step, store.allocation_step);
         storage.table = page_table(&storage.page_ids, storage.table_capacity)?;
     }
     while storage.page_ids.len() < needed {
-        ensure_free(&mut arena, store.allocation_step, stream)?;
         let logical = storage.page_ids.len();
         let physical = allocate(&mut arena)?;
         storage.page_ids.push(physical);
@@ -40,14 +55,11 @@ pub(super) fn ensure(
             map(storage, logical, physical, stream)?;
         }
     }
-    let first = offset / store.page_size;
-    let last = (offset + sequence - 1) / store.page_size;
     for logical in first..=last {
         let source = usize::try_from(storage.page_ids[logical])?;
         if arena.references[source] == 1 {
             continue;
         }
-        ensure_free(&mut arena, store.allocation_step, stream)?;
         let target = allocate(&mut arena)?;
         copy_page(&mut arena, source, usize::try_from(target)?, stream)?;
         arena.references[source] -= 1;
@@ -96,11 +108,11 @@ fn create(store: &PagedStore, keys: &Array, needed: usize, stream: &Stream) -> R
     })
 }
 
-fn ensure_free(arena: &mut Arena, step: usize, stream: &Stream) -> Result<()> {
-    if arena.references.contains(&0) {
+fn ensure_capacity(arena: &mut Arena, required: usize, step: usize, stream: &Stream) -> Result<()> {
+    if required <= arena.capacity {
         return Ok(());
     }
-    let capacity = (arena.capacity * 2).max(arena.capacity + step);
+    let capacity = round(required, step);
     let shape = mirtal::Shape::new([
         arena.kv_heads,
         capacity - arena.capacity,

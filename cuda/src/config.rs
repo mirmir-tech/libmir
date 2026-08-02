@@ -1,7 +1,7 @@
 /// Explicit CUDA runtime and planning policy.
 use std::path::PathBuf;
 
-use crate::backend::{CudaModelSessionConfig, CudaPlanningPolicy};
+use crate::backend::{CudaModelSessionConfig, CudaPlanningPolicy, CudaTuningConfig};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CudaConfig {
@@ -15,6 +15,8 @@ pub struct CudaConfig {
     pub nvrtc_cache_directory: Option<PathBuf>,
     /// Explicit model-level execution planning policy.
     pub planning: CudaPlanningPolicy,
+    /// Persistent, shape-keyed CUDA startup tuning policy.
+    pub tuning: CudaTuningConfig,
     /// Session-local prompt allocation policy.
     pub model_session: CudaModelSessionConfig,
 }
@@ -30,6 +32,7 @@ impl Default for CudaConfig {
             ],
             nvrtc_cache_directory: None,
             planning: CudaPlanningPolicy::default(),
+            tuning: CudaTuningConfig::default(),
             model_session: CudaModelSessionConfig::default(),
         }
     }

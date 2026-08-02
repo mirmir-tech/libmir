@@ -113,7 +113,6 @@ mod tests {
             ),
         };
         let prompt = template.render(&request("Hello"))?;
-
         assert_eq!(prompt.text, "<s>user: Hello");
         assert!(!prompt.add_special_tokens);
         Ok(())
@@ -128,7 +127,6 @@ mod tests {
             template: None,
         };
         let prompt = template.render(&request("ping"))?;
-
         assert_eq!(prompt.text, "user: ping");
         assert!(prompt.add_special_tokens);
         Ok(())
@@ -240,6 +238,8 @@ mod tests {
             tool_choice: None,
             stream: false,
             max_tokens: None,
+            min_tokens: None,
+            ignore_eos: None,
             temperature: None,
             top_p: None,
             top_k: None,

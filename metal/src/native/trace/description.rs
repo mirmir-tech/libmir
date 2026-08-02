@@ -131,11 +131,16 @@ fn mlp_layout(lowering: &DecoderLowering) -> &'static str {
 
 fn has_bias(binding: &models::weights::TensorBinding) -> bool {
     match &binding.storage {
-        TensorStorage::Dense { bias, .. } | TensorStorage::BlockQuantized { bias, .. } => {
-            bias.is_some()
-        },
+        TensorStorage::Dense { bias, .. }
+        | TensorStorage::Float8 { bias, .. }
+        | TensorStorage::BlockQuantized { bias, .. } => bias.is_some(),
         TensorStorage::AffineQuantized { output_bias, .. } => output_bias.is_some(),
-        TensorStorage::PackedInt8 { .. } | TensorStorage::Auxiliary { .. } => false,
+        TensorStorage::PackedInt8 { .. }
+        | TensorStorage::PackedInt4 { .. }
+        | TensorStorage::Awq { .. }
+        | TensorStorage::Gptq { .. }
+        | TensorStorage::BitsAndBytes4Bit { .. }
+        | TensorStorage::Auxiliary { .. } => false,
     }
 }
 

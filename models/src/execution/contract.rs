@@ -18,7 +18,7 @@ impl DecoderExecutionContract {
         catalog: &TensorCatalog,
     ) -> Result<Self> {
         let semantic = SemanticModelSpec::from_layout(layout, decoder, catalog)?;
-        let bindings = WeightBindingPlan::discover(&semantic, catalog)?;
+        let bindings = WeightBindingPlan::discover_from_layout(&semantic, catalog, layout)?;
         Ok(Self { semantic, bindings })
     }
 }

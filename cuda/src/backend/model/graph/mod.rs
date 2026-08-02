@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use super::layer::{LayerPrefill, PreparedLayer, SessionLayer};
 use crate::{
-    Error, Result,
+    Error, PagedPrefillBatch, Result,
     backend::attention::graph::{Configs, Dynamic, Kernels, Nodes},
 };
 
@@ -131,6 +131,19 @@ impl CapturedModelDecode {
             resources.layers[index].execute_prefill_masked(
                 prefill, input, write_plan, table, start_position, output, image,
             )
+        })
+    }
+
+    pub(super) fn execute_prefill_batch(
+        &mut self,
+        index: usize,
+        prefill: LayerPrefill<'_>,
+        input: &DeviceBuffer<bf16>,
+        batch: &PagedPrefillBatch,
+        output: &mut DeviceBuffer<bf16>,
+    ) -> Result<()> {
+        self.graph.with_resources_mut(|resources| {
+            resources.layers[index].execute_prefill_batch(prefill, input, batch, output)
         })
     }
 }

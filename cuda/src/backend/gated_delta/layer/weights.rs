@@ -1,13 +1,16 @@
 use super::AffineGatedDeltaLayerConfig;
-use crate::{AffineQuantizedWeight, CudaTensor, CudaTensorDType, CudaTensorSet, Error, Result};
+use crate::{
+    AffineQuantizedWeight, CudaTensor, CudaTensorDType, CudaTensorSet, Error, Result,
+    backend::linear::CheckpointProjectionWeight,
+};
 
 #[derive(Clone, Debug)]
 pub struct AffineGatedDeltaLayerWeights {
-    pub qkv: AffineQuantizedWeight,
-    pub gate: AffineQuantizedWeight,
-    pub alpha: AffineQuantizedWeight,
-    pub beta: AffineQuantizedWeight,
-    pub output: AffineQuantizedWeight,
+    pub(in crate::backend) qkv: CheckpointProjectionWeight,
+    pub(in crate::backend) gate: CheckpointProjectionWeight,
+    pub(in crate::backend) alpha: CheckpointProjectionWeight,
+    pub(in crate::backend) beta: CheckpointProjectionWeight,
+    pub(in crate::backend) output: CheckpointProjectionWeight,
     pub convolution: CudaTensor,
     pub norm: CudaTensor,
     pub a_log: CudaTensor,
@@ -17,11 +20,11 @@ pub struct AffineGatedDeltaLayerWeights {
 impl AffineGatedDeltaLayerWeights {
     pub fn load(tensors: &CudaTensorSet, prefix: &str) -> Result<Self> {
         Ok(Self {
-            qkv: AffineQuantizedWeight::load(tensors, &format!("{prefix}.in_proj_qkv"))?,
-            gate: AffineQuantizedWeight::load(tensors, &format!("{prefix}.in_proj_z"))?,
-            alpha: AffineQuantizedWeight::load(tensors, &format!("{prefix}.in_proj_a"))?,
-            beta: AffineQuantizedWeight::load(tensors, &format!("{prefix}.in_proj_b"))?,
-            output: AffineQuantizedWeight::load(tensors, &format!("{prefix}.out_proj"))?,
+            qkv: affine(tensors, &format!("{prefix}.in_proj_qkv"))?,
+            gate: affine(tensors, &format!("{prefix}.in_proj_z"))?,
+            alpha: affine(tensors, &format!("{prefix}.in_proj_a"))?,
+            beta: affine(tensors, &format!("{prefix}.in_proj_b"))?,
+            output: affine(tensors, &format!("{prefix}.out_proj"))?,
             convolution: required(tensors, &format!("{prefix}.conv1d.weight"))?,
             norm: required(tensors, &format!("{prefix}.norm.weight"))?,
             a_log: required(tensors, &format!("{prefix}.A_log"))?,
@@ -34,11 +37,11 @@ impl AffineGatedDeltaLayerWeights {
         bindings: LinearAttentionBindings<'_>,
     ) -> Result<Self> {
         Ok(Self {
-            qkv: AffineQuantizedWeight::load_binding(tensors, bindings.qkv)?,
-            gate: AffineQuantizedWeight::load_binding(tensors, bindings.gate)?,
-            alpha: AffineQuantizedWeight::load_binding(tensors, bindings.alpha)?,
-            beta: AffineQuantizedWeight::load_binding(tensors, bindings.beta)?,
-            output: AffineQuantizedWeight::load_binding(tensors, bindings.output)?,
+            qkv: CheckpointProjectionWeight::load_binding(tensors, bindings.qkv)?,
+            gate: CheckpointProjectionWeight::load_binding(tensors, bindings.gate)?,
+            alpha: CheckpointProjectionWeight::load_binding(tensors, bindings.alpha)?,
+            beta: CheckpointProjectionWeight::load_binding(tensors, bindings.beta)?,
+            output: CheckpointProjectionWeight::load_binding(tensors, bindings.output)?,
             convolution: required(tensors, &bindings.convolution.source)?,
             norm: required(tensors, &bindings.norm.source)?,
             a_log: required(tensors, &bindings.decay_log.source)?,
@@ -49,7 +52,7 @@ impl AffineGatedDeltaLayerWeights {
     pub(super) fn validate(&self, config: AffineGatedDeltaLayerConfig) -> Result<()> {
         let mixed = config.mixed_width()?;
         let value = config.value_width()?;
-        let projection = |weights: &AffineQuantizedWeight, input, output| {
+        let projection = |weights: &CheckpointProjectionWeight, input, output| {
             weights.validate(1, input, output, config.group_size, config.bits)
         };
         projection(&self.qkv, config.hidden_size, mixed)?;
@@ -57,7 +60,7 @@ impl AffineGatedDeltaLayerWeights {
         projection(&self.alpha, config.hidden_size, config.value_heads)?;
         projection(&self.beta, config.hidden_size, config.value_heads)?;
         projection(&self.output, value, config.hidden_size)?;
-        shape(&self.convolution, &[mixed, config.convolution_kernel_size, 1])?;
+        convolution_shape(&self.convolution, mixed, config.convolution_kernel_size)?;
         shape(&self.norm, &[config.value_dim])?;
         shape(&self.a_log, &[config.value_heads])?;
         shape(&self.dt_bias, &[config.value_heads])?;
@@ -66,6 +69,23 @@ impl AffineGatedDeltaLayerWeights {
         }
         Ok(())
     }
+}
+
+fn affine(tensors: &CudaTensorSet, name: &str) -> Result<CheckpointProjectionWeight> {
+    AffineQuantizedWeight::load(tensors, name).map(CheckpointProjectionWeight::Affine)
+}
+
+fn convolution_shape(tensor: &CudaTensor, channels: usize, kernel: usize) -> Result<()> {
+    if matches!(tensor.shape(), [c, k, 1] if *c == channels && *k == kernel)
+        || matches!(tensor.shape(), [c, 1, k] if *c == channels && *k == kernel)
+    {
+        return Ok(());
+    }
+    Err(Error::InvalidQuantizedTensor {
+        name: tensor.name().into(),
+        expected: vec![channels, kernel, 1],
+        actual: tensor.shape().to_vec(),
+    })
 }
 
 fn required(tensors: &CudaTensorSet, name: &str) -> Result<CudaTensor> {

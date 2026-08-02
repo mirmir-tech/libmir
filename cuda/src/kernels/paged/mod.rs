@@ -8,14 +8,20 @@ use super::geometry::product;
 use crate::{Error, Result};
 
 mod batch;
+mod gather;
 mod graph;
 mod prefill;
+mod prefill_batch;
 mod split;
 #[cfg(test)]
 mod tests;
 
-pub use batch::BatchedPagedAttention;
+pub use batch::{
+    BatchedPagedAttention, BatchedSplitAttentionWorkspace, BatchedSplitPagedAttention,
+};
+pub use gather::{BatchedPagedKvGather, PagedKvGather};
 pub use prefill::PagedPrefillAttention;
+pub use prefill_batch::BatchedPagedPrefillAttention;
 pub use split::{
     MergeAttentionArguments, SplitAttentionArguments, SplitAttentionConfigs, SplitAttentionKernels,
     SplitAttentionNodes, SplitAttentionWorkspace, SplitPagedAttention,
@@ -36,6 +42,15 @@ cuda_export!(
         key_pages: &mut DeviceBuffer<u8>, value_pages: &mut DeviceBuffer<u8>,
         block_tables: &DeviceBuffer<u32>, token_counts: &DeviceBuffer<u32>,
         batch_size: u32, max_blocks: u32, block_size: u32, kv_heads: u32,
+        key_head_dim: u32, value_head_dim: u32,
+    )
+);
+
+cuda_export!(
+    pub(crate) PrefillBatchKvStoreKernel = "libmir_cuda_store_paged_kv_prefill_batch_bf16"(
+        keys: &DeviceBuffer<bf16>, values: &DeviceBuffer<bf16>,
+        key_pages: &mut DeviceBuffer<u8>, value_pages: &mut DeviceBuffer<u8>,
+        slot_mapping: &DeviceBuffer<u32>, token_count: u32, kv_heads: u32,
         key_head_dim: u32, value_head_dim: u32,
     )
 );
@@ -76,6 +91,7 @@ pub struct PagedAttentionSpec {
 pub struct PagedKvStore {
     kernel: TypedKernel<KvStoreKernel>,
     batch_kernel: TypedKernel<BatchKvStoreKernel>,
+    prefill_batch_kernel: TypedKernel<PrefillBatchKvStoreKernel>,
     spec: PagedKvSpec,
 }
 
@@ -93,6 +109,7 @@ impl PagedKvStore {
         Ok(Self {
             kernel: module.kernel()?,
             batch_kernel: module.kernel()?,
+            prefill_batch_kernel: module.kernel()?,
             spec,
         })
     }
@@ -170,7 +187,7 @@ fn page_bytes(spec: PagedKvSpec, head_dim: usize) -> Result<usize> {
     Ok(elements * usize::from(element_bytes(spec.dtype)?))
 }
 
-fn compile_options(dtype: KvCacheDType) -> Result<CompileOptions> {
+pub fn compile_options(dtype: KvCacheDType) -> Result<CompileOptions> {
     match dtype {
         KvCacheDType::Auto | KvCacheDType::BFloat16 => Ok(CompileOptions::default()),
         KvCacheDType::Fp8 | KvCacheDType::Fp8E4M3 => Ok(CompileOptions {

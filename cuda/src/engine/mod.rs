@@ -3,6 +3,7 @@ mod batch;
 mod execution;
 pub mod lowering;
 mod model;
+mod profile;
 mod runner;
 mod runtime;
 mod trace;
@@ -11,13 +12,17 @@ mod vision;
 use std::{
     collections::HashMap,
     fmt,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{
+        Arc, Mutex, MutexGuard,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use ::runtime::{kv::CacheConfig, scheduler::SchedulerConfig};
+pub use execution::{CudaGenerationStepOutput, CudaPrefillBatch};
 
 use self::model::LoadedModel;
-use crate::{CudaBackend, CudaConfig, Error, Result};
+use crate::{CudaBackend, CudaConfig, Error, Result, backend::ProfilerCapture};
 
 #[derive(Clone)]
 pub struct CudaEngine {
@@ -26,6 +31,8 @@ pub struct CudaEngine {
     session_config: crate::CudaModelSessionConfig,
     scheduler: SchedulerConfig,
     models: Arc<Mutex<HashMap<String, Arc<LoadedModel>>>>,
+    profile_decode: Arc<AtomicBool>,
+    profiler_capture: Arc<Mutex<Option<ProfilerCapture>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -55,7 +62,30 @@ impl CudaEngine {
             session_config,
             scheduler,
             models: Arc::new(Mutex::new(HashMap::new())),
+            profile_decode: Arc::default(),
+            profiler_capture: Arc::default(),
         })
+    }
+
+    pub fn set_profile_decode(&self, enabled: bool) -> Result<()> {
+        let Ok(mut capture) = self.profiler_capture.lock() else {
+            return Err(Error::State("CUDA profiler capture lock is poisoned".into()));
+        };
+        if enabled {
+            if capture.is_none() {
+                *capture = Some(self.backend.start_profiler_capture()?);
+            }
+            self.profile_decode.store(true, Ordering::Relaxed);
+            return Ok(());
+        }
+        self.profile_decode.store(false, Ordering::Relaxed);
+        let active = capture.take();
+        drop(capture);
+        active.map_or(Ok(()), ProfilerCapture::stop)
+    }
+
+    fn profile_decode(&self) -> bool {
+        self.profile_decode.load(Ordering::Relaxed)
     }
 
     fn model(&self, id: &str) -> Result<Arc<LoadedModel>> {
@@ -76,6 +106,12 @@ impl CudaEngine {
         self.model(model_id)?.clear_sessions()
     }
 
+    #[must_use]
+    /// Returns the prompt tokens processed by one CUDA prefill graph.
+    pub fn prefill_chunk_tokens(&self) -> usize {
+        self.session_config.prefill_chunk_tokens
+    }
+
     pub fn release_session(&self, model_id: &str, session: uuid::Uuid) -> Result<()> {
         self.model(model_id)?.release_session(session)
     }
@@ -91,6 +127,10 @@ impl CudaEngine {
         self.backend.trim_memory_pool(0)
     }
 
+    pub fn finish_startup_tuning(&self) {
+        self.backend.finish_startup_tuning();
+    }
+
     pub fn memory_stats(&self) -> Result<CudaMemoryStats> {
         let pool = self.backend.memory_pool_stats()?;
         let (available, total) = self.backend.memory_info()?;
@@ -103,6 +143,12 @@ impl CudaEngine {
             device: device.name.clone(),
             integrated: device.integrated,
         })
+    }
+
+    /// Returns immutable properties of the CUDA device selected by this engine.
+    #[must_use]
+    pub fn device_info(&self) -> &mircuda::DeviceInfo {
+        self.backend.device_info()
     }
 
     pub fn embed_tokens(

@@ -207,7 +207,7 @@ impl QkvPostprocess {
             .ok_or(Error::InvalidDecoderKernel("QKV postprocess launch overflow"))?;
         Ok(LaunchConfig {
             grid: (narrow(heads)?, 1, 1),
-            block: (256, 1, 1),
+            block: (128, 1, 1),
             shared_memory_bytes: 0,
         })
     }

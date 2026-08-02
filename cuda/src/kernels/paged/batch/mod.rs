@@ -1,3 +1,4 @@
+mod split;
 mod store;
 
 use mircuda::{
@@ -16,8 +17,10 @@ cuda_export!(BatchedAttentionKernel = "libmir_cuda_paged_attention_batch_bf16"(
     token_counts: &DeviceBuffer<u32>, block_counts: &DeviceBuffer<u32>,
     output: &mut DeviceBuffer<bf16>, batch_size: u32, max_blocks: u32,
     block_size: u32, query_heads: u32, kv_heads: u32, head_dim: u32,
-    value_head_dim: u32, window: u32, scale: f32,
+    value_head_dim: u32, window: u32, scale: f32, split_threshold: u32,
 ));
+
+pub use split::{BatchedSplitAttentionWorkspace, BatchedSplitPagedAttention};
 
 /// One decode-attention launch over independent paged sequences.
 #[derive(Clone, Debug)]
@@ -60,6 +63,7 @@ impl BatchedPagedAttention {
         batch_size: usize,
         window: Option<usize>,
         scale: f32,
+        split_threshold: usize,
     ) -> Result<()> {
         let query_width = product(self.spec.query_heads, self.spec.head_dim)?;
         let output_width = product(self.spec.query_heads, self.spec.value_head_dim)?;
@@ -99,6 +103,7 @@ impl BatchedPagedAttention {
                 narrow(self.spec.value_head_dim)?,
                 narrow(window.unwrap_or(0))?,
                 scale,
+                narrow(split_threshold)?,
             ),
         )?)
     }

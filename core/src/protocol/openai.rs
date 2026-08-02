@@ -13,6 +13,10 @@ pub struct ChatCompletionRequest {
     #[serde(default)]
     pub max_tokens: Option<usize>,
     #[serde(default)]
+    pub min_tokens: Option<usize>,
+    #[serde(default)]
+    pub ignore_eos: Option<bool>,
+    #[serde(default)]
     pub temperature: Option<f32>,
     #[serde(default)]
     pub top_p: Option<f32>,
@@ -71,8 +75,10 @@ pub struct ChatFunctionCall {
 impl ChatToolCall {
     /// Parses the native Mistral V3 `[TOOL_CALLS]` JSON payload.
     pub fn parse_mistral(payload: &str) -> Result<Vec<Self>, String> {
-        let values = serde_json::from_str::<Vec<serde_json::Value>>(payload)
-            .map_err(|error| format!("invalid tool-call JSON: {error}"))?;
+        let values = match serde_json::from_str::<Vec<serde_json::Value>>(payload) {
+            Ok(values) => values,
+            Err(error) => return Err(format!("invalid tool-call JSON: {error}")),
+        };
         values
             .into_iter()
             .enumerate()
@@ -91,8 +97,10 @@ impl ChatToolCall {
             .and_then(|value| value.as_str().map(str::to_owned))
             .unwrap_or_else(function_kind);
         let function = match object.remove("function") {
-            Some(value) => serde_json::from_value(value)
-                .map_err(|error| format!("invalid tool-call function: {error}"))?,
+            Some(value) => match serde_json::from_value(value) {
+                Ok(function) => function,
+                Err(error) => return Err(format!("invalid tool-call function: {error}")),
+            },
             None => ChatFunctionCall {
                 name: take_string(object, "name")?,
                 arguments: decode_json_string(

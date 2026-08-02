@@ -30,6 +30,31 @@ fn semantic_discovery_does_not_depend_on_model_type() -> Result<()> {
 }
 
 #[test]
+fn key_equals_value_applies_only_to_full_attention() -> Result<()> {
+    let mut config = configuration("hybrid", &[]);
+    config["attention_k_eq_v"] = json!(true);
+    config["global_head_dim"] = json!(16);
+    config["num_global_key_value_heads"] = json!(1);
+    let decoder = DecoderConfig::from_value(&config)?;
+    let spec = SemanticModelSpec::discover(&decoder, &TensorCatalog { tensors: Vec::new() })?;
+
+    let relations = spec
+        .decoder
+        .layers
+        .iter()
+        .map(|layer| match &layer.mixer {
+            MixerSpec::SoftmaxAttention(attention) => Some(attention.key_value_relation),
+            MixerSpec::LinearAttention(_) => None,
+        })
+        .collect::<Option<Vec<_>>>();
+    assert_eq!(
+        relations,
+        Some(vec![KeyValueRelation::Separate, KeyValueRelation::KeyEqualsValue])
+    );
+    Ok(())
+}
+
+#[test]
 fn toml_sidecar_round_trips_complete_semantics() -> Result<()> {
     let decoder = DecoderConfig::from_value(&configuration("unrelated", &[]))?;
     let spec = SemanticModelSpec::discover(&decoder, &attention_sink_catalog())?;

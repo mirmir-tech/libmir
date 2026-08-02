@@ -3,6 +3,9 @@ use libmir::{
     SamplingLogits,
 };
 
+#[path = "checkpoint/prefill_batch.rs"]
+mod prefill_batch;
+
 #[test]
 #[ignore = "loads a real checkpoint; set MODEL"]
 fn generates_through_the_public_library_api() -> Result<()> {
@@ -24,6 +27,8 @@ fn generates_through_the_public_library_api() -> Result<()> {
         tool_choice: None,
         stream: false,
         max_tokens: Some(8),
+        min_tokens: None,
+        ignore_eos: None,
         temperature: Some(0.0),
         top_p: Some(1.0),
         top_k: Some(0),
@@ -158,6 +163,8 @@ fn request(model: &libmir::Model) -> ChatCompletionRequest {
         tool_choice: None,
         stream: false,
         max_tokens: Some(8),
+        min_tokens: None,
+        ignore_eos: None,
         temperature: Some(0.0),
         top_p: Some(1.0),
         top_k: Some(0),

@@ -67,20 +67,22 @@ fn records_decode_latency_during_vision_prefill() -> Result<()> {
     while contended.len() < CONTENDED_TOKENS && !vision_worker.is_finished() {
         token = timed_decode(&mut decoding, token, &mut contended)?;
     }
-    let (vision_elapsed, vision_output) =
-        vision_worker.join().map_err(|_| scheduler_error("vision worker panicked"))?;
+    let Ok((vision_elapsed, vision_output)) = vision_worker.join() else {
+        return Err(scheduler_error("vision worker panicked").into());
+    };
     let vision_output = vision_output?;
     if !overlapped || contended.is_empty() || vision_output.next_token.is_none() {
         return Err(scheduler_error("vision and decode work did not overlap").into());
     }
-    std::fs::write(&report_path, report(&baseline, &contended, vision_elapsed, token)).map_err(
-        |error| {
-            runtime::RuntimeError::Backend(format!(
-                "failed to write contention report {}: {error}",
-                report_path.display()
-            ))
-        },
-    )?;
+    if let Err(error) =
+        std::fs::write(&report_path, report(&baseline, &contended, vision_elapsed, token))
+    {
+        return Err(runtime::RuntimeError::Backend(format!(
+            "failed to write contention report {}: {error}",
+            report_path.display()
+        ))
+        .into());
+    }
     Ok(())
 }
 
@@ -131,14 +133,16 @@ fn required_path(name: &'static str) -> Result<PathBuf> {
 }
 
 fn receive(receiver: &Receiver<()>) -> Result<()> {
-    receiver.recv().map_err(|_| scheduler_error("vision ready signal closed"))?;
+    if receiver.recv().is_err() {
+        return Err(scheduler_error("vision ready signal closed").into());
+    }
     Ok(())
 }
 
 fn send(sender: &SyncSender<Instant>, started: Instant) -> Result<()> {
-    sender
-        .send(started)
-        .map_err(|_| scheduler_error("vision start signal closed"))?;
+    if sender.send(started).is_err() {
+        return Err(scheduler_error("vision start signal closed").into());
+    }
     Ok(())
 }
 
@@ -168,6 +172,8 @@ fn request(model: &libmir::Model, content: &str) -> ChatCompletionRequest {
         tool_choice: None,
         stream: false,
         max_tokens: Some(CONTENDED_TOKENS),
+        min_tokens: None,
+        ignore_eos: None,
         temperature: Some(0.0),
         top_p: Some(1.0),
         top_k: Some(0),

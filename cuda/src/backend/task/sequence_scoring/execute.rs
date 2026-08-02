@@ -126,7 +126,7 @@ pub(super) fn f16_tensor(tensor: &CudaTensor) -> Result<&DeviceBuffer<f16>> {
 }
 
 pub(super) fn epsilon(config: &models::layout::EncoderConfig) -> Result<f32> {
-    config.layer_norm_eps.to_string().parse().map_err(Into::into)
+    Ok(config.layer_norm_eps.to_string().parse()?)
 }
 
 pub(super) fn buffer(backend: &crate::CudaBackend, elements: usize) -> Result<DeviceBuffer<f16>> {

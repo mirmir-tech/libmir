@@ -6,7 +6,7 @@ use super::{
     GateUpBuffers, GateUpProjection, validate,
 };
 use crate::{
-    CudaBackend, Error, PrefillAttentionBf16, Result, RmsNormBf16,
+    CudaBackend, Error, PagedPrefillBatch, PrefillAttentionBf16, Result, RmsNormBf16,
     kernels::{ElementwiseBf16, PackedGatedBf16},
 };
 
@@ -83,6 +83,33 @@ impl PrefillDenseSwiGlu {
             start_position,
             &mut self.scratch.attention,
         )?;
+        self.execute_tail(input, weights, output)
+    }
+
+    pub fn execute_batch(
+        &mut self,
+        state: &mut DecodeDenseSwiGlu,
+        input: &DeviceBuffer<bf16>,
+        weights: DenseSwiGluWeights<'_>,
+        batch: &PagedPrefillBatch,
+        output: &mut DeviceBuffer<bf16>,
+    ) -> Result<()> {
+        self.attention.execute_batch(
+            &mut state.attention,
+            input,
+            weights.attention,
+            batch,
+            &mut self.scratch.attention,
+        )?;
+        self.execute_tail(input, weights, output)
+    }
+
+    fn execute_tail(
+        &mut self,
+        input: &DeviceBuffer<bf16>,
+        weights: DenseSwiGluWeights<'_>,
+        output: &mut DeviceBuffer<bf16>,
+    ) -> Result<()> {
         self.hidden_ops.add(
             &self.stream,
             input,
@@ -90,6 +117,7 @@ impl PrefillDenseSwiGlu {
             &mut self.scratch.residual,
         )?;
         let separate = self.gate_up.execute(
+            &self.stream,
             &self.scratch.residual,
             &self.post_attention_norm,
             weights.post_attention_norm,
@@ -125,8 +153,12 @@ impl PrefillDenseSwiGlu {
             )?;
         }
         if !fused_down {
-            self.down
-                .execute(&self.scratch.activated, weights.down, &mut self.scratch.mlp)?;
+            self.down.execute(
+                &self.stream,
+                &self.scratch.activated,
+                weights.down,
+                &mut self.scratch.mlp,
+            )?;
         }
         self.hidden_ops
             .add(&self.stream, &self.scratch.residual, &self.scratch.mlp, output)

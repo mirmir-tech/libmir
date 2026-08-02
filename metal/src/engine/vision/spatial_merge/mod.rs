@@ -37,6 +37,8 @@ pub(super) fn slice_axis(
 }
 
 pub(super) fn dimension(value: usize, label: &str) -> Result<i32> {
-    i32::try_from(value)
-        .map_err(|_| Error::InvalidModel(format!("spatial-merge vision {label} exceeds i32")))
+    i32::try_from(value).map_or_else(
+        |_| Err(Error::InvalidModel(format!("spatial-merge vision {label} exceeds i32"))),
+        Ok,
+    )
 }

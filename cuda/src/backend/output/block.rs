@@ -44,7 +44,7 @@ pub(super) fn prepare(
             OutputHeadWeight::Fp8BlockRefined {
                 refinement: Fp8RefinementKernels::compile(
                     &backend.inner.compiler,
-                    Fp8OutputSpec::new(input_features, output_features)?,
+                    Fp8OutputSpec::new_refinement(input_features, output_features)?,
                 )?,
                 exact_tensor: source.clone(),
                 exact_weight: source_weight.clone(),

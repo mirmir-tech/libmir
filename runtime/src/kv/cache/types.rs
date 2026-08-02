@@ -10,12 +10,15 @@ pub struct CacheConfig {
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CacheCounters {
     pub probes: usize,
     pub hits: usize,
     pub misses: usize,
     pub hit_tokens: usize,
     pub miss_tokens: usize,
+    pub evictions: usize,
+    pub protected_prefix_skips: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

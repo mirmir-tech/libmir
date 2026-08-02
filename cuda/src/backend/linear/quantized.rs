@@ -92,8 +92,11 @@ impl AffineQuantizedBf16Linear {
             });
         }
         let spec = self.operation.spec();
-        let values_per_word = 32 / spec.bits;
-        let packed = spec.input_features / values_per_word;
+        let packed = spec
+            .input_features
+            .checked_mul(spec.bits)
+            .ok_or(Error::InvalidQuantizedGemv("affine packed width overflow"))?
+            / 32;
         let groups = spec.input_features / spec.group_size;
         validate_shape(
             tensors.weight,

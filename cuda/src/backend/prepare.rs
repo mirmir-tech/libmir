@@ -2,10 +2,10 @@ use ::runtime::kv::KvStorageSpec;
 
 use super::{
     AffineQuantizedBf16Linear, AffineQuantizedBf16Qmm, AffineQuantizedConfig,
-    BatchedPagedAttentionBf16, Bf16Linear, Bf16VectorLinear, CudaBackend, GatedActivation,
-    NvFp4Bf16Linear, NvFp4Config, NvFp4Tensors, PagedAttentionBf16, PagedDecodeBatch, PagedKvCache,
-    RmsNormBf16, RopeBf16, SelectedAffineGatedBf16Linear, SelectedAffinePairBf16Linear,
-    SelectedAffineReduceBf16Linear,
+    BatchedPagedAttentionBf16, BatchedPrefillPagedAttentionBf16, Bf16Linear, Bf16VectorLinear,
+    CudaBackend, GatedActivation, NvFp4Bf16Linear, NvFp4Config, NvFp4Tensors, PagedAttentionBf16,
+    PagedDecodeBatch, PagedKvCache, PagedPrefillBatch, RmsNormBf16, RopeBf16,
+    SelectedAffineGatedBf16Linear, SelectedAffinePairBf16Linear, SelectedAffineReduceBf16Linear,
 };
 use crate::{Result, kernels::RopeSpec};
 
@@ -44,6 +44,16 @@ impl CudaBackend {
         PagedKvCache::new(self, layer, storage)
     }
 
+    pub(crate) fn prepare_windowed_paged_kv(
+        &self,
+        layer: usize,
+        storage: KvStorageSpec,
+        window: usize,
+        sessions: usize,
+    ) -> Result<PagedKvCache> {
+        PagedKvCache::new_windowed(self, layer, storage, window, sessions)
+    }
+
     pub fn prepare_paged_attention_bf16(
         &self,
         cache: &PagedKvCache,
@@ -63,6 +73,16 @@ impl CudaBackend {
         BatchedPagedAttentionBf16::new(self, cache, query_heads, max_blocks, max_batch)
     }
 
+    pub fn prepare_batched_paged_prefill_attention_bf16(
+        &self,
+        cache: &PagedKvCache,
+        query_heads: usize,
+        max_blocks: usize,
+        max_batch: usize,
+    ) -> Result<BatchedPrefillPagedAttentionBf16> {
+        BatchedPrefillPagedAttentionBf16::new(self, cache, query_heads, max_blocks, max_batch)
+    }
+
     pub fn prepare_paged_decode_batch(
         &self,
         storage: KvStorageSpec,
@@ -70,6 +90,16 @@ impl CudaBackend {
         max_batch: usize,
     ) -> Result<PagedDecodeBatch> {
         PagedDecodeBatch::new(self, storage, max_blocks, max_batch)
+    }
+
+    pub fn prepare_paged_prefill_batch(
+        &self,
+        storage: KvStorageSpec,
+        max_blocks: usize,
+        max_batch: usize,
+        max_tokens: usize,
+    ) -> Result<PagedPrefillBatch> {
+        PagedPrefillBatch::new(self, storage, max_blocks, max_batch, max_tokens)
     }
 
     pub fn prepare_nvfp4_bf16_linear(
@@ -110,6 +140,22 @@ impl CudaBackend {
         selected_count: usize,
     ) -> Result<SelectedAffinePairBf16Linear> {
         SelectedAffinePairBf16Linear::new(self, config.spec()?, expert_count, selected_count)
+    }
+
+    pub(in crate::backend) fn prepare_batched_selected_affine_pair_bf16_linear(
+        &self,
+        tokens: usize,
+        config: AffineQuantizedConfig,
+        expert_count: usize,
+        selected_count: usize,
+    ) -> Result<SelectedAffinePairBf16Linear> {
+        SelectedAffinePairBf16Linear::new_batch(
+            self,
+            config.spec()?,
+            expert_count,
+            selected_count,
+            tokens,
+        )
     }
 
     pub fn prepare_selected_affine_gated_bf16_linear(

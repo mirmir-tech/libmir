@@ -1,23 +1,32 @@
-use ::runtime::kv::{BlockTable, KvStorageSpec};
-use mircuda::{DeviceBuffer, KernelNode, PinnedBuffer, Stream, TypedKernel};
+use ::runtime::kv::{BlockTable, KvCacheDType, KvStorageSpec};
+use mircuda::{
+    Context, DeviceBuffer, FmhaBf16Plan, FmhaBf16Spec, KernelNode, MemoryPool, PinnedBuffer,
+    Stream, TypedKernel,
+};
 
 use super::{
-    super::{AttentionExecution, AttentionPlanRequest, CudaBackend},
+    super::{AttentionExecution, AttentionPlanRequest, CudaBackend, PlanSource},
     PagedKvCache,
 };
 use crate::{
     Error, Result,
     kernels::{
-        AttentionKernel, PagedAttention, PagedAttentionSpec, PagedPrefillAttention,
+        AttentionKernel, PagedAttention, PagedAttentionSpec, PagedKvGather, PagedPrefillAttention,
         SplitAttentionConfigs, SplitAttentionKernels, SplitAttentionNodes, SplitAttentionWorkspace,
         SplitPagedAttention,
     },
 };
 
+pub mod autotune;
 mod batch;
+mod capture;
 mod execution;
+mod pages;
+mod prefill_batch;
 
 pub use batch::BatchedPagedAttentionBf16;
+use pages::FmhaPageWorkspace;
+pub use prefill_batch::BatchedPrefillPagedAttentionBf16;
 
 /// Allocation-free decode attention over runtime-managed physical K/V pages.
 #[derive(Debug)]
@@ -26,8 +35,21 @@ pub struct PagedAttentionBf16 {
     split: SplitPagedAttention,
     split_workspace: SplitAttentionWorkspace,
     split_threshold: u32,
+    partition_tokens: usize,
+    plan_request: AttentionPlanRequest,
+    fallback_execution: AttentionExecution,
+    profile_allowed: bool,
+    tuning_complete: bool,
     prefill: PagedPrefillAttention,
+    fmha: Option<FmhaBf16Plan>,
+    gather: Option<PagedKvGather>,
+    fmha_workspace: Option<FmhaPageWorkspace>,
     stream: Stream,
+    pool: MemoryPool,
+    backend: CudaBackend,
+    context: Context,
+    tuner: crate::backend::tuning::CudaAutoTuner,
+    spec: PagedAttentionSpec,
     table_device: DeviceBuffer<u32>,
     table_staging: PinnedBuffer<u32>,
     table_snapshot: Vec<u32>,
@@ -88,6 +110,22 @@ impl PagedAttentionBf16 {
             backend.inner.pool.allocate::<f32>(&backend.inner.stream, partial_statistics)?,
         );
         let prefill = PagedPrefillAttention::compile(&backend.inner.compiler, spec)?;
+        let fmha_supported =
+            matches!(storage.cache.dtype, KvCacheDType::Auto | KvCacheDType::BFloat16)
+                && storage.key_head_dim == 128
+                && storage.value_head_dim == 128;
+        let fmha = fmha_supported
+            .then(|| {
+                FmhaBf16Plan::new(
+                    &backend.inner.context,
+                    &backend.inner.stream,
+                    FmhaBf16Spec::new(query_heads, storage.kv_heads, 128, 128)?,
+                )
+            })
+            .transpose()?;
+        let gather = fmha_supported
+            .then(|| PagedKvGather::compile(&backend.inner.compiler, spec))
+            .transpose()?;
         let table_device = backend.inner.pool.allocate::<u32>(&backend.inner.stream, max_blocks)?;
         let table_staging = backend.inner.context.allocate_pinned::<u32>(max_blocks)?;
         Ok(Self {
@@ -95,8 +133,27 @@ impl PagedAttentionBf16 {
             split,
             split_workspace,
             split_threshold: u32::try_from(split_threshold)?,
+            partition_tokens,
+            plan_request: AttentionPlanRequest {
+                max_context_tokens,
+                query_heads,
+                kv_heads: storage.kv_heads,
+                head_dim: storage.key_head_dim,
+                value_head_dim: storage.value_head_dim,
+            },
+            fallback_execution: plan.execution(),
+            profile_allowed: plan.source() != PlanSource::ExplicitPolicy,
+            tuning_complete: false,
             prefill,
+            fmha,
+            gather,
+            fmha_workspace: None,
             stream: backend.inner.stream.clone(),
+            pool: backend.inner.pool.clone(),
+            backend: backend.clone(),
+            context: backend.inner.context.clone(),
+            tuner: backend.inner.tuner.clone(),
+            spec,
             table_device,
             table_staging,
             table_snapshot: vec![u32::MAX; max_blocks],

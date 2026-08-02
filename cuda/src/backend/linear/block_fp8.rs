@@ -1,6 +1,6 @@
 use mircuda::{DeviceBuffer, Stream, bf16};
 
-use super::CudaBackend;
+use super::{Bf16LinearPairWeights, CudaBackend};
 use crate::{
     CudaTensor, Error, Result,
     kernels::{
@@ -93,6 +93,83 @@ impl CudaBackend {
             &mut residual_scales,
         );
         kernels.quantize_weight_residual(&self.inner.stream, source_weight, &mut buffers)?;
+        Ok(Fp8ResidualLinearWeight {
+            kernels,
+            weight,
+            row_scales,
+            residual,
+            residual_scales,
+        })
+    }
+
+    pub(in crate::backend) fn prepare_block_fp8_linear_pair_weight(
+        &self,
+        source: &Bf16LinearPairWeights,
+    ) -> Result<BlockFp8LinearWeight> {
+        self.prepare_block_fp8_buffer(
+            source.packed(),
+            source.input_features(),
+            source.packed_output_features()?,
+        )
+    }
+
+    pub(in crate::backend) fn prepare_fp8_residual_linear_pair_weight(
+        &self,
+        source: &Bf16LinearPairWeights,
+    ) -> Result<Fp8ResidualLinearWeight> {
+        self.prepare_fp8_residual_buffer(
+            source.packed(),
+            source.input_features(),
+            source.packed_output_features()?,
+        )
+    }
+
+    fn prepare_block_fp8_buffer(
+        &self,
+        source: &DeviceBuffer<bf16>,
+        input_features: usize,
+        output_features: usize,
+    ) -> Result<BlockFp8LinearWeight> {
+        let spec = BlockFp8LinearSpec::new(input_features, output_features)?;
+        let kernels = BlockFp8LinearKernels::compile(&self.inner.compiler, spec)?;
+        let mut weight =
+            self.inner.pool.allocate::<u8>(&self.inner.stream, spec.weight_elements()?)?;
+        let mut scales =
+            self.inner.pool.allocate::<f32>(&self.inner.stream, spec.scale_elements()?)?;
+        kernels.quantize(&self.inner.stream, source, &mut weight, &mut scales)?;
+        Ok(BlockFp8LinearWeight { kernels, weight, scales, spec })
+    }
+
+    fn prepare_fp8_residual_buffer(
+        &self,
+        source: &DeviceBuffer<bf16>,
+        input_features: usize,
+        output_features: usize,
+    ) -> Result<Fp8ResidualLinearWeight> {
+        let spec = Fp8OutputSpec::new(input_features, output_features)?;
+        let kernels = Fp8OutputKernels::compile(&self.inner.compiler, spec)?;
+        let mut weight =
+            self.inner.pool.allocate::<u8>(&self.inner.stream, spec.weight_elements()?)?;
+        let mut block_scales = self
+            .inner
+            .pool
+            .allocate::<f32>(&self.inner.stream, spec.weight_scale_elements()?)?;
+        let mut row_scales =
+            self.inner.pool.allocate::<f32>(&self.inner.stream, spec.output_features)?;
+        let mut residual =
+            self.inner.pool.allocate::<u8>(&self.inner.stream, spec.residual_elements()?)?;
+        let mut residual_scales = self
+            .inner
+            .pool
+            .allocate::<f32>(&self.inner.stream, spec.residual_scale_elements()?)?;
+        let mut buffers = Fp8ResidualWeightBuffers::new(
+            &mut weight,
+            &mut block_scales,
+            &mut row_scales,
+            &mut residual,
+            &mut residual_scales,
+        );
+        kernels.quantize_weight_residual(&self.inner.stream, source, &mut buffers)?;
         Ok(Fp8ResidualLinearWeight {
             kernels,
             weight,

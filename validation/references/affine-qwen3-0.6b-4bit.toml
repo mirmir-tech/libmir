@@ -1,0 +1,33 @@
+schema = 2
+family = "dense"
+model_type = "qwen3"
+dtypes = ["BF16"]
+vocab_size = 151936
+context_len = 40960
+kv_cache_blocks = 128
+prompt_tokens = [151644, 872, 198, 9707, 151645, 198, 151644, 77091, 198]
+generated_tokens = [151667, 198, 32313, 11, 279, 1196, 1053, 330, 9707, 3263, 358, 1184, 311, 5889, 34901, 13]
+
+[affine]
+bits = [4]
+group_sizes = [64]
+parameter_dtype = "BF16"
+
+[tokenizer]
+vocabulary_entries = 151669
+max_token_id = 151668
+added_tokens = 26
+stop_token_ids = [151645, 128247, 151643]
+
+[first_logits]
+token_ids = [151667, 151668, 47611, 106287, 70084, 151645]
+scores = [30.25, 21.0, 20.75, 20.375, 20.25, 19.75]
+absolute_tolerance = 0.25
+
+[metal]
+max_load_active_bytes = 4000000000
+max_decode_active_bytes = 5000000000
+
+[cuda]
+max_load_active_bytes = 6000000000
+max_decode_active_bytes = 7000000000

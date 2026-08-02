@@ -7,5 +7,6 @@ pub mod sampling;
 pub mod scheduler;
 pub mod session;
 pub mod trace;
+pub mod tuning;
 
 pub use error::{Result, RuntimeError};

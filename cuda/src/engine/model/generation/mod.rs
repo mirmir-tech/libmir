@@ -1,6 +1,6 @@
 use mircuda::{DeviceBuffer, bf16};
 use runtime::{
-    backend::{DecodeRequest, PrefillRequest},
+    backend::{DecodeRequest, DecodeSequence, PrefillRequest},
     kv::BlockTable,
 };
 use uuid::Uuid;
@@ -14,6 +14,25 @@ pub(in crate::engine) use graph::GraphExecution;
 pub(in crate::engine) use session::{MixedMixerExecution, SinkAttentionExecution};
 
 pub(in crate::engine) trait GenerationExecution: Send {
+    fn prefix_replay_tokens(&self) -> Option<usize> {
+        None
+    }
+
+    // Admission may assume a retained checkpoint; replay remains the
+    // correctness fallback when that checkpoint is absent.
+    fn prefix_admission(&self) -> Option<(usize, usize, usize)> {
+        self.prefix_replay_tokens().map(|replay| (replay, replay, 0))
+    }
+
+    fn restore_prefix(
+        &mut self,
+        _request: &PrefillRequest,
+        _minimum: usize,
+        _maximum: usize,
+    ) -> Result<Option<usize>> {
+        Ok(None)
+    }
+
     fn prefill_chunk_len(&self, remaining: usize) -> usize;
 
     fn prefill_chunk(
@@ -26,12 +45,40 @@ pub(in crate::engine) trait GenerationExecution: Send {
         final_chunk: bool,
     ) -> Result<Option<Output>>;
 
+    fn prefill_batch_chunk(
+        &mut self,
+        backend: &CudaBackend,
+        chunks: &[PrefillChunk<'_>],
+    ) -> Result<Vec<Option<Output>>> {
+        chunks
+            .iter()
+            .map(|chunk| {
+                self.prefill_chunk(
+                    backend,
+                    chunk.request,
+                    chunk.tokens,
+                    chunk.offset,
+                    chunk.table,
+                    chunk.final_chunk,
+                )
+            })
+            .collect()
+    }
+
     fn decode(
         &mut self,
         backend: &CudaBackend,
         request: &DecodeRequest,
         use_device_token: bool,
     ) -> Result<Output>;
+
+    fn decode_batch(
+        &mut self,
+        _backend: &CudaBackend,
+        _sequences: &[DecodeSequence],
+    ) -> Result<Option<Vec<Output>>> {
+        Ok(None)
+    }
 
     fn clear_sessions(&mut self);
 
@@ -52,6 +99,14 @@ pub(in crate::engine) trait GenerationExecution: Send {
     ) -> Result<Output> {
         Err(unsupported("spatial-merge vision prefill"))
     }
+}
+
+pub(in crate::engine) struct PrefillChunk<'a> {
+    pub request: &'a PrefillRequest,
+    pub tokens: &'a [u32],
+    pub offset: usize,
+    pub table: &'a BlockTable,
+    pub final_chunk: bool,
 }
 
 pub(in crate::engine) struct PooledVisionPrefill<'a> {

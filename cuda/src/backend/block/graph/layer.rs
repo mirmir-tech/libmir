@@ -6,7 +6,7 @@ use super::{
     arguments::{AttentionArguments, KvArguments},
 };
 use crate::{
-    DecodeMoeBlockBf16, PrefillMoeBlockBf16, Result,
+    DecodeMoeBlockBf16, PagedPrefillBatch, PrefillMoeBlockBf16, Result,
     backend::block::graph::weights::CapturedBlockWeights,
     kernels::{
         MergeAttentionArguments, QkvPostprocessArguments, SplitAttentionArguments,
@@ -96,6 +96,16 @@ impl CapturedLayer {
             output,
             image,
         )
+    }
+
+    pub(in crate::backend) fn execute_prefill_batch(
+        &mut self,
+        prefill: &mut PrefillMoeBlockBf16,
+        input: &DeviceBuffer<bf16>,
+        batch: &PagedPrefillBatch,
+        output: &mut DeviceBuffer<bf16>,
+    ) -> Result<()> {
+        prefill.execute_batch(&mut self.block, input, self.weights.borrow(), batch, output)
     }
 
     pub(in crate::backend) fn kernels(&self) -> Kernels {

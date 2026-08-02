@@ -1,0 +1,35 @@
+# snaeppi/Qwen3-0.6B-Base-AWQ-W4A16
+# revision bf39194bb632dfbcfb820fc056cbbde81903d1d4
+# oracle: Transformers 4.57.6 BF16 after independent AutoAWQ GEMM decompression
+schema = 2
+family = "dense"
+model_type = "qwen3"
+dtypes = ["BF16"]
+vocab_size = 151936
+context_len = 32768
+kv_cache_blocks = 128
+prompt_tokens = [785, 6722, 315, 9625, 374]
+generated_tokens = [12095, 11, 323, 279, 6722, 315, 9856, 374, 19846, 13, 15920, 315, 279, 2701, 12239, 374]
+
+[awq]
+bits = 4
+group_size = 128
+
+[tokenizer]
+vocabulary_entries = 151669
+max_token_id = 151668
+added_tokens = 26
+stop_token_ids = [151643, 128247, 151645]
+
+[first_logits]
+token_ids = [12095, 30743, 65892, 32671, 7407, 1304, 220, 55201]
+scores = [22.375, 20.25, 19.625, 19.5, 19.375, 19.125, 19.0, 18.875]
+absolute_tolerance = 0.25
+
+[metal]
+max_load_active_bytes = 850000000
+max_decode_active_bytes = 850000000
+
+[cuda]
+max_load_active_bytes = 950000000
+max_decode_active_bytes = 950000000

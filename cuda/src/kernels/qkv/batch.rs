@@ -11,7 +11,7 @@ use crate::{
 cuda_export!(BatchedQkvPostprocessKernel = "libmir_cuda_qkv_postprocess_batch_bf16"(
     query_input: &DeviceBuffer<bf16>, key_input: &DeviceBuffer<bf16>,
     value_input: &DeviceBuffer<bf16>, query_weight: &DeviceBuffer<bf16>,
-    key_weight: &DeviceBuffer<bf16>, token_counts: &DeviceBuffer<u32>,
+    key_weight: &DeviceBuffer<bf16>, positions: &DeviceBuffer<u32>,
     query_output: &mut DeviceBuffer<bf16>, key_output: &mut DeviceBuffer<bf16>,
     value_output: &mut DeviceBuffer<bf16>, tokens: u32, query_heads: u32,
     kv_heads: u32, head_dim: u32, value_head_dim: u32, rotary_dim: u32,
@@ -41,7 +41,7 @@ impl BatchedQkvPostprocess {
         separate: bool,
         query_weight: &DeviceBuffer<bf16>,
         key_weight: &DeviceBuffer<bf16>,
-        token_counts: &DeviceBuffer<u32>,
+        positions: &DeviceBuffer<u32>,
         query_output: &mut DeviceBuffer<bf16>,
         key_output: &mut DeviceBuffer<bf16>,
         value_output: &mut DeviceBuffer<bf16>,
@@ -66,7 +66,7 @@ impl BatchedQkvPostprocess {
                 inputs[0].len(),
             )?;
         }
-        require("batched Q positions", self.spec.tokens, token_counts.len())?;
+        require("batched Q positions", self.spec.tokens, positions.len())?;
         require("batched Q norm", self.spec.head_dim, query_weight.len())?;
         require("batched K norm", self.spec.head_dim, key_weight.len())?;
         require("batched Q output", product(self.spec.tokens, query)?, query_output.len())?;
@@ -82,7 +82,7 @@ impl BatchedQkvPostprocess {
             stream,
             LaunchConfig {
                 grid: (narrow(heads)?, 1, 1),
-                block: (256, 1, 1),
+                block: (128, 1, 1),
                 shared_memory_bytes: 0,
             },
             (
@@ -91,7 +91,7 @@ impl BatchedQkvPostprocess {
                 inputs[2],
                 query_weight,
                 key_weight,
-                token_counts,
+                positions,
                 query_output,
                 key_output,
                 value_output,

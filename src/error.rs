@@ -42,6 +42,18 @@ pub enum Error {
     /// An unload was requested while sessions or model clones still exist.
     ModelInUse,
     #[error(
+        "model `{model}` needs an estimated {required_bytes} bytes, but only {available_bytes} bytes remain in the accelerator load budget"
+    )]
+    /// A model load could not reserve enough accelerator memory atomically.
+    MemoryAdmission {
+        /// Stable model identifier.
+        model: String,
+        /// Estimated peak residency, including transient execution headroom.
+        required_bytes: u64,
+        /// Bytes still available after safety and in-flight load reservations.
+        available_bytes: u64,
+    },
+    #[error(
         "requested {requested} tokens exceeds model context {context} (prompt {prompt}, max_tokens {max_tokens})"
     )]
     /// Prompt and requested output exceed the model context window.

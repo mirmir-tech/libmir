@@ -80,7 +80,7 @@ fn batched(
     let packed = runtime.copy(packed)?;
     let query_weight = runtime.copy(query_weight)?;
     let key_weight = runtime.copy(key_weight)?;
-    let positions = runtime.copy(&[4_u32, 5])?;
+    let positions = runtime.copy(&[3_u32, 4])?;
     let mut query = runtime.allocate(32)?;
     let mut key = runtime.allocate(16)?;
     let mut value = runtime.allocate(16)?;

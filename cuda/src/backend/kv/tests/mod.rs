@@ -1,4 +1,6 @@
 mod batch;
+mod fmha;
+mod prefill_batch;
 mod split;
 
 use mircuda::{DeviceBuffer, DeviceElement, bf16};

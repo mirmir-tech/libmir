@@ -23,10 +23,10 @@ pub(super) fn usize_field(value: &Value, field: &str) -> Result<usize> {
 
 pub(super) fn optional_usize_field(value: &Value, field: &str) -> Result<Option<usize>> {
     value.get(field).map_or(Ok(None), |value| {
-        value
+        let raw = value
             .as_u64()
-            .ok_or_else(|| invalid(format!("invalid vision integer {field}")))
-            .and_then(|raw| usize::try_from(raw).map(Some).map_err(ModelsError::from))
+            .ok_or_else(|| invalid(format!("invalid vision integer {field}")))?;
+        Ok(Some(usize::try_from(raw)?))
     })
 }
 
@@ -80,10 +80,10 @@ pub(super) fn usize_array_field(value: &Value, field: &str) -> Result<Vec<usize>
         .ok_or_else(|| invalid(format!("missing vision integer array {field}")))?
         .iter()
         .map(|value| {
-            value
+            let value = value
                 .as_u64()
-                .ok_or_else(|| invalid(format!("invalid vision integer array {field}")))
-                .and_then(|value| usize::try_from(value).map_err(ModelsError::from))
+                .ok_or_else(|| invalid(format!("invalid vision integer array {field}")))?;
+            Ok(usize::try_from(value)?)
         })
         .collect()
 }

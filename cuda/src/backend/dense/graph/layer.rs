@@ -6,7 +6,7 @@ use super::{
     weights::CapturedDenseWeights,
 };
 use crate::{
-    DecodeDenseSwiGlu, DenseSwiGluWeights, PrefillDenseSwiGlu, Result,
+    DecodeDenseSwiGlu, DenseSwiGluWeights, PagedPrefillBatch, PrefillDenseSwiGlu, Result,
     backend::attention::graph::{Configs, Dynamic, Geometry, Kernels, Nodes},
     kernels::{
         MergeAttentionArguments, QkvPostprocessArguments, SplitAttentionArguments,
@@ -104,6 +104,16 @@ impl CapturedDenseLayer {
             start_position,
             output,
         )
+    }
+
+    pub(in crate::backend) fn execute_prefill_batch(
+        &mut self,
+        prefill: &mut PrefillDenseSwiGlu,
+        input: &DeviceBuffer<bf16>,
+        batch: &PagedPrefillBatch,
+        output: &mut DeviceBuffer<bf16>,
+    ) -> Result<()> {
+        prefill.execute_batch(&mut self.block, input, self.weights.borrow(), batch, output)
     }
 
     pub(in crate::backend) fn kernels(&self) -> Kernels {

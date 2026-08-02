@@ -1,0 +1,28 @@
+# Qwen/Qwen2.5-0.5B
+# source revision 060db6499f32faf8b98477b0a26969ef7d8b9987
+# oracle: vLLM 0.22.1+7b9cb5b7, BF16, greedy eager execution
+schema = 2
+family = "dense"
+model_type = "qwen2"
+dtypes = ["BF16"]
+vocab_size = 151936
+context_len = 32768
+kv_cache_blocks = 128
+prompt_tokens = [785, 6722, 315, 9625, 374]
+generated_tokens = [12095, 13, 1084, 374]
+
+[tokenizer]
+vocabulary_entries = 151665
+max_token_id = 151664
+added_tokens = 22
+stop_token_ids = [151643, 128247, 151645]
+
+[first_logits]
+token_ids = [12095, 32671, 30743, 1304, 510, 7407, 279, 198]
+scores = [-1.1823881, -2.1823881, -2.8073881, -2.8073881, -3.0573881, -3.1823881, -3.4323881, -3.7448881]
+absolute_tolerance = 0.25
+normalized = true
+
+[cuda]
+max_load_active_bytes = 4000000000
+max_decode_active_bytes = 5000000000

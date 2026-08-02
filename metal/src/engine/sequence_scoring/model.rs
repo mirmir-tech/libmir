@@ -1,4 +1,7 @@
-use models::layout::EncoderConfig;
+use models::{
+    layout::{EncoderConfig, EncoderPositionEmbedding, NormKind},
+    weights::{EncoderBindingPlan, TensorStorage},
+};
 
 use super::layer::EncoderLayer;
 use crate::engine::{Array, DenseEmbedding, DenseLinear, LayerNorm, ModelTensors, Result, Stream};
@@ -14,10 +17,29 @@ pub struct SequenceScoringModel {
 }
 
 impl SequenceScoringModel {
-    pub fn load(tensors: &ModelTensors, config: &EncoderConfig, stream: &Stream) -> Result<Self> {
-        if !config.packed_qkv || config.hidden_activation != "gelu" || config.num_labels != 1 {
+    pub fn load(
+        tensors: &ModelTensors,
+        config: &EncoderConfig,
+        bindings: &EncoderBindingPlan,
+        stream: &Stream,
+    ) -> Result<Self> {
+        if !config.packed_qkv
+            || config.norm != NormKind::LayerNorm
+            || config.hidden_activation != "gelu"
+            || config.position_embedding != EncoderPositionEmbedding::Rope
+            || config.num_labels != 1
+        {
             return Err(crate::engine::Error::InvalidModel(
                 "unsupported sequence-scoring encoder contract".into(),
+            ));
+        }
+        if bindings
+            .tensors
+            .iter()
+            .any(|binding| !matches!(binding.storage, TensorStorage::Dense { .. }))
+        {
+            return Err(crate::engine::Error::InvalidModel(
+                "Metal sequence scoring requires dense encoder bindings".into(),
             ));
         }
         let eps = config.layer_norm_eps.to_string().parse()?;

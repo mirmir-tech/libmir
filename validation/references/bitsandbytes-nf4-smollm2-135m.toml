@@ -1,0 +1,41 @@
+# axolotl-ai-co/SmolLM2-135M-bnb-nf4-bf16
+# revision 5e79411051e1962a2ee686f3b0dacbe2689e1b4b
+# oracle: Transformers 5.6.0 + bitsandbytes 0.50.0, serialized NF4, BF16 compute
+schema = 2
+family = "dense"
+model_type = "llama"
+dtypes = ["BF16"]
+vocab_size = 49152
+context_len = 8192
+kv_cache_blocks = 128
+prompt_tokens = [785, 6722, 315, 9625, 374]
+generated_tokens = [30, 198, 198, 504, 1695, 359, 260, 3301, 288, 1464, 253, 725, 2301, 42, 198, 198]
+
+[bitsandbytes_4bit]
+quant_type = "nf4"
+block_size = 64
+compute_dtype = "bf16"
+storage_dtype = "bf16"
+nested_block_size = 256
+
+[tokenizer]
+vocabulary_entries = 49152
+max_token_id = 49151
+added_tokens = 17
+stop_token_ids = [0, 2]
+
+[first_logits]
+token_ids = [30, 424, 198, 315, 365, 24, 28, 43]
+scores = [34.75, 34.75, 33.5, 33.5, 33.5, 33.25, 33.25, 32.75]
+absolute_tolerance = 0.5
+
+[metal]
+max_load_active_bytes = 160000000
+max_decode_active_bytes = 180000000
+
+[cuda]
+# At step 9 the oracle gives tokens 1464 and 1477 identical 22.875 logits;
+# this sequence independently follows the tied 1477 branch selected by CUDA.
+max_load_active_bytes = 300000000
+max_decode_active_bytes = 300000000
+generated_tokens = [30, 198, 198, 504, 1695, 359, 260, 3301, 288, 1477, 260, 1695, 3643, 42, 198, 198]

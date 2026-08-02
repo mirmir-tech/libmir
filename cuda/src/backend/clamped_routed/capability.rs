@@ -23,7 +23,9 @@ impl ClampedRoutedCapabilityPlan {
         admit_attention(config, cache_dtype)?;
         admit_experts(config, layout)?;
         let qkv = match layout {
-            ClampedRoutedLayout::Native => ClampedRoutedQkvLowering::PackedFused,
+            ClampedRoutedLayout::Native | ClampedRoutedLayout::Dense => {
+                ClampedRoutedQkvLowering::PackedFused
+            },
             ClampedRoutedLayout::Mlx => ClampedRoutedQkvLowering::SeparateComposed,
         };
         tracing::debug!(
@@ -63,6 +65,9 @@ fn admit_attention(config: ClampedRoutedConfig, dtype: KvCacheDType) -> Result<(
 }
 
 fn admit_experts(config: ClampedRoutedConfig, layout: ClampedRoutedLayout) -> Result<()> {
+    if layout == ClampedRoutedLayout::Dense {
+        return Ok(());
+    }
     if config.hidden.is_multiple_of(32) && config.intermediate.is_multiple_of(32) {
         return Ok(());
     }

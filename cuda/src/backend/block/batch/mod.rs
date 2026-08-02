@@ -6,12 +6,15 @@ pub use layer::BatchedDecodeMoeLayer;
 use mircuda::{DeviceBuffer, Stream, bf16};
 
 use self::scratch::BatchBlockScratch;
-use super::{DecodeMoeBlockConfig, DecodeMoeBlockWeights, experts::Experts, scalar, validate};
+use super::{
+    DecodeMoeBlockConfig, DecodeMoeBlockWeights,
+    experts::{ExpertWeights, Experts},
+    scalar, validate,
+};
 use crate::{
     BatchedDecodeAttentionBf16, Bf16Linear, Bf16LinearPair, CudaBackend, Error, ExecutionPhase,
-    MoePlanRequest, NvFp4ExpertBank, PagedDecodeBatch, PagedKvCache, Result, RmsNormBf16,
-    RouterBf16,
-    kernels::{ElementwiseBf16, PackedGatedBf16, RouterSpec},
+    NvFp4ExpertBank, PagedDecodeBatch, PagedKvCache, Result, RmsNormBf16, RouterBf16,
+    kernels::{BatchedSplitAttentionWorkspace, ElementwiseBf16, PackedGatedBf16, RouterSpec},
 };
 
 /// Complete routed-MoE layer for independent decode rows.
@@ -26,6 +29,7 @@ pub struct BatchedDecodeMoeBlockBf16 {
     router: RouterBf16,
     pre_expert_norm: RmsNormBf16,
     experts: Experts,
+    expert_weights: ExpertWeights,
     post_expert_norm: RmsNormBf16,
     post_feed_forward_norm: RmsNormBf16,
     hidden_ops: ElementwiseBf16,
@@ -60,17 +64,28 @@ impl BatchedDecodeMoeBlockBf16 {
         rows: usize,
     ) -> Result<Self> {
         let cache = backend.prepare_paged_kv(config.attention.layer, config.attention.cache)?;
-        Self::new_with_cache(backend, config, gate, up, down, rows, cache)
+        Self::new_with_cache(
+            backend,
+            config,
+            &ExpertWeights::NvFp4 {
+                gate,
+                up,
+                down,
+                activation_mode: models::weights::BlockActivationMode::WeightAndActivation,
+            },
+            rows,
+            cache,
+            None,
+        )
     }
 
-    pub(in crate::backend) fn new_with_cache(
+    pub(in crate::backend::block) fn new_with_cache(
         backend: &CudaBackend,
         config: DecodeMoeBlockConfig,
-        gate: NvFp4ExpertBank,
-        up: NvFp4ExpertBank,
-        down: NvFp4ExpertBank,
+        expert_weights: &ExpertWeights,
         rows: usize,
         cache: PagedKvCache,
+        workspace: Option<BatchedSplitAttentionWorkspace>,
     ) -> Result<Self> {
         validate(config)?;
         if rows == 0 {
@@ -79,21 +94,13 @@ impl BatchedDecodeMoeBlockBf16 {
         let hidden = config.attention.hidden_size;
         let dense = config.dense_intermediate;
         let epsilon = config.attention.rms_norm_epsilon;
-        let plan = backend.execution_planner().plan_moe(MoePlanRequest::nvfp4(
-            ExecutionPhase::Decode,
-            rows,
-            config.experts,
-            config.top_k,
-            hidden,
-            config.expert_intermediate,
-        ))?;
         let norm = || RmsNormBf16::new(backend, rows, hidden, epsilon);
         let elements = rows
             .checked_mul(hidden)
             .ok_or(Error::InvalidDecoderKernel("batched decode block size overflow"))?;
         Ok(Self {
-            attention: BatchedDecodeAttentionBf16::new_with_cache(
-                backend, config.attention, rows, cache,
+            attention: BatchedDecodeAttentionBf16::new_with_cache_weights_workspace(
+                backend, config.attention, rows, cache, None, workspace,
             )?,
             post_attention_norm: norm()?,
             pre_dense_norm: norm()?,
@@ -119,14 +126,13 @@ impl BatchedDecodeMoeBlockBf16 {
             pre_expert_norm: norm()?,
             experts: Experts::new(
                 backend,
+                ExecutionPhase::Decode,
                 rows,
                 config.top_k,
                 config.activation,
-                plan.execution(),
-                gate,
-                up,
-                down,
+                expert_weights,
             )?,
+            expert_weights: expert_weights.clone(),
             post_expert_norm: norm()?,
             post_feed_forward_norm: norm()?,
             hidden_ops: ElementwiseBf16::compile(&backend.inner.compiler, elements)?,

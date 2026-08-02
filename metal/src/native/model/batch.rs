@@ -103,16 +103,8 @@ fn decode_states(
     inputs: &[DecodeInput],
     states: &mut [(Uuid, SessionState)],
 ) -> Result<Vec<NativeOutput>> {
-    let mut sampled = Vec::with_capacity(inputs.len());
-    for (input, (_, state)) in inputs.iter().zip(states.iter_mut()) {
-        let logits = step::take_pending(state, input.token)?;
-        let token = step::device_token(&logits, input.sampling, stream)?.ok_or_else(|| {
-            Error::InvalidDecodeBatch("packed row does not use device sampling".into())
-        })?;
-        sampled.push(token);
-    }
-    let sampled_refs = sampled.iter().collect::<Vec<_>>();
-    let token_ids = Array::concatenate(&sampled_refs, 0, stream)?;
+    let token_ids = sample_batch(inputs, states, stream)?;
+    token_ids.async_eval()?;
     let positions = states
         .iter()
         .map(|(_, state)| state.model_position().and_then(|position| Ok(i32::try_from(position)?)))
@@ -120,6 +112,33 @@ fn decode_states(
     let mut caches = states.iter_mut().map(|(_, state)| &mut state.cache).collect::<Vec<_>>();
     let logits = model.forward_packed_decode(&token_ids, &mut caches, &positions, stream)?;
     complete_batch(&logits, &token_ids, stream, states)
+}
+
+fn sample_batch(
+    inputs: &[DecodeInput],
+    states: &mut [(Uuid, SessionState)],
+    stream: &crate::engine::Stream,
+) -> Result<Array> {
+    let logits = inputs
+        .iter()
+        .zip(states.iter_mut())
+        .map(|(input, (_, state))| step::take_pending(state, input.token))
+        .collect::<Result<Vec<_>>>()?;
+    if inputs.iter().all(|input| input.sampling == SamplingLogits::None) {
+        let refs = logits.iter().collect::<Vec<_>>();
+        return Ok(Array::concatenate(&refs, 0, stream)?.argmax(stream)?);
+    }
+    let sampled = inputs
+        .iter()
+        .zip(&logits)
+        .map(|(input, logits)| {
+            step::device_token(logits, input.sampling, stream)?.ok_or_else(|| {
+                Error::InvalidDecodeBatch("packed row does not use device sampling".into())
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let refs = sampled.iter().collect::<Vec<_>>();
+    Ok(Array::concatenate(&refs, 0, stream)?)
 }
 
 fn complete_batch(
@@ -136,8 +155,6 @@ fn complete_batch(
         .map(|row| Ok(logits.slice(&[row, 0, 0], &[row + 1, 1, width], stream)?))
         .collect::<Result<Vec<_>>>()?;
     logits.async_eval()?;
-    token_ids.async_eval()?;
-    stream.synchronize()?;
     let tokens = token_ids.to_vec_u32_on_stream(stream)?;
     if tokens.len() != states.len() {
         return Err(Error::InvalidDecodeBatch("sampled token count does not match rows".into()));

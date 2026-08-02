@@ -45,3 +45,25 @@ extern "C" __global__ void libmir_cuda_affine_embedding_bf16_int8(
       weight, scales, biases, selected, output, selected_start,
       tokens, vocab, hidden, group_size, output_scale);
 }
+
+extern "C" __global__ void libmir_cuda_affine_embedding_bf16_fallback(
+    const unsigned int* weight, const __nv_bfloat16* scales,
+    const __nv_bfloat16* biases, const unsigned int* selected,
+    __nv_bfloat16* output, unsigned int selected_start,
+    unsigned int tokens, unsigned int vocab, unsigned int hidden,
+    unsigned int group_size, float output_scale) {
+  const unsigned int index = blockIdx.x * blockDim.x + threadIdx.x;
+  if (index >= tokens * hidden) return;
+  const unsigned int token = selected[selected_start + index / hidden];
+  if (token >= vocab) return;
+  constexpr unsigned int bits = LIBMIR_AFFINE_BITS;
+  const unsigned int column = index % hidden;
+  const unsigned int words_per_row = libmir_cuda_affine_words<bits>(hidden);
+  const unsigned int groups_per_row = hidden / group_size;
+  const unsigned int quantized = libmir_cuda_affine_unpack<bits>(
+      weight + token * words_per_row, column);
+  const unsigned int group = token * groups_per_row + column / group_size;
+  const float value = __bfloat162float(scales[group]) * quantized
+      + __bfloat162float(biases[group]);
+  output[index] = __float2bfloat16_rn(value * output_scale);
+}

@@ -1,0 +1,40 @@
+# Compatibility conversion of JunHowie/Qwen3-0.6B-GPTQ-Int4
+# source revision b9d87006067b0c0c2dea836370d6288e14f112ab
+# conversion: each legacy packed qzero field + 1 modulo 16
+# oracle: identical MLX-LM affine QMM reference after exact serialization conversion
+schema = 2
+family = "dense"
+model_type = "qwen3"
+dtypes = ["BF16"]
+vocab_size = 151936
+context_len = 40960
+kv_cache_blocks = 128
+prompt_tokens = [785, 6722, 315, 9625, 374]
+generated_tokens = [12095, 13, 576, 6722, 315, 9625, 374, 1083, 279, 6722, 315, 279, 3283, 315, 24209, 86355]
+
+[gptq]
+bits = 4
+group_size = 128
+checkpoint_format = "gptq_v2"
+symmetric = true
+activation_order = false
+scale_dtype = "F16"
+
+[tokenizer]
+vocabulary_entries = 151669
+max_token_id = 151668
+added_tokens = 27
+stop_token_ids = [151645, 151643, 128247]
+
+[first_logits]
+token_ids = [12095, 7407, 304, 24209, 2598, 1112, 264, 279]
+scores = [16.375, 14.5, 14.1484375, 14.1015625, 13.6640625, 13.25, 13.203125, 12.9296875]
+absolute_tolerance = 0.25
+
+[metal]
+max_load_active_bytes = 850000000
+max_decode_active_bytes = 850000000
+
+[cuda]
+max_load_active_bytes = 950000000
+max_decode_active_bytes = 950000000

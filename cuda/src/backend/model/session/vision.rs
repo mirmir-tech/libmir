@@ -30,13 +30,12 @@ impl CudaMoeModelSession {
         {
             return Err(Error::InvalidVisionKernel("image embeddings differ from prompt span"));
         }
-        self.ensure_vision_capacity(tokens.len())?;
+        self.ensure_prefill_capacity(tokens.len())?;
         self.prefill_tokens.upload(&self.stream, tokens)?;
         self.embedding.execute_batch(
             self.prefill_tokens.device(),
             0,
             tokens.len(),
-            &self.embedding_weight,
             &mut self.prefill_first,
         )?;
         VisionEmbeddingSplice::compile(
@@ -82,19 +81,6 @@ impl CudaMoeModelSession {
                 layer.execute_prefill_masked(input, output, &plan, table, 0, tokens, image)?;
             }
         }
-        Ok(())
-    }
-
-    fn ensure_vision_capacity(&mut self, tokens: usize) -> Result<()> {
-        if tokens <= self.prefill_tokens.capacity() {
-            return Ok(());
-        }
-        let elements = tokens
-            .checked_mul(self.hidden_size)
-            .ok_or(Error::InvalidDecoderKernel("CUDA vision prefill size overflow"))?;
-        self.prefill_tokens.ensure_capacity(&self.backend, tokens)?;
-        self.prefill_first = self.backend.inner.pool.allocate(&self.stream, elements)?;
-        self.prefill_second = self.backend.inner.pool.allocate(&self.stream, elements)?;
         Ok(())
     }
 }
