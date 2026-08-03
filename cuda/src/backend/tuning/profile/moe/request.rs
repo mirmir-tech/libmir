@@ -7,6 +7,7 @@ impl MoeProfileRequest {
     pub(in crate::backend) const fn nvfp4(
         plan: MoePlanRequest,
         activation: GatedActivation,
+        weight_only: bool,
     ) -> Self {
         Self {
             phase: plan.phase,
@@ -15,7 +16,7 @@ impl MoeProfileRequest {
             top_k: plan.top_k,
             hidden_features: plan.hidden_features,
             intermediate_features: plan.intermediate_features,
-            format: MoeProfileFormat::NvFp4 { activation },
+            format: MoeProfileFormat::NvFp4 { activation, weight_only },
         }
     }
 

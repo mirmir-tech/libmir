@@ -111,9 +111,21 @@ pub struct PrefillRequest {
     pub model: ModelHandle,
     pub session_id: Uuid,
     pub prompt_tokens: Vec<u32>,
+    pub cache_checkpoints: Vec<usize>,
     pub block_table: BlockTable,
     pub cached_tokens: usize,
     pub sampling_logits: SamplingLogits,
+}
+
+impl PrefillRequest {
+    /// Last complete K/V block whose recurrent state can be reused safely.
+    #[must_use]
+    pub fn terminal_cache_checkpoint(&self) -> Option<usize> {
+        let block = self.block_table.block_size().filter(|block| *block > 0)?;
+        let before_tail = self.prompt_tokens.len().checked_sub(block)?;
+        let checkpoint = before_tail / block * block;
+        (checkpoint > 0).then_some(checkpoint)
+    }
 }
 
 #[derive(Debug, Clone)]

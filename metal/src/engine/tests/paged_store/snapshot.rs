@@ -15,7 +15,7 @@ fn retains_only_pages_reachable_from_the_snapshot_offset() -> Result<()> {
 }
 
 #[test]
-fn grows_a_snapshot_to_its_reserved_capacity_without_doubling() -> Result<()> {
+fn grows_a_snapshot_with_amortized_capacity() -> Result<()> {
     let stream = Stream::new_gpu()?;
     let initial = Array::from_f32(&[1.0; 8], &[1, 1, 4, 2])?;
     let mut cache = KvCache::new_paged(2, 1)?;
@@ -27,6 +27,6 @@ fn grows_a_snapshot_to_its_reserved_capacity_without_doubling() -> Result<()> {
     let context = snapshot.update(&extension, &extension, &stream)?;
 
     let pages = context.paged.ok_or(Error::NullHandle("paged context"))?.key_pages;
-    assert_eq!(pages.shape()?[1], 6);
+    assert_eq!(pages.shape()?[1], 8);
     Ok(())
 }

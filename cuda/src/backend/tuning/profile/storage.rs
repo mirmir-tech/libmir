@@ -12,7 +12,7 @@ use super::{
 };
 use crate::{AttentionExecution, DenseExecution, DensePlanRequest};
 
-const SCHEMA: u32 = 14;
+const SCHEMA: u32 = 15;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(super) struct DeviceKey {
@@ -67,7 +67,9 @@ pub(super) fn stored_moe_entries(
         .collect::<Vec<_>>();
     stored.sort_by_key(|entry| {
         let format = match entry.request.format {
-            MoeProfileFormat::NvFp4 { activation } => (0, 0, 4, activation.code()),
+            MoeProfileFormat::NvFp4 { activation, weight_only } => {
+                (0, usize::from(weight_only), 4, activation.code())
+            },
             MoeProfileFormat::Affine { group_size, bits, activation } => {
                 (1, group_size, bits, activation.code())
             },

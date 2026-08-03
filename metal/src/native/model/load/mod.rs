@@ -38,10 +38,21 @@ impl LoadedModel {
         Self::load_with_config(manifest, Arc::default(), progress)
     }
 
+    #[cfg(test)]
     #[allow(clippy::too_many_lines)]
     pub fn load_with_config(
         manifest: &ModelManifest,
         config: Arc<MetalConfig>,
+        progress: &mut dyn FnMut(MetalProgressEvent),
+    ) -> Result<Self> {
+        Self::load_with_config_and_pool(manifest, config, Arc::default(), progress)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn load_with_config_and_pool(
+        manifest: &ModelManifest,
+        config: Arc<MetalConfig>,
+        paged_arenas: Arc<crate::engine::PagedArenaPool>,
         progress: &mut dyn FnMut(MetalProgressEvent),
     ) -> Result<Self> {
         let layout = ModelLayout::inspect(&manifest.path)?;
@@ -78,7 +89,7 @@ impl LoadedModel {
             },
         )?;
         let tensor_count = tensors.len();
-        let stream = Stream::new_gpu_with_config(config)?;
+        let stream = Stream::new_gpu_with_config_and_pool(config, paged_arenas)?;
         let _configured_wired_limit = configure_recommended_wired_limit()?;
         let execution = match &task_plan {
             TaskExecutionPlan::Embedding { decoder, task, tensors: tensor_layout } => {

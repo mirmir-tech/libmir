@@ -16,6 +16,8 @@ pub(super) struct Sequence {
     state: Option<SessionState>,
     pub position: usize,
     prefix_cache_tokens: usize,
+    checkpoints: Vec<usize>,
+    next_checkpoint: usize,
     cached_logits: Option<crate::engine::Array>,
     pub output: Option<NativePrefill>,
     pub started: Instant,
@@ -43,12 +45,26 @@ impl Sequence {
         let reserve =
             request.prompt_tokens.len().max(loaded.stream.config().cache.kv_reserve_tokens);
         state.cache.reserve(reserve)?;
+        let page_size = loaded.stream.config().kv_cache.block_size.max(1);
+        state
+            .cache
+            .plan_contiguous(request.prompt_tokens.len().saturating_add(page_size))?;
+        let checkpoints = request
+            .cache_checkpoints
+            .iter()
+            .copied()
+            .filter(|checkpoint| {
+                *checkpoint > position && *checkpoint < request.prompt_tokens.len()
+            })
+            .collect();
         Ok(Self {
             request,
             execution_sampling,
             state: Some(state),
             position,
             prefix_cache_tokens: position,
+            checkpoints,
+            next_checkpoint: 0,
             cached_logits,
             output: None,
             started: Instant::now(),
@@ -62,7 +78,10 @@ impl Sequence {
     pub fn prefill_count(&self, loaded: &LoadedModel, budget: usize) -> Option<usize> {
         let prefix_len = self.request.prompt_tokens.len().saturating_sub(1);
         (self.position < prefix_len).then(|| {
-            loaded.prefill_chunk_len(self.position, prefix_len - self.position).min(budget)
+            loaded
+                .prefill_chunk_len(self.position, prefix_len - self.position)
+                .min(budget)
+                .min(self.checkpoint_distance())
         })
     }
 
@@ -71,7 +90,7 @@ impl Sequence {
     }
 
     pub fn advance_packed(
-        loaded: &LoadedModel,
+        loaded: &mut LoadedModel,
         sequences: &mut [&mut Self],
         count: usize,
     ) -> Result<()> {
@@ -97,10 +116,13 @@ impl Sequence {
             model, &loaded.stream, &mut states, &positions, &tokens, count,
         )?;
         state_root.async_eval()?;
-        loaded.stream.synchronize()?;
-        let _reclaimed = LoadedModel::reclaim_prefill_allocator_cache()?;
+        loaded.settle_prefill_graph()?;
+        for state in &states {
+            state.cache.detach_evaluated_graphs()?;
+        }
         for sequence in sequences {
             sequence.position += count;
+            sequence.cache_checkpoint(loaded)?;
         }
         Ok(())
     }
@@ -115,7 +137,10 @@ impl Sequence {
         let prefix_len = prompt_len - 1;
         if self.position < prefix_len {
             let remaining = prefix_len - self.position;
-            let count = loaded.prefill_chunk_len(self.position, remaining).min(budget);
+            let count = loaded
+                .prefill_chunk_len(self.position, remaining)
+                .min(budget)
+                .min(self.checkpoint_distance());
             let tokens = &self.request.prompt_tokens[self.position..self.position + count];
             let model = loaded.execution.decoder()?;
             let state = self.state.as_mut().ok_or_else(|| {
@@ -124,9 +149,10 @@ impl Sequence {
             let state_root =
                 step::forward_prefill_state(model, &loaded.stream, state, tokens, self.position)?;
             state_root.async_eval()?;
-            loaded.stream.synchronize()?;
-            let _reclaimed = LoadedModel::reclaim_prefill_allocator_cache()?;
+            loaded.settle_prefill_graph()?;
+            state.cache.detach_evaluated_graphs()?;
             self.position += count;
+            self.cache_checkpoint(loaded)?;
             return Ok(count);
         }
         let model = loaded.execution.decoder()?;
@@ -145,6 +171,32 @@ impl Sequence {
         )?;
         self.complete(loaded, logits)?;
         Ok(1)
+    }
+
+    fn checkpoint_distance(&self) -> usize {
+        self.checkpoints
+            .get(self.next_checkpoint)
+            .map_or(usize::MAX, |checkpoint| checkpoint.saturating_sub(self.position).max(1))
+    }
+
+    fn cache_checkpoint(&mut self, loaded: &mut LoadedModel) -> Result<()> {
+        if self.checkpoints.get(self.next_checkpoint) != Some(&self.position) {
+            return Ok(());
+        }
+        let state = self
+            .state
+            .as_ref()
+            .ok_or_else(|| Error::InvalidPrefillBatch("prefill sequence has no state".into()))?;
+        let bytes = loaded.estimated_prefix_bytes(self.position)?;
+        crate::native::model::cache_prefix_checkpoint(
+            &mut loaded.prefixes,
+            &loaded.info.manifest.id,
+            &self.request.prompt_tokens[..self.position],
+            state,
+            bytes,
+        )?;
+        self.next_checkpoint += 1;
+        Ok(())
     }
 
     fn complete(&mut self, loaded: &mut LoadedModel, logits: crate::engine::Array) -> Result<()> {

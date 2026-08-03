@@ -82,6 +82,7 @@ pub use linear::{
     SelectedAffineGatedBf16Linear, SelectedAffinePairBf16Linear, SelectedAffineReduceBf16Linear,
     SelectedNvFp4LinearBf16, SelectedNvFp4MoeBf16, SelectedNvFp4TensorCoreMoeBf16,
 };
+use linear::{BucketedNvFp4Scratch, BucketedNvFp4ScratchConfig};
 use mircuda::{Compiler, Context, DeviceInfo, MemoryPool, Stream};
 pub use model::{
     CudaDecodeBatch, CudaModelSessionConfig, CudaMoeModelSession, CudaMoeModelTemplate,
@@ -102,6 +103,9 @@ pub use sampling::{DeviceBatchSamplerBf16, DeviceSamplerBf16};
 pub use shared_moe::{
     AffineSharedExpertMoeConfig, AffineSharedExpertMoeWeights, CudaAffineSharedExpertMoe,
     CudaAffineSharedExpertMoeExecution,
+};
+pub(crate) use shared_routed::{
+    CudaSharedRoutedDecodeBatch, CudaSharedRoutedPrefillBatch, SharedRoutedCheckpoint,
 };
 pub use shared_routed::{
     CudaSharedRoutedLayerState, CudaSharedRoutedModelSession, CudaSharedRoutedModelTemplate,
@@ -126,6 +130,8 @@ struct CudaRuntime {
     pool: MemoryPool,
     compiler: Compiler,
     mxfp8_scratch: Mutex<HashMap<(usize, usize), Arc<mircuda::MxFp8TensorCoreScratch>>>,
+    nvfp4_bucket_scratch:
+        Mutex<HashMap<BucketedNvFp4ScratchConfig, std::sync::Weak<Mutex<BucketedNvFp4Scratch>>>>,
     planner: CudaExecutionPlanner,
     tuner: tuning::CudaAutoTuner,
 }

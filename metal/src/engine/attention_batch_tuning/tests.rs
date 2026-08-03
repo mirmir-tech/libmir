@@ -1,5 +1,10 @@
 use std::sync::Arc;
 
+mod prefill;
+mod support;
+
+use support::{assert_outputs_close, native_decode_context, paged_context, patterned};
+
 use super::{
     BatchAttentionExecution, candidates, compatible_groups, execute, fallback, forward, paged,
     profile,
@@ -130,14 +135,6 @@ fn partitions_outlier_contexts_without_discarding_the_compatible_batch() -> Resu
 }
 
 #[test]
-fn leaves_multi_token_suffixes_outside_decode_tuning() -> Result<()> {
-    let query = Array::from_f32(&[1.0, 0.0, 0.0, 1.0], &[1, 1, 2, 2])?;
-    let context = context(&[1.0, 0.0, 0.0, 1.0, 2.0, 0.0], &[1.0; 6])?;
-    assert!(profile::key(&[&query, &query], &[&context, &context], true)?.is_none());
-    Ok(())
-}
-
-#[test]
 fn fragmented_pages_retain_measured_view_candidates() -> Result<()> {
     let query = Array::from_f32(&[1.0, 0.0], &[1, 1, 1, 2])?;
     let context = context(&[1.0, 0.0, 0.0, 1.0, 2.0, 0.0], &[1.0; 6])?;
@@ -169,14 +166,43 @@ fn fragmented_pages_retain_measured_view_candidates() -> Result<()> {
             BatchAttentionExecution::PagedBatched,
         ]
     );
+    key.view = false;
+    assert_eq!(
+        candidates(key, true, true),
+        vec![BatchAttentionExecution::PagedRows, BatchAttentionExecution::PagedBatched]
+    );
+    key.view = true;
     key.head_dim = 128;
     key.query_heads = 32;
     key.kv_heads = 8;
+    assert_eq!(fallback(key, true), BatchAttentionExecution::PagedRows);
+    key.head_dim = 512;
+    key.query_heads = 16;
+    key.kv_heads = 2;
     assert_eq!(fallback(key, true), BatchAttentionExecution::PagedRows);
     key.context_bucket = 8_192;
     assert!(profile::prefer_paged_batched(key, true));
     key.fragmented = false;
     assert_eq!(fallback(key, true), BatchAttentionExecution::Rows);
+    Ok(())
+}
+
+#[test]
+fn groups_native_paged_rows_by_page_span_without_requiring_a_view() -> Result<()> {
+    let stream = Stream::new_gpu()?;
+    let query = Array::from_f32(&[0.0; 32], &[1, 1, 1, 32])?;
+    let first = native_decode_context(1_025, 32, 13, &stream)?;
+    let second = native_decode_context(1_041, 32, 17, &stream)?;
+    let queries = [&query, &query];
+    let contexts = [&first, &second];
+    assert_eq!(compatible_groups(&queries, &contexts, false)?, [vec![0, 1]]);
+    let key = profile::key(&queries, &contexts, false)?.unwrap();
+    assert!(!key.view);
+    assert!(paged::batchable(&contexts));
+    assert_eq!(
+        candidates(key, true, true),
+        [BatchAttentionExecution::PagedRows, BatchAttentionExecution::PagedBatched]
+    );
     Ok(())
 }
 
@@ -214,36 +240,4 @@ fn context(keys: &[f32], values: &[f32]) -> Result<KvContext> {
         paged: None,
         mask: None,
     })
-}
-
-fn paged_context(
-    tokens: usize,
-    head_dim: usize,
-    seed: usize,
-    stream: &Stream,
-) -> Result<KvContext> {
-    let values = (0..tokens * head_dim).map(|index| patterned(index, seed)).collect::<Vec<_>>();
-    let keys = Array::from_f32(&values, &[1, 1, i32::try_from(tokens)?, i32::try_from(head_dim)?])?;
-    let values = Array::from_f32(
-        &values.iter().rev().copied().collect::<Vec<_>>(),
-        &[1, 1, i32::try_from(tokens)?, i32::try_from(head_dim)?],
-    )?;
-    let mut cache = KvCache::new_paged(tokens, 16)?;
-    cache.update_for_attention_mode(&keys, &values, stream, 0, PagedContextMode::Both)
-}
-
-fn patterned(index: usize, seed: usize) -> f32 {
-    u8::try_from((index * seed + 3) % 101).map_or(0.0, f32::from) / 50.0 - 1.0
-}
-
-fn assert_outputs_close(expected: &[Array], actual: &[Array], stream: &Stream) -> Result<()> {
-    let expected = Array::concatenate(&expected.iter().collect::<Vec<_>>(), 0, stream)?;
-    let actual = Array::concatenate(&actual.iter().collect::<Vec<_>>(), 0, stream)?;
-    actual.async_eval()?;
-    stream.synchronize()?;
-    let expected = expected.to_vec_f32()?;
-    let actual = actual.to_vec_f32()?;
-    assert_eq!(expected.len(), actual.len());
-    assert!(expected.iter().zip(actual).all(|(left, right)| (left - right).abs() < 1.0e-4));
-    Ok(())
 }

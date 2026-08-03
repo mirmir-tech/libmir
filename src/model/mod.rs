@@ -17,7 +17,7 @@ mod warmup;
 
 use std::{
     path::Path,
-    sync::{Arc, Condvar, Mutex},
+    sync::{Arc, Mutex},
 };
 
 pub use admission::{
@@ -37,7 +37,7 @@ use models::{
     weights::{TensorCatalog, TensorReadiness, VisionTensorSchema},
 };
 pub use remote::{RemoteModelContract, RemoteTaskMetadata, RemoteVisionContract};
-use runtime::{backend::ModelHandle, kv::KvCache};
+use runtime::backend::ModelHandle;
 pub use vision::{IMAGE_PLACEHOLDER, PreparedVisionPrompt};
 
 use self::helpers::{model_id, validate_context};
@@ -68,6 +68,8 @@ pub struct PreparedPrompt {
     pub prompt: ChatPrompt,
     /// Tokenized prompt passed to the inference backend.
     pub tokens: TokenizedPrompt,
+    /// Stable chat-message boundaries worth retaining as reusable cache states.
+    pub cache_checkpoints: Vec<usize>,
 }
 
 /// Lazily initialized inference library configured for one accelerator backend.
@@ -75,6 +77,7 @@ pub struct PreparedPrompt {
 pub struct Library {
     state: Arc<Mutex<library::LibraryState>>,
     memory: memory_admission::ModelMemoryManager,
+    caches: cache::KvCachePools,
     config: RuntimeConfig,
 }
 
@@ -89,8 +92,7 @@ struct ModelInner {
     engine: Engine,
     handle: ModelHandle,
     config: RuntimeConfig,
-    cache: Mutex<KvCache>,
-    cache_ready: Condvar,
+    cache: Arc<cache::SharedKvCache>,
     cache_cohort: cache_cohort::CacheCohort,
     coordinator: ModelCoordinator,
     _memory: memory_admission::ModelMemoryLease,
@@ -164,7 +166,8 @@ impl ModelDescriptor {
             return Err(Error::EmptyPrompt);
         }
         validate_context(tokens.token_ids.len(), generation.max_tokens, self.metadata.context_len)?;
-        Ok(PreparedPrompt { prompt, tokens })
+        let cache_checkpoints = self.cache_checkpoints(request, &tokens.token_ids)?;
+        Ok(PreparedPrompt { prompt, tokens, cache_checkpoints })
     }
 
     /// Builds the backend-neutral manifest used to identify and load this

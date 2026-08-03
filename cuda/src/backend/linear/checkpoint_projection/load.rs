@@ -19,7 +19,7 @@ impl CheckpointProjectionWeight {
         {
             return match format.activation_mode {
                 BlockActivationMode::WeightOnly => {
-                    nvfp4::load_weight_only(tensors, binding).map(Self::NvFp4WeightOnly)
+                    nvfp4::load_weight_only(backend, tensors, binding).map(Self::NvFp4WeightOnly)
                 },
                 BlockActivationMode::WeightAndActivation => {
                     nvfp4::load_native(backend, tensors, binding).map(Self::NvFp4)

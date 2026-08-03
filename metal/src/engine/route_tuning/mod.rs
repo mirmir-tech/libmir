@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use runtime::tuning::{TuningMode, select_fastest_candidate};
+use runtime::tuning::{TuningMode, select_robust_candidate};
 
 use super::{Array, Dtype, Error, Result, Stream};
 
@@ -52,10 +52,10 @@ pub(super) fn forward<G, F, K, U>(
     paths: (G, F, K, U),
 ) -> Result<Array>
 where
-    G: Fn() -> Result<Array>,
-    F: Fn() -> Result<Array>,
-    K: Fn() -> Result<Array>,
-    U: Fn() -> Result<Array>,
+    G: Fn(&Array) -> Result<Array>,
+    F: Fn(&Array) -> Result<Array>,
+    K: Fn(&Array) -> Result<Array>,
+    U: Fn(&Array) -> Result<Array>,
 {
     let (sorted_graph, sorted_fused, grouped_fused, unsorted) = paths;
     let key = key(spec, input, indices)?;
@@ -72,17 +72,20 @@ where
             Some(fallback)
         }
     };
+    let paths: [&dyn Fn(&Array) -> Result<Array>; 4] =
+        [&sorted_graph, &sorted_fused, &grouped_fused, &unsorted];
     decision.map_or_else(
-        || tune(key, fallback, stream, [&sorted_graph, &sorted_fused, &grouped_fused, &unsorted]),
-        |execution| execute(execution, [&sorted_graph, &sorted_fused, &grouped_fused, &unsorted]),
+        || tune(key, fallback, indices, stream, paths),
+        |execution| execute(execution, indices, paths),
     )
 }
 
 fn tune(
     key: RoutingKey,
     fallback: RoutingExecution,
+    indices: &Array,
     stream: &Stream,
-    paths: [&dyn Fn() -> Result<Array>; 4],
+    paths: [&dyn Fn(&Array) -> Result<Array>; 4],
 ) -> Result<Array> {
     let started = Instant::now();
     let result = (|| {
@@ -92,19 +95,20 @@ fn tune(
             RoutingExecution::GroupedFused,
             RoutingExecution::Unsorted,
         ];
+        let patterns = route_patterns(key, indices)?;
+        let routes = [indices, &patterns.balanced, &patterns.hot_set];
         let timings = executions
-            .map(|execution| measure(execution, stream, paths))
+            .map(|execution| {
+                routes
+                    .map(|indices| measure(execution, indices, stream, paths))
+                    .into_iter()
+                    .collect::<Result<Vec<_>>>()
+            })
             .into_iter()
             .collect::<Result<Vec<_>>>()?;
-        let fastest = timings
-            .iter()
-            .enumerate()
-            .min_by_key(|(_, duration)| *duration)
-            .map_or(0, |(index, _)| index);
         let fallback_index =
             executions.iter().position(|execution| *execution == fallback).unwrap_or(0);
-        let selected = select_fastest_candidate(
-            fastest,
+        let selected = select_robust_candidate(
             fallback_index,
             &timings,
             stream.config().tuning.minimum_improvement_bps,
@@ -121,11 +125,14 @@ fn tune(
             intermediate_features = key.intermediate,
             timings_us = ?timings
                 .iter()
-                .map(|duration| duration.as_secs_f64() * 1_000_000.0)
+                .map(|scenarios| scenarios
+                    .iter()
+                    .map(|duration| duration.as_secs_f64() * 1_000_000.0)
+                    .collect::<Vec<_>>())
                 .collect::<Vec<_>>(),
             "selected Metal expert routing execution profile"
         );
-        execute(execution, paths)
+        execute(execution, indices, paths)
     })();
     result.or_else(|error| {
         record(key, fallback, started.elapsed(), stream);
@@ -135,23 +142,24 @@ fn tune(
             ?fallback,
             "Metal expert routing tuning failed; retaining shape fallback"
         );
-        execute(fallback, paths)
+        execute(fallback, indices, paths)
     })
 }
 
 fn measure(
     execution: RoutingExecution,
+    indices: &Array,
     stream: &Stream,
-    paths: [&dyn Fn() -> Result<Array>; 4],
+    paths: [&dyn Fn(&Array) -> Result<Array>; 4],
 ) -> Result<Duration> {
     for _ in 0..stream.config().tuning.warmup_iterations {
-        execute(execution, paths)?.async_eval()?;
+        execute(execution, indices, paths)?.async_eval()?;
     }
     stream.synchronize()?;
     let iterations = stream.config().tuning.measurement_iterations.max(1);
     let started = Instant::now();
     for _ in 0..iterations {
-        execute(execution, paths)?.async_eval()?;
+        execute(execution, indices, paths)?.async_eval()?;
     }
     stream.synchronize()?;
     Ok(started.elapsed() / iterations)
@@ -159,14 +167,35 @@ fn measure(
 
 fn execute(
     execution: RoutingExecution,
-    [sorted_graph, sorted_fused, grouped_fused, unsorted]: [&dyn Fn() -> Result<Array>; 4],
+    indices: &Array,
+    [sorted_graph, sorted_fused, grouped_fused, unsorted]: [&dyn Fn(&Array) -> Result<Array>; 4],
 ) -> Result<Array> {
     match execution {
-        RoutingExecution::Unsorted => unsorted(),
-        RoutingExecution::SortedGraph => sorted_graph(),
-        RoutingExecution::SortedFused => sorted_fused(),
-        RoutingExecution::GroupedFused => grouped_fused(),
+        RoutingExecution::Unsorted => unsorted(indices),
+        RoutingExecution::SortedGraph => sorted_graph(indices),
+        RoutingExecution::SortedFused => sorted_fused(indices),
+        RoutingExecution::GroupedFused => grouped_fused(indices),
     }
+}
+
+struct RoutePatterns {
+    balanced: Array,
+    hot_set: Array,
+}
+
+fn route_patterns(key: RoutingKey, indices: &Array) -> Result<RoutePatterns> {
+    let shape = indices.shape()?;
+    let assignments = elements(&shape)?;
+    let balanced = (0..assignments)
+        .map(|assignment| u32::try_from(assignment % key.experts).map_err(Error::from))
+        .collect::<Result<Vec<_>>>()?;
+    let hot_set = (0..assignments)
+        .map(|assignment| u32::try_from(assignment % key.top_k).map_err(Error::from))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(RoutePatterns {
+        balanced: Array::from_u32(&balanced, &shape)?,
+        hot_set: Array::from_u32(&hot_set, &shape)?,
+    })
 }
 
 fn record(key: RoutingKey, execution: RoutingExecution, elapsed: Duration, stream: &Stream) {

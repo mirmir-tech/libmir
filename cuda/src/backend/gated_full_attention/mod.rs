@@ -1,5 +1,7 @@
+mod batch;
 mod execution;
 mod layer;
+mod prefill;
 mod scratch;
 #[cfg(test)]
 mod tests;
@@ -191,13 +193,22 @@ impl CudaAffineGatedFullAttention {
         storage: KvStorageSpec,
         max_sequence_blocks: usize,
     ) -> Result<CudaAffineGatedFullAttentionState> {
+        let cache = self.backend.prepare_paged_kv(layer, storage)?;
+        self.prepare_state_with_cache(cache, max_sequence_blocks)
+    }
+
+    pub(crate) fn prepare_state_with_cache(
+        &self,
+        cache: PagedKvCache,
+        max_sequence_blocks: usize,
+    ) -> Result<CudaAffineGatedFullAttentionState> {
+        let storage = cache.storage_spec();
         if storage.kv_heads != self.config.key_value_heads
             || storage.key_head_dim != self.config.head_dim
             || storage.value_head_dim != self.config.head_dim
         {
             return Err(Error::InvalidPagedKv("gated attention KV geometry mismatch"));
         }
-        let cache = self.backend.prepare_paged_kv(layer, storage)?;
         let attention = self.backend.prepare_paged_attention_bf16(
             &cache,
             self.config.query_heads,

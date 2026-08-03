@@ -9,10 +9,11 @@ type PackedStep = Option<(usize, Vec<(usize, MetalProgressEvent)>)>;
 impl Batch {
     pub(super) fn execute_packed(
         &mut self,
-        loaded: &LoadedModel,
+        loaded: &mut LoadedModel,
         budget: usize,
     ) -> Result<PackedStep> {
-        if !loaded.execution.decoder()?.supports_packed_prefill() {
+        let model = loaded.execution.decoder()?;
+        if !model.supports_packed_prefill() {
             return Ok(None);
         }
         let candidates = self

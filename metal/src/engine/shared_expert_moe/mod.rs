@@ -167,23 +167,23 @@ impl SharedExpertMoe {
             indices,
             stream,
             (
-                || {
+                |indices| {
                     let sorted = input.sort_expert_inputs(indices, stream)?;
                     let output = self.routed_mlp(&sorted.input, &sorted.indices, true, stream)?;
                     sorted.restore(&output, stream)?.weighted_sum(weights, -2, stream)
                 },
-                || {
+                |indices| {
                     let sorted = input.sort_expert_inputs(indices, stream)?;
                     let output = self.routed_mlp(&sorted.input, &sorted.indices, true, stream)?;
                     sorted.restore_weighted(&output, weights, stream)
                 },
-                || {
+                |indices| {
                     let grouped =
                         input.group_expert_inputs(indices, self.config.expert_count, stream)?;
                     let output = self.routed_mlp(&grouped.input, &grouped.indices, true, stream)?;
                     grouped.restore_weighted(&output, weights, stream)
                 },
-                || {
+                |indices| {
                     let input = input.expand_dims(&[-2, -3], stream)?;
                     self.routed_mlp(&input, indices, false, stream)?
                         .squeeze_axis(-2, stream)?

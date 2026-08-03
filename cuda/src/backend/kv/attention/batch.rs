@@ -117,6 +117,13 @@ impl BatchedPagedAttentionBf16 {
             batch.maximum_tokens(),
         )
     }
+
+    pub(crate) fn capture_partitions(&self, batch: &PagedDecodeBatch) -> usize {
+        batch
+            .maximum_tokens()
+            .div_ceil(self.split.partition_tokens())
+            .min(self.split.max_partitions())
+    }
 }
 
 fn compile_operations(

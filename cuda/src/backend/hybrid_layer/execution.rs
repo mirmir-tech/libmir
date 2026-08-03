@@ -85,6 +85,58 @@ impl CudaAffineGatedDeltaMoeExecution {
         self.residual.add(stream, &self.scratch.residual, &self.scratch.moe, output)
     }
 
+    pub(crate) fn execute_packed(
+        &mut self,
+        input: &DeviceBuffer<bf16>,
+        states: &mut [&mut CudaGatedDeltaState],
+        output: &mut DeviceBuffer<bf16>,
+    ) -> Result<()> {
+        self.prepare_packed(input, states, output)?;
+        self.execute_prepared_packed(input, output)?;
+        self.commit_packed(states)
+    }
+
+    pub(crate) fn prepare_packed(
+        &mut self,
+        input: &DeviceBuffer<bf16>,
+        states: &[&mut CudaGatedDeltaState],
+        output: &DeviceBuffer<bf16>,
+    ) -> Result<()> {
+        self.validate(input, output)?;
+        self.attention
+            .prepare_packed(&self.scratch.normalized, states, &self.scratch.attention)
+    }
+
+    pub(crate) fn execute_prepared_packed(
+        &mut self,
+        input: &DeviceBuffer<bf16>,
+        output: &mut DeviceBuffer<bf16>,
+    ) -> Result<()> {
+        let stream = &self.backend.inner.stream;
+        self.input_norm.execute(
+            stream,
+            input,
+            bf16(&self.input_norm_weight)?,
+            &mut self.scratch.normalized,
+        )?;
+        self.attention
+            .execute_prepared_packed(&self.scratch.normalized, &mut self.scratch.attention)?;
+        self.residual
+            .add(stream, input, &self.scratch.attention, &mut self.scratch.residual)?;
+        self.post_attention_norm.execute(
+            stream,
+            &self.scratch.residual,
+            bf16(&self.post_attention_norm_weight)?,
+            &mut self.scratch.normalized,
+        )?;
+        self.moe.execute(&self.scratch.normalized, &mut self.scratch.moe)?;
+        self.residual.add(stream, &self.scratch.residual, &self.scratch.moe, output)
+    }
+
+    pub(crate) fn commit_packed(&self, states: &mut [&mut CudaGatedDeltaState]) -> Result<()> {
+        self.attention.commit_packed(states)
+    }
+
     fn validate(&self, input: &DeviceBuffer<bf16>, output: &DeviceBuffer<bf16>) -> Result<()> {
         let expected = self.scratch.residual.len();
         if input.len() != expected || output.len() != expected {

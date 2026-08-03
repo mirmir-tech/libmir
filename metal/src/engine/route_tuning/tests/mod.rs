@@ -12,6 +12,7 @@ use crate::{
 };
 
 mod benchmark;
+mod patterns;
 
 #[test]
 fn buckets_route_shapes_without_reading_indices() -> Result<()> {
@@ -41,10 +42,10 @@ fn tuned_routing_matches_unsorted_expert_mlp() -> Result<()> {
         &indices,
         &stream,
         (
-            || sorted(&weights, &input, &indices, &stream),
-            || sorted(&weights, &input, &indices, &stream),
-            || sorted(&weights, &input, &indices, &stream),
-            || unsorted(&weights, &input, &indices, true, &stream),
+            |indices| sorted(&weights, &input, indices, &stream),
+            |indices| sorted(&weights, &input, indices, &stream),
+            |indices| sorted(&weights, &input, indices, &stream),
+            |indices| unsorted(&weights, &input, indices, true, &stream),
         ),
     )?;
     let expected = unsorted(&weights, &input, &indices, false, &stream)?;
@@ -109,23 +110,23 @@ fn benchmarks_sorted_unsorted_crossover() -> Result<()> {
                 &indices,
                 &stream,
                 (
-                    || {
-                        sorted(&weights, &input, &indices, &stream)?
+                    |indices| {
+                        sorted(&weights, &input, indices, &stream)?
                             .weighted_sum(&routing, -2, &stream)
                     },
-                    || {
-                        let sorted = input.sort_expert_inputs(&indices, &stream)?;
+                    |indices| {
+                        let sorted = input.sort_expert_inputs(indices, &stream)?;
                         let output = mlp(&weights, &sorted.input, &sorted.indices, true, &stream)?;
                         sorted.restore_weighted(&output, &routing, &stream)
                     },
-                    || {
-                        let grouped = input.group_expert_inputs(&indices, 8, &stream)?;
+                    |indices| {
+                        let grouped = input.group_expert_inputs(indices, 8, &stream)?;
                         let output =
                             mlp(&weights, &grouped.input, &grouped.indices, true, &stream)?;
                         grouped.restore_weighted(&output, &routing, &stream)
                     },
-                    || {
-                        unsorted(&weights, &input, &indices, fused, &stream)?
+                    |indices| {
+                        unsorted(&weights, &input, indices, fused, &stream)?
                             .weighted_sum(&routing, -2, &stream)
                     },
                 ),

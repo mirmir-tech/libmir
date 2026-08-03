@@ -1,11 +1,14 @@
 mod moe;
 mod pair;
 mod projection;
+mod scratch;
 
 use mircuda::{DeviceBuffer, VariableGroupedFp4Plan, bf16};
 pub use moe::BucketedNvFp4MoeBf16;
 pub(super) use pair::BucketedNvFp4PairBf16;
 use projection::BucketedNvFp4Projection;
+use scratch::ProjectionScratch;
+pub(in crate::backend) use scratch::{BucketedNvFp4Scratch, BucketedNvFp4ScratchConfig};
 
 use self::moe::ExpertBuckets;
 use super::{CudaBackend, NvFp4ExpertBank};
@@ -41,34 +44,34 @@ impl BucketedNvFp4LinearBf16 {
         input: &DeviceBuffer<bf16>,
         selected: &DeviceBuffer<u32>,
         output: &mut DeviceBuffer<bf16>,
+        scratch: &mut ProjectionScratch,
     ) -> Result<()> {
-        self.projection.quantize_ranked(preparation, buckets, input, selected)?;
-        self.execute_prepared(buckets, output)
+        self.projection
+            .quantize_ranked(preparation, buckets, input, selected, scratch)?;
+        self.execute_prepared(buckets, output, scratch)
     }
 
     fn execute_prepared(
         &mut self,
         buckets: &ExpertBuckets,
         output: &mut DeviceBuffer<bf16>,
+        scratch: &ProjectionScratch,
     ) -> Result<()> {
         validate_output(&self.projection, output)?;
         let projection = &self.projection;
         Ok(self.plan.execute(
             &projection.stream,
-            &projection.packed,
-            &projection.scales,
+            &scratch.packed,
+            &scratch.scales,
             &projection.bank.weight,
             &projection.bank.cutlass_scales,
             &projection.bank.combined_scales,
             &buckets.indices,
             &buckets.counts,
             &buckets.offsets,
+            &buckets.scale_offsets,
             output,
         )?)
-    }
-
-    pub(super) fn output_elements(&self) -> Result<usize> {
-        self.projection.output_elements()
     }
 
     pub(super) const fn output_features(&self) -> usize {

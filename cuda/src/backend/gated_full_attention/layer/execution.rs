@@ -5,21 +5,21 @@ use super::{AffineGatedFullAttentionMoeLayerConfig, scratch::FullAttentionLayerS
 use crate::{
     CudaAffineGatedFullAttention, CudaAffineGatedFullAttentionExecution,
     CudaAffineGatedFullAttentionState, CudaAffineSharedExpertMoe,
-    CudaAffineSharedExpertMoeExecution, CudaBackend, CudaTensor, Error, Result,
+    CudaAffineSharedExpertMoeExecution, CudaBackend, CudaTensor, Error, PagedPrefillBatch, Result,
     kernels::{ElementwiseBf16, ShiftedRmsNorm},
 };
 
 #[derive(Debug)]
 pub struct CudaAffineGatedFullAttentionMoeExecution {
-    backend: CudaBackend,
-    attention: CudaAffineGatedFullAttentionExecution,
-    moe: CudaAffineSharedExpertMoeExecution,
-    input_norm: ShiftedRmsNorm,
-    post_attention_norm: ShiftedRmsNorm,
-    residual: ElementwiseBf16,
-    input_norm_weight: CudaTensor,
-    post_attention_norm_weight: CudaTensor,
-    scratch: FullAttentionLayerScratch,
+    pub(super) backend: CudaBackend,
+    pub(super) attention: CudaAffineGatedFullAttentionExecution,
+    pub(super) moe: CudaAffineSharedExpertMoeExecution,
+    pub(super) input_norm: ShiftedRmsNorm,
+    pub(super) post_attention_norm: ShiftedRmsNorm,
+    pub(super) residual: ElementwiseBf16,
+    pub(super) input_norm_weight: CudaTensor,
+    pub(super) post_attention_norm_weight: CudaTensor,
+    pub(super) scratch: FullAttentionLayerScratch,
 }
 
 impl CudaAffineGatedFullAttentionMoeExecution {
@@ -76,6 +76,41 @@ impl CudaAffineGatedFullAttentionMoeExecution {
         )
     }
 
+    pub(crate) fn execute_packed_prefill(
+        &mut self,
+        input: &DeviceBuffer<bf16>,
+        positions: &DeviceBuffer<u32>,
+        states: &mut [&mut CudaAffineGatedFullAttentionState],
+        batch: &PagedPrefillBatch,
+        output: &mut DeviceBuffer<bf16>,
+    ) -> Result<()> {
+        self.validate(input, output)?;
+        let stream = &self.backend.inner.stream;
+        self.input_norm.execute(
+            stream,
+            input,
+            bf16_tensor(&self.input_norm_weight)?,
+            &mut self.scratch.normalized,
+        )?;
+        self.attention.execute_packed_prefill(
+            &self.scratch.normalized,
+            positions,
+            states,
+            batch,
+            &mut self.scratch.attention,
+        )?;
+        self.residual
+            .add(stream, input, &self.scratch.attention, &mut self.scratch.residual)?;
+        self.post_attention_norm.execute(
+            stream,
+            &self.scratch.residual,
+            bf16_tensor(&self.post_attention_norm_weight)?,
+            &mut self.scratch.normalized,
+        )?;
+        self.moe.execute(&self.scratch.normalized, &mut self.scratch.moe)?;
+        self.residual.add(stream, &self.scratch.residual, &self.scratch.moe, output)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn execute_with_image_span(
         &mut self,
@@ -120,7 +155,11 @@ impl CudaAffineGatedFullAttentionMoeExecution {
         self.residual.add(stream, &self.scratch.residual, &self.scratch.moe, output)
     }
 
-    fn validate(&self, input: &DeviceBuffer<bf16>, output: &DeviceBuffer<bf16>) -> Result<()> {
+    pub(super) fn validate(
+        &self,
+        input: &DeviceBuffer<bf16>,
+        output: &DeviceBuffer<bf16>,
+    ) -> Result<()> {
         let expected = self.scratch.residual.len();
         if input.len() != expected || output.len() != expected {
             return Err(Error::InvalidDecoderKernel(

@@ -22,6 +22,8 @@ fn synthetic_nvfp4_autotunes_decode_and_prefill() -> Result<()> {
 
     run(&backend, ExecutionPhase::Decode, 1, &gate, &up, &down)?;
     run(&backend, ExecutionPhase::Prefill, 4, &gate, &up, &down)?;
+    run_weight_only(&backend, ExecutionPhase::Decode, 1, &gate, &up, &down)?;
+    run_weight_only(&backend, ExecutionPhase::Prefill, 4, &gate, &up, &down)?;
     Ok(())
 }
 
@@ -56,7 +58,41 @@ fn run(
     experts.execute(&input, &selected, &routing, &mut output)?;
     backend.synchronize()?;
     let request = MoePlanRequest::nvfp4(phase, tokens, EXPERTS, SELECTED, HIDDEN, INTERMEDIATE);
-    let profile = MoeProfileRequest::nvfp4(request, GatedActivation::GeluTanh);
+    let profile = MoeProfileRequest::nvfp4(request, GatedActivation::GeluTanh, false);
+    assert!(matches!(
+        backend.auto_tuner().lookup_moe(profile),
+        Some((MoeProfileExecution::NvFp4(_), PlanSource::MeasuredStartup))
+    ));
+    Ok(())
+}
+
+fn run_weight_only(
+    backend: &CudaBackend,
+    phase: ExecutionPhase,
+    tokens: usize,
+    gate: &NvFp4ExpertBank,
+    up: &NvFp4ExpertBank,
+    down: &NvFp4ExpertBank,
+) -> Result<()> {
+    let mut experts = AutoNvFp4Experts::new(
+        backend,
+        phase,
+        tokens,
+        SELECTED,
+        GatedActivation::GeluTanh,
+        gate.clone(),
+        up.clone(),
+        down.clone(),
+        models::weights::BlockActivationMode::WeightOnly,
+    )?;
+    let input = backend.pool().allocate_zeroed(backend.stream(), tokens * HIDDEN)?;
+    let selected = backend.pool().allocate_zeroed(backend.stream(), tokens * SELECTED)?;
+    let routing = backend.pool().allocate_zeroed(backend.stream(), tokens * SELECTED)?;
+    let mut output = backend.pool().allocate_zeroed(backend.stream(), tokens * HIDDEN)?;
+    experts.execute(&input, &selected, &routing, &mut output)?;
+    backend.synchronize()?;
+    let request = MoePlanRequest::nvfp4(phase, tokens, EXPERTS, SELECTED, HIDDEN, INTERMEDIATE);
+    let profile = MoeProfileRequest::nvfp4(request, GatedActivation::GeluTanh, true);
     assert!(matches!(
         backend.auto_tuner().lookup_moe(profile),
         Some((MoeProfileExecution::NvFp4(_), PlanSource::MeasuredStartup))

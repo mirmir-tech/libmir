@@ -50,7 +50,9 @@ impl HybridFixture {
     }
 
     pub(super) fn catalog(&self) -> TensorCatalog {
-        TensorCatalog { tensors: self.infos.clone() }
+        let mut tensors = self.infos.clone();
+        tensors.sort_by(|left, right| left.name.cmp(&right.name));
+        TensorCatalog { tensors }
     }
 
     fn layer(&mut self, decoder: &DecoderConfig, layer: usize) -> Result<()> {

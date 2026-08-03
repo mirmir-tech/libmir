@@ -32,22 +32,31 @@ impl Session {
         sampling: SamplingLogits,
         progress: &mut dyn FnMut(ProgressEvent),
     ) -> Result<PrefillOutput> {
-        self.prefill_reserved(tokens, 0, sampling, false, progress)
+        self.prefill_reserved(tokens, &[], 0, sampling, false, progress)
     }
 
     pub(crate) fn prefill_generation_reserved(
         &mut self,
         tokens: &[u32],
+        cache_checkpoints: &[usize],
         reserved_tokens: usize,
         sampling: SamplingLogits,
         progress: &mut dyn FnMut(ProgressEvent),
     ) -> Result<PrefillOutput> {
-        self.prefill_reserved(tokens, reserved_tokens, sampling, reserved_tokens > 1, progress)
+        self.prefill_reserved(
+            tokens,
+            cache_checkpoints,
+            reserved_tokens,
+            sampling,
+            reserved_tokens > 1,
+            progress,
+        )
     }
 
     fn prefill_reserved(
         &mut self,
         tokens: &[u32],
+        cache_checkpoints: &[usize],
         reserved_tokens: usize,
         sampling: SamplingLogits,
         expects_decode: bool,
@@ -84,6 +93,7 @@ impl Session {
                 model: self.model.handle().clone(),
                 session_id: request.session_id,
                 prompt_tokens: tokens.to_vec(),
+                cache_checkpoints: cache_checkpoints.to_vec(),
                 block_table: self.state.table().clone(),
                 cached_tokens: request.cached_tokens,
                 sampling_logits: sampling,

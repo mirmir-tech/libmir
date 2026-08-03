@@ -28,24 +28,23 @@ pub(in crate::engine::hybrid_moe) fn experts(
         &routing.indices,
         stream,
         (
-            || {
-                let sorted = hidden.sort_expert_inputs(&routing.indices, stream)?;
+            |indices| {
+                let sorted = hidden.sort_expert_inputs(indices, stream)?;
                 let output = expert_mlp(&sorted.input, &sorted.indices, weights, true, stream)?;
                 sorted.restore(&output, stream)?.weighted_sum(&routing.weights, -2, stream)
             },
-            || {
-                let sorted = hidden.sort_expert_inputs(&routing.indices, stream)?;
+            |indices| {
+                let sorted = hidden.sort_expert_inputs(indices, stream)?;
                 let output = expert_mlp(&sorted.input, &sorted.indices, weights, true, stream)?;
                 sorted.restore_weighted(&output, &routing.weights, stream)
             },
-            || {
-                let grouped =
-                    hidden.group_expert_inputs(&routing.indices, config.expert_count, stream)?;
+            |indices| {
+                let grouped = hidden.group_expert_inputs(indices, config.expert_count, stream)?;
                 let output = expert_mlp(&grouped.input, &grouped.indices, weights, true, stream)?;
                 grouped.restore_weighted(&output, &routing.weights, stream)
             },
-            || {
-                unsorted(&hidden, &routing.indices, weights, fused_gate_up, stream)?
+            |indices| {
+                unsorted(&hidden, indices, weights, fused_gate_up, stream)?
                     .weighted_sum(&routing.weights, -2, stream)
             },
         ),

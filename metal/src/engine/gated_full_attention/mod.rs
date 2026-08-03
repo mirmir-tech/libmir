@@ -1,3 +1,4 @@
+mod batch;
 mod load;
 
 use models::layout::{AttentionOutput, DecoderConfig, RotaryEmbeddingLayout};

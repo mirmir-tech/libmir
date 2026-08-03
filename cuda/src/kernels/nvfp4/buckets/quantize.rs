@@ -18,13 +18,15 @@ impl NvFp4BucketPreparation {
         selected: &DeviceBuffer<u32>,
         order: &DeviceBuffer<u32>,
         offsets: &DeviceBuffer<u32>,
+        scale_offsets: &DeviceBuffer<u32>,
         globals: &DeviceBuffer<f32>,
         packed: &mut DeviceBuffer<u8>,
         scales: &mut DeviceBuffer<u8>,
         geometry: BucketQuantize,
     ) -> Result<()> {
-        geometry.validate(input, selected, order, offsets, globals, packed, scales)?;
-        let (launch, scale_stride) = launch(geometry)?;
+        geometry
+            .validate(input, selected, order, offsets, scale_offsets, globals, packed, scales)?;
+        let launch = launch(geometry)?;
         Ok(self.quantize.launch(
             stream,
             launch,
@@ -33,6 +35,7 @@ impl NvFp4BucketPreparation {
                 selected,
                 order,
                 offsets,
+                scale_offsets,
                 globals,
                 packed,
                 scales,
@@ -40,7 +43,6 @@ impl NvFp4BucketPreparation {
                 narrow(geometry.selected)?,
                 narrow(geometry.input_rows)?,
                 narrow(geometry.columns)?,
-                narrow(scale_stride)?,
                 u32::from(geometry.ranked),
             ),
         )?)
@@ -54,6 +56,7 @@ impl NvFp4BucketPreparation {
         selected: &DeviceBuffer<u32>,
         order: &DeviceBuffer<u32>,
         offsets: &DeviceBuffer<u32>,
+        scale_offsets: &DeviceBuffer<u32>,
         left_globals: &DeviceBuffer<f32>,
         right_globals: &DeviceBuffer<f32>,
         left_packed: &mut DeviceBuffer<u8>,
@@ -65,11 +68,14 @@ impl NvFp4BucketPreparation {
         if geometry.ranked {
             return Err(Error::InvalidNvFp4("paired bucket quantization requires shared input"));
         }
-        geometry
-            .validate(input, selected, order, offsets, left_globals, left_packed, left_scales)?;
-        geometry
-            .validate(input, selected, order, offsets, right_globals, right_packed, right_scales)?;
-        let (launch, scale_stride) = launch(geometry)?;
+        geometry.validate(
+            input, selected, order, offsets, scale_offsets, left_globals, left_packed, left_scales,
+        )?;
+        geometry.validate(
+            input, selected, order, offsets, scale_offsets, right_globals, right_packed,
+            right_scales,
+        )?;
+        let launch = launch(geometry)?;
         Ok(self.quantize_pair.launch(
             stream,
             launch,
@@ -78,6 +84,7 @@ impl NvFp4BucketPreparation {
                 selected,
                 order,
                 offsets,
+                scale_offsets,
                 left_globals,
                 right_globals,
                 left_packed,
@@ -88,7 +95,6 @@ impl NvFp4BucketPreparation {
                 narrow(geometry.selected)?,
                 narrow(geometry.input_rows)?,
                 narrow(geometry.columns)?,
-                narrow(scale_stride)?,
             ),
         )?)
     }
@@ -102,6 +108,7 @@ impl BucketQuantize {
         selected: &DeviceBuffer<u32>,
         order: &DeviceBuffer<u32>,
         offsets: &DeviceBuffer<u32>,
+        scale_offsets: &DeviceBuffer<u32>,
         globals: &DeviceBuffer<f32>,
         packed: &DeviceBuffer<u8>,
         scales: &DeviceBuffer<u8>,
@@ -113,24 +120,30 @@ impl BucketQuantize {
         require("bucket selections", self.assignments, selected.len())?;
         require("bucket order", self.assignments, order.len())?;
         require("bucket offsets", self.experts, offsets.len())?;
+        require("bucket scale offsets", self.experts, scale_offsets.len())?;
         require("bucket globals", self.experts, globals.len())?;
         require("bucket packed", product(self.assignments, self.columns / 2)?, packed.len())?;
         require(
             "bucket scales",
-            product(self.experts, scale_elements(self.assignments, self.columns)?)?,
+            scale_elements(padded_rows(self.assignments, self.experts)?, self.columns)?,
             scales.len(),
         )
     }
 }
 
-fn launch(geometry: BucketQuantize) -> Result<(LaunchConfig, usize)> {
-    let blocks = product(geometry.assignments, geometry.columns / 16)?;
-    Ok((
-        LaunchConfig {
-            grid: (narrow(blocks)?, 1, 1),
-            block: (32, 1, 1),
-            shared_memory_bytes: 0,
-        },
-        scale_elements(geometry.assignments, geometry.columns)?,
-    ))
+fn launch(geometry: BucketQuantize) -> Result<LaunchConfig> {
+    const WARPS_PER_BLOCK: usize = 8;
+    let warps = product(geometry.assignments, geometry.columns / 16)?;
+    Ok(LaunchConfig {
+        grid: (narrow(warps.div_ceil(WARPS_PER_BLOCK))?, 1, 1),
+        block: (narrow(WARPS_PER_BLOCK * 32)?, 1, 1),
+        shared_memory_bytes: 0,
+    })
+}
+
+fn padded_rows(assignments: usize, experts: usize) -> Result<usize> {
+    let rows = assignments
+        .checked_add(product(experts, 127)?)
+        .ok_or(Error::InvalidNvFp4("bucketed scale capacity overflow"))?;
+    Ok(rows / 128 * 128)
 }

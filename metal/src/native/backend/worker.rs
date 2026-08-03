@@ -7,6 +7,7 @@ use foundation::model::ModelManifest;
 
 use crate::{
     MetalConfig, MetalProgressEvent,
+    engine::PagedArenaPool,
     native::{
         error::{Error, Result, WorkerFailure},
         model::LoadedModel,
@@ -38,6 +39,7 @@ impl ModelClient {
     pub(super) fn spawn(
         manifest: ModelManifest,
         config: Arc<MetalConfig>,
+        paged_arenas: Arc<PagedArenaPool>,
         progress: &mut dyn FnMut(MetalProgressEvent),
     ) -> Result<Self> {
         let (task_sender, task_receiver) = mpsc::channel::<Task>();
@@ -47,7 +49,9 @@ impl ModelClient {
             let mut report = |event| {
                 let _sent = event_sender.send(StartEvent::Progress(event));
             };
-            let mut loaded = match LoadedModel::load_with_config(&manifest, config, &mut report) {
+            let mut loaded = match LoadedModel::load_with_config_and_pool(
+                &manifest, config, paged_arenas, &mut report,
+            ) {
                 Ok(loaded) => loaded,
                 Err(error) => {
                     let _sent = event_sender.send(StartEvent::Ready(Err(error.into())));

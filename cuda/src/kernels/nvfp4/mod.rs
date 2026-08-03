@@ -13,6 +13,7 @@ mod micro;
 mod norm;
 mod selected;
 mod weight_only;
+mod weight_only_tensor_core;
 pub use buckets::{BucketGeometry, BucketQuantize, NvFp4BucketPreparation};
 pub use gated::NvFp4Gated;
 pub use grouped::{BankScaleGeometry, GroupedQuantize, NvFp4GroupedPreparation};
@@ -24,6 +25,7 @@ pub use micro::{
 pub use norm::NvFp4RmsNorm;
 pub use selected::{NvFp4SelectedWeightLaunch, NvFp4SelectedWeightPreparation};
 pub use weight_only::{NvFp4WeightOnly, NvFp4WeightOnlyLaunch};
+pub use weight_only_tensor_core::NvFp4WeightOnlyTensorCore;
 
 cuda_export!(
     NvFp4DequantKernel = "libmir_cuda_nvfp4_dequant_bf16"(

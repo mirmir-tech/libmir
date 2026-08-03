@@ -1,8 +1,8 @@
 use super::*;
 use crate::backend::tuning::{
     AffineProjectionExecution, DirectFp8ProjectionExecution, DirectFp8ScaleDType,
-    DirectFp8WeightScale, MxFp8ProjectionExecution, QuantizedProfileExecution,
-    QuantizedProfileRequest,
+    DirectFp8WeightScale, MxFp8ProjectionExecution, NvFp4WeightOnlyExecution,
+    QuantizedProfileExecution, QuantizedProfileRequest,
 };
 
 #[test]
@@ -24,6 +24,26 @@ fn affine_projection_profile_survives_with_physical_geometry()
     let payload = profile_payload(&directory)?;
     assert!(payload.contains("\"quantized\""));
     assert!(payload.contains("\"group_size\": 64"));
+    fs::remove_dir_all(&directory)?;
+    Ok(())
+}
+
+#[test]
+fn nvfp4_weight_only_profile_isolated_by_token_shape() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = temporary_directory();
+    let request = QuantizedProfileRequest::nvfp4_bf16_weight_only(1_024, 2_048, 512);
+    let execution =
+        QuantizedProfileExecution::NvFp4WeightOnly(NvFp4WeightOnlyExecution::Materialized);
+    let tuner = CudaAutoTuner::new(&device(), config(&directory, CudaTuningMode::Startup));
+    assert!(tuner.claim_quantized(request));
+    tuner.record_quantized(request, execution, Duration::from_micros(35), Duration::from_millis(3));
+
+    let cached = CudaAutoTuner::new(&device(), config(&directory, CudaTuningMode::Cached));
+    assert_eq!(cached.lookup_quantized(request), Some((execution, PlanSource::MeasuredCache)));
+    assert_eq!(
+        cached.lookup_quantized(QuantizedProfileRequest::nvfp4_bf16_weight_only(1, 2_048, 512,)),
+        None
+    );
     fs::remove_dir_all(&directory)?;
     Ok(())
 }

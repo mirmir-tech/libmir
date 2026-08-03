@@ -41,5 +41,6 @@ fn format_key(format: QuantizedProfileFormat) -> (usize, usize, usize, usize) {
         QuantizedProfileFormat::DirectFp8Bf16E5M2WeightOnly { bias } => {
             (4, usize::from(bias), 0, 0)
         },
+        QuantizedProfileFormat::NvFp4Bf16WeightOnly => (5, 0, 0, 0),
     }
 }

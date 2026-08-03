@@ -3,7 +3,9 @@ use mircuda::{
     VariableGroupedFp4Metadata, VariableGroupedFp4Operands, bf16,
 };
 
-use super::{BucketedNvFp4Projection, moe::ExpertBuckets, validate_output};
+use super::{
+    BucketedNvFp4Projection, moe::ExpertBuckets, scratch::ProjectionScratch, validate_output,
+};
 use crate::{CudaBackend, NvFp4ExpertBank, Result, kernels::NvFp4BucketPreparation};
 
 #[derive(Debug)]
@@ -40,20 +42,24 @@ impl BucketedNvFp4PairBf16 {
         selected: &DeviceBuffer<u32>,
         left_output: &mut DeviceBuffer<bf16>,
         right_output: &mut DeviceBuffer<bf16>,
+        left_scratch: &mut ProjectionScratch,
+        right_scratch: &mut ProjectionScratch,
     ) -> Result<()> {
         BucketedNvFp4Projection::quantize_pair(
-            preparation, buckets, input, selected, &mut self.left, &mut self.right,
+            preparation, buckets, input, selected, &self.left, &self.right, left_scratch,
+            right_scratch,
         )?;
         validate_output(&self.left, left_output)?;
         validate_output(&self.right, right_output)?;
         let Self { plan, left, right } = self;
         let mut launch = PairedVariableGroupedFp4Launch {
-            left: operands(left, left_output),
-            right: operands(right, right_output),
+            left: operands(left, left_scratch, left_output),
+            right: operands(right, right_scratch, right_output),
             metadata: VariableGroupedFp4Metadata {
                 indices: &buckets.indices,
                 rows: &buckets.counts,
                 offsets: &buckets.offsets,
+                scale_offsets: &buckets.scale_offsets,
             },
         };
         Ok(plan.execute(&left.stream, &mut launch)?)
@@ -70,11 +76,12 @@ impl BucketedNvFp4PairBf16 {
 
 fn operands<'a>(
     projection: &'a BucketedNvFp4Projection,
+    scratch: &'a ProjectionScratch,
     output: &'a mut DeviceBuffer<bf16>,
 ) -> VariableGroupedFp4Operands<'a> {
     VariableGroupedFp4Operands {
-        a: &projection.packed,
-        a_scales: &projection.scales,
+        a: &scratch.packed,
+        a_scales: &scratch.scales,
         b: &projection.bank.weight,
         b_scales: &projection.bank.cutlass_scales,
         alphas: &projection.bank.combined_scales,

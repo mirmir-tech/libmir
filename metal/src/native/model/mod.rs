@@ -26,7 +26,7 @@ mod load;
 mod memory;
 
 pub(super) use batch::DecodeInput;
-pub(super) use memory::cache_prefix_snapshot;
+pub(super) use memory::{cache_prefix_checkpoint, cache_prefix_snapshot};
 
 pub(super) const KV_CACHE_STEP: usize = 256;
 const PREFILL_STEP: usize = 512;

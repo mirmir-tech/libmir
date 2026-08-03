@@ -3,6 +3,7 @@ mod paged;
 mod profile;
 #[cfg(test)]
 mod tests;
+mod view;
 
 use std::time::Instant;
 
@@ -134,15 +135,18 @@ fn tune(
 }
 
 fn candidates(
-    _key: BatchAttentionKey,
+    key: BatchAttentionKey,
     paged: bool,
     paged_batched: bool,
 ) -> Vec<BatchAttentionExecution> {
-    let mut candidates = vec![BatchAttentionExecution::Rows, BatchAttentionExecution::Batched];
-    if paged {
+    let mut candidates = Vec::new();
+    if key.view {
+        candidates.extend([BatchAttentionExecution::Rows, BatchAttentionExecution::Batched]);
+    }
+    if paged && key.sequence == 1 {
         candidates.push(BatchAttentionExecution::PagedRows);
     }
-    if paged_batched {
+    if paged_batched && key.sequence == 1 {
         candidates.push(BatchAttentionExecution::PagedBatched);
     }
     candidates
@@ -173,7 +177,7 @@ fn execute_measured(
             .iter()
             .zip(contexts)
             .map(|(query, context)| {
-                let (keys, values) = attention_view(context, stream, refresh_fragmented)?;
+                let (keys, values) = view::attention(context, stream, refresh_fragmented)?;
                 query.scaled_dot_product_attention(&keys, &values, scale, causal, stream)
             })
             .collect(),
@@ -196,7 +200,7 @@ fn batched(
     let queries = Array::concatenate(queries, 0, stream)?;
     let views = contexts
         .iter()
-        .map(|context| attention_view(context, stream, refresh_fragmented))
+        .map(|context| view::attention(context, stream, refresh_fragmented))
         .collect::<Result<Vec<_>>>()?;
     let keys = views.iter().map(|(keys, _)| keys).collect::<Vec<_>>();
     let values = views.iter().map(|(_, values)| values).collect::<Vec<_>>();
@@ -218,31 +222,4 @@ fn batched(
             )
         })
         .collect()
-}
-
-fn attention_view(
-    context: &KvContext,
-    stream: &Stream,
-    refresh_fragmented: bool,
-) -> Result<(Array, Array)> {
-    let Some(paged) = context.paged.as_ref().filter(|paged| refresh_fragmented && paged.fragmented)
-    else {
-        return Ok((
-            Array::from_native(context.keys.native().clone())?,
-            Array::from_native(context.values.native().clone())?,
-        ));
-    };
-    let graph = stream.native().graph();
-    let logical_pages = paged.context_tokens.div_ceil(paged.page_size);
-    let ids = graph.slice(paged.page_table.native(), &[0], &[logical_pages])?;
-    let keys = graph.take(paged.key_pages.native(), &ids, 1)?;
-    let values = graph.take(paged.value_pages.native(), &ids, 1)?;
-    let dimensions = keys.shape()?.dimensions().to_vec();
-    let shape =
-        mirtal::Shape::new([1, dimensions[0], logical_pages * paged.page_size, dimensions[3]])?;
-    let stop = [1, dimensions[0], paged.context_tokens, dimensions[3]];
-    Ok((
-        Array::from_native(graph.slice(&graph.reshape(&keys, &shape)?, &[0, 0, 0, 0], &stop)?)?,
-        Array::from_native(graph.slice(&graph.reshape(&values, &shape)?, &[0, 0, 0, 0], &stop)?)?,
-    ))
 }

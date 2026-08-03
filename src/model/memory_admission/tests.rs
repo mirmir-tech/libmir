@@ -10,6 +10,7 @@ fn tracks_loading_and_resident_reservations_until_release() -> Result<()> {
     let lease = manager.reserve(
         "model-a".into(),
         estimate(4 * GIB),
+        None,
         &memory(16 * GIB),
         MemoryRuntimeConfig::default(),
         false,
@@ -46,6 +47,7 @@ fn rejects_loads_that_exceed_the_remaining_safe_budget() -> Result<()> {
     let first = manager.reserve(
         "model-a".into(),
         estimate(5 * GIB),
+        None,
         &memory(16 * GIB),
         MemoryRuntimeConfig::default(),
         false,
@@ -56,6 +58,7 @@ fn rejects_loads_that_exceed_the_remaining_safe_budget() -> Result<()> {
         .reserve(
             "model-b".into(),
             estimate(5 * GIB),
+            None,
             &memory(16 * GIB),
             MemoryRuntimeConfig::default(),
             false,
@@ -80,6 +83,7 @@ fn explicit_overcommit_preserves_forced_load_semantics() -> Result<()> {
     let lease = manager.reserve(
         "model".into(),
         estimate(16 * GIB),
+        None,
         &memory(8 * GIB),
         MemoryRuntimeConfig::default(),
         true,
@@ -113,6 +117,44 @@ fn serializes_model_load_critical_sections() -> Result<()> {
         return Err(runtime::RuntimeError::Config("load worker panicked".into()).into());
     };
     result?;
+    Ok(())
+}
+
+#[test]
+fn charges_shared_metal_cache_once_until_the_last_model_unloads() -> Result<()> {
+    let manager = ModelMemoryManager::default();
+    let shared = SharedCacheMemory { id: 7, bytes: 4 * GIB };
+    let estimate = ModelMemoryEstimate {
+        weight_bytes: 2 * GIB,
+        kv_cache_bytes: 4 * GIB,
+        workspace_bytes: 0,
+        required_bytes: 6 * GIB,
+        kv_bytes_per_token: 1,
+        cache_capacity_tokens: 4 * GIB,
+        model_context_tokens: 0,
+    };
+    let first = manager.reserve(
+        "model-a".into(),
+        estimate,
+        Some(shared),
+        &memory(32 * GIB),
+        MemoryRuntimeConfig::default(),
+        false,
+    )?;
+    let second = manager.reserve(
+        "model-b".into(),
+        estimate,
+        Some(shared),
+        &memory(32 * GIB),
+        MemoryRuntimeConfig::default(),
+        false,
+    )?;
+
+    assert_eq!(manager.committed_bytes()?, 10 * GIB);
+    drop(first);
+    assert_eq!(manager.committed_bytes()?, 7 * GIB);
+    drop(second);
+    assert_eq!(manager.committed_bytes()?, 0);
     Ok(())
 }
 

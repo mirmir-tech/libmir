@@ -1,3 +1,4 @@
+mod batch;
 mod execution;
 mod scratch;
 #[cfg(all(test, target_os = "linux"))]

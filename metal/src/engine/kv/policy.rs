@@ -62,7 +62,7 @@ fn fragmented_native_paged_attention(
     context: usize,
 ) -> bool {
     context >= 1_024
-        && head_dim <= 256
+        && head_dim <= 512
         && head_dim % 32 == 0
         && kv_heads > 0
         && (1..=32).contains(&group_factor)
@@ -85,6 +85,10 @@ mod tests {
     fn uses_native_attention_only_when_supported_pages_are_fragmented() {
         assert_eq!(
             native_paged_attention_mode(128, 32, 8, 1_024, false),
+            PagedContextMode::NativeIfFragmented
+        );
+        assert_eq!(
+            native_paged_attention_mode(512, 16, 2, 1_024, false),
             PagedContextMode::NativeIfFragmented
         );
         assert_eq!(native_paged_attention_mode(128, 32, 8, 512, false), PagedContextMode::View);

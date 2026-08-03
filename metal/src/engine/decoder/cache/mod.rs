@@ -1,6 +1,8 @@
+use std::sync::Arc;
+
 use self::hybrid::HybridLinearLayerCache;
 use crate::engine::{
-    Error, GatedDeltaState, KvCache, KvPageFormat, Result, lowering::MixerLowering,
+    Error, GatedDeltaState, KvCache, KvPageFormat, PagedArenaPool, Result, lowering::MixerLowering,
 };
 
 mod hybrid;
@@ -27,11 +29,46 @@ impl DecoderCache {
         format: KvPageFormat,
         page_size: usize,
     ) -> Result<Self> {
+        Self::new_with_pool(
+            cache_windows,
+            step,
+            format,
+            page_size,
+            &Arc::new(PagedArenaPool::default()),
+        )
+    }
+
+    pub(crate) fn new_with_pool(
+        cache_windows: &[Option<usize>],
+        step: usize,
+        format: KvPageFormat,
+        page_size: usize,
+        pool: &Arc<PagedArenaPool>,
+    ) -> Result<Self> {
+        Self::new_with_pool_capacity(cache_windows, step, format, page_size, usize::MAX, pool)
+    }
+
+    pub(crate) fn new_with_pool_capacity(
+        cache_windows: &[Option<usize>],
+        step: usize,
+        format: KvPageFormat,
+        page_size: usize,
+        max_pages: usize,
+        pool: &Arc<PagedArenaPool>,
+    ) -> Result<Self> {
         let caches = cache_windows
             .iter()
-            .map(|window| {
+            .enumerate()
+            .map(|(layer, window)| {
                 if window.is_none() {
-                    KvCache::new_paged_with_format(step, page_size, format)
+                    KvCache::new_paged_with_pool_capacity(
+                        step,
+                        page_size,
+                        format,
+                        max_pages,
+                        Arc::clone(pool),
+                        layer,
+                    )
                 } else {
                     KvCache::new_with_window(step, *window)
                 }
@@ -50,7 +87,41 @@ impl DecoderCache {
         format: KvPageFormat,
         page_size: usize,
     ) -> Result<Self> {
-        let layers = hybrid::new(mixers, step, format, page_size)?;
+        Self::new_hybrid_linear_with_pool(
+            mixers,
+            step,
+            format,
+            page_size,
+            &Arc::new(PagedArenaPool::default()),
+        )
+    }
+
+    pub(crate) fn new_hybrid_linear_with_pool(
+        mixers: &[MixerLowering],
+        step: usize,
+        format: KvPageFormat,
+        page_size: usize,
+        pool: &Arc<PagedArenaPool>,
+    ) -> Result<Self> {
+        Self::new_hybrid_linear_with_pool_capacity(
+            mixers,
+            step,
+            format,
+            page_size,
+            usize::MAX,
+            pool,
+        )
+    }
+
+    pub(crate) fn new_hybrid_linear_with_pool_capacity(
+        mixers: &[MixerLowering],
+        step: usize,
+        format: KvPageFormat,
+        page_size: usize,
+        max_pages: usize,
+        pool: &Arc<PagedArenaPool>,
+    ) -> Result<Self> {
+        let layers = hybrid::new(mixers, step, format, page_size, max_pages, pool)?;
         Ok(Self {
             storage: CacheStorage::HybridLinear(layers),
         })
@@ -96,6 +167,25 @@ impl DecoderCache {
                 caches.iter_mut().try_for_each(|cache| cache.reserve(tokens))
             },
             CacheStorage::HybridLinear(layers) => hybrid::reserve(layers, tokens),
+        }
+    }
+
+    pub(crate) fn plan_contiguous(&mut self, tokens: usize) -> Result<()> {
+        match &mut self.storage {
+            CacheStorage::Attention(caches) => {
+                caches.iter_mut().for_each(|cache| cache.plan_contiguous(tokens));
+            },
+            CacheStorage::HybridLinear(layers) => hybrid::plan_contiguous(layers, tokens),
+        }
+        Ok(())
+    }
+
+    pub(crate) fn detach_evaluated_graphs(&self) -> Result<()> {
+        match &self.storage {
+            CacheStorage::Attention(caches) => {
+                caches.iter().try_for_each(KvCache::detach_evaluated_graphs)
+            },
+            CacheStorage::HybridLinear(layers) => hybrid::detach_evaluated_graphs(layers),
         }
     }
 

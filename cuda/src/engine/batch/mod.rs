@@ -104,10 +104,10 @@ fn build_outputs(
 }
 
 fn bucket_sizes(maximum: usize) -> impl Iterator<Item = usize> {
-    let mut sizes = std::iter::successors(Some(2_usize), |size| size.checked_mul(2))
+    let mut sizes = std::iter::successors(Some(1_usize), |size| size.checked_mul(2))
         .take_while(|size| *size <= maximum)
         .collect::<Vec<_>>();
-    sizes.extend([5, 10, maximum].into_iter().filter(|size| (2..=maximum).contains(size)));
+    sizes.extend([5, 10, maximum].into_iter().filter(|size| (1..=maximum).contains(size)));
     sizes.sort_unstable();
     sizes.dedup();
     sizes.into_iter()

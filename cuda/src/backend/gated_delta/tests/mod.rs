@@ -39,6 +39,35 @@ fn retains_gated_delta_recurrence_on_cuda() -> Result<()> {
 }
 
 #[test]
+fn restores_recurrent_and_convolution_checkpoint_on_cuda() -> Result<()> {
+    let backend = CudaBackend::new(CudaConfig::default())?;
+    let mut state = state(&backend)?;
+    let query_key = copy(&backend, &bf16s(&[1.0; 32]))?;
+    let value = copy(&backend, &bf16s(&[2.0]))?;
+    let gate = copy(&backend, &bf16s(&[0.0]))?;
+    let parameter = copy(&backend, &bf16s(&[0.0]))?;
+    let mut output = backend.inner.pool.allocate(&backend.inner.stream, 1)?;
+    let inputs = || GatedDeltaInputs {
+        query: &query_key,
+        key: &query_key,
+        value: &value,
+        alpha: &gate,
+        beta: &gate,
+        a_log: &parameter,
+        dt_bias: &parameter,
+    };
+    state.execute(1, inputs(), &mut output)?;
+    let checkpoint = state.checkpoint()?;
+    state.execute(1, inputs(), &mut output)?;
+    let expected = read(&backend, &output)?;
+    state.restore(&checkpoint)?;
+    assert_eq!(state.offset(), 1);
+    state.execute(1, inputs(), &mut output)?;
+    assert_eq!(read(&backend, &output)?, expected);
+    Ok(())
+}
+
+#[test]
 fn retains_depthwise_convolution_history_on_cuda() -> Result<()> {
     let backend = CudaBackend::new(CudaConfig::default())?;
     let mut state = state(&backend)?;

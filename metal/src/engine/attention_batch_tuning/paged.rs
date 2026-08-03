@@ -15,7 +15,6 @@ pub(super) fn batchable(contexts: &[&KvContext]) -> bool {
             paged.key_scales.is_none()
                 && paged.value_scales.is_none()
                 && paged.page_size == first.page_size
-                && paged.context_tokens == first.context_tokens
                 && paged.key_pages.native().dtype().is_ok_and(|dtype| dtype == key_dtype)
                 && paged.value_pages.native().dtype().is_ok_and(|dtype| dtype == key_dtype)
         })
@@ -94,7 +93,12 @@ fn chunk(
 ) -> Result<Array> {
     let first = paged(contexts[0])?;
     let queries = Array::concatenate(queries, 0, stream)?;
-    let pages = first.context_tokens.div_ceil(first.page_size);
+    let context_tokens = contexts
+        .iter()
+        .filter_map(|context| context.paged.as_ref().map(|paged| paged.context_tokens))
+        .max()
+        .ok_or(super::super::Error::ShapeOverflow)?;
+    let pages = context_tokens.div_ceil(first.page_size);
     let mut tables = Vec::with_capacity(contexts.len());
     let mut dependencies = Vec::with_capacity(contexts.len());
     let mut capacities = Vec::with_capacity(contexts.len());
@@ -136,7 +140,7 @@ fn chunk(
             capacities.native(),
         ],
         first.page_size,
-        first.context_tokens,
+        context_tokens,
         scale,
     )?;
     Array::from_native(output)

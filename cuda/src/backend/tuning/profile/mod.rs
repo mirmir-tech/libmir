@@ -27,8 +27,8 @@ pub(in crate::backend) use moe::{
 };
 pub(in crate::backend) use quantized::{
     AffineProjectionExecution, DirectFp8ProjectionExecution, DirectFp8ScaleDType,
-    DirectFp8WeightScale, MxFp8ProjectionExecution, QuantizedProfileExecution,
-    QuantizedProfileRequest,
+    DirectFp8WeightScale, MxFp8ProjectionExecution, NvFp4WeightOnlyExecution,
+    QuantizedProfileExecution, QuantizedProfileRequest,
 };
 
 #[derive(Clone, Debug)]

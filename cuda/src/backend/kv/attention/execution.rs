@@ -43,6 +43,18 @@ impl PagedAttentionBf16 {
             .checked_add(query_tokens)
             .ok_or(crate::Error::InvalidPagedKv("prefill attention context overflow"))?;
         if window.is_none() && image.is_none() {
+            if let Some(fmha) = &mut self.paged_fmha {
+                return fmha.execute(
+                    query,
+                    cache.key_pages(),
+                    cache.value_pages(),
+                    output,
+                    &self.table_device,
+                    query_tokens,
+                    context,
+                    scale,
+                );
+            }
             if let (Some(first_page_token), Some(fmha)) =
                 (contiguous_page_token(table, context), &self.fmha)
             {

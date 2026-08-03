@@ -48,9 +48,9 @@ impl AutoNvFp4Experts {
             config.output_features,
         );
         let planned = backend.execution_planner().plan_moe(request)?;
-        let profile = MoeProfileRequest::nvfp4(request, activation);
         let weight_only = activation_mode == BlockActivationMode::WeightOnly;
-        let cached = (!weight_only && planned.source() != PlanSource::ExplicitPolicy)
+        let profile = MoeProfileRequest::nvfp4(request, activation, weight_only);
+        let cached = (planned.source() != PlanSource::ExplicitPolicy)
             .then(|| backend.auto_tuner().lookup_moe(profile))
             .flatten()
             .and_then(|(execution, source)| match execution {
@@ -61,35 +61,29 @@ impl AutoNvFp4Experts {
                 | MoeProfileExecution::MxFp8(_) => None,
             });
         let weights = [gate, up, down];
-        let selected_execution = if weight_only {
+        let fallback_execution = if weight_only {
             MoeExecution::SelectedWeightOnly
         } else {
-            cached.map_or_else(|| planned.execution(), |value| value.0)
+            planned.execution()
         };
+        let selected_execution = cached.map_or(fallback_execution, |value| value.0);
         let (candidate, cache_applied) =
             match Candidate::new(backend, request, activation, &weights, selected_execution) {
                 Ok(candidate) => (candidate, cached.is_some()),
-                Err(error) if selected_execution != planned.execution() => {
+                Err(error) if selected_execution != fallback_execution => {
                     tracing::warn!(
                         ?selected_execution,
                         %error,
                         "cached CUDA MoE candidate is unavailable; using planner fallback"
                     );
                     (
-                        Candidate::new(
-                            backend,
-                            request,
-                            activation,
-                            &weights,
-                            planned.execution(),
-                        )?,
+                        Candidate::new(backend, request, activation, &weights, fallback_execution)?,
                         false,
                     )
                 },
                 Err(error) => return Err(error),
             };
-        let tunable = !weight_only
-            && cached.is_none()
+        let tunable = cached.is_none()
             && backend.auto_tuner().prepares_candidates(planned.source())
             && (phase == ExecutionPhase::Prefill || tokens == 1);
         if let Some((execution, source)) = cached.filter(|_| cache_applied) {

@@ -10,6 +10,9 @@ use runtime::{
 use super::{Engine, EngineInner};
 use crate::Result;
 
+const METAL_COMPLETION_ROUND_ROWS: usize = 4;
+const METAL_MAX_PREFILL_WAVE_ROWS: usize = 2;
+
 pub enum EnginePrefillBatch {
     #[cfg(feature = "cuda")]
     Cuda(cuda::CudaPrefillBatch),
@@ -26,6 +29,7 @@ pub struct EngineGenerationStepOutput {
 pub struct PrefillExecutionProfile {
     pub chunk_tokens: usize,
     pub completion_round_tokens: usize,
+    pub max_prefill_wave_rows: usize,
     pub block_tokens: usize,
     pub resident_token_slots: usize,
     pub limit_deep_prefill_waves: bool,
@@ -54,6 +58,8 @@ impl Engine {
         let _ = model;
         #[cfg(not(feature = "cuda"))]
         let _ = max_batch_tokens;
+        let resident_token_slots =
+            cache.block_size.saturating_mul(cache.block_count as usize).max(1);
         let chunk_tokens = match &self.inner {
             #[cfg(feature = "cuda")]
             EngineInner::Cuda(cuda) => cuda.prefill_chunk_tokens(),
@@ -64,19 +70,25 @@ impl Engine {
             #[cfg(feature = "cuda")]
             EngineInner::Cuda(_) => max_batch_tokens,
             #[cfg(feature = "metal")]
-            EngineInner::Metal(_) => max_batch_tokens,
+            EngineInner::Metal(_) => max_batch_tokens.div_ceil(METAL_COMPLETION_ROUND_ROWS),
+        };
+        let max_prefill_wave_rows = match &self.inner {
+            #[cfg(feature = "cuda")]
+            EngineInner::Cuda(_) => usize::MAX,
+            #[cfg(feature = "metal")]
+            EngineInner::Metal(_) => METAL_MAX_PREFILL_WAVE_ROWS,
         };
         let limit_deep_prefill_waves = match &self.inner {
             #[cfg(feature = "cuda")]
             EngineInner::Cuda(_) => true,
             #[cfg(feature = "metal")]
-            EngineInner::Metal(_) => false,
+            EngineInner::Metal(_) => true,
         };
         let cached_prefix_admission = match &self.inner {
             #[cfg(feature = "cuda")]
             EngineInner::Cuda(cuda) => cuda.paged_prefix_admission(&model.id)?,
             #[cfg(feature = "metal")]
-            EngineInner::Metal(_) => None,
+            EngineInner::Metal(_) => Some((0, 0, 0)),
         };
         let cached_prefix_replay_tokens =
             cached_prefix_admission.map(|(fallback_tokens, _, _)| fallback_tokens);
@@ -99,11 +111,9 @@ impl Engine {
         Ok(PrefillExecutionProfile {
             chunk_tokens: chunk_tokens.max(1),
             completion_round_tokens: completion_round_tokens.max(1),
+            max_prefill_wave_rows,
             block_tokens: cache.block_size.max(1),
-            resident_token_slots: cache
-                .block_size
-                .saturating_mul(cache.block_count as usize)
-                .max(1),
+            resident_token_slots,
             limit_deep_prefill_waves,
             cached_prefix_replay_tokens,
             cached_prefix_checkpoint_replay_tokens,

@@ -1,3 +1,4 @@
+mod batch;
 mod execution;
 mod scratch;
 
@@ -110,6 +111,14 @@ impl CudaAffineGatedFullAttentionMoeLayer {
         max_sequence_blocks: usize,
     ) -> Result<CudaAffineGatedFullAttentionState> {
         self.attention.prepare_state(layer, storage, max_sequence_blocks)
+    }
+
+    pub(crate) fn prepare_state_with_cache(
+        &self,
+        cache: crate::PagedKvCache,
+        max_sequence_blocks: usize,
+    ) -> Result<CudaAffineGatedFullAttentionState> {
+        self.attention.prepare_state_with_cache(cache, max_sequence_blocks)
     }
 }
 

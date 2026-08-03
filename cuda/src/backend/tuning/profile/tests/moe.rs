@@ -6,6 +6,7 @@ fn moe_profile_survives_with_routing_geometry() -> Result<(), Box<dyn std::error
     let request = MoeProfileRequest::nvfp4(
         MoePlanRequest::nvfp4(ExecutionPhase::Decode, 1, 128, 8, 2_048, 768),
         GatedActivation::GeluTanh,
+        false,
     );
     let tuner = CudaAutoTuner::new(&device(), config(&directory, CudaTuningMode::Startup));
     assert!(tuner.claim_moe(request));
@@ -28,6 +29,12 @@ fn moe_profile_survives_with_routing_geometry() -> Result<(), Box<dyn std::error
     assert!(payload.contains("\"moe\""));
     assert!(payload.contains("\"experts\": 128"));
     assert!(payload.contains("\"top_k\": 8"));
+    let weight_only = MoeProfileRequest::nvfp4(
+        MoePlanRequest::nvfp4(ExecutionPhase::Decode, 1, 128, 8, 2_048, 768),
+        GatedActivation::GeluTanh,
+        true,
+    );
+    assert_eq!(cached.lookup_moe(weight_only), None);
     fs::remove_dir_all(&directory)?;
     Ok(())
 }

@@ -78,6 +78,7 @@ pub(in crate::backend) enum MoeProfileExecution {
 pub(super) enum MoeProfileFormat {
     NvFp4 {
         activation: GatedActivation,
+        weight_only: bool,
     },
     Affine {
         group_size: usize,

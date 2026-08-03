@@ -77,6 +77,8 @@ pub(super) fn execute_loaded_decode(
             })
         })
         .collect::<Result<Vec<_>>>()?;
+    let sessions = sequences.iter().map(|sequence| sequence.session_id).collect::<Vec<_>>();
+    loaded.settle_decode_graphs(&sessions)?;
     if profile {
         let timings = DecodeTimings {
             backend_execution: started.elapsed(),

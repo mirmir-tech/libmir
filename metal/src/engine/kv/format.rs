@@ -2,7 +2,7 @@ use runtime::kv::KvCacheDType;
 
 use crate::engine::{Error, Result};
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum KvPageFormat {
     #[default]
     Native,

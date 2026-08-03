@@ -16,6 +16,7 @@ All systems are exercised through their OpenAI-compatible API with
 | Text generation (TG) | Exactly 128 tokens |
 | Concurrency | 1 / 2 / 5 / 10 |
 | Qwen3-4B context depth | 0 / 4,096 / 8,192 / 16,384 / 32,768 |
+| Qwen3.6-35B-A3B context depth | 0 / 4,096 / 8,192 / 16,384 / 32,768 |
 | GPT-OSS-20B context depth | 0 / 4,096 / 8,192 / 16,384 / 32,768 / 65,535 / 100,000 |
 | Cache | Prefix caching enabled |
 | Latency | API mode |
@@ -32,6 +33,7 @@ matrix coverage, and per-depth results.
 | Model | Device | PP tok/s ↑<br>mirmir / vLLM | TG tok/s ↑<br>mirmir / vLLM | TTFT ms ↓<br>mirmir / vLLM |
 |:---|:---|---:|---:|---:|
 | [Qwen3-4B BF16](qwen3-4b.md) | NVIDIA GX10 (GB10) | 4,556.7 / 4,720.7<br>96.5% · 8/36 wins | 58.70 / 34.07<br>172.3% · 33/36 wins | 2,953 / 2,191<br>1.347× · 0/36 wins |
+| [Qwen3.6-35B-A3B NVFP4](qwen3.6-35b-a3b-nvfp4.md) | NVIDIA GX10 (GB10) | 2,939.3 / 2,399.0<br>122.5% · 21/36 wins | 41.60 / 54.10<br>76.9% · 8/36 wins | 3,379 / 3,899<br>0.867× · 21/36 wins |
 | [GPT-OSS-20B BF16](gpt-oss-20b-bf16.md) | NVIDIA GX10 (GB10) | 2,827.2 / 2,254.3<br>125.4% · 43/52 wins | 27.74 / 25.53<br>108.7% · 26/52 wins | 6,088 / 7,422<br>0.820× · 44/52 wins |
 
 ## Metal

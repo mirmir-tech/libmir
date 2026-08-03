@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use super::{
     LoadedModel, ModelExecution, ModelRunner,
+    capacity::max_sequence_blocks,
     generation::{
         GenerationExecution, GraphExecution, MixedMixerExecution, SinkAttentionExecution,
     },
@@ -50,7 +51,7 @@ impl CudaEngine {
         let vision_readiness = vision
             .as_ref()
             .map(|config| VisionTensorSchema::discover(config).readiness(&catalog));
-        let blocks = usize::try_from(self.cache.block_count)?;
+        let blocks = max_sequence_blocks(manifest.context_len, self.cache)?;
         let mut report = |current: u64, detail: String| {
             progress(ProgressEvent::load_weights(current.min(total), total, detail));
         };
@@ -138,7 +139,10 @@ impl CudaEngine {
                     },
                     report,
                 )?;
-                Ok(generation(MixedMixerExecution::new(template)))
+                Ok(generation(MixedMixerExecution::new(
+                    template,
+                    self.session_config.prefill_chunk_tokens,
+                )?))
             },
             CudaDecoderRuntime::ClampedRouted => {
                 let ring_sessions = self.scheduler.max_batch_requests;

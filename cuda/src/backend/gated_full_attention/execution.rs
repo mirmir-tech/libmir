@@ -3,7 +3,8 @@ use runtime::kv::{BlockTable, KvBackendStorage, KvWritePlan};
 
 use super::{
     AffineGatedFullAttentionConfig, AffineGatedFullAttentionWeights,
-    CudaAffineGatedFullAttentionState, checked, scratch::GatedAttentionScratch,
+    CudaAffineGatedFullAttentionState, batch::GatedFullAttentionBatch, checked,
+    prefill::GatedFullAttentionPrefill, scratch::GatedAttentionScratch,
     validation::validate_execution,
 };
 use crate::{
@@ -14,21 +15,23 @@ use crate::{
 
 #[derive(Debug)]
 pub struct CudaAffineGatedFullAttentionExecution {
-    backend: CudaBackend,
-    config: AffineGatedFullAttentionConfig,
-    tokens: usize,
+    pub(super) backend: CudaBackend,
+    pub(super) config: AffineGatedFullAttentionConfig,
+    pub(super) tokens: usize,
     query: CheckpointProjection,
     key: CheckpointProjection,
     value: CheckpointProjection,
-    output: CheckpointProjection,
+    pub(super) output: CheckpointProjection,
     split: GatedAttentionSplit,
     query_norm: ShiftedRmsNorm,
     key_norm: ShiftedRmsNorm,
     query_rope: Mrope,
     key_rope: Mrope,
-    gate: SigmoidElementwiseBf16,
+    pub(super) gate: SigmoidElementwiseBf16,
     weights: AffineGatedFullAttentionWeights,
-    scratch: GatedAttentionScratch,
+    pub(super) scratch: GatedAttentionScratch,
+    pub(super) batch: Option<GatedFullAttentionBatch>,
+    pub(super) prefill: Option<GatedFullAttentionPrefill>,
 }
 
 impl CudaAffineGatedFullAttentionExecution {
@@ -113,6 +116,8 @@ impl CudaAffineGatedFullAttentionExecution {
             )?,
             weights: weights.clone(),
             scratch: GatedAttentionScratch::new(backend, config, tokens)?,
+            batch: None,
+            prefill: None,
         })
     }
 
@@ -187,7 +192,7 @@ impl CudaAffineGatedFullAttentionExecution {
         self.output.execute(&self.scratch.gated, output)
     }
 
-    fn project_and_transform(
+    pub(super) fn project_and_transform(
         &mut self,
         input: &DeviceBuffer<bf16>,
         positions: &DeviceBuffer<u32>,

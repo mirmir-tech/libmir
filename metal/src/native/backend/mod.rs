@@ -23,7 +23,7 @@ use super::{
     error::{Error, Result},
     model::LoadedModel,
 };
-use crate::MetalConfig;
+use crate::{MetalConfig, engine::PagedArenaPool};
 
 #[derive(Debug, Default)]
 struct ModelRegistry {
@@ -35,6 +35,7 @@ pub struct MetalBackend {
     models: Arc<Mutex<ModelRegistry>>,
     profile_decode: Arc<AtomicBool>,
     config: Arc<MetalConfig>,
+    paged_arenas: Arc<PagedArenaPool>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -52,6 +53,7 @@ impl MetalBackend {
             models: Arc::default(),
             profile_decode: Arc::default(),
             config: Arc::new(config),
+            paged_arenas: Arc::default(),
         }
     }
 

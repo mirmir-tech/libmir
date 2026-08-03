@@ -18,6 +18,7 @@ use super::{
 };
 use crate::{Error, Result, backend::CudaTextEmbeddingModel};
 
+mod capacity;
 mod generation;
 mod load;
 mod projection;

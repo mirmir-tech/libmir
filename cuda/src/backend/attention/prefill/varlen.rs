@@ -9,8 +9,8 @@ pub(super) fn prepare_varlen_fmha(
     config: DecodeAttentionConfig,
 ) -> Result<Option<FmhaBf16Plan>> {
     let supported = matches!(config.cache.cache.dtype, KvCacheDType::Auto | KvCacheDType::BFloat16)
-        && config.cache.key_head_dim == 128
-        && config.cache.value_head_dim == 128;
+        && matches!(config.cache.key_head_dim, 64 | 128 | 256)
+        && config.cache.value_head_dim == config.cache.key_head_dim;
     if !supported {
         return Ok(None);
     }

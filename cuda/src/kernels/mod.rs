@@ -62,7 +62,9 @@ pub use encoder::{
 };
 pub use gated_attention::GatedAttentionSplit;
 pub use gated_delta::{
-    GatedDeltaConvolution, GatedDeltaConvolutionSpec, GatedDeltaLaunch, GatedDeltaRecurrence,
+    GatedDeltaBatchConvolution, GatedDeltaBatchConvolutionSpec, GatedDeltaBatchRecurrence,
+    GatedDeltaBatchSpec, GatedDeltaConvolution, GatedDeltaConvolutionSpec,
+    GatedDeltaInputs as GatedDeltaKernelInputs, GatedDeltaLaunch, GatedDeltaRecurrence,
     GatedDeltaSpec, GatedDeltaTransformSpec, GatedDeltaTransforms,
 };
 pub use gptq::{GptqLaunch, GptqLinear, GptqSpec};
@@ -80,7 +82,7 @@ pub use nvfp4::{
     NvFp4MicroGateWorkspace, NvFp4MicroKernels, NvFp4MicroLaunch, NvFp4MicroSpec,
     NvFp4MicroWorkspace, NvFp4Preparation, NvFp4RmsNorm, NvFp4SelectedWeightLaunch,
     NvFp4SelectedWeightPreparation, NvFp4Spec, NvFp4WeightOnly, NvFp4WeightOnlyLaunch,
-    scale_elements,
+    NvFp4WeightOnlyTensorCore, scale_elements,
 };
 pub use output_fp8::{
     Fp8OutputKernels, Fp8OutputSpec, Fp8RefinementKernels, Fp8ResidualWeightBuffers,

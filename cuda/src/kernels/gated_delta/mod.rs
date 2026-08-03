@@ -6,16 +6,31 @@ use mircuda::{
 use super::geometry::{narrow, product, require};
 use crate::{Error, Result};
 
+mod batch;
+pub use batch::{
+    GatedDeltaBatchConvolution, GatedDeltaBatchConvolutionSpec, GatedDeltaBatchRecurrence,
+    GatedDeltaBatchSpec,
+};
 mod convolution;
 pub use convolution::{GatedDeltaConvolution, GatedDeltaConvolutionSpec};
 mod transform;
 pub use transform::{GatedDeltaTransformSpec, GatedDeltaTransforms};
 
 cuda_export!(
+    ParametersKernel = "libmir_cuda_gated_delta_parameters_bf16"(
+        alpha: &DeviceBuffer<bf16>, beta: &DeviceBuffer<bf16>,
+        a_log: &DeviceBuffer<bf16>, dt_bias: &DeviceBuffer<bf16>,
+        decay: &mut DeviceBuffer<f32>, update: &mut DeviceBuffer<f32>,
+        tokens: u32, value_heads: u32,
+    )
+);
+
+cuda_export!(
     RecurrenceKernel = "libmir_cuda_gated_delta_recurrence_bf16"(
         query: &DeviceBuffer<bf16>, key: &DeviceBuffer<bf16>, value: &DeviceBuffer<bf16>,
         alpha: &DeviceBuffer<bf16>, beta: &DeviceBuffer<bf16>, a_log: &DeviceBuffer<bf16>,
-        dt_bias: &DeviceBuffer<bf16>, state: &mut DeviceBuffer<f32>,
+        dt_bias: &DeviceBuffer<bf16>,
+        decay: &DeviceBuffer<f32>, update: &DeviceBuffer<f32>, state: &mut DeviceBuffer<f32>,
         output: &mut DeviceBuffer<bf16>, tokens: u32, key_heads: u32, value_heads: u32,
         key_dim: u32, value_dim: u32,
     )
@@ -38,12 +53,26 @@ pub struct GatedDeltaLaunch<'a> {
     pub beta: &'a DeviceBuffer<bf16>,
     pub a_log: &'a DeviceBuffer<bf16>,
     pub dt_bias: &'a DeviceBuffer<bf16>,
+    pub decay: &'a mut DeviceBuffer<f32>,
+    pub update: &'a mut DeviceBuffer<f32>,
     pub state: &'a mut DeviceBuffer<f32>,
     pub output: &'a mut DeviceBuffer<bf16>,
 }
 
+#[derive(Clone, Copy)]
+pub struct GatedDeltaInputs<'a> {
+    pub query: &'a DeviceBuffer<bf16>,
+    pub key: &'a DeviceBuffer<bf16>,
+    pub value: &'a DeviceBuffer<bf16>,
+    pub alpha: &'a DeviceBuffer<bf16>,
+    pub beta: &'a DeviceBuffer<bf16>,
+    pub a_log: &'a DeviceBuffer<bf16>,
+    pub dt_bias: &'a DeviceBuffer<bf16>,
+}
+
 #[derive(Clone, Debug)]
 pub struct GatedDeltaRecurrence {
+    parameters: TypedKernel<ParametersKernel>,
     kernel: TypedKernel<RecurrenceKernel>,
     spec: GatedDeltaSpec,
 }
@@ -53,7 +82,11 @@ impl GatedDeltaRecurrence {
         validate(spec)?;
         let source = cuda_kernel_file!("../../../kernels/gated_delta_bf16.cu");
         let module = compiler.compile(source, &CompileOptions::default())?;
-        Ok(Self { kernel: module.kernel()?, spec })
+        Ok(Self {
+            parameters: module.kernel()?,
+            kernel: module.kernel()?,
+            spec,
+        })
     }
 
     pub fn execute(&self, stream: &Stream, launch: &mut GatedDeltaLaunch<'_>) -> Result<()> {
@@ -69,8 +102,30 @@ impl GatedDeltaRecurrence {
         require("Gated Delta beta", gates, launch.beta.len())?;
         require("Gated Delta A log", self.spec.value_heads, launch.a_log.len())?;
         require("Gated Delta time bias", self.spec.value_heads, launch.dt_bias.len())?;
+        require("Gated Delta decay", gates, launch.decay.len())?;
+        require("Gated Delta update", gates, launch.update.len())?;
         require("Gated Delta state", state, launch.state.len())?;
         require("Gated Delta output", value, launch.output.len())?;
+        if self.spec.tokens > 1 {
+            self.parameters.launch(
+                stream,
+                LaunchConfig {
+                    grid: (narrow(gates.div_ceil(256))?, 1, 1),
+                    block: (256, 1, 1),
+                    shared_memory_bytes: 0,
+                },
+                (
+                    launch.alpha,
+                    launch.beta,
+                    launch.a_log,
+                    launch.dt_bias,
+                    &mut *launch.decay,
+                    &mut *launch.update,
+                    narrow(self.spec.tokens)?,
+                    narrow(self.spec.value_heads)?,
+                ),
+            )?;
+        }
         Ok(self.kernel.launch(
             stream,
             LaunchConfig {
@@ -86,6 +141,8 @@ impl GatedDeltaRecurrence {
                 launch.beta,
                 launch.a_log,
                 launch.dt_bias,
+                &*launch.decay,
+                &*launch.update,
                 &mut *launch.state,
                 &mut *launch.output,
                 narrow(self.spec.tokens)?,
@@ -109,6 +166,7 @@ fn validate(spec: GatedDeltaSpec) -> Result<()> {
         || !spec.value_heads.is_multiple_of(spec.key_heads)
         || spec.key_dim == 0
         || !spec.key_dim.is_multiple_of(32)
+        || spec.key_dim > 256
         || spec.value_dim == 0
     {
         return Err(Error::InvalidDecoderKernel("invalid Gated Delta recurrence geometry"));

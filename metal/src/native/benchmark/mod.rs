@@ -87,9 +87,10 @@ fn keeps_kv_state_for_interleaved_sessions() -> Result<()> {
     let mut model = LoadedModel::load(&config.manifest(), &mut ignored)?;
     let first_session = Uuid::new_v4();
     let second_session = Uuid::new_v4();
-    let first = model.prefill(first_session, &[1, 2], SamplingLogits::None, None, &mut ignored)?;
+    let first =
+        model.prefill(first_session, &[1, 2], &[], SamplingLogits::None, None, &mut ignored)?;
     let second =
-        model.prefill(second_session, &[3, 4], SamplingLogits::None, None, &mut ignored)?;
+        model.prefill(second_session, &[3, 4], &[], SamplingLogits::None, None, &mut ignored)?;
     let first_token = greedy_token(&first.output)?;
     let _second_token = greedy_token(&second.output)?;
 
@@ -108,17 +109,24 @@ fn reuses_exact_device_prefix_snapshot() -> Result<()> {
     let mut ignored = |_event| {};
     let mut model = LoadedModel::load(&config.manifest(), &mut ignored)?;
     let prompt = [1, 2];
-    let first = model.prefill(Uuid::new_v4(), &prompt, SamplingLogits::None, None, &mut ignored)?;
+    let first =
+        model.prefill(Uuid::new_v4(), &prompt, &[], SamplingLogits::None, None, &mut ignored)?;
     let second =
-        model.prefill(Uuid::new_v4(), &prompt, SamplingLogits::None, None, &mut ignored)?;
+        model.prefill(Uuid::new_v4(), &prompt, &[], SamplingLogits::None, None, &mut ignored)?;
 
     assert_eq!(first.prefix_cache_tokens, 0);
     assert_eq!(second.prefix_cache_tokens, prompt.len());
     assert_eq!(greedy_token(&first.output)?, greedy_token(&second.output)?);
 
     let extended_session = Uuid::new_v4();
-    let extended =
-        model.prefill(extended_session, &[1, 2, 3], SamplingLogits::None, None, &mut ignored)?;
+    let extended = model.prefill(
+        extended_session,
+        &[1, 2, 3],
+        &[],
+        SamplingLogits::None,
+        None,
+        &mut ignored,
+    )?;
     let extended_token = greedy_token(&extended.output)?;
     assert_eq!(extended.prefix_cache_tokens, prompt.len());
     assert_eq!(model.session_cached_tokens(extended_session)?, 3);
@@ -130,7 +138,7 @@ fn reuses_exact_device_prefix_snapshot() -> Result<()> {
 fn run_decode(model: &mut LoadedModel, prompt: &[u32], decode_tokens: usize) -> Result<Duration> {
     let session = Uuid::new_v4();
     let mut ignored = |_event| {};
-    let output = model.prefill(session, prompt, SamplingLogits::None, None, &mut ignored)?;
+    let output = model.prefill(session, prompt, &[], SamplingLogits::None, None, &mut ignored)?;
     let mut token = greedy_token(&output.output)?;
     let started = Instant::now();
     for _ in 0..decode_tokens {

@@ -3,7 +3,8 @@ use std::time::Instant;
 use runtime::{
     Result as RuntimeResult,
     backend::{
-        DecodeOutput, DecodeTimings, ModelHandle, PrefillOutput, SamplingLogits, TokenEvent,
+        DecodeOutput, DecodeTimings, ModelHandle, PrefillOutput, PrefillRequest, SamplingLogits,
+        TokenEvent,
     },
     kv::BlockTable,
 };
@@ -16,18 +17,12 @@ use crate::{
 };
 
 impl MetalBackend {
-    pub fn prefill_tokens_with_progress(
+    pub fn prefill_request_with_progress(
         &self,
-        model: &ModelHandle,
-        session_id: Uuid,
-        prompt_tokens: &[u32],
-        block_table: &BlockTable,
-        sampling_logits: SamplingLogits,
+        request: &PrefillRequest,
         progress: &mut dyn FnMut(MetalProgressEvent),
     ) -> RuntimeResult<PrefillOutput> {
-        Ok(self.prefill_tokens_inner(
-            model, session_id, prompt_tokens, block_table, sampling_logits, progress,
-        )?)
+        Ok(self.prefill_request_inner(request, progress)?)
     }
 
     pub fn decode_token(
@@ -41,34 +36,31 @@ impl MetalBackend {
         Ok(self.decode_token_inner(model, session_id, token_id, block_table, sampling_logits)?)
     }
 
-    pub(super) fn prefill_tokens_inner(
+    pub(super) fn prefill_request_inner(
         &self,
-        model: &ModelHandle,
-        session_id: Uuid,
-        prompt_tokens: &[u32],
-        block_table: &BlockTable,
-        sampling_logits: SamplingLogits,
+        request: &PrefillRequest,
         progress: &mut dyn FnMut(MetalProgressEvent),
     ) -> Result<PrefillOutput> {
         let started = Instant::now();
-        let lookup = model.id.clone();
+        let lookup = request.model.id.clone();
         let model_id = lookup.clone();
-        let tokens = prompt_tokens.to_vec();
-        let blocks = block_table.blocks().len();
-        let block_size = block_table.block_size();
-        let execution_sampling =
-            execution_sampling(sampling_logits, self.config.fusion.device_token_pipeline.enabled());
+        let request = request.clone();
+        let execution_sampling = execution_sampling(
+            request.sampling_logits,
+            self.config.fusion.device_token_pipeline.enabled(),
+        );
         self.with_model_progress(
             &lookup,
             move |loaded, worker_progress| {
                 execute_prefill(
                     loaded,
                     &model_id,
-                    session_id,
-                    &tokens,
-                    blocks,
-                    block_size,
-                    sampling_logits,
+                    request.session_id,
+                    &request.prompt_tokens,
+                    &request.cache_checkpoints,
+                    request.block_table.blocks().len(),
+                    request.block_table.block_size(),
+                    request.sampling_logits,
                     execution_sampling,
                     started,
                     worker_progress,
@@ -115,6 +107,7 @@ fn execute_prefill(
     model_id: &str,
     session_id: Uuid,
     prompt_tokens: &[u32],
+    cache_checkpoints: &[usize],
     blocks: usize,
     block_size: Option<usize>,
     sampling_logits: SamplingLogits,
@@ -122,8 +115,14 @@ fn execute_prefill(
     started: Instant,
     progress: &mut dyn FnMut(MetalProgressEvent),
 ) -> Result<PrefillOutput> {
-    let native =
-        loaded.prefill(session_id, prompt_tokens, execution_sampling, block_size, progress)?;
+    let native = loaded.prefill(
+        session_id,
+        prompt_tokens,
+        cache_checkpoints,
+        execution_sampling,
+        block_size,
+        progress,
+    )?;
     super::prefill_output::materialize_prefill_parts(
         loaded, model_id, session_id, prompt_tokens, blocks, sampling_logits, native, started,
     )

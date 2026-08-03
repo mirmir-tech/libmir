@@ -25,6 +25,22 @@ impl Sequence {
         self.consumed < self.request.prompt_tokens.len()
     }
 
+    pub(super) fn checkpoint_distance(&self) -> usize {
+        let declared = self
+            .request
+            .cache_checkpoints
+            .iter()
+            .copied()
+            .find(|checkpoint| *checkpoint > self.consumed)
+            .map(|checkpoint| checkpoint - self.consumed);
+        let terminal = self
+            .request
+            .terminal_cache_checkpoint()
+            .filter(|checkpoint| *checkpoint > self.consumed)
+            .map(|checkpoint| checkpoint - self.consumed);
+        declared.into_iter().chain(terminal).min().unwrap_or(usize::MAX)
+    }
+
     pub(super) fn finish(
         mut self,
         loaded: &crate::engine::model::LoadedModel,

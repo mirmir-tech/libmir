@@ -45,11 +45,12 @@ pub(super) fn load_native(
 }
 
 pub(super) fn load_weight_only(
+    backend: &CudaBackend,
     tensor_set: &CudaTensorSet,
     binding: &TensorBinding,
 ) -> Result<NvFp4WeightOnlyWeight> {
     let (config, tensors) = tensors(binding, tensor_set)?;
-    NvFp4WeightOnlyWeight::load(config, tensors)
+    NvFp4WeightOnlyWeight::load(backend, config, tensors)
 }
 
 fn tensors<'a>(

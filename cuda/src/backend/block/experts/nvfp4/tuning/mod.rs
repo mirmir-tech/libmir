@@ -103,7 +103,11 @@ impl AutoNvFp4Experts {
 fn candidate_executions(request: MoePlanRequest) -> &'static [MoeExecution] {
     match (request.phase, request.tokens) {
         (ExecutionPhase::Decode, 1) => &[MoeExecution::HybridW4A4, MoeExecution::IndexedGrouped],
-        (ExecutionPhase::Prefill, _) => &[MoeExecution::Bucketed, MoeExecution::IndexedGrouped],
+        (ExecutionPhase::Prefill, _) => &[
+            MoeExecution::Bucketed,
+            MoeExecution::IndexedGrouped,
+            MoeExecution::SelectedWeightOnly,
+        ],
         (ExecutionPhase::Decode, _) => &[],
     }
 }
@@ -173,7 +177,11 @@ mod tests {
         assert!(candidate_executions(batch).is_empty());
         assert_eq!(
             candidate_executions(prefill),
-            [MoeExecution::Bucketed, MoeExecution::IndexedGrouped]
+            [
+                MoeExecution::Bucketed,
+                MoeExecution::IndexedGrouped,
+                MoeExecution::SelectedWeightOnly,
+            ]
         );
     }
 

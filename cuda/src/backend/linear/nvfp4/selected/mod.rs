@@ -18,6 +18,7 @@ mod tensor_core;
 mod tests;
 
 pub use bucketed::BucketedNvFp4MoeBf16;
+pub(in crate::backend) use bucketed::{BucketedNvFp4Scratch, BucketedNvFp4ScratchConfig};
 #[cfg(test)]
 pub use direct_down_moe::DirectDownNvFp4MoeBf16;
 pub use grouped::GroupedNvFp4MoeBf16;

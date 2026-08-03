@@ -77,6 +77,7 @@ fn finishing_startup_prevents_new_runtime_measurements() {
     let moe = MoeProfileRequest::nvfp4(
         MoePlanRequest::nvfp4(ExecutionPhase::Decode, 1, 128, 8, 2_048, 768),
         GatedActivation::GeluTanh,
+        false,
     );
     let tuner = CudaAutoTuner::new(&device(), CudaTuningConfig::default());
     assert!(tuner.prepares_candidates(PlanSource::Heuristic));

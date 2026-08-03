@@ -53,9 +53,13 @@ pub fn configure_expert_fusion<T: ExpertFusion>(
     stream.synchronize()?;
     let memory = memory_stats()?;
     let additional = estimate_additional_bytes(layers)?;
-    let reserve = memory.recommended.map(reserve_bytes);
+    let reserve = stream
+        .config()
+        .expert_fusion_reserve_bytes
+        .or_else(|| memory.recommended.map(default_reserve_bytes));
     let enabled = match mode {
-        FusionMode::Auto => additional.is_some_and(|bytes| fits_budget(memory, bytes)),
+        FusionMode::Auto => additional
+            .is_some_and(|bytes| fits_budget(memory, bytes, reserve.unwrap_or(usize::MAX))),
         FusionMode::Enabled => additional.is_some(),
         FusionMode::Disabled => false,
     };
@@ -86,24 +90,24 @@ fn estimate_additional_bytes<T: ExpertFusion>(layers: &[T]) -> Result<Option<usi
     Ok(Some(total))
 }
 
-fn fits_budget(memory: MemoryStats, additional: usize) -> bool {
+fn fits_budget(memory: MemoryStats, additional: usize, reserve: usize) -> bool {
     let Some(recommended) = memory.recommended else {
         return false;
     };
     memory
         .active
         .checked_add(additional)
-        .and_then(|used| used.checked_add(reserve_bytes(recommended)))
+        .and_then(|used| used.checked_add(reserve))
         .is_some_and(|required| required <= recommended)
 }
 
-fn reserve_bytes(recommended: usize) -> usize {
+fn default_reserve_bytes(recommended: usize) -> usize {
     max(MINIMUM_RESERVE_BYTES, recommended / RESERVE_DIVISOR)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{MemoryStats, fits_budget, reserve_bytes};
+    use super::{MemoryStats, default_reserve_bytes, fits_budget};
 
     #[test]
     fn auto_budget_keeps_memory_reserve() {
@@ -115,8 +119,23 @@ mod tests {
             limit: recommended,
             recommended: Some(recommended),
         };
-        assert!(fits_budget(memory, 10 * 1024 * 1024 * 1024));
-        assert!(!fits_budget(memory, 12 * 1024 * 1024 * 1024));
-        assert_eq!(reserve_bytes(recommended), 3_435_973_836);
+        let reserve = default_reserve_bytes(recommended);
+        assert!(fits_budget(memory, 10 * 1024 * 1024 * 1024, reserve));
+        assert!(!fits_budget(memory, 12 * 1024 * 1024 * 1024, reserve));
+        assert_eq!(reserve, 3_435_973_836);
+    }
+
+    #[test]
+    fn planned_runtime_residency_can_reject_fusion() {
+        let recommended = 56 * 1024 * 1024 * 1024;
+        let memory = MemoryStats {
+            active: 28 * 1024 * 1024 * 1024,
+            cached: 0,
+            peak: 0,
+            limit: recommended,
+            recommended: Some(recommended),
+        };
+
+        assert!(!fits_budget(memory, 18 * 1024 * 1024 * 1024, 25 * 1024 * 1024 * 1024,));
     }
 }

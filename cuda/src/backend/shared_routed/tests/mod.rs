@@ -73,6 +73,51 @@ fn continues_decode_after_spatial_vision_prefill() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn concurrent_sessions_reuse_model_kv_pages_and_plans() -> Result<()> {
+    let backend = CudaBackend::new(CudaConfig::default())?;
+    let decoder = decoder()?;
+    let fixture = fixture::HybridFixture::new(&decoder)?;
+    let cache = CacheConfig {
+        block_size: 16,
+        block_count: 16_384,
+        dtype: KvCacheDType::BFloat16,
+    };
+    let template = backend.load_shared_routed_model_template(
+        &decoder,
+        &fixture.catalog(),
+        crate::SharedRoutedModelLoadConfig { cache, max_sequence_blocks: 2 },
+    )?;
+    let caches = template.allocate_shared_kv()?;
+    assert_eq!(caches.iter().filter(|cache| cache.is_some()).count(), 1);
+
+    let mut first = template.instantiate_with_caches(&caches)?;
+    let after_first = backend.memory_pool_stats()?.used;
+    let mut second = template.instantiate_with_caches(&caches)?;
+    let after_second = backend.memory_pool_stats()?.used;
+    let duplicated_pages = u64::from(cache.block_count)
+        * u64::try_from(cache.block_size)?
+        * u64::try_from(decoder.layer_key_value_heads(1))?
+        * u64::try_from(decoder.layer_head_dim(1))?
+        * 2
+        * 2;
+
+    assert!(after_second.saturating_sub(after_first) < duplicated_pages);
+
+    let mut table = BlockTable::with_block_size(16);
+    table.push(BlockId(0));
+    table.set_token_len(2);
+    first.prefill(Uuid::from_u128(1), &[1, 2], &table)?;
+    backend.synchronize()?;
+    let after_first_prefill = backend.memory_pool_stats()?.used;
+    second.prefill(Uuid::from_u128(2), &[1, 2], &table)?;
+    backend.synchronize()?;
+    assert_eq!(template.plans.lock().expect("plan cache").len(), 1);
+    assert_eq!(backend.memory_pool_stats()?.used, after_first_prefill);
+    drop((first, second));
+    Ok(())
+}
+
 fn decoder() -> Result<DecoderConfig> {
     Ok(DecoderConfig::from_value(&json!({
         "text_config": {

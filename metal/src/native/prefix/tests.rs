@@ -1,5 +1,7 @@
+use std::collections::HashMap;
+
 use super::{
-    PrefixCache, PrefixEntry, PrefixSnapshot,
+    PrefixCache, PrefixEntry, PrefixGroup, PrefixSnapshot,
     index::{PrefixKey, indexed_prefixes},
 };
 use crate::{
@@ -17,6 +19,27 @@ fn indexes_storage_efficient_complete_blocks_and_the_exact_prompt() {
 fn indexes_only_the_exact_prompt_without_block_prefixes() {
     let indexed = indexed_prefixes("model", &[1, 2, 3], None);
     assert_eq!(indexed.iter().map(|(_, position)| *position).collect::<Vec<_>>(), [3]);
+}
+
+#[test]
+fn message_checkpoint_shares_a_group_with_the_completed_prompt() -> Result<()> {
+    let mut cache = PrefixCache::new(2, usize::MAX);
+    let mut state = SessionState::new(DecoderCache::new(&[], 1)?);
+    state.position = 2;
+    cache.insert_checkpoint("model", &[1, 2], &state, 40)?;
+    state.position = 3;
+    let logits = Array::from_u32(&[0], &[1])?;
+    cache.insert("model", &[1, 2, 3], &state, &logits, None, 60)?;
+
+    let (restored, logits) = cache
+        .restore_longest("model", &[1, 2, 9])?
+        .ok_or(crate::native::error::Error::NoPrefixLogits)?;
+
+    assert_eq!(restored.position, 2);
+    assert!(logits.is_none());
+    assert_eq!(cache.groups.len(), 1);
+    assert_eq!(cache.resident_bytes(), 100);
+    Ok(())
 }
 
 #[test]
@@ -97,9 +120,12 @@ fn insert_snapshot_with_key(
     bytes: usize,
 ) -> Result<()> {
     cache.entries.insert(key, PrefixEntry { memory_group, position: 1 });
-    cache.groups.entry(memory_group).or_insert(PrefixSnapshot {
-        state: SessionState::new(DecoderCache::new(&[], 1)?),
-        logits: Array::from_u32(&[0], &[1])?,
+    cache.groups.entry(memory_group).or_insert(PrefixGroup {
+        terminal: Some(PrefixSnapshot {
+            state: SessionState::new(DecoderCache::new(&[], 1)?),
+            logits: Some(Array::from_u32(&[0], &[1])?),
+        }),
+        checkpoints: HashMap::new(),
         bytes,
     });
     cache.touch_group(memory_group);

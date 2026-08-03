@@ -31,6 +31,7 @@ pub(super) enum SharedRoutedEmbedding {
 #[derive(Debug)]
 pub(super) struct SharedRoutedOutputHead {
     operation: CheckpointProjection,
+    tokens: usize,
     hidden: usize,
     vocab: usize,
 }
@@ -118,6 +119,7 @@ impl SharedRoutedEmbedding {
 impl SharedRoutedOutputHead {
     pub(super) fn new(
         backend: &CudaBackend,
+        tokens: usize,
         hidden: usize,
         vocab: usize,
         weight: &CheckpointProjectionWeight,
@@ -125,12 +127,13 @@ impl SharedRoutedOutputHead {
         Ok(Self {
             operation: CheckpointProjection::new(
                 backend,
-                1,
+                tokens,
                 hidden,
                 vocab,
                 DenseRole::OutputHead,
                 weight,
             )?,
+            tokens,
             hidden,
             vocab,
         })
@@ -141,7 +144,7 @@ impl SharedRoutedOutputHead {
         input: &DeviceBuffer<bf16>,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
-        if input.len() != self.hidden || output.len() != self.vocab {
+        if input.len() != self.tokens * self.hidden || output.len() != self.tokens * self.vocab {
             return Err(Error::InvalidDecoderKernel("shared-routed output-head buffer mismatch"));
         }
         self.operation.execute(input, output)

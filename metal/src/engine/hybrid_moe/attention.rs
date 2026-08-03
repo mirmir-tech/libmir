@@ -1,6 +1,6 @@
 use super::{HybridMoeLayerConfig, weights::AttentionWeights};
 use crate::engine::{
-    Array, FusedAttention, FusedKeyValue, KvCache, PagedContextMode, Result, RopeOptions, Stream,
+    Array, FusedAttention, FusedKeyValue, KvCache, Result, RopeOptions, Stream,
     native_paged_attention_mode, paged_attention_min_context,
 };
 
@@ -79,7 +79,7 @@ pub(super) fn forward_decode(
                     stream.config().cache.force_native_paged_attention,
                 )
             } else {
-                PagedContextMode::View
+                crate::engine::PagedContextMode::View
             };
             let context = cache.update_for_attention_mode(
                 &keys,
@@ -89,12 +89,16 @@ pub(super) fn forward_decode(
                 mode,
             )?;
             if let Some(paged) = context.paged {
-                queries.paged_scaled_dot_product_attention_with_scratch(
-                    paged.attention(),
-                    paged.scratch(),
-                    1.0,
-                    stream,
-                )?
+                if sequence == 1 {
+                    queries.paged_scaled_dot_product_attention_with_scratch(
+                        paged.attention(),
+                        paged.scratch(),
+                        1.0,
+                        stream,
+                    )?
+                } else {
+                    unreachable!("multi-token attention always requests a cache view")
+                }
             } else if let Some(mask) = mask.or(context.mask.as_ref()) {
                 queries.masked_scaled_dot_product_attention(
                     &context.keys, &context.values, 1.0, mask, stream,

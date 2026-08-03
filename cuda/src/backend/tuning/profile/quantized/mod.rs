@@ -37,10 +37,18 @@ pub(in crate::backend) enum DirectFp8WeightScale {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
+pub(in crate::backend) enum NvFp4WeightOnlyExecution {
+    Compressed,
+    TensorCore,
+    Materialized,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
 pub(in crate::backend) enum QuantizedProfileExecution {
     Affine(AffineProjectionExecution),
     MxFp8(MxFp8ProjectionExecution),
     DirectFp8(DirectFp8ProjectionExecution),
+    NvFp4WeightOnly(NvFp4WeightOnlyExecution),
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -62,6 +70,7 @@ enum QuantizedProfileFormat {
     DirectFp8Bf16E5M2WeightOnly {
         bias: bool,
     },
+    NvFp4Bf16WeightOnly,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -74,6 +83,11 @@ pub(in crate::backend) struct QuantizedProfileRequest {
 }
 
 impl QuantizedProfileRequest {
+    #[must_use]
+    pub(in crate::backend) const fn tokens(self) -> usize {
+        self.tokens
+    }
+
     pub(in crate::backend) const fn affine(
         tokens: usize,
         input_features: usize,
@@ -169,6 +183,24 @@ impl QuantizedProfileRequest {
             input_features,
             output_features,
             format: QuantizedProfileFormat::DirectFp8Bf16E5M2WeightOnly { bias },
+        }
+    }
+
+    pub(in crate::backend) const fn nvfp4_bf16_weight_only(
+        tokens: usize,
+        input_features: usize,
+        output_features: usize,
+    ) -> Self {
+        Self {
+            phase: if tokens == 1 {
+                ExecutionPhase::Decode
+            } else {
+                ExecutionPhase::Prefill
+            },
+            tokens,
+            input_features,
+            output_features,
+            format: QuantizedProfileFormat::NvFp4Bf16WeightOnly,
         }
     }
 }

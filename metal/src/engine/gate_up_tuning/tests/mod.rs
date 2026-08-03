@@ -86,6 +86,7 @@ pub(super) fn batch_attention_key() -> BatchAttentionKey {
         dtype: 5,
         causal: false,
         fragmented: false,
+        view: true,
     }
 }
 

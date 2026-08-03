@@ -1,18 +1,17 @@
 use crate::{MemoryRuntimeConfig, MemorySnapshot, ModelMemoryEstimate};
 
-// Unified memory also pays the global platform and allocator reserves above.
-// Half a checkpoint keeps load-time copy headroom without reserving it twice.
-const TRANSIENT_RESERVE_DIVISOR: u64 = 2;
-
 pub(super) fn platform_reserve(config: MemoryRuntimeConfig, memory: &MemorySnapshot) -> u64 {
     config.hard_reserve_bytes(memory)
 }
 
-pub(super) fn transient_reserve(estimate: ModelMemoryEstimate, memory: &MemorySnapshot) -> u64 {
-    if !memory.unified {
-        return 0;
-    }
-    estimate.weight_bytes / TRANSIENT_RESERVE_DIVISOR
+pub(super) const fn transient_reserve(
+    _estimate: ModelMemoryEstimate,
+    _memory: &MemorySnapshot,
+) -> u64 {
+    // Runtime workspace is already included in `required_bytes`; reserving an
+    // additional fraction of the weights would strand accelerator memory and
+    // override the operator's explicit hard-reserve policy.
+    0
 }
 
 pub(super) fn planned_residency(estimate: ModelMemoryEstimate, memory: &MemorySnapshot) -> u64 {
@@ -26,14 +25,14 @@ mod tests {
     const GIB: u64 = 1024 * 1024 * 1024;
 
     #[test]
-    fn unified_policy_keeps_global_and_per_model_headroom() {
+    fn unified_policy_does_not_duplicate_workspace_headroom() {
         let mut memory = snapshot(128 * GIB, true);
         memory.allocation_reserve_bytes = 4 * GIB;
         let estimate = estimate(40 * GIB);
 
         assert_eq!(platform_reserve(MemoryRuntimeConfig::default(), &memory), 36 * GIB);
-        assert_eq!(transient_reserve(estimate, &memory), 20 * GIB);
-        assert_eq!(planned_residency(estimate, &memory), 60 * GIB);
+        assert_eq!(transient_reserve(estimate, &memory), 0);
+        assert_eq!(planned_residency(estimate, &memory), 40 * GIB);
     }
 
     #[test]

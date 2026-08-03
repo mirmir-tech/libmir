@@ -65,6 +65,20 @@ impl MetalPrefillBatch {
         if loaded.prefixes.reserve_batch_slots(sequences.len()) {
             crate::engine::clear_memory_cache()?;
         }
+        let page_size = loaded.stream.config().kv_cache.block_size.max(1);
+        let required_pages = sequences
+            .iter()
+            .map(|sequence| {
+                sequence
+                    .request
+                    .prompt_tokens
+                    .len()
+                    .div_ceil(page_size)
+                    .saturating_add(1)
+                    .saturating_sub(sequence.position.div_ceil(page_size))
+            })
+            .sum();
+        loaded.reserve_prefill_pages(required_pages)?;
         Ok((
             Self {
                 model_id,

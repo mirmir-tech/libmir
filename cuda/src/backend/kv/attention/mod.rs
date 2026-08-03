@@ -1,7 +1,6 @@
-use ::runtime::kv::{BlockTable, KvCacheDType, KvStorageSpec};
+use ::runtime::kv::{BlockTable, KvStorageSpec};
 use mircuda::{
-    Context, DeviceBuffer, FmhaBf16Plan, FmhaBf16Spec, KernelNode, MemoryPool, PinnedBuffer,
-    Stream, TypedKernel,
+    Context, DeviceBuffer, FmhaBf16Plan, KernelNode, MemoryPool, PinnedBuffer, Stream, TypedKernel,
 };
 
 use super::{
@@ -21,10 +20,12 @@ pub mod autotune;
 mod batch;
 mod capture;
 mod execution;
+mod fmha;
 mod pages;
 mod prefill_batch;
 
 pub use batch::BatchedPagedAttentionBf16;
+use fmha::PagedFmhaPrefill;
 use pages::FmhaPageWorkspace;
 pub use prefill_batch::BatchedPrefillPagedAttentionBf16;
 
@@ -42,6 +43,7 @@ pub struct PagedAttentionBf16 {
     tuning_complete: bool,
     prefill: PagedPrefillAttention,
     fmha: Option<FmhaBf16Plan>,
+    paged_fmha: Option<PagedFmhaPrefill>,
     gather: Option<PagedKvGather>,
     fmha_workspace: Option<FmhaPageWorkspace>,
     stream: Stream,
@@ -110,19 +112,8 @@ impl PagedAttentionBf16 {
             backend.inner.pool.allocate::<f32>(&backend.inner.stream, partial_statistics)?,
         );
         let prefill = PagedPrefillAttention::compile(&backend.inner.compiler, spec)?;
-        let fmha_supported =
-            matches!(storage.cache.dtype, KvCacheDType::Auto | KvCacheDType::BFloat16)
-                && storage.key_head_dim == 128
-                && storage.value_head_dim == 128;
-        let fmha = fmha_supported
-            .then(|| {
-                FmhaBf16Plan::new(
-                    &backend.inner.context,
-                    &backend.inner.stream,
-                    FmhaBf16Spec::new(query_heads, storage.kv_heads, 128, 128)?,
-                )
-            })
-            .transpose()?;
+        let (fmha_supported, fmha, paged_fmha) =
+            fmha::prepare(backend, storage, query_heads, max_blocks)?;
         let gather = fmha_supported
             .then(|| PagedKvGather::compile(&backend.inner.compiler, spec))
             .transpose()?;
@@ -146,6 +137,7 @@ impl PagedAttentionBf16 {
             tuning_complete: false,
             prefill,
             fmha,
+            paged_fmha,
             gather,
             fmha_workspace: None,
             stream: backend.inner.stream.clone(),

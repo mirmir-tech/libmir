@@ -119,7 +119,12 @@ fn schedule(
             sequence.prefix_tokens > 0,
             completion_first,
         );
-        let count = generation.prefill_chunk_len(remaining.min(row_budget).min(context_budget));
+        let count = generation.prefill_chunk_len(
+            remaining
+                .min(row_budget)
+                .min(context_budget)
+                .min(sequence.checkpoint_distance()),
+        );
         if !plan::valid_chunk(count, remaining, remaining_budget) {
             return Err(Error::InvalidDecoderKernel(
                 "CUDA lowering returned an invalid prefill chunk",

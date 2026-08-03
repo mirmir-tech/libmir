@@ -69,6 +69,7 @@ impl PreparedGeneration {
         match self {
             Self::Text(prepared) => session.prefill_generation_reserved(
                 &prepared.tokens.token_ids,
+                &prepared.cache_checkpoints,
                 reserved_tokens,
                 sampling,
                 progress,

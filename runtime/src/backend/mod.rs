@@ -1,5 +1,7 @@
 mod batch;
 mod capability;
+#[cfg(test)]
+mod tests;
 mod traits;
 
 pub use batch::{DecodeBatchOutput, DecodeBatchRequest, DecodeSequence};

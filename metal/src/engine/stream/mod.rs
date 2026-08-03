@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use super::{
-    Result, attention_tuning,
+    PagedArenaPool, Result, attention_tuning,
     compiled::CompiledGraphs,
     gate_up_tuning::MetalTuner,
     kernels::{
@@ -12,6 +12,8 @@ use super::{
         QuantizedPageWriteOptions,
     },
 };
+
+mod construction;
 
 #[derive(Debug)]
 pub struct Stream {
@@ -21,36 +23,10 @@ pub struct Stream {
     config: Arc<crate::MetalConfig>,
     pub(super) tuner: Mutex<MetalTuner>,
     graph_dumped: AtomicBool,
+    paged_arenas: Arc<PagedArenaPool>,
 }
 
 impl Stream {
-    pub fn new_gpu() -> Result<Self> {
-        Self::new(mirtal::Device::gpu(0), Arc::default())
-    }
-
-    pub(crate) fn new_gpu_with_config(config: Arc<crate::MetalConfig>) -> Result<Self> {
-        Self::new(mirtal::Device::gpu(0), config)
-    }
-
-    pub fn new_cpu() -> Result<Self> {
-        Self::new(mirtal::Device::cpu(0), Arc::default())
-    }
-
-    fn new(device: mirtal::Device, config: Arc<crate::MetalConfig>) -> Result<Self> {
-        let native = device.new_stream()?;
-        let compiled = CompiledGraphs::new(&native)?;
-        let kernels = Kernels::new()?;
-        let tuner = Mutex::new(MetalTuner::new(config.tuning.clone()));
-        Ok(Self {
-            native,
-            compiled,
-            kernels,
-            config,
-            tuner,
-            graph_dumped: AtomicBool::new(false),
-        })
-    }
-
     pub fn synchronize(&self) -> Result<()> {
         Ok(self.native.synchronize()?)
     }
@@ -65,6 +41,14 @@ impl Stream {
 
     pub(crate) fn config(&self) -> &crate::MetalConfig {
         &self.config
+    }
+
+    pub(crate) const fn paged_arenas(&self) -> &Arc<PagedArenaPool> {
+        &self.paged_arenas
+    }
+
+    pub(crate) fn detach_paged_arena_graphs(&self) -> Result<()> {
+        self.paged_arenas.detach_evaluated_graphs()
     }
 
     pub(crate) fn finish_startup_tuning(&self) {

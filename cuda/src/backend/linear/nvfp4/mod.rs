@@ -13,6 +13,7 @@ pub use selected::{
     BucketedNvFp4MoeBf16, DirectNvFp4MoeBf16, GroupedNvFp4MoeBf16, HybridNvFp4MoeBf16,
     SelectedNvFp4LinearBf16, SelectedNvFp4MoeBf16, SelectedNvFp4TensorCoreMoeBf16,
 };
+pub(in crate::backend) use selected::{BucketedNvFp4Scratch, BucketedNvFp4ScratchConfig};
 pub use weight_only::{NvFp4WeightOnlyBf16Linear, NvFp4WeightOnlyWeight};
 
 use super::CudaBackend;

@@ -16,6 +16,7 @@ pub struct MetalConfig {
     pub fusion: MetalFusionConfig,
     pub kv_cache: runtime::kv::CacheConfig,
     pub tuning: MetalTuningConfig,
+    pub(crate) expert_fusion_reserve_bytes: Option<usize>,
 }
 
 impl Default for MetalConfig {
@@ -27,6 +28,7 @@ impl Default for MetalConfig {
             fusion: MetalFusionConfig::default(),
             kv_cache: runtime::kv::CacheConfig::new(4_096),
             tuning: MetalTuningConfig::default(),
+            expert_fusion_reserve_bytes: None,
         }
     }
 }

@@ -1,5 +1,8 @@
 mod contiguous;
 mod format;
+#[cfg(test)]
+mod inspection;
+mod lifecycle;
 mod paged;
 mod policy;
 mod sliding;
@@ -7,6 +10,7 @@ mod sliding;
 use std::sync::Arc;
 
 pub use format::KvPageFormat;
+pub use paged::PagedArenaPool;
 pub use policy::{
     NATIVE_PAGED_ATTENTION_MIN_CONTEXT, native_paged_attention_mode, paged_attention_enabled,
     paged_attention_min_context,
@@ -96,23 +100,48 @@ impl KvCache {
         page_size: usize,
         format: KvPageFormat,
     ) -> Result<Self> {
-        Self::new_with_options(step, None, Some((page_size, format)))
+        Self::new_paged_with_pool(step, page_size, format, Arc::new(PagedArenaPool::default()), 0)
+    }
+
+    pub(crate) fn new_paged_with_pool(
+        step: usize,
+        page_size: usize,
+        format: KvPageFormat,
+        pool: Arc<PagedArenaPool>,
+        layer: usize,
+    ) -> Result<Self> {
+        Self::new_paged_with_pool_capacity(step, page_size, format, usize::MAX, pool, layer)
+    }
+
+    pub(crate) fn new_paged_with_pool_capacity(
+        step: usize,
+        page_size: usize,
+        format: KvPageFormat,
+        max_pages: usize,
+        pool: Arc<PagedArenaPool>,
+        layer: usize,
+    ) -> Result<Self> {
+        Self::new_with_options(step, None, Some((page_size, format, max_pages, pool, layer)))
     }
 
     fn new_with_options(
         step: usize,
         max_context: Option<usize>,
-        page_storage: Option<(usize, KvPageFormat)>,
+        page_storage: Option<(usize, KvPageFormat, usize, Arc<PagedArenaPool>, usize)>,
     ) -> Result<Self> {
-        if step == 0 || max_context == Some(0) || page_storage.is_some_and(|(size, _)| size == 0) {
+        if step == 0
+            || max_context == Some(0)
+            || page_storage.as_ref().is_some_and(|(size, ..)| *size == 0)
+        {
             return Err(Error::InvalidModel("KV cache dimensions must be positive".into()));
         }
         let reserve_tokens = usize::from(page_storage.is_some()) * step;
         Ok(Self {
             keys: None,
             values: None,
-            pages: page_storage
-                .map(|(size, format)| paged::PagedStore::new(size, step, reserve_tokens, format)),
+            pages: page_storage.map(|(size, format, max_pages, pool, layer)| {
+                paged::PagedStore::new(size, step, reserve_tokens, max_pages, format, pool, layer)
+            }),
             offset: 0,
             capacity: 0,
             write_index: 0,

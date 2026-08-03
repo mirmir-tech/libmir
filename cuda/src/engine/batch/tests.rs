@@ -4,9 +4,9 @@ use super::{bucket_sizes, build_outputs, sample_policies};
 
 #[test]
 fn prepares_common_and_maximum_decode_buckets() {
-    assert_eq!(bucket_sizes(1).collect::<Vec<_>>(), Vec::<usize>::new());
-    assert_eq!(bucket_sizes(7).collect::<Vec<_>>(), [2, 4, 5, 7]);
-    assert_eq!(bucket_sizes(16).collect::<Vec<_>>(), [2, 4, 5, 8, 10, 16]);
+    assert_eq!(bucket_sizes(1).collect::<Vec<_>>(), [1]);
+    assert_eq!(bucket_sizes(7).collect::<Vec<_>>(), [1, 2, 4, 5, 7]);
+    assert_eq!(bucket_sizes(16).collect::<Vec<_>>(), [1, 2, 4, 5, 8, 10, 16]);
 }
 
 #[test]

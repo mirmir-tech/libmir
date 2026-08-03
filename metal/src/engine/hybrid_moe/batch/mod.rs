@@ -27,6 +27,44 @@ impl HybridMoeModel {
         decode_graph::export_once(&logits, stream)?;
         Ok(logits)
     }
+
+    pub(crate) fn forward_packed_prefill_state(
+        &self,
+        token_ids: &Array,
+        caches: &mut [&mut DecoderCache],
+        positions: &[i32],
+        stream: &Stream,
+    ) -> Result<Array> {
+        let mut hidden = self.embedding.lookup(token_ids, stream)?;
+        hidden = hidden.multiply_scalar(self.embed_scale, stream)?;
+        let shape = token_ids.shape()?;
+        let position = positions.iter().copied().min().map_or(Ok(0), usize::try_from)?;
+        let evaluation_step = crate::engine::decoder::prefill_evaluation_step(
+            caches.len(),
+            usize::try_from(shape[1])?,
+            position,
+            self.layers.len(),
+        );
+        for (index, layer) in self.layers.iter().enumerate() {
+            let mut layer_caches = caches
+                .iter_mut()
+                .map(|cache| {
+                    cache.attention_caches_mut()?.get_mut(index).ok_or_else(|| {
+                        Error::InvalidModel(format!("missing cache for layer {index}"))
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            hidden = layer.mix_packed_prefill(&hidden, &mut layer_caches, positions, stream)?;
+            hidden = layer.feed_forward_packed(&hidden, stream)?;
+            if evaluation_step
+                .is_some_and(|step| (index + 1) % step == 0 || index + 1 == self.layers.len())
+            {
+                hidden.async_eval()?;
+                stream.synchronize()?;
+            }
+        }
+        Ok(hidden)
+    }
 }
 
 impl LoweredPackedLayer for HybridMoeLayer {
@@ -77,6 +115,33 @@ impl HybridMoeLayer {
             self.fused_key_value.as_ref(),
             caches,
             positions,
+            false,
+            stream,
+        )?;
+        let attention =
+            self.weights
+                .post_attention_norm
+                .apply(&attention, self.config.rms_norm_eps, stream)?;
+        input.add(&attention, stream)
+    }
+
+    fn mix_packed_prefill(
+        &self,
+        input: &Array,
+        caches: &mut [&mut KvCache],
+        positions: &[i32],
+        stream: &Stream,
+    ) -> Result<Array> {
+        let normalized = self.weights.input_norm.apply(input, self.config.rms_norm_eps, stream)?;
+        let attention = packed_attention(
+            &normalized,
+            &self.weights.attention,
+            self.config,
+            self.fused_attention.as_ref(),
+            self.fused_key_value.as_ref(),
+            caches,
+            positions,
+            true,
             stream,
         )?;
         let attention =

@@ -3,6 +3,7 @@ mod batch;
 #[cfg(any(feature = "cuda", feature = "metal"))]
 mod generation;
 mod lifecycle;
+mod load;
 mod memory;
 mod prefill;
 mod select;
@@ -13,7 +14,7 @@ mod vision;
 
 #[cfg(feature = "cuda")]
 use cuda::CudaEngine;
-use foundation::model::{BackendTarget, ModelManifest};
+use foundation::model::BackendTarget;
 #[cfg(any(feature = "cuda", feature = "metal"))]
 pub use generation::PrefillExecutionProfile;
 #[cfg(any(feature = "cuda", feature = "metal"))]
@@ -110,27 +111,6 @@ impl Engine {
             EngineInner::Metal(metal) => Ok(metal.finish_startup_tuning(model)?),
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
             EngineInner::Unavailable => Ok(()),
-        }
-    }
-
-    /// Loads model weights and reports backend progress events.
-    pub fn load_model_with_progress(
-        &self,
-        manifest: &ModelManifest,
-        progress: &mut dyn FnMut(ProgressEvent),
-    ) -> RuntimeResult<ModelHandle> {
-        #[cfg(not(any(feature = "cuda", feature = "metal")))]
-        let _ = (&manifest, &progress);
-        match &self.inner {
-            #[cfg(feature = "cuda")]
-            EngineInner::Cuda(cuda) => Ok(cuda.load_model_with_progress(manifest, progress)?),
-            #[cfg(feature = "metal")]
-            EngineInner::Metal(metal) => {
-                let mut mapped = |event| progress(metal_progress(event));
-                metal.load_model_with_progress(manifest, &mut mapped)
-            },
-            #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => unavailable(),
         }
     }
 

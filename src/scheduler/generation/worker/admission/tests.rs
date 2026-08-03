@@ -55,6 +55,10 @@ fn prefill_wave_targets_request_completion() {
         4
     );
     assert_eq!(
+        prefill_wave_limit(10, 8_192, 6_144, profile(2_048, 2_048, capacity, true), 10),
+        4
+    );
+    assert_eq!(
         prefill_wave_limit(2, 8_192, 102_048, profile(1_024, 8_192, capacity, true), 2),
         1
     );
@@ -63,6 +67,14 @@ fn prefill_wave_targets_request_completion() {
         2
     );
     assert_eq!(prefill_wave_limit(16, 1, 1, profile(1, 1, 1, true), 1), 1);
+}
+
+#[test]
+fn backend_caps_the_physical_prefill_wave() {
+    let mut execution = profile(2_048, 2_048, 1_000_000, true);
+    execution.max_prefill_wave_rows = 2;
+    assert_eq!(prefill_wave_limit(10, 8_192, 2_066, execution, 10), 2);
+    assert_eq!(prefill_wave_limit(10, 8_192, 4_100, execution, 10), 2);
 }
 
 #[test]
@@ -129,6 +141,7 @@ fn profile(
     PrefillExecutionProfile {
         chunk_tokens,
         completion_round_tokens,
+        max_prefill_wave_rows: usize::MAX,
         block_tokens: 16,
         resident_token_slots,
         limit_deep_prefill_waves,
@@ -164,6 +177,7 @@ fn pending(
             },
             session_id: uuid::Uuid::nil(),
             prompt_tokens: vec![0; 100_000],
+            cache_checkpoints: Vec::new(),
             block_table: BlockTable::with_block_size(16),
             cached_tokens,
             sampling_logits: SamplingLogits::None,

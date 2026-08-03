@@ -28,6 +28,20 @@ impl DecoderExecution for HybridMoeModel {
         self.forward_packed_decode(token_ids, caches, positions, stream)
     }
 
+    fn supports_packed_prefill(&self) -> bool {
+        true
+    }
+
+    fn forward_packed_prefill_state(
+        &self,
+        token_ids: &Array,
+        caches: &mut [&mut DecoderCache],
+        positions: &[i32],
+        stream: &Stream,
+    ) -> Result<Array> {
+        self.forward_packed_prefill_state(token_ids, caches, positions, stream)
+    }
+
     fn forward_greedy_decode(
         &self,
         token_ids: &Array,

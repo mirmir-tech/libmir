@@ -1,9 +1,17 @@
+mod batch;
 mod boundary;
+mod checkpoint;
 mod load;
 mod plan;
+mod position;
 mod session;
 #[cfg(all(test, target_os = "linux"))]
 mod tests;
+
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use models::{
     layout::DecoderConfig,
@@ -12,12 +20,19 @@ use models::{
 };
 use runtime::kv::{CacheConfig, KvStorageSpec};
 
-use self::load::{build_layer, infer_norm_shift, required_norm};
 pub use self::session::CudaSharedRoutedModelSession;
+pub(crate) use self::{
+    batch::{CudaSharedRoutedDecodeBatch, CudaSharedRoutedPrefillBatch},
+    checkpoint::SharedRoutedCheckpoint,
+};
+use self::{
+    load::{build_layer, infer_norm_shift, required_norm},
+    plan::SharedRoutedExecutionPlan,
+};
 use crate::{
     CudaAffineGatedDeltaMoeLayer, CudaAffineGatedFullAttentionMoeLayer,
     CudaAffineGatedFullAttentionState, CudaBackend, CudaGatedDeltaState, CudaTensor, CudaTensorSet,
-    Error, Result, backend::linear::CheckpointProjectionWeight,
+    Error, PagedKvCache, Result, backend::linear::CheckpointProjectionWeight,
 };
 
 #[derive(Clone, Debug)]
@@ -45,6 +60,7 @@ pub struct CudaSharedRoutedModelTemplate {
     cache: CacheConfig,
     max_sequence_blocks: usize,
     norm_shift: f32,
+    plans: Arc<Mutex<HashMap<usize, SharedRoutedExecutionPlan>>>,
 }
 
 impl CudaSharedRoutedModelTemplate {
@@ -114,6 +130,7 @@ impl CudaSharedRoutedModelTemplate {
             cache,
             max_sequence_blocks,
             norm_shift,
+            plans: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -136,40 +153,99 @@ impl CudaSharedRoutedModelTemplate {
         )
     }
 
-    fn prepare_output_head(&self) -> Result<boundary::SharedRoutedOutputHead> {
+    fn prepare_output_head(&self, tokens: usize) -> Result<boundary::SharedRoutedOutputHead> {
         boundary::SharedRoutedOutputHead::new(
             &self.backend,
+            tokens,
             self.decoder.hidden_size,
             self.decoder.vocab_size,
             &self.output,
         )
     }
 
-    pub fn prepare_states(&self) -> Result<Vec<CudaSharedRoutedLayerState>> {
+    pub(crate) fn prepare_decode_batch(&self, rows: usize) -> Result<CudaSharedRoutedDecodeBatch> {
+        CudaSharedRoutedDecodeBatch::new(self, rows)
+    }
+
+    pub(crate) fn prepare_prefill_batch(
+        &self,
+        rows: usize,
+        row_tokens: usize,
+    ) -> Result<CudaSharedRoutedPrefillBatch> {
+        CudaSharedRoutedPrefillBatch::new(self, rows, row_tokens)
+    }
+
+    fn cache_spec(&self) -> Result<KvStorageSpec> {
+        self.layers
+            .iter()
+            .enumerate()
+            .find_map(|(index, layer)| {
+                matches!(layer, SharedRoutedLayerTemplate::Full(_)).then(|| {
+                    KvStorageSpec::new(
+                        self.cache,
+                        self.decoder.layer_key_value_heads(index),
+                        self.decoder.layer_head_dim(index),
+                    )
+                })
+            })
+            .ok_or(Error::InvalidPagedKv("shared-routed model has no full-attention cache"))
+    }
+
+    pub(crate) fn allocate_shared_kv(&self) -> Result<Vec<Option<PagedKvCache>>> {
         self.layers
             .iter()
             .enumerate()
             .map(|(index, layer)| match layer {
-                SharedRoutedLayerTemplate::Linear(layer) => {
-                    layer.prepare_state().map(CudaSharedRoutedLayerState::Linear)
-                },
-                SharedRoutedLayerTemplate::Full(layer) => {
+                SharedRoutedLayerTemplate::Linear(_) => Ok(None),
+                SharedRoutedLayerTemplate::Full(_) => {
                     let storage = KvStorageSpec::new(
                         self.cache,
                         self.decoder.layer_key_value_heads(index),
                         self.decoder.layer_head_dim(index),
                     );
-                    layer
-                        .prepare_state(index, storage, self.max_sequence_blocks)
-                        .map(Box::new)
-                        .map(CudaSharedRoutedLayerState::Full)
+                    self.backend.prepare_paged_kv(index, storage).map(Some)
                 },
             })
             .collect()
     }
 
+    fn prepare_states(
+        &self,
+        caches: &[Option<PagedKvCache>],
+    ) -> Result<Vec<CudaSharedRoutedLayerState>> {
+        if caches.len() != self.layers.len() {
+            return Err(Error::InvalidPagedKv("shared-routed cache count differs from layers"));
+        }
+        self.layers
+            .iter()
+            .zip(caches)
+            .map(|(layer, cache)| match layer {
+                SharedRoutedLayerTemplate::Linear(layer) => {
+                    layer.prepare_state().map(CudaSharedRoutedLayerState::Linear)
+                },
+                SharedRoutedLayerTemplate::Full(layer) => layer
+                    .prepare_state_with_cache(
+                        cache.clone().ok_or(Error::InvalidPagedKv(
+                            "shared-routed full-attention cache is missing",
+                        ))?,
+                        self.max_sequence_blocks,
+                    )
+                    .map(Box::new)
+                    .map(CudaSharedRoutedLayerState::Full),
+            })
+            .collect()
+    }
+
     pub fn instantiate(&self) -> Result<CudaSharedRoutedModelSession> {
-        CudaSharedRoutedModelSession::new(self)
+        let caches = self.allocate_shared_kv()?;
+        self.instantiate_with_caches(&caches)
+    }
+
+    pub(crate) fn instantiate_with_caches(
+        &self,
+        caches: &[Option<PagedKvCache>],
+    ) -> Result<CudaSharedRoutedModelSession> {
+        CudaSharedRoutedModelSession::new(self, caches)
     }
 
     #[must_use]

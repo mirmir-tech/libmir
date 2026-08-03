@@ -3,7 +3,10 @@ mod index;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use self::index::{PrefixKey, indexed_prefixes, longest_indexed_prefix};
-use super::{error::Result, session::SessionState};
+use super::{
+    error::{Error, Result},
+    session::SessionState,
+};
 use crate::engine::Array;
 
 #[derive(Debug, Clone, Copy)]
@@ -15,14 +18,20 @@ struct PrefixEntry {
 #[derive(Debug)]
 struct PrefixSnapshot {
     state: SessionState,
-    logits: Array,
+    logits: Option<Array>,
+}
+
+#[derive(Debug, Default)]
+struct PrefixGroup {
+    terminal: Option<PrefixSnapshot>,
+    checkpoints: HashMap<usize, PrefixSnapshot>,
     bytes: usize,
 }
 
 #[derive(Debug)]
 pub(super) struct PrefixCache {
     entries: HashMap<PrefixKey, PrefixEntry>,
-    groups: HashMap<u64, PrefixSnapshot>,
+    groups: HashMap<u64, PrefixGroup>,
     group_recency: VecDeque<u64>,
     capacity: usize,
     byte_capacity: usize,
@@ -51,17 +60,30 @@ impl PrefixCache {
             return Ok(None);
         };
         let group = entry.memory_group;
-        let Some(snapshot) = self.groups.get(&group) else {
+        let Some(group_state) = self.groups.get(&group) else {
             return Ok(None);
         };
-        let exact = entry.position == tokens.len() && entry.position == snapshot.state.position;
+        let direct = group_state.checkpoints.get(&entry.position);
+        let source = if let Some(checkpoint) = direct {
+            checkpoint
+        } else {
+            let Some(terminal) = group_state.terminal.as_ref() else {
+                return Ok(None);
+            };
+            terminal
+        };
+        let exact = entry.position == tokens.len() && entry.position == source.state.position;
         let position = if entry.position == tokens.len() && !exact {
             entry.position.saturating_sub(1)
         } else {
             entry.position
         };
-        let cache = snapshot.state.cache.snapshot_at(position)?;
-        let logits = exact.then(|| snapshot.logits.snapshot()).transpose()?;
+        let cache = source.state.cache.snapshot_at(position)?;
+        let logits = if exact {
+            source.logits.as_ref().map(Array::snapshot).transpose()?
+        } else {
+            None
+        };
         self.touch_group(group);
         Ok(Some((SessionState::from_prefix(cache, position), logits)))
     }
@@ -90,26 +112,69 @@ impl PrefixCache {
         if !self.enabled() {
             return Ok(());
         }
-        let memory_group = self.next_memory_group;
-        self.next_memory_group = self.next_memory_group.wrapping_add(1);
+        let memory_group = self.pending_group(model, tokens).unwrap_or_else(|| self.new_group());
         let snapshot = PrefixSnapshot {
             state: SessionState::from_prefix(
                 state.cache.snapshot_at(state.position)?,
                 state.position,
             ),
-            logits: logits.snapshot()?,
-            bytes,
+            logits: Some(logits.snapshot()?),
         };
         let block_size =
             block_size.filter(|size| *size > 0 && state.cache.supports_prefix_offsets());
         for (key, position) in indexed_prefixes(model, tokens, block_size) {
             self.entries.insert(key, PrefixEntry { memory_group, position });
         }
-        self.groups.insert(memory_group, snapshot);
+        let group = self.groups.entry(memory_group).or_default();
+        group.terminal = Some(snapshot);
+        group.bytes = group.bytes.saturating_add(bytes);
         self.touch_group(memory_group);
         self.remove_unindexed_groups();
         self.enforce_limits();
         Ok(())
+    }
+
+    pub(super) fn insert_checkpoint(
+        &mut self,
+        model: &str,
+        tokens: &[u32],
+        state: &SessionState,
+        bytes: usize,
+    ) -> Result<()> {
+        if !self.enabled() || tokens.is_empty() {
+            return Ok(());
+        }
+        let memory_group = self.pending_group(model, tokens).unwrap_or_else(|| self.new_group());
+        let position = tokens.len();
+        let snapshot = PrefixSnapshot {
+            state: SessionState::from_prefix(state.cache.snapshot_at(position)?, position),
+            logits: None,
+        };
+        let key = indexed_prefixes(model, tokens, None)
+            .pop()
+            .map(|(key, _)| key)
+            .ok_or_else(|| Error::InvalidPrefillBatch("prefix checkpoint has no key".into()))?;
+        self.entries.insert(key, PrefixEntry { memory_group, position });
+        let group = self.groups.entry(memory_group).or_default();
+        if group.checkpoints.insert(position, snapshot).is_none() {
+            group.bytes = group.bytes.saturating_add(bytes);
+        }
+        self.touch_group(memory_group);
+        self.remove_unindexed_groups();
+        self.enforce_limits();
+        Ok(())
+    }
+
+    fn pending_group(&self, model: &str, tokens: &[u32]) -> Option<u64> {
+        longest_indexed_prefix(model, tokens, &self.entries)
+            .map(|(_, entry)| entry.memory_group)
+            .filter(|group| self.groups.get(group).is_some_and(|state| state.terminal.is_none()))
+    }
+
+    fn new_group(&mut self) -> u64 {
+        let group = self.next_memory_group;
+        self.next_memory_group = self.next_memory_group.wrapping_add(1);
+        group
     }
 
     fn enforce_limits(&mut self) {

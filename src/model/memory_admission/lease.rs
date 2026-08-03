@@ -40,6 +40,15 @@ impl Drop for ModelMemoryLease {
             return;
         };
         if let Some(reservation) = ledger.entries.remove(&self.id) {
+            if let Some(shared) = reservation.shared_memory
+                && let Some(shared_reservation) = ledger.shared.get_mut(&shared)
+            {
+                shared_reservation.references = shared_reservation.references.saturating_sub(1);
+                let released = shared_reservation.references == 0;
+                if released {
+                    ledger.shared.remove(&shared);
+                }
+            }
             tracing::info!(
                 model = reservation.model,
                 reservation_bytes = reservation.bytes,

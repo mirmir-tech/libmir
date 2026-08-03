@@ -9,7 +9,11 @@ use crate::{
     },
 };
 
+mod batch;
+mod checkpoint;
 mod layer;
+pub(crate) use batch::CudaGatedDeltaBatchState;
+pub(crate) use checkpoint::CudaGatedDeltaCheckpoint;
 pub use layer::{
     AffineGatedDeltaLayerConfig, AffineGatedDeltaLayerWeights, CudaAffineGatedDeltaExecution,
     CudaAffineGatedDeltaLayer,
@@ -42,6 +46,8 @@ pub struct CudaGatedDeltaState {
     state: DeviceBuffer<f32>,
     convolution: DeviceBuffer<bf16>,
     next_convolution: DeviceBuffer<bf16>,
+    decay: DeviceBuffer<f32>,
+    update: DeviceBuffer<f32>,
     offset: usize,
 }
 
@@ -76,6 +82,8 @@ impl CudaBackend {
             state: self.inner.pool.allocate_zeroed(&self.inner.stream, probe.state_elements()?)?,
             convolution: self.inner.pool.allocate_zeroed(&self.inner.stream, history)?,
             next_convolution: self.inner.pool.allocate_zeroed(&self.inner.stream, history)?,
+            decay: self.inner.pool.allocate(&self.inner.stream, config.value_heads)?,
+            update: self.inner.pool.allocate(&self.inner.stream, config.value_heads)?,
             offset: 0,
         })
     }
@@ -120,6 +128,13 @@ impl CudaGatedDeltaState {
         inputs: GatedDeltaInputs<'_>,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
+        let gates = tokens
+            .checked_mul(self.config.value_heads)
+            .ok_or(crate::Error::InvalidDecoderKernel("Gated Delta gate size overflow"))?;
+        if self.decay.len() != gates {
+            self.decay = self.backend.inner.pool.allocate(&self.backend.inner.stream, gates)?;
+            self.update = self.backend.inner.pool.allocate(&self.backend.inner.stream, gates)?;
+        }
         let operation = GatedDeltaRecurrence::compile(
             &self.backend.inner.compiler,
             GatedDeltaSpec {
@@ -140,6 +155,8 @@ impl CudaGatedDeltaState {
                 beta: inputs.beta,
                 a_log: inputs.a_log,
                 dt_bias: inputs.dt_bias,
+                decay: &mut self.decay,
+                update: &mut self.update,
                 state: &mut self.state,
                 output,
             },

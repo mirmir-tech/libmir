@@ -72,11 +72,13 @@ impl ClampedRoutedModel {
     }
 
     pub fn new_cache(&self, stream: &Stream) -> Result<DecoderCache> {
-        DecoderCache::new_with_format(
+        DecoderCache::new_with_pool_capacity(
             &self.windows,
             self.cache_step,
             KvPageFormat::resolve(stream.config().kv_cache.dtype)?,
             stream.config().kv_cache.block_size,
+            stream.config().kv_cache.block_count as usize,
+            stream.paged_arenas(),
         )
     }
 

@@ -2,7 +2,7 @@ use std::{path::Path, sync::Arc};
 
 use foundation::model::BackendTarget;
 use models::generation::GenerationOverrides;
-use runtime::kv::KvCache;
+use runtime::kv::CacheConfig;
 
 use super::{
     Library, Model, ModelDescriptor, ModelInner, automatic_cache, cache_cohort::CacheCohort,
@@ -34,6 +34,7 @@ impl Library {
                 model_config: None,
             })),
             memory: ModelMemoryManager::default(),
+            caches: super::cache::KvCachePools::default(),
             config,
         }
     }
@@ -58,18 +59,29 @@ impl Library {
     ) -> Result<Model> {
         let descriptor = ModelDescriptor::inspect(path, overrides)?;
         let _load = self.memory.serialize_load()?;
-        let (engine, config) = self.model_runtime(&descriptor)?;
+        let (engine, mut config) = self.model_runtime(&descriptor)?;
         let manifest = descriptor.manifest_for(engine.target())?;
-        let estimate = descriptor.memory_estimate_for(&config, &engine.target());
+        let target = engine.target();
+        let initial_estimate = descriptor.memory_estimate_for(&config, &target);
+        let cache = self.caches.acquire(&target, config.kv_cache, initial_estimate);
+        config.kv_cache = cache.config;
+        let estimate = descriptor.memory_estimate_for(&config, &target);
         let memory = engine.memory_snapshot()?;
         let reservation = self.memory.reserve(
             manifest.id.clone(),
             estimate,
+            cache.shared_memory,
             &memory,
             config.memory,
             options.allow_memory_overcommit,
         )?;
-        let handle = engine.load_model_with_progress(&manifest, progress)?;
+        let post_load_reserve = resolved_post_load_reserve(&target, &config, &memory, estimate);
+        let handle = engine.load_model_with_progress_and_reservation(
+            &manifest,
+            post_load_reserve,
+            resolved_metal_cache(&target, &config),
+            progress,
+        )?;
         let coordinator = match ModelCoordinator::new(
             engine.clone(),
             handle.clone(),
@@ -91,8 +103,7 @@ impl Library {
                 descriptor,
                 engine,
                 handle,
-                cache: std::sync::Mutex::new(KvCache::with_config(config.kv_cache)),
-                cache_ready: std::sync::Condvar::new(),
+                cache: cache.cache,
                 cache_cohort: CacheCohort::new(
                     config.scheduler.decode_batch_wait_us,
                     config.scheduler.max_batch_tokens,
@@ -146,7 +157,7 @@ impl Library {
         let committed = self.memory.committed_bytes()?;
         let config = automatic_cache::resolve(&self.config, estimate, &memory, committed);
         let resolved_estimate = descriptor.memory_estimate_for(&config, &target);
-        let engine = if config.kv_cache == engine_config.kv_cache {
+        let engine = if engine_cache_compatible(&target, config.kv_cache, engine_config.kv_cache) {
             probe
         } else {
             Engine::from_config(&config)?
@@ -181,6 +192,36 @@ impl Library {
     }
 }
 
+fn resolved_post_load_reserve(
+    target: &BackendTarget,
+    config: &RuntimeConfig,
+    memory: &crate::MemorySnapshot,
+    estimate: crate::ModelMemoryEstimate,
+) -> Option<usize> {
+    (*target == BackendTarget::Metal).then(|| {
+        let bytes = estimate
+            .kv_cache_bytes
+            .saturating_add(estimate.workspace_bytes)
+            .saturating_add(memory_policy::platform_reserve(config.memory, memory));
+        usize::try_from(bytes).unwrap_or(usize::MAX)
+    })
+}
+
+fn resolved_metal_cache(target: &BackendTarget, config: &RuntimeConfig) -> Option<CacheConfig> {
+    (*target == BackendTarget::Metal).then_some(config.kv_cache)
+}
+
+fn engine_cache_compatible(
+    target: &BackendTarget,
+    resolved: CacheConfig,
+    current: CacheConfig,
+) -> bool {
+    resolved == current
+        || (*target == BackendTarget::Metal
+            && resolved.block_size == current.block_size
+            && resolved.dtype == current.dtype)
+}
+
 fn cleanup_failed_load(engine: &Engine, handle: &runtime::backend::ModelHandle) {
     if let Err(error) = engine.unload_model(handle) {
         tracing::warn!(%error, model = handle.id, "failed to roll back partial model load");
@@ -189,3 +230,7 @@ fn cleanup_failed_load(engine: &Engine, handle: &runtime::backend::ModelHandle) 
         tracing::warn!(%error, model = handle.id, "failed to clear memory after load rollback");
     }
 }
+
+#[cfg(test)]
+#[path = "library/tests.rs"]
+mod tests;

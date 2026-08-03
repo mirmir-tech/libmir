@@ -1,9 +1,8 @@
 use super::super::{HybridMoeLayerConfig, attention, weights::AttentionWeights};
 use crate::engine::{
-    Array, FusedAttention, FusedKeyValue, KvCache, Result, Stream, native_paged_attention_mode,
-    paged_attention_min_context,
+    Array, Error, FusedAttention, FusedKeyValue, KvCache, KvContext, PagedContextMode, Result,
+    Stream, attention_batch_tuning, native_paged_attention_mode, paged_attention_min_context,
 };
-
 #[allow(clippy::too_many_arguments)]
 pub(super) fn packed_attention(
     input: &Array,
@@ -13,29 +12,43 @@ pub(super) fn packed_attention(
     fused_key_value: Option<&FusedKeyValue>,
     caches: &mut [&mut KvCache],
     positions: &[i32],
+    causal: bool,
     stream: &Stream,
 ) -> Result<Array> {
     let batch = i32::try_from(caches.len())?;
+    let sequence = *input
+        .shape()?
+        .get(1)
+        .ok_or_else(|| Error::InvalidModel("packed input has no sequence axis".into()))?;
     let (queries, raw_keys, raw_values) =
         projections(input, weights, fused_attention, fused_key_value, stream)?;
-    let queries = queries.reshape(&[batch, 1, config.attention_heads, config.head_dim], stream)?;
+    let queries =
+        queries.reshape(&[batch, sequence, config.attention_heads, config.head_dim], stream)?;
     let queries = weights.query_norm.apply(&queries, config.rms_norm_eps, stream)?;
-    let raw_keys = raw_keys.reshape(&[batch, 1, config.kv_heads, config.head_dim], stream)?;
-    let values = values(&raw_keys, raw_values, batch, config, stream)?;
+    let raw_keys =
+        raw_keys.reshape(&[batch, sequence, config.kv_heads, config.head_dim], stream)?;
+    let values = values(&raw_keys, raw_values, batch, sequence, config, stream)?;
     let keys = weights.key_norm.apply(&raw_keys, config.rms_norm_eps, stream)?;
     let rows = attention_rows(
         &queries,
         &keys,
         &values,
         caches,
-        AttentionRows { weights, config, positions, stream },
+        AttentionRows {
+            weights,
+            config,
+            positions,
+            causal,
+            stream,
+        },
     )?;
     let rows = rows.iter().collect::<Vec<_>>();
     let output = Array::concatenate(&rows, 0, stream)?.transpose(&[0, 2, 1, 3], stream)?;
     let width = config.attention_heads * config.head_dim;
-    weights.output.forward(&output.reshape(&[batch, 1, width], stream)?, stream)
+    weights
+        .output
+        .forward(&output.reshape(&[batch, sequence, width], stream)?, stream)
 }
-
 fn projections(
     input: &Array,
     weights: &AttentionWeights,
@@ -64,6 +77,7 @@ fn values(
     raw_keys: &Array,
     raw_values: Option<Array>,
     batch: i32,
+    sequence: i32,
     config: HybridMoeLayerConfig,
     stream: &Stream,
 ) -> Result<Array> {
@@ -71,15 +85,12 @@ fn values(
         raw_keys.rms_norm_unit(config.rms_norm_eps, stream)?
     } else {
         raw_values
-            .ok_or_else(|| {
-                crate::engine::Error::InvalidModel("missing hybrid MoE value projection".into())
-            })?
-            .reshape(&[batch, 1, config.kv_heads, config.head_dim], stream)?
+            .ok_or_else(|| Error::InvalidModel("missing hybrid MoE value projection".into()))?
+            .reshape(&[batch, sequence, config.kv_heads, config.head_dim], stream)?
             .rms_norm_unit(config.rms_norm_eps, stream)?
     };
     values.transpose(&[0, 2, 1, 3], stream)
 }
-
 fn attention_rows(
     queries: &Array,
     keys: &Array,
@@ -87,61 +98,114 @@ fn attention_rows(
     caches: &mut [&mut KvCache],
     context: AttentionRows<'_>,
 ) -> Result<Vec<Array>> {
-    caches
+    let AttentionRows {
+        weights,
+        config,
+        positions,
+        causal,
+        stream,
+    } = context;
+    let tune_paged = caches.len() > 1;
+    let prepared = caches
         .iter_mut()
         .enumerate()
-        .map(|(row, cache)| attention_row(queries, keys, values, cache, row, context))
+        .map(|(row, cache)| {
+            let position = positions[row];
+            let query =
+                sequence_row_slice(queries, row, config.attention_heads, config.head_dim, stream)?;
+            let query = attention::rope_layout(
+                &query,
+                weights.rope_frequencies.as_ref(),
+                config,
+                position,
+                stream,
+            )?;
+            let key = sequence_row_slice(keys, row, config.kv_heads, config.head_dim, stream)?;
+            let key = attention::rope_layout(
+                &key,
+                weights.rope_frequencies.as_ref(),
+                config,
+                position,
+                stream,
+            )?;
+            let value = row_slice(values, row, config.kv_heads, config.head_dim, stream)?;
+            let sequence = usize::try_from(query.shape()?[2])?;
+            let mode = if sequence == 1 && tune_paged {
+                PagedContextMode::Both
+            } else if sequence == 1 {
+                native_paged_attention_mode(
+                    config.head_dim,
+                    config.attention_heads,
+                    config.kv_heads,
+                    usize::try_from(position)? + 1,
+                    stream.config().cache.force_native_paged_attention,
+                )
+            } else {
+                PagedContextMode::View
+            };
+            let context = cache.update_for_attention_mode(
+                &key,
+                &value,
+                stream,
+                paged_attention_min_context(stream),
+                mode,
+            )?;
+            Ok((query, context, mode))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut outputs = grouped_attention(&prepared, causal, stream)?;
+    prepared
+        .into_iter()
+        .enumerate()
+        .map(|(row, (query, context, mode))| {
+            if let Some(output) = outputs[row].take() {
+                return Ok(output);
+            }
+            let view = mode == PagedContextMode::Both
+                && context
+                    .paged
+                    .as_ref()
+                    .is_none_or(|paged| paged.key_scales.is_none() && paged.value_scales.is_none());
+            if view || context.paged.is_none() {
+                return query.scaled_dot_product_attention(
+                    &context.keys, &context.values, 1.0, causal, stream,
+                );
+            }
+            let paged = context
+                .paged
+                .ok_or_else(|| Error::InvalidModel("native paged context is missing".into()))?;
+            query.paged_scaled_dot_product_attention_with_scratch(
+                paged.attention(),
+                paged.scratch(),
+                1.0,
+                stream,
+            )
+        })
         .collect()
 }
 
-fn attention_row(
-    queries: &Array,
-    keys: &Array,
-    values: &Array,
-    cache: &mut KvCache,
-    row: usize,
-    context: AttentionRows<'_>,
-) -> Result<Array> {
-    let AttentionRows { weights, config, positions, stream } = context;
-    let position = positions[row];
-    let query = sequence_row_slice(queries, row, config.attention_heads, config.head_dim, stream)?;
-    let query = attention::rope_layout(
-        &query,
-        weights.rope_frequencies.as_ref(),
-        config,
-        position,
-        stream,
-    )?;
-    let key = sequence_row_slice(keys, row, config.kv_heads, config.head_dim, stream)?;
-    let key =
-        attention::rope_layout(&key, weights.rope_frequencies.as_ref(), config, position, stream)?;
-    let value = row_slice(values, row, config.kv_heads, config.head_dim, stream)?;
-    let mode = native_paged_attention_mode(
-        config.head_dim,
-        config.attention_heads,
-        config.kv_heads,
-        usize::try_from(position)? + 1,
-        stream.config().cache.force_native_paged_attention,
-    );
-    let context = cache.update_for_attention_mode(
-        &key,
-        &value,
-        stream,
-        paged_attention_min_context(stream),
-        mode,
-    )?;
-    if let Some(paged) = context.paged {
-        query.paged_scaled_dot_product_attention_with_scratch(
-            paged.attention(),
-            paged.scratch(),
-            1.0,
-            stream,
-        )
-    } else if let Some(mask) = context.mask.as_ref() {
-        query.masked_scaled_dot_product_attention(&context.keys, &context.values, 1.0, mask, stream)
-    } else {
-        query.scaled_dot_product_attention(&context.keys, &context.values, 1.0, false, stream)
+fn grouped_attention(
+    prepared: &[(Array, KvContext, PagedContextMode)],
+    causal: bool,
+    stream: &Stream,
+) -> Result<Vec<Option<Array>>> {
+    let queries = prepared.iter().map(|(query, _, _)| query).collect::<Vec<_>>();
+    let contexts = prepared.iter().map(|(_, context, _)| context).collect::<Vec<_>>();
+    let groups = attention_batch_tuning::compatible_groups(&queries, &contexts, causal)?;
+    let mut outputs = std::iter::repeat_with(|| None).take(prepared.len()).collect::<Vec<_>>();
+    for rows in groups.iter().filter(|rows| rows.len() > 1) {
+        let group_queries = rows.iter().map(|&row| queries[row]).collect::<Vec<_>>();
+        let group_contexts = rows.iter().map(|&row| contexts[row]).collect::<Vec<_>>();
+        let Some(group_outputs) =
+            attention_batch_tuning::forward(&group_queries, &group_contexts, 1.0, causal, stream)?
+        else {
+            continue;
+        };
+        for (&row, output) in rows.iter().zip(group_outputs) {
+            outputs[row] = Some(output);
+        }
     }
+    Ok(outputs)
 }
 
 #[derive(Clone, Copy)]
@@ -149,6 +213,7 @@ struct AttentionRows<'a> {
     weights: &'a AttentionWeights,
     config: HybridMoeLayerConfig,
     positions: &'a [i32],
+    causal: bool,
     stream: &'a Stream,
 }
 
@@ -159,9 +224,10 @@ fn row_slice(
     head_dim: i32,
     stream: &Stream,
 ) -> Result<Array> {
+    let sequence = usize::try_from(input.shape()?[2])?;
     input.slice(
         &[row, 0, 0, 0],
-        &[row + 1, usize::try_from(heads)?, 1, usize::try_from(head_dim)?],
+        &[row + 1, usize::try_from(heads)?, sequence, usize::try_from(head_dim)?],
         stream,
     )
 }
@@ -173,9 +239,10 @@ fn sequence_row_slice(
     head_dim: i32,
     stream: &Stream,
 ) -> Result<Array> {
+    let sequence = usize::try_from(input.shape()?[1])?;
     input.slice(
         &[row, 0, 0, 0],
-        &[row + 1, 1, usize::try_from(heads)?, usize::try_from(head_dim)?],
+        &[row + 1, sequence, usize::try_from(heads)?, usize::try_from(head_dim)?],
         stream,
     )
 }

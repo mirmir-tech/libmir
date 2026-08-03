@@ -12,7 +12,7 @@ use crate::{engine::PrefillExecutionProfile, scheduler::generation::Command};
 mod priority;
 
 const DECODE_COHORT_WAIT_MULTIPLIER: u64 = 25;
-const PREFILL_QUIET_WAIT_MULTIPLIER: u64 = 50;
+const PREFILL_QUIET_WAIT_MULTIPLIER: u64 = 150;
 const PREFILL_HARD_WAIT_MULTIPLIER: u32 = 4;
 
 impl Worker {
@@ -184,7 +184,7 @@ pub(super) fn prefill_wave_limit(
     if !profile.limit_deep_prefill_waves {
         return full_wave.min(resident_wave_rows);
     }
-    full_wave.min(resident_wave_rows)
+    full_wave.min(resident_wave_rows).min(profile.max_prefill_wave_rows)
 }
 
 pub(super) fn pending_prefill_tokens(

@@ -17,7 +17,7 @@ use super::{
     GateUpExecution, GateUpKey,
 };
 
-const SCHEMA: u32 = 15;
+const SCHEMA: u32 = 16;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct ProfileFile {
@@ -149,6 +149,7 @@ pub(super) fn persist(
             entry.key.dtype,
             entry.key.causal,
             entry.key.fragmented,
+            entry.key.view,
         )
     });
     let mut experts = experts
@@ -201,7 +202,7 @@ pub(super) fn persist(
 }
 
 pub(super) fn cache_name() -> &'static str {
-    "execution-v15-metal-gpu0.json"
+    "execution-v16-metal-gpu0.json"
 }
 
 fn temporary_path(path: &Path) -> PathBuf {

@@ -41,6 +41,13 @@ impl GatedDeltaState {
         Ok(())
     }
 
+    pub(crate) fn detach_evaluated_graphs(&self) -> Result<()> {
+        for array in [&self.value, &self.convolution].into_iter().flatten() {
+            array.native().detach_graph()?;
+        }
+        Ok(())
+    }
+
     pub fn snapshot(&self) -> Result<Self> {
         Ok(Self {
             value: clone_array(self.value.as_ref())?,

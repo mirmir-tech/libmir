@@ -224,7 +224,7 @@ impl CheckpointProjection {
                 operation: NvFp4Bf16Linear::from_weight(backend, tokens, weight.clone())?,
             }),
             CheckpointProjectionWeight::NvFp4WeightOnly(weight) => Ok(Self::NvFp4WeightOnly {
-                operation: NvFp4WeightOnlyBf16Linear::new(backend, tokens, weight.clone())?,
+                operation: NvFp4WeightOnlyBf16Linear::new(backend, tokens, role, weight.clone())?,
             }),
             CheckpointProjectionWeight::PackedInteger(weight) => Ok(Self::PackedInteger {
                 operation: PackedIntegerBf16Linear::new(backend, tokens, input, output, weight)?,

@@ -6,23 +6,24 @@ use super::{
 };
 use crate::{
     CudaBackend, DenseRole, Error, GatedDeltaInputs, Result,
-    backend::linear::CheckpointProjection,
+    backend::{gated_delta::CudaGatedDeltaBatchState, linear::CheckpointProjection},
     kernels::{GatedDeltaTransformSpec, GatedDeltaTransforms},
 };
 
 #[derive(Debug)]
 pub struct CudaAffineGatedDeltaExecution {
-    backend: CudaBackend,
-    config: AffineGatedDeltaLayerConfig,
-    tokens: usize,
-    qkv: CheckpointProjection,
-    gate: CheckpointProjection,
-    alpha: CheckpointProjection,
-    beta: CheckpointProjection,
-    output: CheckpointProjection,
-    transforms: GatedDeltaTransforms,
-    weights: AffineGatedDeltaLayerWeights,
-    scratch: GatedDeltaScratch,
+    pub(super) backend: CudaBackend,
+    pub(super) config: AffineGatedDeltaLayerConfig,
+    pub(super) tokens: usize,
+    pub(super) qkv: CheckpointProjection,
+    pub(super) gate: CheckpointProjection,
+    pub(super) alpha: CheckpointProjection,
+    pub(super) beta: CheckpointProjection,
+    pub(super) output: CheckpointProjection,
+    pub(super) transforms: GatedDeltaTransforms,
+    pub(super) weights: AffineGatedDeltaLayerWeights,
+    pub(super) scratch: GatedDeltaScratch,
+    pub(super) batch_state: Option<CudaGatedDeltaBatchState>,
 }
 
 impl CudaAffineGatedDeltaExecution {
@@ -73,6 +74,7 @@ impl CudaAffineGatedDeltaExecution {
             )?,
             weights: weights.clone(),
             scratch: GatedDeltaScratch::new(backend, config, tokens)?,
+            batch_state: None,
         })
     }
 
@@ -131,7 +133,7 @@ impl CudaAffineGatedDeltaExecution {
         self.output.execute(&self.scratch.gated, output)
     }
 
-    fn validate(
+    pub(super) fn validate(
         &self,
         input: &DeviceBuffer<bf16>,
         state: &CudaGatedDeltaState,

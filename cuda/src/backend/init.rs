@@ -48,6 +48,7 @@ impl CudaBackend {
                 pool,
                 compiler,
                 mxfp8_scratch: std::sync::Mutex::new(std::collections::HashMap::new()),
+                nvfp4_bucket_scratch: std::sync::Mutex::new(std::collections::HashMap::new()),
                 planner,
                 tuner,
             }),

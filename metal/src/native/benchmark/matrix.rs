@@ -137,7 +137,7 @@ fn run_sample(model: &mut LoadedModel, prompt: &[u32], decode_tokens: usize) -> 
     let session = Uuid::new_v4();
     let mut ignored = |_event| {};
     let started = Instant::now();
-    let output = model.prefill(session, prompt, SamplingLogits::None, None, &mut ignored)?;
+    let output = model.prefill(session, prompt, &[], SamplingLogits::None, None, &mut ignored)?;
     let prefill = started.elapsed();
     let mut token = greedy_token(&output.output)?;
     drop(output);

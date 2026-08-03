@@ -1,16 +1,14 @@
 use mircuda::{DeviceBuffer, Stream, VariableGroupedFp4Spec, bf16};
 
-use super::{CudaBackend, NvFp4ExpertBank, moe::ExpertBuckets};
+use super::{CudaBackend, NvFp4ExpertBank, moe::ExpertBuckets, scratch::ProjectionScratch};
 use crate::{
     Error, Result,
-    kernels::{BucketQuantize, NvFp4BucketPreparation, NvFp4Spec, scale_elements},
+    kernels::{BucketQuantize, NvFp4BucketPreparation, NvFp4Spec},
 };
 
 #[derive(Debug)]
 pub(super) struct BucketedNvFp4Projection {
     pub(super) bank: NvFp4ExpertBank,
-    pub(super) packed: DeviceBuffer<u8>,
-    pub(super) scales: DeviceBuffer<u8>,
     pub(super) stream: Stream,
     spec: NvFp4Spec,
     assignments: usize,
@@ -34,16 +32,8 @@ impl BucketedNvFp4Projection {
             return Err(Error::InvalidNvFp4("invalid bucketed expert geometry"));
         }
         let spec = NvFp4Spec::new(bank.config.input_features, bank.config.output_features)?;
-        let packed_elements = assignments
-            .checked_mul(spec.input_features / 2)
-            .ok_or(Error::InvalidNvFp4("bucketed packed input overflow"))?;
-        let scale_count = experts
-            .checked_mul(scale_elements(assignments, spec.input_features)?)
-            .ok_or(Error::InvalidNvFp4("bucketed input scale overflow"))?;
         Ok(Self {
             bank,
-            packed: backend.inner.pool.allocate(&backend.inner.stream, packed_elements)?,
-            scales: backend.inner.pool.allocate_zeroed(&backend.inner.stream, scale_count)?,
             stream: backend.inner.stream.clone(),
             spec,
             assignments,
@@ -53,13 +43,16 @@ impl BucketedNvFp4Projection {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn quantize_pair(
         preparation: &NvFp4BucketPreparation,
         buckets: &ExpertBuckets,
         input: &DeviceBuffer<bf16>,
         selected: &DeviceBuffer<u32>,
-        left: &mut Self,
-        right: &mut Self,
+        left: &Self,
+        right: &Self,
+        left_scratch: &mut ProjectionScratch,
+        right_scratch: &mut ProjectionScratch,
     ) -> Result<()> {
         left.require_compatible(right)?;
         let geometry = left.quantize_geometry(false);
@@ -69,22 +62,24 @@ impl BucketedNvFp4Projection {
             selected,
             &buckets.order,
             &buckets.offsets,
+            &buckets.scale_offsets,
             &left.bank.input_scales,
             &right.bank.input_scales,
-            &mut left.packed,
-            &mut right.packed,
-            &mut left.scales,
-            &mut right.scales,
+            &mut left_scratch.packed,
+            &mut right_scratch.packed,
+            &mut left_scratch.scales,
+            &mut right_scratch.scales,
             geometry,
         )
     }
 
     pub(super) fn quantize_ranked(
-        &mut self,
+        &self,
         preparation: &NvFp4BucketPreparation,
         buckets: &ExpertBuckets,
         input: &DeviceBuffer<bf16>,
         selected: &DeviceBuffer<u32>,
+        scratch: &mut ProjectionScratch,
     ) -> Result<()> {
         let geometry = self.quantize_geometry(true);
         preparation.quantize(
@@ -93,9 +88,10 @@ impl BucketedNvFp4Projection {
             selected,
             &buckets.order,
             &buckets.offsets,
+            &buckets.scale_offsets,
             &self.bank.input_scales,
-            &mut self.packed,
-            &mut self.scales,
+            &mut scratch.packed,
+            &mut scratch.scales,
             geometry,
         )
     }

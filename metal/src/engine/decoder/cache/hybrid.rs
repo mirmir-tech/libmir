@@ -1,5 +1,7 @@
+use std::sync::Arc;
+
 use crate::engine::{
-    Error, GatedDeltaState, KvCache, KvPageFormat, Result, lowering::MixerLowering,
+    Error, GatedDeltaState, KvCache, KvPageFormat, PagedArenaPool, Result, lowering::MixerLowering,
 };
 
 #[derive(Debug)]
@@ -13,15 +15,23 @@ pub(super) fn new(
     step: usize,
     format: KvPageFormat,
     page_size: usize,
+    max_pages: usize,
+    pool: &Arc<PagedArenaPool>,
 ) -> Result<Vec<HybridLinearLayerCache>> {
     mixers
         .iter()
-        .map(|mixer| match mixer {
+        .enumerate()
+        .map(|(layer, mixer)| match mixer {
             MixerLowering::Linear => GatedDeltaState::new().map(HybridLinearLayerCache::Linear),
-            MixerLowering::Softmax { window: None, .. } => {
-                KvCache::new_paged_with_format(step, page_size, format)
-                    .map(HybridLinearLayerCache::Full)
-            },
+            MixerLowering::Softmax { window: None, .. } => KvCache::new_paged_with_pool_capacity(
+                step,
+                page_size,
+                format,
+                max_pages,
+                Arc::clone(pool),
+                layer,
+            )
+            .map(HybridLinearLayerCache::Full),
             MixerLowering::Softmax { window: Some(window), .. } => {
                 KvCache::new_with_window(step, Some(*window)).map(HybridLinearLayerCache::Full)
             },
@@ -43,6 +53,24 @@ pub(super) fn reserve(layers: &mut [HybridLinearLayerCache], tokens: usize) -> R
     for layer in layers {
         if let HybridLinearLayerCache::Full(cache) = layer {
             cache.reserve(tokens)?;
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn plan_contiguous(layers: &mut [HybridLinearLayerCache], tokens: usize) {
+    for layer in layers {
+        if let HybridLinearLayerCache::Full(cache) = layer {
+            cache.plan_contiguous(tokens);
+        }
+    }
+}
+
+pub(super) fn detach_evaluated_graphs(layers: &[HybridLinearLayerCache]) -> Result<()> {
+    for layer in layers {
+        match layer {
+            HybridLinearLayerCache::Linear(state) => state.detach_evaluated_graphs()?,
+            HybridLinearLayerCache::Full(cache) => cache.detach_evaluated_graphs()?,
         }
     }
     Ok(())

@@ -1,8 +1,11 @@
+use std::sync::{Arc, Mutex};
+
 use mircuda::{DeviceBuffer, Stream, bf16};
 
 use super::{
     super::{CudaBackend, NvFp4ExpertBank},
     BucketedNvFp4LinearBf16, BucketedNvFp4PairBf16,
+    scratch::{BucketedNvFp4Scratch, BucketedNvFp4ScratchConfig},
 };
 use crate::{
     Error, GatedActivation, Result,
@@ -13,17 +16,19 @@ use crate::{
 pub(in crate::backend::linear::nvfp4::selected) struct ExpertBuckets {
     pub(super) counts: DeviceBuffer<u32>,
     pub(super) offsets: DeviceBuffer<u32>,
+    pub(super) scale_offsets: DeviceBuffer<u32>,
     pub(super) order: DeviceBuffer<u32>,
     pub(super) positions: DeviceBuffer<u32>,
     pub(super) indices: DeviceBuffer<u32>,
 }
 
 impl ExpertBuckets {
-    fn new(backend: &CudaBackend, assignments: usize, experts: usize) -> Result<Self> {
+    pub(super) fn new(backend: &CudaBackend, assignments: usize, experts: usize) -> Result<Self> {
         let allocate = |elements| backend.inner.pool.allocate(&backend.inner.stream, elements);
         Ok(Self {
             counts: allocate(experts)?,
             offsets: allocate(experts)?,
+            scale_offsets: allocate(experts)?,
             order: allocate(assignments)?,
             positions: allocate(assignments)?,
             indices: allocate(experts)?,
@@ -35,15 +40,11 @@ impl ExpertBuckets {
 #[derive(Debug)]
 pub struct BucketedNvFp4MoeBf16 {
     preparation: NvFp4BucketPreparation,
-    buckets: ExpertBuckets,
     gate_up: BucketedNvFp4PairBf16,
     down: BucketedNvFp4LinearBf16,
     gated: ElementwiseBf16,
     reduce: ElementwiseBf16,
-    gate_output: DeviceBuffer<bf16>,
-    up_output: DeviceBuffer<bf16>,
-    intermediate: DeviceBuffer<bf16>,
-    down_output: DeviceBuffer<bf16>,
+    scratch: Arc<Mutex<BucketedNvFp4Scratch>>,
     activation: GatedActivation,
     stream: Stream,
     tokens: usize,
@@ -101,16 +102,18 @@ impl BucketedNvFp4MoeBf16 {
             assignments,
             "prepared NVFP4 MoE execution"
         );
-        let allocate = |elements| backend.inner.pool.allocate(&backend.inner.stream, elements);
+        let scratch = backend.bucketed_nvfp4_scratch(BucketedNvFp4ScratchConfig {
+            tokens,
+            selected,
+            experts,
+            hidden: down.output_features(),
+            intermediate: gate_up.output_features(),
+        })?;
         Ok(Self {
             preparation: NvFp4BucketPreparation::compile(&backend.inner.compiler)?,
-            buckets: ExpertBuckets::new(backend, assignments, experts)?,
             gated: ElementwiseBf16::compile(&backend.inner.compiler, intermediate_elements)?,
             reduce: ElementwiseBf16::compile(&backend.inner.compiler, down.output_features())?,
-            gate_output: allocate(intermediate_elements)?,
-            up_output: allocate(intermediate_elements)?,
-            intermediate: allocate(intermediate_elements)?,
-            down_output: allocate(down.output_elements()?)?,
+            scratch,
             gate_up,
             down,
             activation,
@@ -130,14 +133,29 @@ impl BucketedNvFp4MoeBf16 {
         routing: &DeviceBuffer<bf16>,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
+        let mut scratch = self
+            .scratch
+            .lock()
+            .map_err(|_| Error::InvalidExecutionPlan("NVFP4 bucket scratch lock is poisoned"))?;
+        let BucketedNvFp4Scratch {
+            buckets,
+            gate,
+            up,
+            down,
+            gate_output,
+            up_output,
+            intermediate,
+            down_output,
+        } = &mut *scratch;
         self.preparation.prepare(
             &self.stream,
             selected,
-            &mut self.buckets.counts,
-            &mut self.buckets.offsets,
-            &mut self.buckets.order,
-            &mut self.buckets.positions,
-            &mut self.buckets.indices,
+            &mut buckets.counts,
+            &mut buckets.offsets,
+            &mut buckets.scale_offsets,
+            &mut buckets.order,
+            &mut buckets.positions,
+            &mut buckets.indices,
             BucketGeometry {
                 assignments: self.assignments,
                 experts: self.experts,
@@ -145,35 +163,40 @@ impl BucketedNvFp4MoeBf16 {
         )?;
         self.gate_up.execute(
             &self.preparation,
-            &self.buckets,
+            buckets,
             input,
             selected,
-            &mut self.gate_output,
-            &mut self.up_output,
+            gate_output,
+            up_output,
+            gate,
+            up,
         )?;
         self.gated.gated(
             &self.stream,
-            &self.gate_output,
-            &self.up_output,
-            &mut self.intermediate,
+            gate_output,
+            up_output,
+            intermediate,
             self.activation.into(),
         )?;
         self.down.execute_ranked(
             &self.preparation,
-            &self.buckets,
-            &self.intermediate,
+            buckets,
+            intermediate,
             selected,
-            &mut self.down_output,
+            down_output,
+            down,
         )?;
-        self.reduce.weighted_reduce_bucketed(
+        let result = self.reduce.weighted_reduce_bucketed(
             &self.stream,
-            &self.down_output,
+            down_output,
             routing,
-            &self.buckets.positions,
+            &buckets.positions,
             output,
             self.selected,
             self.tokens,
-        )
+        );
+        drop(scratch);
+        result
     }
 
     #[must_use]

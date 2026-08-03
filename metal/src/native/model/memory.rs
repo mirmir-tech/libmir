@@ -1,9 +1,10 @@
 use models::layout::AttentionLayerType;
 use runtime::kv::KvCacheDType;
+use uuid::Uuid;
 
 use super::LoadedModel;
 use crate::{
-    engine::{Array, MemoryStats, clear_memory_cache, memory_stats},
+    engine::{Array, KvPageFormat, MemoryStats, clear_memory_cache, memory_stats},
     native::{error::Result, prefix::PrefixCache, session::SessionState},
 };
 
@@ -24,6 +25,66 @@ pub(super) fn prefix_cache_budget(memory: MemoryStats, configured: Option<usize>
 }
 
 impl LoadedModel {
+    pub(crate) fn settle_prefill_graph(&self) -> Result<()> {
+        self.stream.synchronize()?;
+        self.stream.detach_paged_arena_graphs()?;
+        let _reclaimed = Self::reclaim_prefill_allocator_cache()?;
+        Ok(())
+    }
+
+    pub(crate) fn settle_decode_graphs(&mut self, sessions: &[Uuid]) -> Result<()> {
+        self.stream.synchronize()?;
+        self.stream.detach_paged_arena_graphs()?;
+        for session in sessions {
+            if let Some(state) = self.sessions.get(session) {
+                state.cache.detach_evaluated_graphs()?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn reserve_prefill_pages(&mut self, required: usize) -> Result<()> {
+        let maximum = self.stream.config().kv_cache.block_count as usize;
+        let Some(decoder) = self.info.decoder.as_ref() else {
+            return Ok(());
+        };
+        let Some(layer) = (0..decoder.num_hidden_layers)
+            .find(|layer| decoder.layer_type(*layer) == AttentionLayerType::Full)
+        else {
+            return Ok(());
+        };
+        let kv_heads = decoder.layer_key_value_heads(layer);
+        let head_dim = decoder.layer_head_dim(layer);
+        let format = KvPageFormat::resolve(self.stream.config().kv_cache.dtype)?;
+        let available = |model: &Self| {
+            model
+                .stream
+                .paged_arenas()
+                .available_pages(maximum, layer, kv_heads, head_dim, format)
+        };
+        let mut evicted = false;
+        while available(self)? < required {
+            if !self.prefixes.evict_oldest() {
+                break;
+            }
+            evicted = true;
+        }
+        if evicted {
+            clear_memory_cache()?;
+        }
+        let available = available(self)?;
+        if available < required {
+            return Err(crate::engine::Error::InvalidModel(
+                format!(
+                    "Metal prefill requires {required} free K/V pages but only {available} remain"
+                )
+                .into(),
+            )
+            .into());
+        }
+        Ok(())
+    }
+
     pub(crate) fn estimated_prefix_bytes(&self, tokens: usize) -> Result<usize> {
         let Some(decoder) = self.info.decoder.as_ref() else {
             return Ok(0);
@@ -113,6 +174,29 @@ pub(in crate::native) fn cache_prefix_snapshot(
         return Ok(false);
     }
     prefixes.insert(model, tokens, state, logits, block_size, bytes)?;
+    Ok(true)
+}
+
+pub(in crate::native) fn cache_prefix_checkpoint(
+    prefixes: &mut PrefixCache,
+    model: &str,
+    tokens: &[u32],
+    state: &SessionState,
+    bytes: usize,
+) -> Result<bool> {
+    if !prefixes.enabled() {
+        return Ok(false);
+    }
+    let _reclaimed = LoadedModel::reclaim_prefill_allocator_cache()?;
+    let mut memory = memory_stats()?;
+    while !prefix_snapshot_fits(memory) && prefixes.evict_oldest() {
+        clear_memory_cache()?;
+        memory = memory_stats()?;
+    }
+    if !prefix_snapshot_fits(memory) {
+        return Ok(false);
+    }
+    prefixes.insert_checkpoint(model, tokens, state, bytes)?;
     Ok(true)
 }
 

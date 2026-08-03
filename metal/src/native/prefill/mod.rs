@@ -1,19 +1,16 @@
-use models::vision::{
-    PooledPreprocessedImage, PooledPromptTokens, SpatialMergePreprocessedImage,
-    SpatialMergePromptTokens,
-};
 use runtime::backend::SamplingLogits;
 use uuid::Uuid;
 
 use super::{
     error::{Error, Result},
-    model::{LoadedModel, LoadedVisionModel, NativeOutput},
+    model::{LoadedModel, NativeOutput},
     session::SessionState,
     step,
 };
 use crate::MetalProgressEvent;
 
 mod batch;
+mod vision;
 
 pub use batch::MetalPrefillBatch;
 pub(in crate::native) use batch::PrefillStep;
@@ -28,11 +25,11 @@ impl LoadedModel {
         &mut self,
         session: Uuid,
         tokens: &[u32],
+        cache_checkpoints: &[usize],
         sampling: SamplingLogits,
         prefix_block_size: Option<usize>,
         progress: &mut dyn FnMut(MetalProgressEvent),
     ) -> Result<NativePrefill> {
-        let model = self.execution.decoder()?;
         let Some((&last, prefix)) = tokens.split_last() else {
             return Err(Error::EmptyPrompt);
         };
@@ -42,10 +39,20 @@ impl LoadedModel {
                 let position = state.position;
                 (state, position, position, logits)
             } else {
+                let model = self.execution.decoder()?;
                 (SessionState::new(model.new_cache(&self.stream)?), 0, 0, None)
             };
         let reserve = tokens.len().max(self.stream.config().cache.kv_reserve_tokens);
         state.cache.reserve(reserve)?;
+        let page_size = self.stream.config().kv_cache.block_size.max(1);
+        state.cache.plan_contiguous(tokens.len().saturating_add(page_size))?;
+        let required_pages = tokens
+            .len()
+            .div_ceil(page_size)
+            .saturating_add(1)
+            .saturating_sub(position.div_ceil(page_size));
+        self.reserve_prefill_pages(required_pages)?;
+        let model = self.execution.decoder()?;
         if position == tokens.len() {
             let logits = cached_logits.ok_or(Error::NoPrefixLogits)?;
             let output = step::output(model, &self.stream, &mut state, logits, sampling)?;
@@ -56,8 +63,16 @@ impl LoadedModel {
 
         progress(MetalProgressEvent::prefill_tokens(position, tokens.len()));
         let mut remaining = &prefix[position..];
+        let restored_position = position;
+        let mut checkpoints = cache_checkpoints
+            .iter()
+            .copied()
+            .filter(|checkpoint| *checkpoint > restored_position && *checkpoint < tokens.len())
+            .peekable();
         while !remaining.is_empty() {
-            let count = self.prefill_chunk_len(position, remaining.len());
+            let count = self
+                .prefill_chunk_len(position, remaining.len())
+                .min(checkpoints.peek().map_or(usize::MAX, |checkpoint| checkpoint - position));
             let state_root = step::forward_prefill_state(
                 model,
                 &self.stream,
@@ -66,10 +81,20 @@ impl LoadedModel {
                 position,
             )?;
             state_root.async_eval()?;
-            self.stream.synchronize()?;
-            let _reclaimed = Self::reclaim_prefill_allocator_cache()?;
+            self.settle_prefill_graph()?;
+            state.cache.detach_evaluated_graphs()?;
             position += count;
             remaining = &remaining[count..];
+            if checkpoints.next_if_eq(&position).is_some() {
+                let checkpoint_bytes = self.estimated_prefix_bytes(position)?;
+                super::model::cache_prefix_checkpoint(
+                    &mut self.prefixes,
+                    &self.info.manifest.id,
+                    &tokens[..position],
+                    &state,
+                    checkpoint_bytes,
+                )?;
+            }
             progress(MetalProgressEvent::prefill_tokens(position, tokens.len()));
         }
         let logits = step::forward_token(
@@ -99,134 +124,5 @@ impl LoadedModel {
         let output = step::output(model, &self.stream, &mut state, logits, sampling)?;
         self.sessions.insert(session, state);
         Ok(NativePrefill { output, prefix_cache_tokens })
-    }
-
-    pub(super) fn prefill_pooled_vision(
-        &mut self,
-        session: Uuid,
-        prompt: &PooledPromptTokens,
-        image: &PooledPreprocessedImage,
-        sampling: SamplingLogits,
-        progress: &mut dyn FnMut(MetalProgressEvent),
-    ) -> Result<NativePrefill> {
-        let model = self.execution.decoder()?;
-        let Some((&last, prefix)) = prompt.token_ids.split_last() else {
-            return Err(Error::EmptyPrompt);
-        };
-        if prompt.image_end > prefix.len() {
-            return Err(Error::UnsupportedModel(
-                "pooled vision image block must precede the final prompt token".into(),
-            ));
-        }
-        let Some(LoadedVisionModel::PooledEncoder(tower)) = self.vision_model.as_ref() else {
-            return Err(Error::UnsupportedModel(
-                "pooled vision tower is not loaded or its tensors are incomplete".into(),
-            ));
-        };
-        let mut state = SessionState::new(model.new_cache(&self.stream)?);
-        let reserve = prompt.token_ids.len().max(self.stream.config().cache.kv_reserve_tokens);
-        state.cache.reserve(reserve)?;
-        progress(MetalProgressEvent::prefill_tokens(0, prompt.token_ids.len()));
-        let prefix_prompt = PooledPromptTokens {
-            token_ids: prefix.to_vec(),
-            image_start: prompt.image_start,
-            image_end: prompt.image_end,
-        };
-        let hidden = tower.forward_multimodal_prefill(
-            model, &prefix_prompt, image, &mut state.cache, &self.stream,
-        )?;
-        hidden.async_eval()?;
-        self.stream.synchronize()?;
-        progress(MetalProgressEvent::prefill_tokens(prefix.len(), prompt.token_ids.len()));
-        let logits = step::forward_token(
-            model,
-            &self.stream,
-            &mut state,
-            last,
-            prefix.len(),
-            sampling == SamplingLogits::None,
-        )?;
-        state.position = prompt.token_ids.len();
-        let output = step::output(model, &self.stream, &mut state, logits, sampling)?;
-        self.sessions.insert(session, state);
-        progress(MetalProgressEvent::prefill_tokens(
-            prompt.token_ids.len(),
-            prompt.token_ids.len(),
-        ));
-        Ok(NativePrefill { output, prefix_cache_tokens: 0 })
-    }
-
-    pub(super) fn prefill_spatial_merge_vision(
-        &mut self,
-        session: Uuid,
-        prompt: &SpatialMergePromptTokens,
-        image: &SpatialMergePreprocessedImage,
-        sampling: SamplingLogits,
-        progress: &mut dyn FnMut(MetalProgressEvent),
-    ) -> Result<NativePrefill> {
-        let model = self.execution.decoder()?;
-        let Some((&last, prefix)) = prompt.token_ids.split_last() else {
-            return Err(Error::EmptyPrompt);
-        };
-        if prompt.image_end > prefix.len() {
-            return Err(Error::UnsupportedModel(
-                "spatial-merge vision image block must precede the final prompt token".into(),
-            ));
-        }
-        let Some(LoadedVisionModel::SpatialMergeEncoder(tower)) = self.vision_model.as_ref() else {
-            return Err(Error::UnsupportedModel(
-                "spatial-merge vision tower is not loaded or its tensors are incomplete".into(),
-            ));
-        };
-        let mut state = SessionState::new(model.new_cache(&self.stream)?);
-        state.rope_position_delta = prompt.position_delta;
-        state
-            .cache
-            .reserve(prompt.token_ids.len().max(self.stream.config().cache.kv_reserve_tokens))?;
-        progress(MetalProgressEvent::prefill_tokens(0, prompt.token_ids.len()));
-        let prefix_prompt = spatial_merge_prefix(prompt, prefix.len());
-        let hidden = tower.forward_multimodal_prefill(
-            model, &prefix_prompt, image, &mut state.cache, &self.stream,
-        )?;
-        hidden.async_eval()?;
-        self.stream.synchronize()?;
-        progress(MetalProgressEvent::prefill_tokens(prefix.len(), prompt.token_ids.len()));
-        state.position = prefix.len();
-        let model_position = state.model_position()?;
-        let logits = step::forward_token(
-            model,
-            &self.stream,
-            &mut state,
-            last,
-            model_position,
-            sampling == SamplingLogits::None,
-        )?;
-        state.position = prompt.token_ids.len();
-        let output = step::output(model, &self.stream, &mut state, logits, sampling)?;
-        self.sessions.insert(session, state);
-        progress(MetalProgressEvent::prefill_tokens(
-            prompt.token_ids.len(),
-            prompt.token_ids.len(),
-        ));
-        Ok(NativePrefill { output, prefix_cache_tokens: 0 })
-    }
-}
-
-fn spatial_merge_prefix(
-    prompt: &SpatialMergePromptTokens,
-    length: usize,
-) -> SpatialMergePromptTokens {
-    let sequence = prompt.token_ids.len();
-    let mut position_ids = Vec::with_capacity(3 * length);
-    for axis in 0..3 {
-        let start = axis * sequence;
-        position_ids.extend_from_slice(&prompt.position_ids[start..start + length]);
-    }
-    SpatialMergePromptTokens {
-        token_ids: prompt.token_ids[..length].to_vec(),
-        image_start: prompt.image_start,
-        image_end: prompt.image_end,
-        position_ids,
-        position_delta: prompt.position_delta,
     }
 }
