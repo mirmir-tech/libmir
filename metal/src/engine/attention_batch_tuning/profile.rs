@@ -74,9 +74,21 @@ pub(in crate::engine) fn compatible_groups(
     let mut singles = Vec::new();
     for (index, (&query, &context)) in queries.iter().zip(contexts).enumerate() {
         let Some(key) = row_key(query, context, causal)? else {
+            tracing::trace!(
+                target: "libmir::metal::attention_batch",
+                row = index,
+                causal,
+                "packed-attention row has no compatible execution key"
+            );
             singles.push(vec![index]);
             continue;
         };
+        tracing::trace!(
+            target: "libmir::metal::attention_batch",
+            row = index,
+            ?key,
+            "classified packed-attention row"
+        );
         if let Some((_, rows)) = groups.iter_mut().find(|(candidate, _)| *candidate == key) {
             rows.push(index);
         } else {

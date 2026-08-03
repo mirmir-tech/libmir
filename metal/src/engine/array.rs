@@ -32,6 +32,10 @@ impl Array {
         Ok(self.native.async_eval()?)
     }
 
+    pub(crate) fn detach_graph(&self) -> Result<()> {
+        Ok(self.native.detach_graph()?)
+    }
+
     pub fn to_vec_f32(&self) -> Result<Vec<f32>> {
         Ok(self.native.to_vec_f32()?)
     }

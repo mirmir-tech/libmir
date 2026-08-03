@@ -26,7 +26,7 @@ pub(super) use quantized_kv::{PreparedQuantizedPageWrite, QuantizedPageWriteOpti
 pub(super) use template::template;
 
 use super::Result;
-pub(super) const BATCHED_PAGED_ROWS: usize = 8;
+pub(super) const BATCHED_PAGED_ROWS: usize = 12;
 
 mirtal::metal_kernel! {
     fn mxfp4_gate_up {
@@ -200,7 +200,7 @@ pub(super) struct Kernels {
     gated_delta_decode: mirtal::MetalKernel<8, 2>,
     gptq: gptq::GptqKernels,
     paged_attention: mirtal::MetalKernel<6, 1>,
-    paged_attention_batched: mirtal::MetalKernel<21, 1>,
+    paged_attention_batched: mirtal::MetalKernel<29, 1>,
     paged_attention_partial: mirtal::MetalLibrary,
     paged_attention_reduce: mirtal::MetalKernel<3, 1>,
     paged_kv: mirtal::MetalLibrary,

@@ -48,6 +48,26 @@ fn recycles_released_pages_across_sessions() -> Result<()> {
 }
 
 #[test]
+fn gathers_multiple_physical_runs_in_logical_order() -> Result<()> {
+    let pool = Arc::new(PagedArenaPool::default());
+    let stream = stream(&pool)?;
+    let mut first = cache(&pool, 0)?;
+    let mut blocker = cache(&pool, 0)?;
+    let initial = values(&[1.0, 2.0])?;
+    let occupied = values(&[9.0, 9.0])?;
+    drop(first.update(&initial, &initial, &stream)?);
+    drop(blocker.update(&occupied, &occupied, &stream)?);
+
+    let extension = Array::from_f32(&[3.0, 4.0, 5.0, 6.0], &[1, 1, 2, 2])?;
+    let context = first.update(&extension, &extension, &stream)?;
+    context.keys.async_eval()?;
+    stream.synchronize()?;
+
+    assert_eq!(context.keys.to_vec_f32_on_stream(&stream)?, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    Ok(())
+}
+
+#[test]
 fn separates_incompatible_layers_and_releases_empty_arenas() -> Result<()> {
     let pool = Arc::new(PagedArenaPool::default());
     let stream = stream(&pool)?;

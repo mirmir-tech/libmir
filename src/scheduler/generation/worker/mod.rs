@@ -28,7 +28,6 @@ pub(super) struct Worker {
     active_decode: HashMap<uuid::Uuid, Vec<BlockId>>,
     active_prefill: Option<ActivePrefill>,
     prefill_profile: PrefillExecutionProfile,
-    refill_steps: usize,
     prefill_handoff: handoff::PrefillHandoff,
     stopping: bool,
 }
@@ -51,7 +50,6 @@ impl Worker {
             active_decode: HashMap::new(),
             active_prefill: None,
             prefill_profile,
-            refill_steps: 0,
             prefill_handoff: handoff::PrefillHandoff::default(),
             stopping: false,
         }
@@ -227,11 +225,6 @@ impl Worker {
 
     pub(super) fn observe_decode(&mut self, rows: usize) {
         self.observe_prefill_handoff_decode(rows);
-        if rows > 1 {
-            self.refill_steps = 64;
-        } else {
-            self.refill_steps = self.refill_steps.saturating_sub(1);
-        }
     }
 
     fn prefill_admission_limit(&self) -> usize {

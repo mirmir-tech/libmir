@@ -149,6 +149,7 @@ fn profile(
         cached_prefix_checkpoint_replay_tokens: Some(0),
         cached_prefix_completion_slack_tokens: 16,
         defer_new_decode: false,
+        interleave_prefill_decode: true,
         collect_long_prefill_window: false,
     }
 }

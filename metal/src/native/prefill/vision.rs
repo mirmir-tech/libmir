@@ -40,8 +40,12 @@ impl LoadedModel {
         let reserve = prompt.token_ids.len().max(self.stream.config().cache.kv_reserve_tokens);
         state.cache.reserve(reserve)?;
         let page_size = self.stream.config().kv_cache.block_size.max(1);
-        state.cache.plan_contiguous(prompt.token_ids.len().saturating_add(page_size))?;
-        self.reserve_prefill_pages(prompt.token_ids.len().div_ceil(page_size).saturating_add(1))?;
+        state.cache.plan_contiguous(prompt.token_ids.len().saturating_add(page_size));
+        self.reserve_prefill_pages(super::required_prefill_pages(
+            prompt.token_ids.len(),
+            0,
+            page_size,
+        ))?;
         let model = self.execution.decoder()?;
         let Some(LoadedVisionModel::PooledEncoder(tower)) = self.vision_model.as_ref() else {
             return Err(Error::UnsupportedModel(
@@ -104,8 +108,12 @@ impl LoadedModel {
             .cache
             .reserve(prompt.token_ids.len().max(self.stream.config().cache.kv_reserve_tokens))?;
         let page_size = self.stream.config().kv_cache.block_size.max(1);
-        state.cache.plan_contiguous(prompt.token_ids.len().saturating_add(page_size))?;
-        self.reserve_prefill_pages(prompt.token_ids.len().div_ceil(page_size).saturating_add(1))?;
+        state.cache.plan_contiguous(prompt.token_ids.len().saturating_add(page_size));
+        self.reserve_prefill_pages(super::required_prefill_pages(
+            prompt.token_ids.len(),
+            0,
+            page_size,
+        ))?;
         let model = self.execution.decoder()?;
         let Some(LoadedVisionModel::SpatialMergeEncoder(tower)) = self.vision_model.as_ref() else {
             return Err(Error::UnsupportedModel(

@@ -88,17 +88,11 @@ fn gather_runs(
             graph.slice(arena.values.native(), &begin, &end)?,
         ));
     }
-    let mut keys = Vec::with_capacity(runs.len());
-    let mut values = Vec::with_capacity(runs.len());
-    for (start, stop) in runs {
-        let begin = [0, start, 0, 0];
-        let end = [arena.kv_heads, stop, arena.page_size, arena.head_dim];
-        keys.push(graph.slice(arena.keys.native(), &begin, &end)?);
-        values.push(graph.slice(arena.values.native(), &begin, &end)?);
-    }
-    let key_refs = keys.iter().collect::<Vec<_>>();
-    let value_refs = values.iter().collect::<Vec<_>>();
-    Ok((graph.concatenate(&key_refs, 1)?, graph.concatenate(&value_refs, 1)?))
+    let ids = graph.slice(storage.table.native(), &[0], &[pages])?;
+    Ok((
+        graph.take(arena.keys.native(), &ids, 1)?,
+        graph.take(arena.values.native(), &ids, 1)?,
+    ))
 }
 
 fn physical_runs(page_ids: &[u32]) -> Result<Vec<(usize, usize)>> {

@@ -22,11 +22,55 @@ fn indexes_only_the_exact_prompt_without_block_prefixes() {
 }
 
 #[test]
+fn continuation_replays_an_unaligned_terminal_page() -> Result<()> {
+    let mut cache = PrefixCache::new(2, usize::MAX);
+    let mut state = SessionState::new(DecoderCache::new(&[], 1)?);
+    state.position = 5;
+    let logits = Array::from_u32(&[0], &[1])?;
+    cache.insert("model", &[1, 2, 3, 4, 5], &state, &logits, Some(2), 100)?;
+
+    let (continued, continued_logits) = cache
+        .restore_longest("model", &[1, 2, 3, 4, 5, 6])?
+        .ok_or(crate::native::error::Error::NoPrefixLogits)?;
+    let (exact, exact_logits) = cache
+        .restore_longest("model", &[1, 2, 3, 4, 5])?
+        .ok_or(crate::native::error::Error::NoPrefixLogits)?;
+
+    assert_eq!(continued.position, 4);
+    assert!(continued_logits.is_none());
+    assert_eq!(exact.position, 5);
+    assert!(exact_logits.is_some());
+    Ok(())
+}
+
+#[test]
+fn continuation_replays_an_unaligned_checkpoint_page() -> Result<()> {
+    let mut cache = PrefixCache::new(2, usize::MAX);
+    let mut state = SessionState::new(DecoderCache::new(&[], 1)?);
+    state.position = 5;
+    cache.insert_checkpoint("model", &[1, 2, 3, 4, 5], &state, 2, 100)?;
+
+    let (continued, logits) = cache
+        .restore_longest("model", &[1, 2, 3, 4, 5, 6])?
+        .ok_or(crate::native::error::Error::NoPrefixLogits)?;
+
+    assert_eq!(continued.position, 4);
+    assert!(logits.is_none());
+
+    let (completed, completed_logits) = cache
+        .restore_longest("model", &[1, 2, 3, 4, 5])?
+        .ok_or(crate::native::error::Error::NoPrefixLogits)?;
+    assert_eq!(completed.position, 4);
+    assert!(completed_logits.is_none());
+    Ok(())
+}
+
+#[test]
 fn message_checkpoint_shares_a_group_with_the_completed_prompt() -> Result<()> {
     let mut cache = PrefixCache::new(2, usize::MAX);
     let mut state = SessionState::new(DecoderCache::new(&[], 1)?);
     state.position = 2;
-    cache.insert_checkpoint("model", &[1, 2], &state, 40)?;
+    cache.insert_checkpoint("model", &[1, 2], &state, 2, 40)?;
     state.position = 3;
     let logits = Array::from_u32(&[0], &[1])?;
     cache.insert("model", &[1, 2, 3], &state, &logits, None, 60)?;
@@ -119,7 +163,15 @@ fn insert_snapshot_with_key(
     memory_group: u64,
     bytes: usize,
 ) -> Result<()> {
-    cache.entries.insert(key, PrefixEntry { memory_group, position: 1 });
+    cache.entries.insert(
+        key,
+        PrefixEntry {
+            memory_group,
+            position: 1,
+            continuation_position: 1,
+            completion_position: 0,
+        },
+    );
     cache.groups.entry(memory_group).or_insert(PrefixGroup {
         terminal: Some(PrefixSnapshot {
             state: SessionState::new(DecoderCache::new(&[], 1)?),

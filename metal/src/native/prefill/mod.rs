@@ -10,6 +10,8 @@ use super::{
 use crate::MetalProgressEvent;
 
 mod batch;
+#[cfg(test)]
+mod tests;
 mod vision;
 
 pub use batch::MetalPrefillBatch;
@@ -45,12 +47,8 @@ impl LoadedModel {
         let reserve = tokens.len().max(self.stream.config().cache.kv_reserve_tokens);
         state.cache.reserve(reserve)?;
         let page_size = self.stream.config().kv_cache.block_size.max(1);
-        state.cache.plan_contiguous(tokens.len().saturating_add(page_size))?;
-        let required_pages = tokens
-            .len()
-            .div_ceil(page_size)
-            .saturating_add(1)
-            .saturating_sub(position.div_ceil(page_size));
+        state.cache.plan_contiguous(tokens.len().saturating_add(page_size));
+        let required_pages = required_prefill_pages(tokens.len(), position, page_size);
         self.reserve_prefill_pages(required_pages)?;
         let model = self.execution.decoder()?;
         if position == tokens.len() {
@@ -92,6 +90,7 @@ impl LoadedModel {
                     &self.info.manifest.id,
                     &tokens[..position],
                     &state,
+                    page_size,
                     checkpoint_bytes,
                 )?;
             }
@@ -125,4 +124,12 @@ impl LoadedModel {
         self.sessions.insert(session, state);
         Ok(NativePrefill { output, prefix_cache_tokens })
     }
+}
+
+fn required_prefill_pages(tokens: usize, position: usize, page_size: usize) -> usize {
+    let page_size = page_size.max(1);
+    let planned = tokens.saturating_add(page_size).div_ceil(page_size);
+    let owned = position.div_ceil(page_size);
+    let copy_on_write = usize::from(position > 0 && !position.is_multiple_of(page_size));
+    planned.saturating_sub(owned).saturating_add(copy_on_write)
 }

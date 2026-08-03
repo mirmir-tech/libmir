@@ -25,11 +25,12 @@ use metal::MetalBackend;
 use runtime::RuntimeError;
 #[cfg(feature = "cuda")]
 use runtime::backend::DecodeRequest;
+#[cfg(any(feature = "cuda", feature = "metal"))]
+use runtime::progress::ProgressEvent;
 use runtime::{
     Result as RuntimeResult,
     backend::{DecodeOutput, ModelHandle, SamplingLogits},
     kv::BlockTable,
-    progress::ProgressEvent,
 };
 use uuid::Uuid;
 

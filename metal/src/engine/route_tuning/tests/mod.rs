@@ -46,6 +46,7 @@ fn tuned_routing_matches_unsorted_expert_mlp() -> Result<()> {
             |indices| sorted(&weights, &input, indices, &stream),
             |indices| sorted(&weights, &input, indices, &stream),
             |indices| unsorted(&weights, &input, indices, true, &stream),
+            |indices| unsorted(&weights, &input, indices, false, &stream),
         ),
     )?;
     let expected = unsorted(&weights, &input, &indices, false, &stream)?;
@@ -124,6 +125,10 @@ fn benchmarks_sorted_unsorted_crossover() -> Result<()> {
                         let output =
                             mlp(&weights, &grouped.input, &grouped.indices, true, &stream)?;
                         grouped.restore_weighted(&output, &routing, &stream)
+                    },
+                    |indices| {
+                        unsorted(&weights, &input, indices, fused, &stream)?
+                            .weighted_sum(&routing, -2, &stream)
                     },
                     |indices| {
                         unsorted(&weights, &input, indices, fused, &stream)?

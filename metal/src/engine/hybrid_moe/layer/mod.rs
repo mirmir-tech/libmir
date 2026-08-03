@@ -24,6 +24,8 @@ mod lowered;
 #[cfg(test)]
 mod tests;
 
+pub(super) use forward::emit_profile;
+
 #[derive(Debug)]
 pub struct HybridMoeLayer {
     pub(super) config: HybridMoeLayerConfig,

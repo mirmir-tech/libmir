@@ -15,6 +15,10 @@ switch (batch) {
   case 5: key_pages = key_pages_5; value_pages = value_pages_5; break;
   case 6: key_pages = key_pages_6; value_pages = value_pages_6; break;
   case 7: key_pages = key_pages_7; value_pages = value_pages_7; break;
+  case 8: key_pages = key_pages_8; value_pages = value_pages_8; break;
+  case 9: key_pages = key_pages_9; value_pages = value_pages_9; break;
+  case 10: key_pages = key_pages_10; value_pages = value_pages_10; break;
+  case 11: key_pages = key_pages_11; value_pages = value_pages_11; break;
 }
 thread float query[QK_PER_THREAD];
 thread float accumulator[V_PER_THREAD];

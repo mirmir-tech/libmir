@@ -43,15 +43,15 @@ fn prefill_measurement_does_not_starve_decode_or_other_families() {
     prefill.causal = true;
     tuner.record_batch_attention(prefill, BatchAttentionExecution::Rows, Duration::from_millis(1));
 
-    assert!(!tuner.batch_attention_budget_available(true));
-    assert!(tuner.batch_attention_budget_available(false));
+    assert!(!tuner.batch_attention_runtime_budget_available(true));
+    assert!(tuner.batch_attention_runtime_budget_available(false));
     assert!(tuner.attention_budget_available());
     assert!(tuner.expert_budget_available());
     assert!(tuner.routing_budget_available());
 }
 
 #[test]
-fn completed_startup_retains_cached_decisions_but_closes_new_measurements() {
+fn completed_startup_retains_decisions_and_shape_discovery_budgets() {
     let mut tuner = MetalTuner::new(TuningConfig::default());
     let key = fixture_key();
     tuner.record(key, GateUpExecution::Separate, Duration::from_micros(1));
@@ -59,8 +59,8 @@ fn completed_startup_retains_cached_decisions_but_closes_new_measurements() {
 
     assert_eq!(tuner.plan(key), TuneAction::Execute(GateUpExecution::Separate));
     assert!(!tuner.attention_budget_available());
-    assert!(!tuner.batch_attention_budget_available(false));
     assert!(tuner.batch_attention_runtime_budget_available(false));
     assert!(!tuner.expert_budget_available());
     assert!(!tuner.routing_budget_available());
+    assert!(tuner.routing_runtime_budget_available());
 }

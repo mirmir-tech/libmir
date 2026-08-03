@@ -44,7 +44,11 @@ pub(in crate::engine::hybrid_moe) fn experts(
                 grouped.restore_weighted(&output, &routing.weights, stream)
             },
             |indices| {
-                unsorted(&hidden, indices, weights, fused_gate_up, stream)?
+                unsorted(&hidden, indices, weights, fused_gate_up, false, stream)?
+                    .weighted_sum(&routing.weights, -2, stream)
+            },
+            |indices| {
+                unsorted(&hidden, indices, weights, fused_gate_up, true, stream)?
                     .weighted_sum(&routing.weights, -2, stream)
             },
         ),
@@ -57,6 +61,7 @@ fn unsorted(
     indices: &Array,
     weights: &LayerWeights,
     fused_gate_up: Option<&FusedExpertGateUp>,
+    native_output: bool,
     stream: &Stream,
 ) -> Result<Array> {
     let hidden = hidden.expand_dims(&[-2, -3], stream)?;
@@ -64,14 +69,16 @@ fn unsorted(
         (Some(fused), Some((gate, up))) => {
             expert_tuning::forward(gate, up, fused, &hidden, indices, stream)?
         },
+        _ if native_output => weights.experts.gather_gate_up_native(&hidden, indices, stream)?,
         _ => weights.experts.gather_gate_up(&hidden, indices, false, stream)?,
     };
     let activated = gate.gelu_approx_mul(&up, stream)?;
-    weights
-        .experts
-        .down
-        .gather(&activated, indices, false, stream)?
-        .squeeze_axis(-2, stream)
+    let output = if native_output {
+        weights.experts.down.gather_native(&activated, indices, false, stream)?
+    } else {
+        weights.experts.down.gather(&activated, indices, false, stream)?
+    };
+    output.squeeze_axis(-2, stream)
 }
 
 fn expert_mlp(

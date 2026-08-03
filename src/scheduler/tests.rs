@@ -1,25 +1,10 @@
-use std::{
-    collections::{HashSet, VecDeque},
-    time::Duration,
-};
+use std::time::Duration;
 
-use super::{State, collection_target};
+use super::{collection_target, decode_admission_wait};
 
 #[test]
-fn successful_batch_retains_a_bounded_refill_hint() {
-    let mut state = State {
-        waiting: VecDeque::new(),
-        active: HashSet::new(),
-        running: false,
-        refill_steps: 0,
-    };
-    assert_eq!(state.refill_wait(200), Duration::from_micros(200));
-    state.observe(4);
-    assert_eq!(state.refill_wait(200), Duration::from_millis(5));
-    for _ in 0..64 {
-        state.observe(1);
-    }
-    assert_eq!(state.refill_wait(200), Duration::from_micros(200));
+fn decode_admission_uses_the_configured_wait_without_hidden_amplification() {
+    assert_eq!(decode_admission_wait(200), Duration::from_micros(200));
 }
 
 #[test]

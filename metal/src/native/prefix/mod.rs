@@ -1,6 +1,7 @@
 mod index;
+mod retention;
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 
 use self::index::{PrefixKey, indexed_prefixes, longest_indexed_prefix};
 use super::{
@@ -13,6 +14,8 @@ use crate::engine::Array;
 struct PrefixEntry {
     memory_group: u64,
     position: usize,
+    continuation_position: usize,
+    completion_position: usize,
 }
 
 #[derive(Debug)]
@@ -72,11 +75,15 @@ impl PrefixCache {
             };
             terminal
         };
-        let exact = entry.position == tokens.len() && entry.position == source.state.position;
-        let position = if entry.position == tokens.len() && !exact {
-            entry.position.saturating_sub(1)
-        } else {
+        let complete_prompt = entry.position == tokens.len();
+        let exact =
+            complete_prompt && entry.position == source.state.position && source.logits.is_some();
+        let position = if exact {
             entry.position
+        } else if complete_prompt {
+            entry.completion_position
+        } else {
+            entry.continuation_position
         };
         let cache = source.state.cache.snapshot_at(position)?;
         let logits = if exact {
@@ -86,18 +93,6 @@ impl PrefixCache {
         };
         self.touch_group(group);
         Ok(Some((SessionState::from_prefix(cache, position), logits)))
-    }
-
-    pub(super) fn reserve_batch_slots(&mut self, count: usize) -> bool {
-        let target = self.capacity.saturating_sub(count);
-        let mut evicted = false;
-        while self.groups.len() > target {
-            if !self.evict_oldest() {
-                break;
-            }
-            evicted = true;
-        }
-        evicted
     }
 
     pub(super) fn insert(
@@ -123,7 +118,22 @@ impl PrefixCache {
         let block_size =
             block_size.filter(|size| *size > 0 && state.cache.supports_prefix_offsets());
         for (key, position) in indexed_prefixes(model, tokens, block_size) {
-            self.entries.insert(key, PrefixEntry { memory_group, position });
+            let continuation_position = block_size
+                .filter(|size| *size > 0)
+                .map_or(position, |size| position / size * size);
+            let completion_position = block_size.filter(|size| *size > 0).map_or_else(
+                || position.saturating_sub(1),
+                |size| position.saturating_sub(1) / size * size,
+            );
+            self.entries.insert(
+                key,
+                PrefixEntry {
+                    memory_group,
+                    position,
+                    continuation_position,
+                    completion_position,
+                },
+            );
         }
         let group = self.groups.entry(memory_group).or_default();
         group.terminal = Some(snapshot);
@@ -139,6 +149,7 @@ impl PrefixCache {
         model: &str,
         tokens: &[u32],
         state: &SessionState,
+        block_size: usize,
         bytes: usize,
     ) -> Result<()> {
         if !self.enabled() || tokens.is_empty() {
@@ -146,6 +157,16 @@ impl PrefixCache {
         }
         let memory_group = self.pending_group(model, tokens).unwrap_or_else(|| self.new_group());
         let position = tokens.len();
+        let continuation_position = if block_size > 0 && state.cache.supports_prefix_offsets() {
+            position / block_size * block_size
+        } else {
+            position
+        };
+        let completion_position = if block_size > 0 && state.cache.supports_prefix_offsets() {
+            position.saturating_sub(1) / block_size * block_size
+        } else {
+            position.saturating_sub(1)
+        };
         let snapshot = PrefixSnapshot {
             state: SessionState::from_prefix(state.cache.snapshot_at(position)?, position),
             logits: None,
@@ -154,7 +175,15 @@ impl PrefixCache {
             .pop()
             .map(|(key, _)| key)
             .ok_or_else(|| Error::InvalidPrefillBatch("prefix checkpoint has no key".into()))?;
-        self.entries.insert(key, PrefixEntry { memory_group, position });
+        self.entries.insert(
+            key,
+            PrefixEntry {
+                memory_group,
+                position,
+                continuation_position,
+                completion_position,
+            },
+        );
         let group = self.groups.entry(memory_group).or_default();
         if group.checkpoints.insert(position, snapshot).is_none() {
             group.bytes = group.bytes.saturating_add(bytes);
@@ -175,68 +204,6 @@ impl PrefixCache {
         let group = self.next_memory_group;
         self.next_memory_group = self.next_memory_group.wrapping_add(1);
         group
-    }
-
-    fn enforce_limits(&mut self) {
-        while self.groups.len() > self.capacity || self.resident_bytes() > self.byte_capacity {
-            if !self.evict_oldest() {
-                break;
-            }
-        }
-    }
-
-    pub(super) const fn enabled(&self) -> bool {
-        self.capacity > 0 && self.byte_capacity > 0
-    }
-
-    pub(super) const fn capacity(&self) -> usize {
-        self.capacity
-    }
-
-    pub(super) const fn byte_capacity(&self) -> usize {
-        self.byte_capacity
-    }
-
-    pub(super) fn resident_bytes(&self) -> usize {
-        self.groups.values().map(|group| group.bytes).sum()
-    }
-
-    pub(super) fn clear(&mut self) {
-        self.entries.clear();
-        self.groups.clear();
-        self.group_recency.clear();
-    }
-
-    pub(super) fn evict_oldest(&mut self) -> bool {
-        let Some(expired) = self.group_recency.pop_front() else {
-            return false;
-        };
-        self.groups.remove(&expired);
-        self.entries.retain(|_, entry| entry.memory_group != expired);
-        true
-    }
-
-    fn remove_unindexed_groups(&mut self) {
-        let indexed = self.entries.values().map(|entry| entry.memory_group).collect::<HashSet<_>>();
-        self.groups.retain(|group, _| indexed.contains(group));
-        self.group_recency.retain(|group| indexed.contains(group));
-    }
-
-    fn reserve_miss_slot(&mut self) {
-        if self.groups.len() >= self.capacity || self.resident_bytes() >= self.byte_capacity {
-            self.evict_oldest();
-        }
-    }
-
-    fn touch_group(&mut self, group: u64) {
-        self.remove_group_recency(group);
-        self.group_recency.push_back(group);
-    }
-
-    fn remove_group_recency(&mut self, group: u64) {
-        if let Some(index) = self.group_recency.iter().position(|entry| *entry == group) {
-            let _removed = self.group_recency.remove(index);
-        }
     }
 }
 

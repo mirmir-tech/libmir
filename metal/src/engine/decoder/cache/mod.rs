@@ -170,14 +170,15 @@ impl DecoderCache {
         }
     }
 
-    pub(crate) fn plan_contiguous(&mut self, tokens: usize) -> Result<()> {
+    pub(crate) fn plan_contiguous(&mut self, tokens: usize) {
         match &mut self.storage {
             CacheStorage::Attention(caches) => {
-                caches.iter_mut().for_each(|cache| cache.plan_contiguous(tokens));
+                for cache in caches {
+                    cache.plan_contiguous(tokens);
+                }
             },
             CacheStorage::HybridLinear(layers) => hybrid::plan_contiguous(layers, tokens),
         }
-        Ok(())
     }
 
     pub(crate) fn detach_evaluated_graphs(&self) -> Result<()> {

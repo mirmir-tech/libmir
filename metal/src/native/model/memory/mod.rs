@@ -1,6 +1,5 @@
 use models::layout::AttentionLayerType;
 use runtime::kv::KvCacheDType;
-use uuid::Uuid;
 
 use super::LoadedModel;
 use crate::{
@@ -12,6 +11,9 @@ const AUTO_PREFIX_CACHE_NUMERATOR: usize = 2;
 const AUTO_PREFIX_CACHE_DIVISOR: usize = 5;
 const ALLOCATOR_CACHE_DIVISOR: usize = 8;
 const MEMORY_PRESSURE_PERCENT: usize = 85;
+
+#[cfg(test)]
+mod tests;
 
 pub(super) fn prefix_cache_budget(memory: MemoryStats, configured: Option<usize>) -> usize {
     configured.unwrap_or_else(|| {
@@ -32,13 +34,11 @@ impl LoadedModel {
         Ok(())
     }
 
-    pub(crate) fn settle_decode_graphs(&mut self, sessions: &[Uuid]) -> Result<()> {
+    pub(crate) fn flush_decode_graphs(&self) -> Result<()> {
         self.stream.synchronize()?;
         self.stream.detach_paged_arena_graphs()?;
-        for session in sessions {
-            if let Some(state) = self.sessions.get(session) {
-                state.cache.detach_evaluated_graphs()?;
-            }
+        for state in self.sessions.values() {
+            state.cache.detach_evaluated_graphs()?;
         }
         Ok(())
     }
@@ -74,12 +74,9 @@ impl LoadedModel {
         }
         let available = available(self)?;
         if available < required {
-            return Err(crate::engine::Error::InvalidModel(
-                format!(
-                    "Metal prefill requires {required} free K/V pages but only {available} remain"
-                )
-                .into(),
-            )
+            return Err(crate::engine::Error::InvalidModel(format!(
+                "Metal prefill requires {required} free K/V pages but only {available} remain"
+            ))
             .into());
         }
         Ok(())
@@ -182,6 +179,7 @@ pub(in crate::native) fn cache_prefix_checkpoint(
     model: &str,
     tokens: &[u32],
     state: &SessionState,
+    block_size: usize,
     bytes: usize,
 ) -> Result<bool> {
     if !prefixes.enabled() {
@@ -196,7 +194,7 @@ pub(in crate::native) fn cache_prefix_checkpoint(
     if !prefix_snapshot_fits(memory) {
         return Ok(false);
     }
-    prefixes.insert_checkpoint(model, tokens, state, bytes)?;
+    prefixes.insert_checkpoint(model, tokens, state, block_size, bytes)?;
     Ok(true)
 }
 
@@ -213,36 +211,5 @@ fn usable_memory(memory: MemoryStats) -> usize {
         (0, Some(recommended)) => recommended,
         (limit, None | Some(0)) => limit,
         (limit, Some(recommended)) => limit.min(recommended),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn bounds_automatic_prefix_cache_to_two_fifths_of_usable_memory() {
-        let memory = MemoryStats {
-            active: 10,
-            cached: 20,
-            peak: 30,
-            limit: 1_000,
-            recommended: Some(800),
-        };
-        assert_eq!(prefix_cache_budget(memory, None), 320);
-        assert_eq!(prefix_cache_budget(memory, Some(75)), 75);
-    }
-
-    #[test]
-    fn prefix_snapshot_preserves_runtime_headroom() {
-        let memory = MemoryStats {
-            active: 700,
-            cached: 50,
-            peak: 750,
-            limit: 1_000,
-            recommended: Some(1_000),
-        };
-        assert!(prefix_snapshot_fits(memory));
-        assert!(!prefix_snapshot_fits(MemoryStats { active: 801, ..memory }));
     }
 }

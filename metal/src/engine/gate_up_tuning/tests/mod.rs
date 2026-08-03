@@ -52,7 +52,11 @@ fn cached_mode_reuses_a_persisted_shape_decision()
         Duration::from_millis(1),
     );
     startup.record_expert(expert_key(), ExpertExecution::Separate, Duration::from_millis(1));
-    startup.record_routing(routing_key(), RoutingExecution::SortedFused, Duration::from_millis(1));
+    startup.record_routing(
+        routing_key(),
+        RoutingExecution::UnsortedNative,
+        Duration::from_millis(1),
+    );
     startup.persist();
     let cached = MetalTuner::new(TuningConfig {
         mode: TuningMode::Cached,
@@ -70,7 +74,7 @@ fn cached_mode_reuses_a_persisted_shape_decision()
         Some(BatchAttentionExecution::Rows)
     );
     assert_eq!(cached.expert_decision(expert_key()), Some(ExpertExecution::Separate));
-    assert_eq!(cached.routing_decision(routing_key()), Some(RoutingExecution::SortedFused));
+    assert_eq!(cached.routing_decision(routing_key()), Some(RoutingExecution::UnsortedNative));
     fs::remove_dir_all(directory)?;
     Ok(())
 }

@@ -16,7 +16,7 @@ use std::{
 };
 
 use ::runtime::{RuntimeError, backend::ModelHandle};
-pub use generation::MetalGenerationStepOutput;
+pub use generation::{MetalGenerationStepOutput, MetalPrefillSchedule};
 
 use self::worker::ModelClient;
 use super::{

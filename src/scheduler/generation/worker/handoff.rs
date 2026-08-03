@@ -18,7 +18,10 @@ impl Worker {
     }
 
     pub(super) fn begin_prefill_handoff(&mut self, sessions: impl IntoIterator<Item = uuid::Uuid>) {
-        if !self.prefill_profile.limit_deep_prefill_waves || self.prefill.is_empty() {
+        if !self.prefill_profile.limit_deep_prefill_waves
+            || !self.prefill_profile.interleave_prefill_decode
+            || self.prefill.is_empty()
+        {
             return;
         }
         self.prefill_handoff.begin(sessions);

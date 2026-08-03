@@ -6,8 +6,8 @@ use super::{
 use crate::engine::{Array, DecoderModel, DeviceSampling, Stream, sample};
 
 pub(super) struct DeferredToken {
-    sampled: Array,
     next_logits: Array,
+    token_id: u32,
 }
 
 impl DeferredToken {
@@ -15,9 +15,12 @@ impl DeferredToken {
         Ok(self.next_logits.async_eval()?)
     }
 
-    pub(super) fn complete(self, state: &mut SessionState, token_id: u32) -> NativeOutput {
-        state.pending = Some(PendingDecode { token_id, logits: self.next_logits });
-        NativeOutput::Greedy(token_id)
+    pub(super) fn complete(self, state: &mut SessionState) -> NativeOutput {
+        state.pending = Some(PendingDecode {
+            token_id: self.token_id,
+            logits: self.next_logits,
+        });
+        NativeOutput::Greedy(self.token_id)
     }
 }
 
@@ -93,11 +96,7 @@ pub(super) fn output(
     }
     let deferred = deferred_token(model, stream, state, &logits, sampling)?;
     deferred.enqueue()?;
-    let token_id = deferred.sampled.to_vec_u32_on_stream(stream)?;
-    let token_id = *token_id
-        .first()
-        .ok_or_else(|| Error::InvalidDecodeBatch("sampled token is empty".into()))?;
-    Ok(deferred.complete(state, token_id))
+    Ok(deferred.complete(state))
 }
 
 fn deferred_token(
@@ -111,6 +110,14 @@ fn deferred_token(
         Error::InvalidDecodeBatch("batch row does not use device token sampling".into())
     })?;
     sampled.async_eval()?;
+    let token_id = sampled
+        .to_vec_u32_on_stream(stream)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| Error::InvalidDecodeBatch("sampled token is empty".into()))?;
+    sampled.detach_graph()?;
+    stream.detach_paged_arena_graphs()?;
+    state.cache.detach_evaluated_graphs()?;
     let next_logits = forward_ids(
         model,
         stream,
@@ -119,7 +126,7 @@ fn deferred_token(
         state.model_position()?,
         sampling == SamplingLogits::None,
     )?;
-    Ok(DeferredToken { sampled, next_logits })
+    Ok(DeferredToken { next_logits, token_id })
 }
 
 pub(super) fn decode_pending(

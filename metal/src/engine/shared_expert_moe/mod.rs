@@ -3,15 +3,17 @@
 use models::weights::SharedRoutedFeedForwardBindings;
 
 use super::{
-    Array, Error, FusedExpertGateUp, FusedGateUp, ModelTensors, QuantizedLinear, Result, Stream,
+    Array, Error, FusedExpertGateUp, FusedGateUp, ModelTensors, Result, Stream,
     binding::BoundLinear,
-    fusion_planner::{FusionPlanner, ProjectionBiases},
+    fusion_planner::FusionPlanner,
     gate_up_tuning,
     lowering::FeedForwardLowering,
     route_tuning::{self, ExpertActivation, RoutingSpec},
 };
 
+mod load;
 mod routed;
+use load::{linear, projection_biases};
 use routed::RoutedGateUp;
 
 #[derive(Debug, Clone, Copy)]
@@ -169,23 +171,32 @@ impl SharedExpertMoe {
             (
                 |indices| {
                     let sorted = input.sort_expert_inputs(indices, stream)?;
-                    let output = self.routed_mlp(&sorted.input, &sorted.indices, true, stream)?;
+                    let output =
+                        self.routed_mlp(&sorted.input, &sorted.indices, true, false, stream)?;
                     sorted.restore(&output, stream)?.weighted_sum(weights, -2, stream)
                 },
                 |indices| {
                     let sorted = input.sort_expert_inputs(indices, stream)?;
-                    let output = self.routed_mlp(&sorted.input, &sorted.indices, true, stream)?;
+                    let output =
+                        self.routed_mlp(&sorted.input, &sorted.indices, true, false, stream)?;
                     sorted.restore_weighted(&output, weights, stream)
                 },
                 |indices| {
                     let grouped =
                         input.group_expert_inputs(indices, self.config.expert_count, stream)?;
-                    let output = self.routed_mlp(&grouped.input, &grouped.indices, true, stream)?;
+                    let output =
+                        self.routed_mlp(&grouped.input, &grouped.indices, true, false, stream)?;
                     grouped.restore_weighted(&output, weights, stream)
                 },
                 |indices| {
                     let input = input.expand_dims(&[-2, -3], stream)?;
-                    self.routed_mlp(&input, indices, false, stream)?
+                    self.routed_mlp(&input, indices, false, false, stream)?
+                        .squeeze_axis(-2, stream)?
+                        .weighted_sum(weights, -2, stream)
+                },
+                |indices| {
+                    let input = input.expand_dims(&[-2, -3], stream)?;
+                    self.routed_mlp(&input, indices, false, true, stream)?
                         .squeeze_axis(-2, stream)?
                         .weighted_sum(weights, -2, stream)
                 },
@@ -198,11 +209,20 @@ impl SharedExpertMoe {
         input: &Array,
         indices: &Array,
         sorted: bool,
+        native_output: bool,
         stream: &Stream,
     ) -> Result<Array> {
-        let (gate, up) = self.routed_gate_up.gather(input, indices, sorted, stream)?;
+        let (gate, up) = if native_output {
+            self.routed_gate_up.gather_native(input, indices, stream)?
+        } else {
+            self.routed_gate_up.gather(input, indices, sorted, stream)?
+        };
         let activated = gate.silu_mul(&up, stream)?;
-        self.routed_down.gather(&activated, indices, sorted, stream)
+        if native_output {
+            self.routed_down.gather_native(&activated, indices, false, stream)
+        } else {
+            self.routed_down.gather(&activated, indices, sorted, stream)
+        }
     }
 
     fn shared(&self, input: &Array, stream: &Stream) -> Result<Array> {
@@ -223,19 +243,6 @@ impl SharedExpertMoe {
         let output = self.shared_down.forward(&gate.silu_mul(&up, stream)?, stream)?;
         self.shared_output_gate.forward(input, stream)?.sigmoid_mul(&output, stream)
     }
-}
-
-fn projection_biases(gate: &BoundLinear, up: &BoundLinear) -> ProjectionBiases {
-    ProjectionBiases::new([false, false], None, [gate.has_bias(), up.has_bias()])
-}
-
-fn linear(
-    tensors: &ModelTensors,
-    prefix: &str,
-    name: &str,
-    group_size: i32,
-) -> Result<BoundLinear> {
-    QuantizedLinear::load(tensors, &format!("{prefix}.{name}"), group_size).map(BoundLinear::Affine)
 }
 
 #[cfg(test)]

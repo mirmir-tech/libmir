@@ -131,6 +131,9 @@ impl LoadedModel {
     }
 
     pub(super) fn release_session(&mut self, session: Uuid) -> Result<()> {
+        if self.sessions.contains_key(&session) {
+            self.flush_decode_graphs()?;
+        }
         let _removed = self.sessions.remove(&session);
         let _reclaimed = Self::reclaim_prefill_allocator_cache()?;
         Ok(())

@@ -1,8 +1,14 @@
 use std::time::{Duration, Instant};
 
+use patterns::route_patterns;
 use runtime::tuning::{TuningMode, select_robust_candidate};
 
 use super::{Array, Dtype, Error, Result, Stream};
+
+mod patterns;
+
+type RoutingPath<'a> = &'a dyn Fn(&Array) -> Result<Array>;
+type RoutingPaths<'a> = [RoutingPath<'a>; 5];
 
 #[derive(
     Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize,
@@ -29,6 +35,7 @@ pub struct RoutingKey {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum RoutingExecution {
     Unsorted,
+    UnsortedNative,
     SortedGraph,
     SortedFused,
     GroupedFused,
@@ -44,20 +51,21 @@ pub struct RoutingSpec {
     pub fused_unsorted: bool,
 }
 
-pub(super) fn forward<G, F, K, U>(
+pub(super) fn forward<G, F, K, U, N>(
     spec: RoutingSpec,
     input: &Array,
     indices: &Array,
     stream: &Stream,
-    paths: (G, F, K, U),
+    paths: (G, F, K, U, N),
 ) -> Result<Array>
 where
     G: Fn(&Array) -> Result<Array>,
     F: Fn(&Array) -> Result<Array>,
     K: Fn(&Array) -> Result<Array>,
     U: Fn(&Array) -> Result<Array>,
+    N: Fn(&Array) -> Result<Array>,
 {
-    let (sorted_graph, sorted_fused, grouped_fused, unsorted) = paths;
+    let (sorted_graph, sorted_fused, grouped_fused, unsorted, unsorted_native) = paths;
     let key = key(spec, input, indices)?;
     let fallback = fallback(indices)?;
     let decision = {
@@ -66,14 +74,16 @@ where
             Some(fallback)
         } else if let Some(execution) = tuner.routing_decision(key) {
             Some(execution)
-        } else if tuner.config().mode == TuningMode::Startup && tuner.routing_budget_available() {
+        } else if tuner.config().mode == TuningMode::Startup
+            && (tuner.routing_budget_available() || tuner.routing_runtime_budget_available())
+        {
             None
         } else {
             Some(fallback)
         }
     };
-    let paths: [&dyn Fn(&Array) -> Result<Array>; 4] =
-        [&sorted_graph, &sorted_fused, &grouped_fused, &unsorted];
+    let paths: RoutingPaths<'_> =
+        [&sorted_graph, &sorted_fused, &grouped_fused, &unsorted, &unsorted_native];
     decision.map_or_else(
         || tune(key, fallback, indices, stream, paths),
         |execution| execute(execution, indices, paths),
@@ -85,7 +95,7 @@ fn tune(
     fallback: RoutingExecution,
     indices: &Array,
     stream: &Stream,
-    paths: [&dyn Fn(&Array) -> Result<Array>; 4],
+    paths: RoutingPaths<'_>,
 ) -> Result<Array> {
     let started = Instant::now();
     let result = (|| {
@@ -94,6 +104,7 @@ fn tune(
             RoutingExecution::SortedFused,
             RoutingExecution::GroupedFused,
             RoutingExecution::Unsorted,
+            RoutingExecution::UnsortedNative,
         ];
         let patterns = route_patterns(key, indices)?;
         let routes = [indices, &patterns.balanced, &patterns.hot_set];
@@ -150,7 +161,7 @@ fn measure(
     execution: RoutingExecution,
     indices: &Array,
     stream: &Stream,
-    paths: [&dyn Fn(&Array) -> Result<Array>; 4],
+    paths: RoutingPaths<'_>,
 ) -> Result<Duration> {
     for _ in 0..stream.config().tuning.warmup_iterations {
         execute(execution, indices, paths)?.async_eval()?;
@@ -168,34 +179,15 @@ fn measure(
 fn execute(
     execution: RoutingExecution,
     indices: &Array,
-    [sorted_graph, sorted_fused, grouped_fused, unsorted]: [&dyn Fn(&Array) -> Result<Array>; 4],
+    [sorted_graph, sorted_fused, grouped_fused, unsorted, unsorted_native]: RoutingPaths<'_>,
 ) -> Result<Array> {
     match execution {
         RoutingExecution::Unsorted => unsorted(indices),
+        RoutingExecution::UnsortedNative => unsorted_native(indices),
         RoutingExecution::SortedGraph => sorted_graph(indices),
         RoutingExecution::SortedFused => sorted_fused(indices),
         RoutingExecution::GroupedFused => grouped_fused(indices),
     }
-}
-
-struct RoutePatterns {
-    balanced: Array,
-    hot_set: Array,
-}
-
-fn route_patterns(key: RoutingKey, indices: &Array) -> Result<RoutePatterns> {
-    let shape = indices.shape()?;
-    let assignments = elements(&shape)?;
-    let balanced = (0..assignments)
-        .map(|assignment| u32::try_from(assignment % key.experts).map_err(Error::from))
-        .collect::<Result<Vec<_>>>()?;
-    let hot_set = (0..assignments)
-        .map(|assignment| u32::try_from(assignment % key.top_k).map_err(Error::from))
-        .collect::<Result<Vec<_>>>()?;
-    Ok(RoutePatterns {
-        balanced: Array::from_u32(&balanced, &shape)?,
-        hot_set: Array::from_u32(&hot_set, &shape)?,
-    })
 }
 
 fn record(key: RoutingKey, execution: RoutingExecution, elapsed: Duration, stream: &Stream) {

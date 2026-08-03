@@ -105,13 +105,22 @@ fn decode_states(
 ) -> Result<Vec<NativeOutput>> {
     let token_ids = sample_batch(inputs, states, stream)?;
     token_ids.async_eval()?;
+    let tokens = token_ids.to_vec_u32_on_stream(stream)?;
+    if tokens.len() != states.len() {
+        return Err(Error::InvalidDecodeBatch("sampled token count does not match rows".into()));
+    }
+    token_ids.detach_graph()?;
+    stream.detach_paged_arena_graphs()?;
+    for (_, state) in states.iter() {
+        state.cache.detach_evaluated_graphs()?;
+    }
     let positions = states
         .iter()
         .map(|(_, state)| state.model_position().and_then(|position| Ok(i32::try_from(position)?)))
         .collect::<std::result::Result<Vec<_>, _>>()?;
     let mut caches = states.iter_mut().map(|(_, state)| &mut state.cache).collect::<Vec<_>>();
     let logits = model.forward_packed_decode(&token_ids, &mut caches, &positions, stream)?;
-    complete_batch(&logits, &token_ids, stream, states)
+    complete_batch(&logits, tokens, stream, states)
 }
 
 fn sample_batch(
@@ -143,7 +152,7 @@ fn sample_batch(
 
 fn complete_batch(
     logits: &Array,
-    token_ids: &Array,
+    tokens: Vec<u32>,
     stream: &crate::engine::Stream,
     states: &mut [(Uuid, SessionState)],
 ) -> Result<Vec<NativeOutput>> {
@@ -155,10 +164,6 @@ fn complete_batch(
         .map(|row| Ok(logits.slice(&[row, 0, 0], &[row + 1, 1, width], stream)?))
         .collect::<Result<Vec<_>>>()?;
     logits.async_eval()?;
-    let tokens = token_ids.to_vec_u32_on_stream(stream)?;
-    if tokens.len() != states.len() {
-        return Err(Error::InvalidDecodeBatch("sampled token count does not match rows".into()));
-    }
     Ok(states
         .iter_mut()
         .zip(rows)

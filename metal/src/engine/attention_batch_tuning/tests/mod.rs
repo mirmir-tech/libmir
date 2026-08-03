@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+mod batched_paged;
 mod prefill;
 mod support;
 
@@ -196,7 +197,8 @@ fn groups_native_paged_rows_by_page_span_without_requiring_a_view() -> Result<()
     let queries = [&query, &query];
     let contexts = [&first, &second];
     assert_eq!(compatible_groups(&queries, &contexts, false)?, [vec![0, 1]]);
-    let key = profile::key(&queries, &contexts, false)?.unwrap();
+    let key = profile::key(&queries, &contexts, false)?
+        .ok_or_else(|| Error::InvalidModel("native paged profile is missing".into()))?;
     assert!(!key.view);
     assert!(paged::batchable(&contexts));
     assert_eq!(

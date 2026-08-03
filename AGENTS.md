@@ -109,6 +109,17 @@ The target shape is:
   pipeline. The pipeline keeps the next token on MLX for the following
   decode step and is the preferred fast path when top-p and repetition penalty
   are inactive.
+- Metal decode materializes the sampled token before building the following
+  forward graph, then detaches the now-evaluated K/V roots without a second
+  stream synchronization. Session release synchronizes before pages are
+  recycled.
+- Metal prefill scheduling is architecture-aware: routed models use physical
+  waves of at most two rows and finish queued waves before streaming, while
+  dense models retain completion-first interleaving. Keep this as a backend
+  capability in the shared scheduler profile, not a model-name special case.
+- Decode cohort admission uses exactly `decode_batch_wait_us`. Never multiply
+  that window after a multi-row step or retain a hidden refill horizon; a
+  latency/occupancy tradeoff must be explicit or backend-measured.
 - The native MLX backend keeps an independent device-resident page-backed K/V
   state for each session, while dispatch remains serialized on one explicit GPU
   stream. Its longest-token-prefix LRU snapshots K/V and prompt logits as MLX
@@ -312,6 +323,24 @@ The target shape is:
 - Mirmir owns model assembly, page allocation/refcounts, copy-on-write snapshot
   policy and cache promotion. Mirtal owns generic graph operations, compiled
   graphs, checked MSL import/export and execution mechanics.
+- Metal exact-prefix hits may retain an unaligned terminal page and cached
+  logits. A continuation from an unaligned terminal or checkpoint must restore
+  only through the last complete K/V page and replay the partial page; never
+  attach shared-arena continuation to page copy-on-write through MLX
+  `slice_update`.
+- A non-quantized Metal K/V view uses a slice for one increasing physical page
+  run and one device `take` for multiple runs. Never rebuild fragmented shared
+  arenas as per-run slices plus concatenation inside every attention layer.
+- Metal packed-attention tuning retains a bounded causal runtime-discovery
+  budget after startup. An unseen multi-token batch/context shape must compare
+  row-wise and batched MLX SDPA once, persist the shape-keyed decision, and
+  never fall back permanently merely because readiness did not cover it.
+- An automatically resolved K/V block count is a shared capacity ceiling, not
+  a per-session Metal residency request. Never copy it into
+  `kv_reserve_tokens`; shared paged arenas grow from actual prompt demand.
+- Affine routed Metal MLPs tune BF16-cast and native GatherQMM-output execution
+  as complete shape/format candidates. Ordinary QMM retains its model dtype,
+  and neither choice may be selected by a model or device-name rule.
 - Affine quantization, dequantization, QMM/GatherQMM and generic graph operations
   are mirtal primitives. Sampling, routing, expert dispatch, embedding lookup,
   and RoPE scaling policy are Mirmir Rust compositions that must remain lazy and

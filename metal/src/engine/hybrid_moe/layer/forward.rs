@@ -87,7 +87,7 @@ impl HybridMoeLayer {
     }
 }
 
-fn emit_profile(
+pub(in crate::engine::hybrid_moe) fn emit_profile(
     output: &Array,
     stream: &Stream,
     layer: usize,

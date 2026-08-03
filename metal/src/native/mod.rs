@@ -10,5 +10,7 @@ mod session;
 mod step;
 mod trace;
 
-pub use backend::{MetalBackend, MetalGenerationStepOutput, MetalMemoryStats};
+pub use backend::{
+    MetalBackend, MetalGenerationStepOutput, MetalMemoryStats, MetalPrefillSchedule,
+};
 pub use prefill::MetalPrefillBatch;

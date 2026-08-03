@@ -52,8 +52,7 @@ pub(super) fn forward(
         } else if let Some(execution) = tuner.batch_attention_decision(key) {
             Some(execution)
         } else if tuner.config().mode == TuningMode::Startup
-            && (tuner.batch_attention_budget_available(key.causal)
-                || paged && tuner.batch_attention_runtime_budget_available(key.causal))
+            && tuner.batch_attention_runtime_budget_available(key.causal)
         {
             None
         } else {

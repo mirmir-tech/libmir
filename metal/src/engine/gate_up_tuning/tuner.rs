@@ -138,10 +138,6 @@ impl MetalTuner {
         self.startup_open && self.budgets.attention.available()
     }
 
-    pub const fn batch_attention_budget_available(&self, causal: bool) -> bool {
-        self.startup_open && self.budgets.batch_attention(causal).available()
-    }
-
     pub const fn batch_attention_runtime_budget_available(&self, causal: bool) -> bool {
         self.budgets.batch_attention(causal).available()
     }
@@ -152,6 +148,10 @@ impl MetalTuner {
 
     pub const fn routing_budget_available(&self) -> bool {
         self.startup_open && self.budgets.routing.available()
+    }
+
+    pub const fn routing_runtime_budget_available(&self) -> bool {
+        self.budgets.routing.available()
     }
 
     pub const fn finish_startup(&mut self) {

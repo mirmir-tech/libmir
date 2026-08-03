@@ -102,8 +102,8 @@ fn chunk(
     let mut tables = Vec::with_capacity(contexts.len());
     let mut dependencies = Vec::with_capacity(contexts.len());
     let mut capacities = Vec::with_capacity(contexts.len());
-    let mut keys = [first.key_pages.native(); 8];
-    let mut values = [first.value_pages.native(); 8];
+    let mut keys = [first.key_pages.native(); 12];
+    let mut values = [first.value_pages.native(); 12];
     for (row, context) in contexts.iter().enumerate() {
         let context = paged(context)?;
         tables.push(context.page_table.slice(&[0], &[pages], stream)?);
@@ -127,6 +127,10 @@ fn chunk(
             keys[5],
             keys[6],
             keys[7],
+            keys[8],
+            keys[9],
+            keys[10],
+            keys[11],
             values[0],
             values[1],
             values[2],
@@ -135,6 +139,10 @@ fn chunk(
             values[5],
             values[6],
             values[7],
+            values[8],
+            values[9],
+            values[10],
+            values[11],
             tables.native(),
             dependencies.native(),
             capacities.native(),

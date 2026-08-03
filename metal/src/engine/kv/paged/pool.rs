@@ -79,24 +79,29 @@ impl PagedArenaPool {
         head_dim: usize,
         format: KvPageFormat,
     ) -> Result<usize> {
-        let arenas = self
-            .arenas
-            .lock()
-            .map_err(|_| Error::InvalidModel("paged arena pool lock was poisoned".into()))?;
-        let Some(arena) = arenas.iter().find_map(|(key, arena)| {
-            (key.layer == layer
-                && key.kv_heads == kv_heads
-                && key.head_dim == head_dim
-                && key.format == format)
-                .then(|| arena.upgrade())
-                .flatten()
-        }) else {
+        let arena = {
+            let arenas = self
+                .arenas
+                .lock()
+                .map_err(|_| Error::InvalidModel("paged arena pool lock was poisoned".into()))?;
+            arenas.iter().find_map(|(key, arena)| {
+                (key.layer == layer
+                    && key.kv_heads == kv_heads
+                    && key.head_dim == head_dim
+                    && key.format == format)
+                    .then(|| arena.upgrade())
+                    .flatten()
+            })
+        };
+        let Some(arena) = arena else {
             return Ok(maximum);
         };
-        let arena = arena
-            .lock()
-            .map_err(|_| Error::InvalidModel("paged arena lock was poisoned".into()))?;
-        let used = arena.references.iter().filter(|count| **count > 0).count();
+        let used = {
+            let arena = arena
+                .lock()
+                .map_err(|_| Error::InvalidModel("paged arena lock was poisoned".into()))?;
+            arena.references.iter().filter(|count| **count > 0).count()
+        };
         Ok(maximum.saturating_sub(used))
     }
 
@@ -196,6 +201,11 @@ fn create(key: ArenaKey, capacity: usize, stream: &Stream) -> Result<Arena> {
 }
 
 #[cfg(test)]
+pub(super) fn same(left: &Arc<Mutex<Arena>>, right: &Arc<Mutex<Arena>>) -> bool {
+    Arc::ptr_eq(left, right)
+}
+
+#[cfg(test)]
 mod tests {
     use super::contiguous_free_start;
 
@@ -204,9 +214,4 @@ mod tests {
         assert_eq!(contiguous_free_start(&[1, 0, 0, 1, 0, 0, 0, 0], 3), Some(4));
         assert_eq!(contiguous_free_start(&[1, 0, 1, 0], 2), None);
     }
-}
-
-#[cfg(test)]
-pub(super) fn same(left: &Arc<Mutex<Arena>>, right: &Arc<Mutex<Arena>>) -> bool {
-    Arc::ptr_eq(left, right)
 }

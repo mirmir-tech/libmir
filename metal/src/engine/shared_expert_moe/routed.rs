@@ -127,4 +127,27 @@ impl RoutedGateUp {
             },
         }
     }
+
+    pub(super) fn gather_native(
+        &self,
+        input: &Array,
+        indices: &Array,
+        stream: &Stream,
+    ) -> Result<(Array, Array)> {
+        match self {
+            Self::Separate { gate, up, fused: None } => Ok((
+                gate.gather_native(input, indices, false, stream)?,
+                up.gather_native(input, indices, false, stream)?,
+            )),
+            Self::Fused { projection, width, interleaved } => {
+                let output = projection.gather_native(input, indices, false, stream)?;
+                if *interleaved {
+                    split_interleaved_last(&output, *width, stream)
+                } else {
+                    split_last(&output, *width, stream)
+                }
+            },
+            Self::Separate { .. } => self.gather(input, indices, false, stream),
+        }
+    }
 }

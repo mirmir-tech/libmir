@@ -147,7 +147,7 @@ impl Stream {
 
     pub(super) fn batched_paged_attention(
         &self,
-        inputs: [&mirtal::Array; 20],
+        inputs: [&mirtal::Array; 28],
         page_size: usize,
         context_tokens: usize,
         scale: f32,

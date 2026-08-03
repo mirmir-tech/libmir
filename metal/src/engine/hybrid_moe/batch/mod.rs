@@ -1,7 +1,13 @@
 mod attention;
 
+use std::time::Instant;
+
 use self::attention::packed_attention;
-use super::{HybridMoeLayer, feed_forward, model::HybridMoeModel};
+use super::{
+    HybridMoeLayer, feed_forward,
+    layer::{emit_profile, profile_components},
+    model::HybridMoeModel,
+};
 use crate::engine::{
     Array, DecoderCache, Error, KvCache, Result, Stream, decode_graph,
     decoder::{LoweredPackedLayer, forward_packed_layers},
@@ -15,9 +21,13 @@ impl HybridMoeModel {
         positions: &[i32],
         stream: &Stream,
     ) -> Result<Array> {
+        let profile = profile_components(stream);
+        let started = Instant::now();
         let hidden = self.embedding.lookup(token_ids, stream)?;
         let hidden = hidden.multiply_scalar(self.embed_scale, stream)?;
+        emit_batch_profile(&hidden, stream, "embedding", started, profile)?;
         let hidden = forward_packed_layers(&self.layers, hidden, caches, positions, stream)?;
+        let started = Instant::now();
         let hidden = hidden.rms_norm(&self.final_norm, 1.0e-6, stream)?;
         let logits = self.embedding.project(&hidden, stream)?;
         let logits = match self.softcap {
@@ -25,6 +35,7 @@ impl HybridMoeModel {
             None => logits,
         };
         decode_graph::export_once(&logits, stream)?;
+        emit_batch_profile(&logits, stream, "logits", started, profile)?;
         Ok(logits)
     }
 
@@ -67,6 +78,25 @@ impl HybridMoeModel {
     }
 }
 
+fn emit_batch_profile(
+    output: &Array,
+    stream: &Stream,
+    component: &str,
+    started: Instant,
+    profile: bool,
+) -> Result<()> {
+    if profile {
+        output.async_eval()?;
+        stream.synchronize()?;
+        tracing::debug!(
+            component,
+            milliseconds = started.elapsed().as_secs_f64() * 1_000.0,
+            "MLX hybrid MoE packed component profile"
+        );
+    }
+    Ok(())
+}
+
 impl LoweredPackedLayer for HybridMoeLayer {
     fn forward_packed_mixer(
         &self,
@@ -76,6 +106,8 @@ impl LoweredPackedLayer for HybridMoeLayer {
         positions: &[i32],
         stream: &Stream,
     ) -> Result<Array> {
+        let profile = profile_components(stream);
+        let started = Instant::now();
         let mut layer_caches = caches
             .iter_mut()
             .map(|cache| {
@@ -85,7 +117,11 @@ impl LoweredPackedLayer for HybridMoeLayer {
                     .ok_or_else(|| Error::InvalidModel(format!("missing cache for layer {index}")))
             })
             .collect::<Result<Vec<_>>>()?;
-        self.mix_packed(input, &mut layer_caches, positions, stream)
+        let output = self.mix_packed(input, &mut layer_caches, positions, stream)?;
+        if profile {
+            emit_profile(&output, stream, self.config.layer_index, "attention", started)?;
+        }
+        Ok(output)
     }
 
     fn forward_packed_feed_forward(
@@ -94,7 +130,13 @@ impl LoweredPackedLayer for HybridMoeLayer {
         _batch_size: usize,
         stream: &Stream,
     ) -> Result<Array> {
-        self.feed_forward_packed(input, stream)
+        let profile = profile_components(stream);
+        let started = Instant::now();
+        let output = self.feed_forward_packed(input, stream)?;
+        if profile {
+            emit_profile(&output, stream, self.config.layer_index, "feed_forward", started)?;
+        }
+        Ok(output)
     }
 }
 

@@ -31,10 +31,21 @@ struct WorkerStats {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    drop(
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .try_init(),
+    );
     let config = Config::parse()?;
     let mut runtime = RuntimeConfig::default();
     runtime.scheduler.max_batch_requests = config.sessions;
     runtime.scheduler.max_batch_tokens = runtime.scheduler.max_batch_tokens.max(config.sessions);
+    #[cfg(feature = "metal")]
+    {
+        runtime.metal.diagnostics.profile_components = enabled("MIRMIR_METAL_PROFILE_COMPONENTS");
+        runtime.metal.tuning.cache_directory =
+            env::var_os("MIRMIR_METAL_TUNING_CACHE").map(PathBuf::from);
+    }
     #[cfg(feature = "cuda")]
     {
         runtime.cuda.planning.moe_batch = config.moe_batch;
@@ -216,4 +227,9 @@ fn moe_batch_argument(index: usize) -> Result<CudaMoeBatchPolicy, Box<dyn std::e
 
 fn argument(index: usize, default: usize) -> Result<usize, Box<dyn std::error::Error>> {
     env::args().nth(index).map_or(Ok(default), |value| Ok(value.parse()?))
+}
+
+#[cfg(feature = "metal")]
+fn enabled(name: &str) -> bool {
+    matches!(env::var(name).as_deref(), Ok("1" | "true" | "TRUE" | "yes" | "YES"))
 }

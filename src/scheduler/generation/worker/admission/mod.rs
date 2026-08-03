@@ -11,7 +11,6 @@ use crate::{engine::PrefillExecutionProfile, scheduler::generation::Command};
 
 mod priority;
 
-const DECODE_COHORT_WAIT_MULTIPLIER: u64 = 25;
 const PREFILL_QUIET_WAIT_MULTIPLIER: u64 = 150;
 const PREFILL_HARD_WAIT_MULTIPLIER: u32 = 4;
 
@@ -21,11 +20,7 @@ impl Worker {
         if self.decode.is_empty() {
             return;
         }
-        let wait = Duration::from_micros(if self.refill_steps == 0 {
-            self.config.decode_batch_wait_us
-        } else {
-            self.config.decode_batch_wait_us.saturating_mul(DECODE_COHORT_WAIT_MULTIPLIER)
-        });
+        let wait = crate::scheduler::decode_admission_wait(self.config.decode_batch_wait_us);
         let deadline = Instant::now() + wait;
         while self.decode_needs_more() && !self.stopping {
             let remaining = deadline.saturating_duration_since(Instant::now());

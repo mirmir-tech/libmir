@@ -17,6 +17,14 @@ use crate::{
     },
 };
 
+const ROUTED_MAX_PREFILL_WAVE_ROWS: usize = 2;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MetalPrefillSchedule {
+    pub max_wave_rows: usize,
+    pub interleave_decode: bool,
+}
+
 pub struct MetalGenerationStepOutput {
     pub decode: Vec<DecodeOutput>,
     pub prefill: RuntimeResult<bool>,
@@ -30,6 +38,23 @@ impl MetalBackend {
     ) -> RuntimeResult<usize> {
         let lookup = model.id.clone();
         Ok(self.with_model(&lookup, move |loaded| Ok(loaded.info.prefill_step))?)
+    }
+
+    /// Returns the physical wave and streaming policy measured for the loaded
+    /// model architecture.
+    pub fn prefill_schedule(
+        &self,
+        model: &runtime::backend::ModelHandle,
+    ) -> RuntimeResult<MetalPrefillSchedule> {
+        let lookup = model.id.clone();
+        Ok(self.with_model(&lookup, move |loaded| {
+            let routed = loaded
+                .info
+                .decoder
+                .as_ref()
+                .is_some_and(|decoder| decoder.num_experts.is_some_and(|experts| experts > 0));
+            Ok(prefill_schedule(routed))
+        })?)
     }
 
     pub fn prepare_prefill_batch(
@@ -123,6 +148,20 @@ impl MetalBackend {
     }
 }
 
+const fn prefill_schedule(routed: bool) -> MetalPrefillSchedule {
+    if routed {
+        MetalPrefillSchedule {
+            max_wave_rows: ROUTED_MAX_PREFILL_WAVE_ROWS,
+            interleave_decode: false,
+        }
+    } else {
+        MetalPrefillSchedule {
+            max_wave_rows: usize::MAX,
+            interleave_decode: true,
+        }
+    }
+}
+
 fn step_model_id<'a>(
     decode: Option<&'a DecodeBatchRequest>,
     prefill: Option<&'a MetalPrefillBatch>,
@@ -140,10 +179,21 @@ fn step_model_id<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::step_model_id;
+    use super::{prefill_schedule, step_model_id};
 
     #[test]
     fn empty_generation_step_is_rejected() {
         assert!(step_model_id(None, None).is_err());
+    }
+
+    #[test]
+    fn routed_prefill_finishes_physical_waves_before_streaming() {
+        let routed = prefill_schedule(true);
+        assert_eq!(routed.max_wave_rows, 2);
+        assert!(!routed.interleave_decode);
+
+        let dense = prefill_schedule(false);
+        assert_eq!(dense.max_wave_rows, usize::MAX);
+        assert!(dense.interleave_decode);
     }
 }

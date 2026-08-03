@@ -74,6 +74,21 @@ impl ExpertWeights {
         }
     }
 
+    pub(super) fn gather_gate_up_native(
+        &self,
+        input: &Array,
+        indices: &Array,
+        stream: &Stream,
+    ) -> Result<(Array, Array)> {
+        match &self.gate_up {
+            ExpertGateUpWeights::Separate { gate, up } => Ok((
+                gate.gather_native(input, indices, false, stream)?,
+                up.gather_native(input, indices, false, stream)?,
+            )),
+            ExpertGateUpWeights::Fused { .. } => self.gather_gate_up(input, indices, false, stream),
+        }
+    }
+
     pub(super) const fn separate(&self) -> Option<(&BoundLinear, &BoundLinear)> {
         match &self.gate_up {
             ExpertGateUpWeights::Separate { gate, up } => Some((gate, up)),

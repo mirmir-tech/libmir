@@ -13,8 +13,10 @@ mirtal::metal_kernel! {
             queries: T,
             key_pages_0: T, key_pages_1: T, key_pages_2: T, key_pages_3: T,
             key_pages_4: T, key_pages_5: T, key_pages_6: T, key_pages_7: T,
+            key_pages_8: T, key_pages_9: T, key_pages_10: T, key_pages_11: T,
             value_pages_0: T, value_pages_1: T, value_pages_2: T, value_pages_3: T,
             value_pages_4: T, value_pages_5: T, value_pages_6: T, value_pages_7: T,
+            value_pages_8: T, value_pages_9: T, value_pages_10: T, value_pages_11: T,
             page_tables: u32, page_dependencies: u32, page_capacities: u32,
             attention_scale: scalar<f32>,
         ],
@@ -26,7 +28,7 @@ mirtal::metal_kernel! {
     }
 }
 
-pub(in crate::engine::kernels) fn new() -> Result<mirtal::MetalKernel<21, 1>> {
+pub(in crate::engine::kernels) fn new() -> Result<mirtal::MetalKernel<29, 1>> {
     Ok(paged_attention_batched()?)
 }
 
@@ -34,7 +36,7 @@ impl Kernels {
     pub(crate) fn batched_paged_attention(
         &self,
         stream: &mirtal::Stream,
-        inputs: [&mirtal::Array; 20],
+        inputs: [&mirtal::Array; 28],
         page_size: usize,
         context_tokens: usize,
         scale: f32,
@@ -49,7 +51,7 @@ impl Kernels {
         let pages = context_tokens.div_ceil(page_size);
         if batch == 0
             || batch > super::super::BATCHED_PAGED_ROWS
-            || inputs[17].len() != batch * pages
+            || inputs[25].len() != batch * pages
         {
             return Err(Error::InvalidModel("batched paged SDPA inputs are incompatible".into()));
         }
@@ -57,7 +59,8 @@ impl Kernels {
         let kernel_inputs = [
             inputs[0], inputs[1], inputs[2], inputs[3], inputs[4], inputs[5], inputs[6], inputs[7],
             inputs[8], inputs[9], inputs[10], inputs[11], inputs[12], inputs[13], inputs[14],
-            inputs[15], inputs[16], inputs[17], inputs[18], inputs[19], &scalar,
+            inputs[15], inputs[16], inputs[17], inputs[18], inputs[19], inputs[20], inputs[21],
+            inputs[22], inputs[23], inputs[24], inputs[25], inputs[26], inputs[27], &scalar,
         ];
         let [output] = self.paged_attention_batched.dispatch(
             stream,

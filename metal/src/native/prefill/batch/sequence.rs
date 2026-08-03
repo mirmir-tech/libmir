@@ -48,7 +48,7 @@ impl Sequence {
         let page_size = loaded.stream.config().kv_cache.block_size.max(1);
         state
             .cache
-            .plan_contiguous(request.prompt_tokens.len().saturating_add(page_size))?;
+            .plan_contiguous(request.prompt_tokens.len().saturating_add(page_size));
         let checkpoints = request
             .cache_checkpoints
             .iter()
@@ -193,6 +193,7 @@ impl Sequence {
             &loaded.info.manifest.id,
             &self.request.prompt_tokens[..self.position],
             state,
+            loaded.stream.config().kv_cache.block_size.max(1),
             bytes,
         )?;
         self.next_checkpoint += 1;

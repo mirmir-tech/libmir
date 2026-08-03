@@ -1,4 +1,10 @@
-use super::{HybridMoeLayerConfig, weights::LayerWeights};
+use std::time::Instant;
+
+use super::{
+    HybridMoeLayerConfig,
+    layer::{emit_profile, profile_components},
+    weights::LayerWeights,
+};
 use crate::engine::{
     Array, FusedExpertGateUp, FusedGateUp, Result, Stream, fusion_planner::FusionPlanner,
     gate_up_tuning, lowering::FeedForwardLowering,
@@ -16,8 +22,17 @@ pub(super) fn forward(
     fused_expert_gate_up: Option<&FusedExpertGateUp>,
     stream: &Stream,
 ) -> Result<Array> {
+    let profile = profile_components(stream) && input.shape()?[0] > 1;
+    let started = Instant::now();
     let dense = dense(input, weights, config, fused_gate_up, stream)?;
+    if profile {
+        emit_profile(&dense, stream, config.layer_index, "dense", started)?;
+    }
+    let started = Instant::now();
     let experts = experts(input, weights, config, fused_expert_gate_up, stream)?;
+    if profile {
+        emit_profile(&experts, stream, config.layer_index, "experts", started)?;
+    }
     dense.add(&experts, stream)
 }
 

@@ -9,7 +9,7 @@ use runtime::{
 
 use super::MetalBackend;
 use crate::{
-    MetalProgressEvent,
+    MetalConfig, MetalProgressEvent,
     native::{backend::worker::ModelClient, error::Result, trace},
 };
 
@@ -60,13 +60,7 @@ impl MetalBackend {
         );
         let _guard = span.enter();
         let mut config = (*self.config).clone();
-        if let Some((reserved_bytes, cache)) = reservation {
-            config.expert_fusion_reserve_bytes = Some(reserved_bytes);
-            config.kv_cache = cache;
-            config.cache.kv_reserve_tokens = usize::try_from(cache.block_count)
-                .unwrap_or(usize::MAX)
-                .saturating_mul(cache.block_size);
-        }
+        apply_reservation(&mut config, reservation);
         let client = ModelClient::spawn(
             manifest.clone(),
             Arc::new(config),
@@ -81,5 +75,30 @@ impl MetalBackend {
             id: manifest.id.clone(),
             backend: "mlx-native".into(),
         })
+    }
+}
+
+fn apply_reservation(config: &mut MetalConfig, reservation: Option<(usize, CacheConfig)>) {
+    if let Some((reserved_bytes, cache)) = reservation {
+        config.expert_fusion_reserve_bytes = Some(reserved_bytes);
+        config.kv_cache = cache;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn automatic_capacity_does_not_become_eager_session_residency() {
+        let mut config = MetalConfig::default();
+        let reserve_tokens = config.cache.kv_reserve_tokens;
+        let cache = CacheConfig::new(98_832);
+
+        apply_reservation(&mut config, Some((512, cache)));
+
+        assert_eq!(config.kv_cache, cache);
+        assert_eq!(config.cache.kv_reserve_tokens, reserve_tokens);
+        assert_eq!(config.expert_fusion_reserve_bytes, Some(512));
     }
 }

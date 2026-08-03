@@ -10,8 +10,14 @@ use runtime::{
 use super::{Engine, EngineInner};
 use crate::Result;
 
+mod profile;
+#[cfg(feature = "metal")]
+mod progress;
+pub use profile::PrefillExecutionProfile;
+#[cfg(feature = "metal")]
+use progress::metal_progress;
+
 const METAL_COMPLETION_ROUND_ROWS: usize = 4;
-const METAL_MAX_PREFILL_WAVE_ROWS: usize = 2;
 
 pub enum EnginePrefillBatch {
     #[cfg(feature = "cuda")]
@@ -23,21 +29,6 @@ pub enum EnginePrefillBatch {
 pub struct EngineGenerationStepOutput {
     pub decode: Vec<DecodeOutput>,
     pub prefill: Result<bool>,
-}
-
-#[derive(Clone, Copy)]
-pub struct PrefillExecutionProfile {
-    pub chunk_tokens: usize,
-    pub completion_round_tokens: usize,
-    pub max_prefill_wave_rows: usize,
-    pub block_tokens: usize,
-    pub resident_token_slots: usize,
-    pub limit_deep_prefill_waves: bool,
-    pub cached_prefix_replay_tokens: Option<usize>,
-    pub cached_prefix_checkpoint_replay_tokens: Option<usize>,
-    pub cached_prefix_completion_slack_tokens: usize,
-    pub defer_new_decode: bool,
-    pub collect_long_prefill_window: bool,
 }
 
 impl Engine {
@@ -72,11 +63,17 @@ impl Engine {
             #[cfg(feature = "metal")]
             EngineInner::Metal(_) => max_batch_tokens.div_ceil(METAL_COMPLETION_ROUND_ROWS),
         };
+        let metal_schedule = match &self.inner {
+            #[cfg(feature = "cuda")]
+            EngineInner::Cuda(_) => None,
+            #[cfg(feature = "metal")]
+            EngineInner::Metal(metal) => Some(metal.prefill_schedule(model)?),
+        };
         let max_prefill_wave_rows = match &self.inner {
             #[cfg(feature = "cuda")]
             EngineInner::Cuda(_) => usize::MAX,
             #[cfg(feature = "metal")]
-            EngineInner::Metal(_) => METAL_MAX_PREFILL_WAVE_ROWS,
+            EngineInner::Metal(_) => metal_schedule.map_or(usize::MAX, |value| value.max_wave_rows),
         };
         let limit_deep_prefill_waves = match &self.inner {
             #[cfg(feature = "cuda")]
@@ -102,6 +99,12 @@ impl Engine {
             #[cfg(feature = "metal")]
             EngineInner::Metal(_) => true,
         };
+        let interleave_prefill_decode = match &self.inner {
+            #[cfg(feature = "cuda")]
+            EngineInner::Cuda(_) => true,
+            #[cfg(feature = "metal")]
+            EngineInner::Metal(_) => metal_schedule.is_none_or(|value| value.interleave_decode),
+        };
         let collect_long_prefill_window = match &self.inner {
             #[cfg(feature = "cuda")]
             EngineInner::Cuda(_) => false,
@@ -119,6 +122,7 @@ impl Engine {
             cached_prefix_checkpoint_replay_tokens,
             cached_prefix_completion_slack_tokens,
             defer_new_decode,
+            interleave_prefill_decode,
             collect_long_prefill_window,
         })
     }
@@ -222,25 +226,6 @@ impl Engine {
                 EnginePrefillBatch::Cuda(_) => Err(batch_backend_mismatch()),
             },
         }
-    }
-}
-
-#[cfg(feature = "metal")]
-fn metal_progress(event: metal::MetalProgressEvent) -> ProgressEvent {
-    ProgressEvent {
-        stage: match event.stage {
-            metal::MetalProgressStage::LoadWeights => runtime::progress::ProgressStage::LoadWeights,
-            metal::MetalProgressStage::PrefillTokens => {
-                runtime::progress::ProgressStage::PrefillTokens
-            },
-        },
-        current: event.current,
-        total: event.total,
-        unit: match event.unit {
-            metal::MetalProgressUnit::Byte => runtime::progress::ProgressUnit::Byte,
-            metal::MetalProgressUnit::Token => runtime::progress::ProgressUnit::Token,
-        },
-        detail: event.detail,
     }
 }
 

@@ -5,6 +5,7 @@ use crate::engine::{
 };
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)] // Session-local K/V stays inline; boxing adds per-layer allocation.
 pub(super) enum HybridLinearLayerCache {
     Linear(GatedDeltaState),
     Full(KvCache),

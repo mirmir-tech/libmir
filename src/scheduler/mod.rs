@@ -24,8 +24,6 @@ pub use step::GenerationStepState;
 use self::response::DecodeResponse;
 use crate::{Engine, Result};
 
-const REFILL_WAIT_MULTIPLIER: u64 = 25;
-
 pub struct DecodeCoordinator {
     engine: Engine,
     model: ModelHandle,
@@ -39,7 +37,6 @@ struct State {
     waiting: VecDeque<Pending>,
     active: HashSet<uuid::Uuid>,
     running: bool,
-    refill_steps: usize,
 }
 
 struct Pending {
@@ -65,7 +62,6 @@ impl DecodeCoordinator {
                 waiting: VecDeque::new(),
                 active: HashSet::new(),
                 running: false,
-                refill_steps: 0,
             }),
             arrived: Condvar::new(),
         }
@@ -118,13 +114,11 @@ impl DecodeCoordinator {
                     return;
                 },
             };
-            let rows = batch.len();
             self.execute(batch);
             let Ok(mut state) = self.state.lock() else {
                 self.fail_waiting("decode admission lock is poisoned");
                 return;
             };
-            state.observe(rows);
             if state.waiting.is_empty() {
                 state.running = false;
                 return;
@@ -137,7 +131,7 @@ impl DecodeCoordinator {
             return Err(scheduler_error("decode admission lock is poisoned"));
         };
         let limit = self.limit();
-        let wait = state.refill_wait(self.config.decode_batch_wait_us);
+        let wait = decode_admission_wait(self.config.decode_batch_wait_us);
         let waited = self.arrived.wait_timeout_while(state, wait, |state| {
             let admitting = state.waiting.iter().any(|pending| pending.newly_active);
             state.waiting.len() < collection_target(state.active.len(), admitting, limit)
@@ -193,22 +187,8 @@ impl DecodeCoordinator {
     }
 }
 
-impl State {
-    fn observe(&mut self, rows: usize) {
-        if rows > 1 {
-            self.refill_steps = 64;
-        } else {
-            self.refill_steps = self.refill_steps.saturating_sub(1);
-        }
-    }
-
-    fn refill_wait(&self, base_us: u64) -> Duration {
-        Duration::from_micros(if self.refill_steps == 0 {
-            base_us
-        } else {
-            base_us.saturating_mul(REFILL_WAIT_MULTIPLIER)
-        })
-    }
+fn decode_admission_wait(microseconds: u64) -> Duration {
+    Duration::from_micros(microseconds)
 }
 
 fn complete_errors(responses: Vec<Arc<DecodeResponse>>, message: &str) {

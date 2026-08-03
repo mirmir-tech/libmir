@@ -229,12 +229,9 @@ fn round(value: usize, step: usize) -> usize {
 
 fn growth_target(current: usize, required: usize, step: usize, maximum: usize) -> Result<usize> {
     if required > maximum {
-        return Err(Error::InvalidModel(
-            format!(
-                "paged arena requires {required} pages but the configured K/V capacity is {maximum}"
-            )
-            .into(),
-        ));
+        return Err(Error::InvalidModel(format!(
+            "paged arena requires {required} pages but the configured K/V capacity is {maximum}"
+        )));
     }
     if required <= current {
         return Ok(current);

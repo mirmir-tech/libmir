@@ -146,6 +146,19 @@ impl BoundLinear {
         }
     }
 
+    pub(in crate::engine) fn gather_native(
+        &self,
+        input: &Array,
+        indices: &Array,
+        sorted: bool,
+        stream: &Stream,
+    ) -> Result<Array> {
+        match self {
+            Self::Affine(linear) => linear.gather_native(input, indices, sorted, stream),
+            _ => self.gather(input, indices, sorted, stream),
+        }
+    }
+
     pub(in crate::engine) fn route(
         &self,
         input: &Array,

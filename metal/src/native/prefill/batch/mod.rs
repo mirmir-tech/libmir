@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use runtime::backend::{PrefillRequest, SamplingLogits};
 
 use self::sequence::Sequence;
-use super::NativePrefill;
+use super::{NativePrefill, required_prefill_pages};
 use crate::{
     MetalProgressEvent,
     native::{
@@ -69,13 +69,11 @@ impl MetalPrefillBatch {
         let required_pages = sequences
             .iter()
             .map(|sequence| {
-                sequence
-                    .request
-                    .prompt_tokens
-                    .len()
-                    .div_ceil(page_size)
-                    .saturating_add(1)
-                    .saturating_sub(sequence.position.div_ceil(page_size))
+                required_prefill_pages(
+                    sequence.request.prompt_tokens.len(),
+                    sequence.position,
+                    page_size,
+                )
             })
             .sum();
         loaded.reserve_prefill_pages(required_pages)?;

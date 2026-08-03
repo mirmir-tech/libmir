@@ -73,14 +73,23 @@ impl QuantizedLinear {
         sorted_indices: bool,
         stream: &Stream,
     ) -> Result<Array> {
-        input
-            .gather_qmm(
-                &self.arrays,
-                indices,
-                mirtal::GatherQmmOptions { transpose: true, sorted_indices },
-                stream,
-            )?
+        self.gather_native(input, indices, sorted_indices, stream)?
             .astype_like(input, stream)
+    }
+
+    pub(in crate::engine) fn gather_native(
+        &self,
+        input: &Array,
+        indices: &Array,
+        sorted_indices: bool,
+        stream: &Stream,
+    ) -> Result<Array> {
+        input.gather_qmm(
+            &self.arrays,
+            indices,
+            mirtal::GatherQmmOptions { transpose: true, sorted_indices },
+            stream,
+        )
     }
 
     pub fn route(
