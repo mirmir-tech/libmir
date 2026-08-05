@@ -1,5 +1,4 @@
 use mircuda::{DeviceBuffer, bf16};
-use runtime::kv::BlockTable;
 
 use super::{
     AffineGatedFullAttentionConfig, CudaAffineGatedFullAttentionExecution,
@@ -7,12 +6,12 @@ use super::{
 };
 use crate::{
     BatchedPagedAttentionBf16, CudaBackend, Error, PagedDecodeBatch, PagedKvCache, Result,
+    kernels::BatchedSplitAttentionWorkspace,
 };
 
 #[derive(Debug)]
 pub(super) struct GatedFullAttentionBatch {
     cache: PagedKvCache,
-    paging: PagedDecodeBatch,
     attention: BatchedPagedAttentionBf16,
     rows: usize,
 }
@@ -21,27 +20,32 @@ impl CudaAffineGatedFullAttentionExecution {
     pub(crate) fn prepare_packed(
         &mut self,
         states: &[&mut CudaAffineGatedFullAttentionState],
-        tables: &[&BlockTable],
-        max_blocks: usize,
+        paging: &PagedDecodeBatch,
     ) -> Result<()> {
-        if states.len() != self.tokens || tables.len() != self.tokens {
+        if states.len() != self.tokens || paging.active() != self.tokens {
             return Err(Error::InvalidDecoderKernel("gated attention packed row mismatch"));
         }
         if self.batch.is_none() {
             self.batch = Some(GatedFullAttentionBatch::new(
-                &self.backend, states[0], self.config, max_blocks, self.tokens,
+                &self.backend,
+                states[0],
+                self.config,
+                paging,
+                self.tokens,
+                self.batch_workspace.take(),
             )?);
         }
         self.batch
             .as_mut()
             .ok_or(Error::InvalidDecoderKernel("gated attention batch was not prepared"))?
-            .prepare(states, tables)
+            .prepare(states, paging)
     }
 
     pub(crate) fn execute_prepared_packed(
         &mut self,
         input: &DeviceBuffer<bf16>,
         positions: &DeviceBuffer<u32>,
+        paging: &PagedDecodeBatch,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
         if positions.len() != 3 * self.tokens
@@ -58,6 +62,7 @@ impl CudaAffineGatedFullAttentionExecution {
                 &self.scratch.rotated_query,
                 &self.scratch.rotated_key,
                 &self.scratch.value,
+                paging,
                 &mut self.scratch.attended,
                 self.config.attention_scale,
             )?;
@@ -70,8 +75,8 @@ impl CudaAffineGatedFullAttentionExecution {
         self.output.execute(&self.scratch.gated, output)
     }
 
-    pub(crate) fn packed_capture_partitions(&self) -> usize {
-        self.batch.as_ref().map_or(0, GatedFullAttentionBatch::capture_partitions)
+    pub(crate) fn packed_capture_partitions(&self, paging: &PagedDecodeBatch) -> usize {
+        self.batch.as_ref().map_or(0, |batch| batch.capture_partitions(paging))
     }
 }
 
@@ -80,39 +85,40 @@ impl GatedFullAttentionBatch {
         backend: &CudaBackend,
         state: &CudaAffineGatedFullAttentionState,
         config: AffineGatedFullAttentionConfig,
-        max_blocks: usize,
+        paging: &PagedDecodeBatch,
         rows: usize,
+        workspace: Option<BatchedSplitAttentionWorkspace>,
     ) -> Result<Self> {
         Ok(Self {
             cache: state.cache.clone(),
-            paging: backend.prepare_paged_decode_batch(
-                state.cache.storage_spec(),
-                max_blocks,
-                rows,
-            )?,
-            attention: backend.prepare_batched_paged_attention_bf16(
+            attention: BatchedPagedAttentionBf16::new_with_workspace(
+                backend,
                 &state.cache,
                 config.query_heads,
-                max_blocks,
+                paging.max_blocks(),
                 rows,
+                workspace,
             )?,
             rows,
         })
     }
 
     pub(super) fn prepare(
-        &mut self,
+        &self,
         states: &[&mut CudaAffineGatedFullAttentionState],
-        tables: &[&BlockTable],
+        paging: &PagedDecodeBatch,
     ) -> Result<()> {
-        if states.len() != self.rows || tables.len() != self.rows {
+        if states.len() != self.rows || paging.active() != self.rows {
             return Err(Error::InvalidPagedKv("gated attention batch row mismatch"));
         }
         let storage = states[0].cache.storage_spec();
         if states.iter().any(|state| state.cache.storage_spec() != storage) {
             return Err(Error::InvalidPagedKv("gated attention batch cache geometry differs"));
         }
-        self.paging.prepare(tables)
+        if paging.cache_config() != storage.cache {
+            return Err(Error::InvalidPagedKv("gated attention paging geometry differs"));
+        }
+        Ok(())
     }
 
     pub(super) fn execute_prepared(
@@ -120,14 +126,15 @@ impl GatedFullAttentionBatch {
         query: &DeviceBuffer<bf16>,
         key: &DeviceBuffer<bf16>,
         value: &DeviceBuffer<bf16>,
+        paging: &PagedDecodeBatch,
         output: &mut DeviceBuffer<bf16>,
         scale: f32,
     ) -> Result<()> {
-        self.cache.store_batch(&self.paging, key, value)?;
-        self.attention.execute(query, &self.cache, &self.paging, output, None, scale)
+        self.cache.store_batch(paging, key, value)?;
+        self.attention.execute(query, &self.cache, paging, output, None, scale)
     }
 
-    fn capture_partitions(&self) -> usize {
-        self.attention.capture_partitions(&self.paging)
+    fn capture_partitions(&self, paging: &PagedDecodeBatch) -> usize {
+        self.attention.capture_partitions(paging)
     }
 }

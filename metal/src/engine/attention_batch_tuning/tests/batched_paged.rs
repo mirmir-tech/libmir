@@ -1,8 +1,33 @@
-use super::{BatchAttentionExecution, execute, support};
-use crate::engine::{Array, Result, Stream};
+use super::{BatchAttentionExecution, candidates, execute, support};
+use crate::engine::{Array, Result, Stream, attention_batch_tuning::BatchAttentionKey};
 
 #[test]
-fn executes_ten_paged_rows_in_one_batch() -> Result<()> {
+fn exposes_all_chunk_widths_to_the_tuner_at_batch_ten() {
+    let key = BatchAttentionKey {
+        batch: 10,
+        sequence: 1,
+        context_bucket: 2_048,
+        query_heads: 16,
+        kv_heads: 8,
+        head_dim: 256,
+        dtype: 5,
+        causal: false,
+        fragmented: true,
+        view: false,
+    };
+    assert_eq!(
+        candidates(key, true, true),
+        [
+            BatchAttentionExecution::PagedRows,
+            BatchAttentionExecution::PagedBatched4,
+            BatchAttentionExecution::PagedBatched8,
+            BatchAttentionExecution::PagedBatched12,
+        ]
+    );
+}
+
+#[test]
+fn executes_ten_paged_rows_with_each_chunk_width() -> Result<()> {
     const ROWS: usize = 10;
     const CONTEXT: usize = 257;
     const HEAD_DIM: usize = 32;
@@ -16,13 +41,13 @@ fn executes_ten_paged_rows_in_one_batch() -> Result<()> {
     let contexts = contexts.iter().collect::<Vec<_>>();
     let expected =
         execute(BatchAttentionExecution::PagedRows, &queries, &contexts, 0.125, false, &stream)?;
-    let actual = execute(
-        BatchAttentionExecution::PagedBatched,
-        &queries,
-        &contexts,
-        0.125,
-        false,
-        &stream,
-    )?;
-    support::assert_outputs_close(&expected, &actual, &stream)
+    for execution in [
+        BatchAttentionExecution::PagedBatched4,
+        BatchAttentionExecution::PagedBatched8,
+        BatchAttentionExecution::PagedBatched12,
+    ] {
+        let actual = execute(execution, &queries, &contexts, 0.125, false, &stream)?;
+        support::assert_outputs_close(&expected, &actual, &stream)?;
+    }
+    Ok(())
 }

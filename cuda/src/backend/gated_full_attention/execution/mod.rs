@@ -8,19 +8,29 @@ use super::{
     validation::validate_execution,
 };
 use crate::{
-    CudaBackend, CudaTensor, DenseRole, Error, Result,
-    backend::linear::CheckpointProjection,
-    kernels::{GatedAttentionSplit, Mrope, MropeSpec, ShiftedRmsNorm, SigmoidElementwiseBf16},
+    CudaBackend, DenseRole, Error, Result,
+    backend::linear::{CheckpointProjection, CheckpointProjectionWeight},
+    kernels::{
+        BatchedSplitAttentionWorkspace, GatedAttentionSplit, Mrope, MropeSpec, ProjectionPackSplit,
+        ShiftedRmsNorm, SigmoidElementwiseBf16,
+    },
 };
+
+mod packed;
+mod projection;
+
+use packed::prepare_packed_projection;
 
 #[derive(Debug)]
 pub struct CudaAffineGatedFullAttentionExecution {
     pub(super) backend: CudaBackend,
     pub(super) config: AffineGatedFullAttentionConfig,
     pub(super) tokens: usize,
-    query: CheckpointProjection,
-    key: CheckpointProjection,
-    value: CheckpointProjection,
+    query: Option<CheckpointProjection>,
+    key: Option<CheckpointProjection>,
+    value: Option<CheckpointProjection>,
+    packed_qkv: Option<CheckpointProjection>,
+    packed_split: Option<ProjectionPackSplit>,
     pub(super) output: CheckpointProjection,
     split: GatedAttentionSplit,
     query_norm: ShiftedRmsNorm,
@@ -31,6 +41,7 @@ pub struct CudaAffineGatedFullAttentionExecution {
     weights: AffineGatedFullAttentionWeights,
     pub(super) scratch: GatedAttentionScratch,
     pub(super) batch: Option<GatedFullAttentionBatch>,
+    pub(super) batch_workspace: Option<BatchedSplitAttentionWorkspace>,
     pub(super) prefill: Option<GatedFullAttentionPrefill>,
 }
 
@@ -39,6 +50,7 @@ impl CudaAffineGatedFullAttentionExecution {
         backend: &CudaBackend,
         config: AffineGatedFullAttentionConfig,
         weights: &AffineGatedFullAttentionWeights,
+        packed_qkv: Option<&CheckpointProjectionWeight>,
         tokens: usize,
     ) -> Result<Self> {
         if tokens == 0 {
@@ -49,6 +61,10 @@ impl CudaAffineGatedFullAttentionExecution {
         };
         let query_width = config.query_width()?;
         let key_value_width = config.key_value_width()?;
+        let projected_query = checked(query_width, 2)?;
+        let (packed, packed_split) = prepare_packed_projection(
+            backend, config, tokens, packed_qkv, projected_query, key_value_width,
+        )?;
         let norm = |heads| {
             ShiftedRmsNorm::compile(
                 &backend.inner.compiler,
@@ -76,24 +92,38 @@ impl CudaAffineGatedFullAttentionExecution {
             backend: backend.clone(),
             config,
             tokens,
-            query: projection(
-                config.hidden_size,
-                checked(query_width, 2)?,
-                DenseRole::AttentionQkv,
-                &weights.query,
-            )?,
-            key: projection(
-                config.hidden_size,
-                key_value_width,
-                DenseRole::AttentionQkv,
-                &weights.key,
-            )?,
-            value: projection(
-                config.hidden_size,
-                key_value_width,
-                DenseRole::AttentionQkv,
-                &weights.value,
-            )?,
+            query: if packed.is_none() {
+                Some(projection(
+                    config.hidden_size,
+                    projected_query,
+                    DenseRole::AttentionQkv,
+                    &weights.query,
+                )?)
+            } else {
+                None
+            },
+            key: if packed.is_none() {
+                Some(projection(
+                    config.hidden_size,
+                    key_value_width,
+                    DenseRole::AttentionQkv,
+                    &weights.key,
+                )?)
+            } else {
+                None
+            },
+            value: if packed.is_none() {
+                Some(projection(
+                    config.hidden_size,
+                    key_value_width,
+                    DenseRole::AttentionQkv,
+                    &weights.value,
+                )?)
+            } else {
+                None
+            },
+            packed_qkv: packed,
+            packed_split,
             output: projection(
                 query_width,
                 config.hidden_size,
@@ -115,8 +145,9 @@ impl CudaAffineGatedFullAttentionExecution {
                 checked(tokens, query_width)?,
             )?,
             weights: weights.clone(),
-            scratch: GatedAttentionScratch::new(backend, config, tokens)?,
+            scratch: GatedAttentionScratch::new(backend, config, tokens, packed_qkv.is_some())?,
             batch: None,
+            batch_workspace: None,
             prefill: None,
         })
     }
@@ -191,52 +222,4 @@ impl CudaAffineGatedFullAttentionExecution {
         )?;
         self.output.execute(&self.scratch.gated, output)
     }
-
-    pub(super) fn project_and_transform(
-        &mut self,
-        input: &DeviceBuffer<bf16>,
-        positions: &DeviceBuffer<u32>,
-    ) -> Result<()> {
-        let stream = &self.backend.inner.stream;
-        self.query.execute(input, &mut self.scratch.query_projected)?;
-        self.split.execute(
-            stream,
-            &self.scratch.query_projected,
-            &mut self.scratch.query,
-            &mut self.scratch.gate,
-        )?;
-        self.key.execute(input, &mut self.scratch.key)?;
-        self.value.execute(input, &mut self.scratch.value)?;
-        self.query_norm.execute(
-            stream,
-            &self.scratch.query,
-            bf16_tensor(&self.weights.query_norm)?,
-            &mut self.scratch.normalized_query,
-        )?;
-        self.key_norm.execute(
-            stream,
-            &self.scratch.key,
-            bf16_tensor(&self.weights.key_norm)?,
-            &mut self.scratch.normalized_key,
-        )?;
-        self.query_rope.execute(
-            stream,
-            &self.scratch.normalized_query,
-            positions,
-            &mut self.scratch.rotated_query,
-        )?;
-        self.key_rope.execute(
-            stream,
-            &self.scratch.normalized_key,
-            positions,
-            &mut self.scratch.rotated_key,
-        )
-    }
-}
-
-fn bf16_tensor(tensor: &CudaTensor) -> Result<&DeviceBuffer<bf16>> {
-    tensor.as_bf16().ok_or_else(|| Error::DTypeMismatch {
-        name: tensor.name().into(),
-        expected: "BF16",
-    })
 }

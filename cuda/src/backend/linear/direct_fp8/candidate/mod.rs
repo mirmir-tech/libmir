@@ -1,11 +1,17 @@
 use std::sync::Arc;
 
-use mircuda::{DeviceBuffer, ScaledFp8Scale, Stream, bf16};
+use mircuda::{DeviceBuffer, ScaledFp8Scale, ScaledFp8Tile, Stream, bf16};
+
+mod admission;
+
+pub(super) use admission::tensor_core_admitted;
+use admission::{bias, cublaslt_admitted};
 
 use super::{
     CudaBackend, CudaTensor, DirectE5M2WeightOnlyTensorCoreLinear, DirectFp8Activation,
-    DirectFp8CheckpointWeight, DirectFp8Format, DirectFp8Linear, DirectFp8Scale, DirectFp8Scales,
-    DirectFp8Spec, DirectFp8TensorCoreLinear, Error, Result, unsupported,
+    DirectFp8CachedLinear, DirectFp8CheckpointWeight, DirectFp8CublasLtLinear, DirectFp8Format,
+    DirectFp8Linear, DirectFp8Scale, DirectFp8Scales, DirectFp8Spec, DirectFp8TensorCoreLinear,
+    Error, Result, unsupported,
 };
 use crate::backend::tuning::DirectFp8ProjectionExecution;
 
@@ -14,11 +20,12 @@ pub(super) struct Candidate {
     pub(super) execution: DirectFp8ProjectionExecution,
     operation: Operation,
 }
-
 #[derive(Clone, Debug)]
 enum Operation {
     Portable(DirectFp8Linear),
+    PortableCached(DirectFp8CachedLinear),
     TensorCore(Arc<DirectFp8TensorCoreLinear>),
+    CublasLt(Arc<DirectFp8CublasLtLinear>),
     E5M2TensorCore(DirectE5M2WeightOnlyTensorCoreLinear),
 }
 
@@ -30,8 +37,10 @@ impl Candidate {
         has_bias: bool,
         execution: DirectFp8ProjectionExecution,
     ) -> Result<Self> {
-        if execution == DirectFp8ProjectionExecution::TensorCore
-            && !tensor_core_admitted(backend, spec, tensor_core_scale)
+        if matches!(
+            execution,
+            DirectFp8ProjectionExecution::TensorCore | DirectFp8ProjectionExecution::TensorCoreWide
+        ) && !tensor_core_admitted(backend, spec, tensor_core_scale)
         {
             return Err(Error::InvalidExecutionPlan("direct FP8 Tensor Core is unavailable"));
         }
@@ -39,7 +48,19 @@ impl Candidate {
             DirectFp8ProjectionExecution::Portable => {
                 Operation::Portable(DirectFp8Linear::compile(&backend.inner.compiler, spec)?)
             },
-            DirectFp8ProjectionExecution::TensorCore => {
+            DirectFp8ProjectionExecution::PortableCached => {
+                if tensor_core_scale != Some(ScaledFp8Scale::F32) {
+                    return Err(Error::InvalidExecutionPlan(
+                        "cached direct FP8 requires F32 scales",
+                    ));
+                }
+                Operation::PortableCached(DirectFp8CachedLinear::compile(
+                    &backend.inner.compiler,
+                    spec,
+                )?)
+            },
+            DirectFp8ProjectionExecution::TensorCore
+            | DirectFp8ProjectionExecution::TensorCoreWide => {
                 if spec.format == DirectFp8Format::E5M2 {
                     Operation::E5M2TensorCore(DirectE5M2WeightOnlyTensorCoreLinear::compile(
                         &backend.inner.compiler,
@@ -56,13 +77,33 @@ impl Candidate {
                             "direct FP8 Tensor Core scale dtype is unavailable",
                         ))?,
                         has_bias,
+                        match execution {
+                            DirectFp8ProjectionExecution::TensorCore => ScaledFp8Tile::M16N64K128,
+                            DirectFp8ProjectionExecution::TensorCoreWide => {
+                                ScaledFp8Tile::M16N128K64
+                            },
+                            _ => unreachable!(),
+                        },
                     )?))
                 }
+            },
+            DirectFp8ProjectionExecution::CublasLt => {
+                if !cublaslt_admitted(spec, tensor_core_scale, has_bias) {
+                    return Err(Error::InvalidExecutionPlan("direct FP8 cuBLASLt is unavailable"));
+                }
+                Operation::CublasLt(Arc::new(DirectFp8CublasLtLinear::prepare(
+                    &backend.inner.compiler,
+                    &backend.inner.context,
+                    &backend.inner.pool,
+                    &backend.inner.stream,
+                    spec,
+                )?))
             },
         };
         Ok(Self { execution, operation })
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) fn execute(
         &self,
         stream: &Stream,
@@ -108,6 +149,14 @@ impl Candidate {
                     bias,
                     output,
                 )?),
+                Operation::PortableCached(operation) => Ok(operation.execute(
+                    stream,
+                    input,
+                    weight_buffer,
+                    DirectFp8Scales { weight: scales, activation: input_scale },
+                    bias,
+                    output,
+                )?),
                 Operation::TensorCore(operation) => Ok(operation.execute_f32_scales(
                     stream,
                     input,
@@ -115,6 +164,16 @@ impl Candidate {
                     scales,
                     weight.input_scale.as_ref().and_then(CudaTensor::as_f32),
                     bias,
+                    output,
+                )?),
+                Operation::CublasLt(operation) => Ok(operation.execute(
+                    stream,
+                    input,
+                    weight_buffer,
+                    scales,
+                    weight.input_scale.as_ref().and_then(CudaTensor::as_f32).ok_or(
+                        Error::InvalidExecutionPlan("direct FP8 cuBLASLt input scale is missing"),
+                    )?,
                     output,
                 )?),
                 Operation::E5M2TensorCore(_) => Err(Error::InvalidExecutionPlan(
@@ -134,6 +193,9 @@ impl Candidate {
                     bias,
                     output,
                 )?),
+                Operation::PortableCached(_) => {
+                    Err(Error::InvalidExecutionPlan("cached direct FP8 requires F32 scales"))
+                },
                 Operation::TensorCore(operation) => Ok(operation.execute_bf16_scales(
                     stream,
                     input,
@@ -143,6 +205,9 @@ impl Candidate {
                     bias,
                     output,
                 )?),
+                Operation::CublasLt(_) => {
+                    Err(Error::InvalidExecutionPlan("direct FP8 cuBLASLt requires F32 scales"))
+                },
                 Operation::E5M2TensorCore(_) => Err(Error::InvalidExecutionPlan(
                     "scaled E5M2 reached the weight-only Tensor Core path",
                 )),
@@ -161,51 +226,18 @@ impl Candidate {
                 bias,
                 output,
             )?),
+            Operation::PortableCached(_) => {
+                Err(unsupported(weight.weight.name(), "cached direct FP8 requires scaled E4M3"))
+            },
             Operation::TensorCore(_) => {
                 Err(unsupported(weight.weight.name(), "cannot use an identity Tensor Core scale"))
+            },
+            Operation::CublasLt(_) => {
+                Err(unsupported(weight.weight.name(), "cannot use an identity cuBLASLt FP8 scale"))
             },
             Operation::E5M2TensorCore(operation) => {
                 Ok(operation.execute(stream, input, weight_buffer, bias, output)?)
             },
         }
     }
-}
-
-fn bias(weight: &DirectFp8CheckpointWeight) -> Result<Option<&DeviceBuffer<bf16>>> {
-    weight
-        .bias
-        .as_ref()
-        .map(|value| {
-            value.as_bf16().ok_or_else(|| Error::DTypeMismatch {
-                name: value.name().into(),
-                expected: "BF16",
-            })
-        })
-        .transpose()
-}
-
-pub(super) fn tensor_core_admitted(
-    backend: &CudaBackend,
-    spec: DirectFp8Spec,
-    scale: Option<ScaledFp8Scale>,
-) -> bool {
-    let scaled_e4m3 = scale.is_some()
-        && spec.format == DirectFp8Format::E4M3
-        && matches!(
-            (spec.scale, spec.activation),
-            (DirectFp8Scale::OutputChannel, DirectFp8Activation::DynamicE4M3Token)
-                | (
-                    DirectFp8Scale::Tensor | DirectFp8Scale::OutputChannel,
-                    DirectFp8Activation::StaticE4M3Tensor
-                )
-        );
-    let weight_only_e5m2 = scale.is_none()
-        && spec.format == DirectFp8Format::E5M2
-        && spec.scale == DirectFp8Scale::Tensor
-        && spec.activation == DirectFp8Activation::Bf16
-        && spec.input_features.is_multiple_of(16)
-        && spec.output_features.is_multiple_of(16);
-    backend.inner.device.compute_capability.0 == 12
-        && !spec.inverse_scale
-        && (scaled_e4m3 || weight_only_e5m2)
 }

@@ -2,10 +2,11 @@ use std::time::Instant;
 
 use runtime::backend::{PrefillRequest, SamplingLogits};
 
-use super::super::NativePrefill;
+use super::{super::NativePrefill, reservation};
 use crate::native::{
     error::{Error, Result},
     model::LoadedModel,
+    prefix::RestoredPrefix,
     session::SessionState,
     step,
 };
@@ -19,23 +20,22 @@ pub(super) struct Sequence {
     checkpoints: Vec<usize>,
     next_checkpoint: usize,
     cached_logits: Option<crate::engine::Array>,
+    pub(super) page_reservation_pending: bool,
     pub output: Option<NativePrefill>,
     pub started: Instant,
 }
 
 impl Sequence {
     pub fn prepare(
-        loaded: &mut LoadedModel,
+        loaded: &LoadedModel,
         request: PrefillRequest,
         execution_sampling: SamplingLogits,
+        restored: Option<RestoredPrefix>,
     ) -> Result<Self> {
         let model = loaded.execution.decoder()?;
         if request.prompt_tokens.is_empty() {
             return Err(Error::EmptyPrompt);
         }
-        let restored = loaded
-            .prefixes
-            .restore_longest(&loaded.info.manifest.id, &request.prompt_tokens)?;
         let (mut state, position, cached_logits) = if let Some((state, logits)) = restored {
             let position = state.position;
             (state, position, logits)
@@ -66,6 +66,7 @@ impl Sequence {
             checkpoints,
             next_checkpoint: 0,
             cached_logits,
+            page_reservation_pending: true,
             output: None,
             started: Instant::now(),
         })
@@ -94,6 +95,12 @@ impl Sequence {
         sequences: &mut [&mut Self],
         count: usize,
     ) -> Result<()> {
+        let page_size = loaded.stream.config().kv_cache.block_size.max(1);
+        let required = sequences
+            .iter()
+            .map(|sequence| reservation::required(sequence, page_size))
+            .sum();
+        loaded.reserve_prefill_pages(required)?;
         let positions = sequences.iter().map(|sequence| sequence.position).collect::<Vec<_>>();
         let tokens = sequences
             .iter()
@@ -121,6 +128,7 @@ impl Sequence {
             state.cache.detach_evaluated_graphs()?;
         }
         for sequence in sequences {
+            sequence.page_reservation_pending = false;
             sequence.position += count;
             sequence.cache_checkpoint(loaded)?;
         }
@@ -136,6 +144,7 @@ impl Sequence {
         }
         let prefix_len = prompt_len - 1;
         if self.position < prefix_len {
+            reservation::ensure(self, loaded)?;
             let remaining = prefix_len - self.position;
             let count = loaded
                 .prefill_chunk_len(self.position, remaining)
@@ -151,10 +160,12 @@ impl Sequence {
             state_root.async_eval()?;
             loaded.settle_prefill_graph()?;
             state.cache.detach_evaluated_graphs()?;
+            self.page_reservation_pending = false;
             self.position += count;
             self.cache_checkpoint(loaded)?;
             return Ok(count);
         }
+        reservation::ensure(self, loaded)?;
         let model = loaded.execution.decoder()?;
         let last = self.request.prompt_tokens[prefix_len];
         let state = self
@@ -169,6 +180,7 @@ impl Sequence {
             self.position,
             self.execution_sampling == SamplingLogits::None,
         )?;
+        self.page_reservation_pending = false;
         self.complete(loaded, logits)?;
         Ok(1)
     }

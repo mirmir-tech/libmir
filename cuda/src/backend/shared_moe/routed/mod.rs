@@ -7,7 +7,7 @@ use super::{
     weights::{AffineSharedExpertMoeWeights, RoutedSharedMoeWeights},
 };
 use crate::{
-    AffineQuantizedConfig, AffineRouterBf16, CudaBackend, DenseRole, Result,
+    AffineQuantizedConfig, AffineRouterBf16, CudaBackend, DenseRole, ExecutionPhase, Result,
     backend::linear::{CheckpointProjection, SelectedDenseMoeBf16},
     kernels::RouterUnitTopK,
 };
@@ -15,6 +15,7 @@ use crate::{
 mod affine;
 mod mxfp;
 mod nvfp4;
+mod parallel;
 
 #[derive(Debug)]
 pub(super) enum SharedRoutedExecution {
@@ -56,6 +57,7 @@ impl SharedRoutedExecution {
         config: AffineSharedExpertMoeConfig,
         weights: &AffineSharedExpertMoeWeights,
         tokens: usize,
+        phase: ExecutionPhase,
     ) -> Result<Self> {
         match &weights.routed {
             RoutedSharedMoeWeights::Affine(weights) => Ok(Self::Affine {
@@ -116,11 +118,11 @@ impl SharedRoutedExecution {
             RoutedSharedMoeWeights::MxFp8(experts) => {
                 mxfp::mxfp8(backend, config, weights, experts, tokens)
             },
-            RoutedSharedMoeWeights::NvFp4(expert_weights) => {
-                nvfp4::NvFp4RoutedExecution::new(backend, config, weights, expert_weights, tokens)
-                    .map(Box::new)
-                    .map(Self::NvFp4)
-            },
+            RoutedSharedMoeWeights::NvFp4(expert_weights) => nvfp4::NvFp4RoutedExecution::new(
+                backend, config, weights, expert_weights, tokens, phase,
+            )
+            .map(Box::new)
+            .map(Self::NvFp4),
         }
     }
 

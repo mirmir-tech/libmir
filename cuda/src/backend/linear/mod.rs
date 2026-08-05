@@ -47,7 +47,11 @@ pub use nvfp4::{
     NvFp4WeightOnlyWeight, SelectedNvFp4LinearBf16, SelectedNvFp4MoeBf16,
     SelectedNvFp4TensorCoreMoeBf16,
 };
-pub(in crate::backend) use nvfp4::{BucketedNvFp4Scratch, BucketedNvFp4ScratchConfig};
+pub(in crate::backend) use nvfp4::{
+    BucketedNvFp4Scratch, BucketedNvFp4ScratchConfig, MarlinNvFp4Bf16Linear, MarlinNvFp4MoeBf16,
+    MarlinNvFp4Scratch, MarlinNvFp4ScratchConfig, SelectedNvFp4WeightOnlyTensorCoreMoeBf16,
+    TiledSelectedNvFp4MoeBf16,
+};
 pub use pack::{Bf16LinearPack, Bf16LinearPackWeights};
 pub(in crate::backend) use packed_int8::CompressedInt8Embedding;
 pub use packed_int8::{CompressedInt8Bf16Linear, CompressedInt8Weight};

@@ -1,26 +1,25 @@
 use mircuda::{DeviceBuffer, bf16};
-use runtime::kv::BlockTable;
 
 use super::{CudaAffineGatedFullAttentionMoeExecution, CudaAffineGatedFullAttentionState};
-use crate::{Error, Result};
+use crate::{Error, PagedDecodeBatch, Result};
 
 impl CudaAffineGatedFullAttentionMoeExecution {
     pub(crate) fn prepare_packed(
         &mut self,
         input: &DeviceBuffer<bf16>,
         states: &[&mut CudaAffineGatedFullAttentionState],
-        tables: &[&BlockTable],
-        max_blocks: usize,
+        paging: &PagedDecodeBatch,
         output: &DeviceBuffer<bf16>,
     ) -> Result<()> {
         self.validate(input, output)?;
-        self.attention.prepare_packed(states, tables, max_blocks)
+        self.attention.prepare_packed(states, paging)
     }
 
     pub(crate) fn execute_prepared_packed(
         &mut self,
         input: &DeviceBuffer<bf16>,
         positions: &DeviceBuffer<u32>,
+        paging: &PagedDecodeBatch,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
         let stream = &self.backend.inner.stream;
@@ -33,6 +32,7 @@ impl CudaAffineGatedFullAttentionMoeExecution {
         self.attention.execute_prepared_packed(
             &self.scratch.normalized,
             positions,
+            paging,
             &mut self.scratch.attention,
         )?;
         self.residual
@@ -47,8 +47,8 @@ impl CudaAffineGatedFullAttentionMoeExecution {
         self.residual.add(stream, &self.scratch.residual, &self.scratch.moe, output)
     }
 
-    pub(crate) fn packed_capture_partitions(&self) -> usize {
-        self.attention.packed_capture_partitions()
+    pub(crate) fn packed_capture_partitions(&self, paging: &PagedDecodeBatch) -> usize {
+        self.attention.packed_capture_partitions(paging)
     }
 }
 

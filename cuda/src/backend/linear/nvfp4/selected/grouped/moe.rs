@@ -83,6 +83,13 @@ impl GroupedNvFp4MoeBf16 {
             MoeExecution::DirectW4A4
             | MoeExecution::HybridW4A4
             | MoeExecution::SelectedWeightOnly
+            | MoeExecution::SelectedWeightOnlyTensorCore
+            | MoeExecution::SelectedWeightOnlyTiled2
+            | MoeExecution::SelectedWeightOnlyTiled4
+            | MoeExecution::SelectedWeightOnlyTiled8
+            | MoeExecution::MarlinWeightOnlyN128K128
+            | MoeExecution::MarlinWeightOnlyN128K64
+            | MoeExecution::MarlinWeightOnlyN64K128
             | MoeExecution::Bucketed => {
                 return Err(Error::InvalidExecutionPlan(
                     "decode MoE cannot use bucketed execution",

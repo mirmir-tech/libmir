@@ -11,6 +11,6 @@ pub use config::{
 };
 pub use native::{
     MetalBackend, MetalGenerationStepOutput, MetalMemoryStats, MetalPrefillBatch,
-    MetalPrefillSchedule,
+    MetalPrefillCohort, MetalPrefillSchedule,
 };
 pub use progress::{MetalProgressEvent, MetalProgressStage, MetalProgressUnit};

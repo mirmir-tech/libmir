@@ -23,11 +23,23 @@ impl CudaAutoTuner {
     }
 
     pub(crate) fn claim_attention(&self, request: AttentionProfileRequest) -> bool {
+        self.claim_attention_inner(request, false)
+    }
+
+    pub(crate) fn claim_dynamic_attention(&self, request: AttentionProfileRequest) -> bool {
+        self.claim_attention_inner(request, true)
+    }
+
+    fn claim_attention_inner(
+        &self,
+        request: AttentionProfileRequest,
+        allow_after_startup: bool,
+    ) -> bool {
         let Ok(mut state) = self.inner.state.lock() else {
             return false;
         };
         self.inner.config.mode == super::CudaTuningMode::Startup
-            && !state.sealed
+            && (allow_after_startup || !state.sealed)
             && state.budget.available()
             && !state.attention.contains_key(&request)
             && state.attention_inflight.insert(request)
@@ -85,6 +97,7 @@ pub(super) fn stored_entries(
             entry.request.plan.head_dim,
             entry.request.plan.value_head_dim,
             entry.request.plan.max_context_tokens,
+            entry.request.batch_rows,
             entry.request.block_size,
             entry.request.window_tokens,
         )

@@ -25,18 +25,15 @@ fn transforms_gated_delta_projections_on_cuda() -> Result<()> {
     mixed_values.extend(vec![3.0; 32]);
     mixed_values.extend([1.0, 2.0, 3.0, 4.0]);
     let mixed = copy(&backend, &bf16s(&mixed_values))?;
-    let mut query = allocate(&backend, 32)?;
-    let mut key = allocate(&backend, 32)?;
     let mut value = allocate(&backend, 4)?;
-    transforms.split(&backend.inner.stream, &mixed, &mut query, &mut key, &mut value)?;
     let mut normalized_query = allocate(&backend, 32)?;
     let mut normalized_key = allocate(&backend, 32)?;
-    transforms.normalize_qk(
+    transforms.split_normalize(
         &backend.inner.stream,
-        &query,
-        &key,
+        &mixed,
         &mut normalized_query,
         &mut normalized_key,
+        &mut value,
     )?;
     let gate = copy(&backend, &bf16s(&[1.0; 4]))?;
     let weight = copy(&backend, &bf16s(&[0.0; 4]))?;

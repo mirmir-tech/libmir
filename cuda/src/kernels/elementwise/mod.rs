@@ -46,7 +46,6 @@ cuda_export!(
         layout: u32, activation: u32,
     )
 );
-
 #[derive(Clone, Debug)]
 pub struct ElementwiseBf16 {
     add: TypedKernel<AddKernel>,
@@ -132,6 +131,29 @@ impl ElementwiseBf16 {
         columns: usize,
         activation: GatedActivation,
     ) -> Result<()> {
+        self.gated_packed(stream, input, output, columns, activation, 2)
+    }
+
+    pub fn gated_concatenated(
+        &self,
+        stream: &Stream,
+        input: &DeviceBuffer<bf16>,
+        output: &mut DeviceBuffer<bf16>,
+        columns: usize,
+        activation: GatedActivation,
+    ) -> Result<()> {
+        self.gated_packed(stream, input, output, columns, activation, 0)
+    }
+
+    fn gated_packed(
+        &self,
+        stream: &Stream,
+        input: &DeviceBuffer<bf16>,
+        output: &mut DeviceBuffer<bf16>,
+        columns: usize,
+        activation: GatedActivation,
+        layout: u32,
+    ) -> Result<()> {
         let packed_elements = self
             .elements
             .checked_mul(2)
@@ -145,10 +167,16 @@ impl ElementwiseBf16 {
             GatedActivation::GeluTanh => 0,
             GatedActivation::Silu => 1,
         };
+        let threads = 256_usize;
+        let rows = self.elements / columns;
         Ok(self.packed_gated.launch(
             stream,
-            self.launch()?,
-            (input, input, output, u32::try_from(columns)?, self.count()?, 2, activation),
+            LaunchConfig {
+                grid: (u32::try_from(columns.div_ceil(threads))?, u32::try_from(rows)?, 1),
+                block: (u32::try_from(threads)?, 1, 1),
+                shared_memory_bytes: 0,
+            },
+            (input, input, output, u32::try_from(columns)?, self.count()?, layout, activation),
         )?)
     }
 

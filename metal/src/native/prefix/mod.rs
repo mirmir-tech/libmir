@@ -10,6 +10,13 @@ use super::{
 };
 use crate::engine::Array;
 
+pub(super) type RestoredPrefix = (SessionState, Option<Array>);
+
+pub(super) struct LeasedPrefix {
+    pub(super) restored: RestoredPrefix,
+    pub(super) memory_group: u64,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct PrefixEntry {
     memory_group: u64,
@@ -57,9 +64,30 @@ impl PrefixCache {
         &mut self,
         model: &str,
         tokens: &[u32],
-    ) -> Result<Option<(SessionState, Option<Array>)>> {
+    ) -> Result<Option<RestoredPrefix>> {
+        Ok(self
+            .restore_longest_with_miss_reservation(model, tokens, true)?
+            .map(|leased| leased.restored))
+    }
+
+    pub(super) fn lease_longest(
+        &mut self,
+        model: &str,
+        tokens: &[u32],
+    ) -> Result<Option<LeasedPrefix>> {
+        self.restore_longest_with_miss_reservation(model, tokens, false)
+    }
+
+    fn restore_longest_with_miss_reservation(
+        &mut self,
+        model: &str,
+        tokens: &[u32],
+        reserve_miss: bool,
+    ) -> Result<Option<LeasedPrefix>> {
         let Some((_, entry)) = longest_indexed_prefix(model, tokens, &self.entries) else {
-            self.reserve_miss_slot();
+            if reserve_miss {
+                self.reserve_miss_slot();
+            }
             return Ok(None);
         };
         let group = entry.memory_group;
@@ -92,7 +120,10 @@ impl PrefixCache {
             None
         };
         self.touch_group(group);
-        Ok(Some((SessionState::from_prefix(cache, position), logits)))
+        Ok(Some(LeasedPrefix {
+            restored: (SessionState::from_prefix(cache, position), logits),
+            memory_group: group,
+        }))
     }
 
     pub(super) fn insert(
@@ -137,7 +168,7 @@ impl PrefixCache {
         }
         let group = self.groups.entry(memory_group).or_default();
         group.terminal = Some(snapshot);
-        group.bytes = group.bytes.saturating_add(bytes);
+        group.bytes = group.bytes.max(bytes);
         self.touch_group(memory_group);
         self.remove_unindexed_groups();
         self.enforce_limits();
@@ -185,9 +216,8 @@ impl PrefixCache {
             },
         );
         let group = self.groups.entry(memory_group).or_default();
-        if group.checkpoints.insert(position, snapshot).is_none() {
-            group.bytes = group.bytes.saturating_add(bytes);
-        }
+        group.checkpoints.insert(position, snapshot);
+        group.bytes = group.bytes.max(bytes);
         self.touch_group(memory_group);
         self.remove_unindexed_groups();
         self.enforce_limits();

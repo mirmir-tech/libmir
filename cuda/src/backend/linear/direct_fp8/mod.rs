@@ -4,9 +4,10 @@ use super::CudaBackend;
 use crate::{
     CudaTensor, CudaTensorDType, CudaTensorSet, Error, Result,
     kernels::{
-        DirectE5M2WeightOnlyTensorCoreLinear, DirectFp8Activation, DirectFp8Embedding,
-        DirectFp8EmbeddingBatch, DirectFp8EmbeddingSpec, DirectFp8Format, DirectFp8Linear,
-        DirectFp8Scale, DirectFp8Scales, DirectFp8Spec, DirectFp8TensorCoreLinear,
+        DirectE5M2WeightOnlyTensorCoreLinear, DirectFp8Activation, DirectFp8CachedLinear,
+        DirectFp8CublasLtLinear, DirectFp8Embedding, DirectFp8EmbeddingBatch,
+        DirectFp8EmbeddingSpec, DirectFp8Format, DirectFp8Linear, DirectFp8Scale, DirectFp8Scales,
+        DirectFp8Spec, DirectFp8TensorCoreLinear,
     },
 };
 
@@ -16,6 +17,7 @@ mod embedding;
 use contract::{execution_contract, unsupported};
 pub use embedding::DirectFp8EmbeddingLookup;
 mod load;
+mod pack;
 mod storage;
 mod tuning;
 use storage::{identity_scale, tensor};

@@ -10,12 +10,14 @@ use super::{
 use crate::MetalProgressEvent;
 
 mod batch;
+mod cohort;
 #[cfg(test)]
 mod tests;
 mod vision;
 
 pub use batch::MetalPrefillBatch;
 pub(in crate::native) use batch::PrefillStep;
+pub use cohort::MetalPrefillCohort;
 
 pub(super) struct NativePrefill {
     pub(super) output: NativeOutput,

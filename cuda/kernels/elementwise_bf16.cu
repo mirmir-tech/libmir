@@ -43,10 +43,10 @@ extern "C" __global__ void libmir_cuda_packed_gated_bf16(
     const __nv_bfloat16* gate_input, const __nv_bfloat16* up_input,
     __nv_bfloat16* output, unsigned int columns, unsigned int elements,
     unsigned int layout, unsigned int activation) {
-  const unsigned int index = blockIdx.x * blockDim.x + threadIdx.x;
-  if (index >= elements) return;
-  const unsigned int row = index / columns;
-  const unsigned int column = index % columns;
+  const unsigned int row = blockIdx.y;
+  const unsigned int column = blockIdx.x * blockDim.x + threadIdx.x;
+  const unsigned int index = row * columns + column;
+  if (column >= columns || index >= elements) return;
   const unsigned int gate_index = layout == 1u
       ? row * columns + column
       : layout == 2u

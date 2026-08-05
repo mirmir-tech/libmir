@@ -28,6 +28,7 @@ impl NvFp4RoutedExecution {
         weights: &AffineSharedExpertMoeWeights,
         expert_weights: &ExpertWeights,
         tokens: usize,
+        phase: ExecutionPhase,
     ) -> Result<Self> {
         let (router, top_k, scores, selected, routing) =
             mxfp::routing(backend, config, weights, tokens, 4)?;
@@ -39,11 +40,7 @@ impl NvFp4RoutedExecution {
             routing,
             experts: Box::new(Experts::new(
                 backend,
-                if tokens == 1 {
-                    ExecutionPhase::Decode
-                } else {
-                    ExecutionPhase::Prefill
-                },
+                phase,
                 tokens,
                 config.top_k,
                 config.activation,
@@ -59,13 +56,26 @@ impl NvFp4RoutedExecution {
         weights: &ExpertWeights,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
+        self.prepare_routing(backend, input)?;
+        self.execute_prepared(input, weights, output)
+    }
+
+    pub(super) fn prepare_routing(
+        &mut self,
+        backend: &CudaBackend,
+        input: &DeviceBuffer<bf16>,
+    ) -> Result<()> {
         self.router.execute(input, &mut self.scores)?;
-        self.top_k.execute(
-            backend.stream(),
-            &self.scores,
-            &mut self.selected,
-            &mut self.routing,
-        )?;
+        self.top_k
+            .execute(backend.stream(), &self.scores, &mut self.selected, &mut self.routing)
+    }
+
+    pub(super) fn execute_prepared(
+        &mut self,
+        input: &DeviceBuffer<bf16>,
+        weights: &ExpertWeights,
+        output: &mut DeviceBuffer<bf16>,
+    ) -> Result<()> {
         self.experts.execute(input, &self.selected, &self.routing, weights, output)
     }
 }

@@ -55,6 +55,7 @@ impl Worker {
     }
 
     pub(super) fn fail_all(&mut self, message: &str) {
+        self.prefill_cohort = None;
         complete_decode_errors(self.decode.drain(..).collect(), message);
         complete_prefill_errors(self.prefill.drain(..).collect(), message);
         self.fail_active_prefill(message);

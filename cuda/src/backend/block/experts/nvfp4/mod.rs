@@ -23,6 +23,7 @@ pub(in crate::backend) struct AutoNvFp4Experts {
     candidates: Vec<Candidate>,
     fallback: usize,
     tunable: bool,
+    weight_only: bool,
 }
 
 impl AutoNvFp4Experts {
@@ -83,9 +84,14 @@ impl AutoNvFp4Experts {
                 },
                 Err(error) => return Err(error),
             };
+        let tunable_phase = if weight_only {
+            true
+        } else {
+            phase == ExecutionPhase::Prefill || tokens == 1
+        };
         let tunable = cached.is_none()
-            && backend.auto_tuner().prepares_candidates(planned.source())
-            && (phase == ExecutionPhase::Prefill || tokens == 1);
+            && backend.auto_tuner().prepares_moe_candidates(profile, planned.source())
+            && tunable_phase;
         if let Some((execution, source)) = cached.filter(|_| cache_applied) {
             tuning::trace_selection(request, execution, source, None);
         }
@@ -98,6 +104,7 @@ impl AutoNvFp4Experts {
             candidates: vec![candidate],
             fallback: 0,
             tunable,
+            weight_only,
         })
     }
 

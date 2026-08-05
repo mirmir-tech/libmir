@@ -1,7 +1,10 @@
 use foundation::model::BackendTarget;
 use models::{
-    execution::TaskExecutionPlan,
+    execution::{DecoderExecutionContract, TaskExecutionPlan},
     layout::{AttentionLayerType, DecoderConfig},
+    weights::{
+        BlockActivationMode, BlockFormat, LayerTensorRole, LogicalTensorRole, TensorStorage,
+    },
 };
 use runtime::kv::{CacheConfig, KvStorageSpec};
 
@@ -38,7 +41,12 @@ impl ModelDescriptor {
         });
         let (kv_bytes_per_token, kv_cache_bytes) =
             generation_decoder.map_or((0, 0), |decoder| kv_budget(decoder, config, target));
-        let workspace_bytes = workspace(weight_bytes);
+        let workspace_bytes =
+            workspace(weight_bytes).saturating_add(if *target == BackendTarget::Cuda {
+                cuda_persistent_workspace(self.execution.as_ref())
+            } else {
+                0
+            });
         let required_bytes =
             weight_bytes.saturating_add(kv_cache_bytes).saturating_add(workspace_bytes);
         ModelMemoryEstimate {
@@ -124,6 +132,43 @@ const fn workspace(weights: u64) -> u64 {
     }
 }
 
+fn cuda_persistent_workspace(execution: Option<&DecoderExecutionContract>) -> u64 {
+    execution.map_or(0, |execution| {
+        execution
+            .bindings
+            .tensors
+            .iter()
+            .filter(|binding| {
+                matches!(
+                    binding.role,
+                    LogicalTensorRole::Layer {
+                        tensor: LayerTensorRole::ExpertProjection { .. },
+                        ..
+                    }
+                ) && matches!(
+                    binding.storage,
+                    TensorStorage::BlockQuantized { format, .. }
+                        if format.format == BlockFormat::NvFp4
+                            && format.activation_mode == BlockActivationMode::WeightOnly
+                )
+            })
+            .filter_map(|binding| binding.logical_shape.as_deref())
+            .map(nvfp4_marlin_bytes)
+            .fold(0_u64, u64::saturating_add)
+    })
+}
+
+fn nvfp4_marlin_bytes(shape: &[usize]) -> u64 {
+    let elements = shape.iter().fold(1_u64, |elements, dimension| {
+        elements.saturating_mul(u64::try_from(*dimension).unwrap_or(u64::MAX))
+    });
+    let experts = shape.first().copied().filter(|_| shape.len() == 3).unwrap_or(1);
+    elements
+        .div_ceil(2)
+        .saturating_add(elements.div_ceil(16))
+        .saturating_add(u64::try_from(experts).unwrap_or(u64::MAX).saturating_mul(4))
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -134,6 +179,12 @@ mod tests {
     fn reserves_at_least_half_a_gibibyte_for_runtime_workspace() {
         assert_eq!(workspace(128 * MIB), 512 * MIB);
         assert_eq!(workspace(10 * 1024 * MIB), 1024 * MIB);
+    }
+
+    #[test]
+    fn accounts_for_persistent_marlin_weights_scales_and_globals() {
+        assert_eq!(nvfp4_marlin_bytes(&[4, 32, 64]), 4_624);
+        assert_eq!(nvfp4_marlin_bytes(&[32, 64]), 1_156);
     }
 
     #[test]

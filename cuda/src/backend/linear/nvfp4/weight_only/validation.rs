@@ -1,6 +1,9 @@
 use mircuda::{Context, DeviceBuffer, Stream, bf16};
 
-use super::{NvFp4WeightOnly, NvFp4WeightOnlyTensorCore, NvFp4WeightOnlyWeight};
+use super::{
+    NvFp4WeightOnly, NvFp4WeightOnlyTensorCore, NvFp4WeightOnlyWeight,
+    marlin::MarlinNvFp4Bf16Linear,
+};
 use crate::{Result, kernels::NvFp4WeightOnlyLaunch};
 
 const ABSOLUTE_TOLERANCE: f32 = 0.125;
@@ -24,6 +27,28 @@ pub(super) fn tensor_core_compatible(
     Ok(equivalent(&reference, &candidate))
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(super) fn marlin_compatible(
+    context: &Context,
+    stream: &Stream,
+    compressed: &NvFp4WeightOnly,
+    marlin: &mut MarlinNvFp4Bf16Linear,
+    weight: &NvFp4WeightOnlyWeight,
+    input: &DeviceBuffer<bf16>,
+    output: &mut DeviceBuffer<bf16>,
+    sample: &mut DeviceBuffer<bf16>,
+) -> Result<[bool; 3]> {
+    compressed.execute(stream, &mut launch(input, output, weight))?;
+    let reference = read_stratified(context, stream, output, sample)?;
+    let mut compatible = [false; 3];
+    for (index, (_, config)) in super::tuning::marlin_candidates().into_iter().enumerate() {
+        marlin.execute(input, output, config)?;
+        compatible[index] =
+            equivalent(&reference, &read_stratified(context, stream, output, sample)?);
+    }
+    Ok(compatible)
+}
+
 fn launch<'a>(
     input: &'a DeviceBuffer<bf16>,
     output: &'a mut DeviceBuffer<bf16>,
@@ -45,6 +70,25 @@ fn read_sample(
     sample: &mut DeviceBuffer<bf16>,
 ) -> Result<Vec<bf16>> {
     stream.copy_device_range(output, 0..sample.len(), sample, 0)?;
+    let mut host = context.allocate_pinned(sample.len())?;
+    stream.copy_to_host(sample, &mut host)?;
+    Ok(host.to_vec()?)
+}
+
+fn read_stratified(
+    context: &Context,
+    stream: &Stream,
+    output: &DeviceBuffer<bf16>,
+    sample: &mut DeviceBuffer<bf16>,
+) -> Result<Vec<bf16>> {
+    if sample.len() == output.len() {
+        return read_sample(context, stream, output, sample);
+    }
+    let chunk = sample.len() / 3;
+    let starts = [0, (output.len() - chunk) / 2, output.len() - chunk];
+    for (index, start) in starts.into_iter().enumerate() {
+        stream.copy_device_range(output, start..start + chunk, sample, index * chunk)?;
+    }
     let mut host = context.allocate_pinned(sample.len())?;
     stream.copy_to_host(sample, &mut host)?;
     Ok(host.to_vec()?)

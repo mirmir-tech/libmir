@@ -112,13 +112,14 @@ impl CudaSharedRoutedModelSession {
         let mut plans = plans
             .lock()
             .map_err(|_| Error::State("shared-routed execution plan cache is poisoned".into()))?;
-        let plan = match plans.entry(count) {
-            std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                entry.insert(SharedRoutedExecutionPlan::new(&self.template, count)?)
-            },
-        };
-        self.execute_plan(session_id, tokens, positions, table, image_span, image, plan)?;
+        if let Some(plan) = plans.get_mut(count) {
+            self.execute_plan(session_id, tokens, positions, table, image_span, image, plan)?;
+        } else {
+            plans.reserve(count);
+            let mut plan = SharedRoutedExecutionPlan::new(&self.template, count)?;
+            self.execute_plan(session_id, tokens, positions, table, image_span, image, &mut plan)?;
+            plans.insert(count, plan);
+        }
         drop(plans);
         Ok(&self.logits)
     }

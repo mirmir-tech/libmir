@@ -3,7 +3,8 @@
 extern "C" __global__ void libmir_cuda_gated_delta_convolution_bf16(
     const __nv_bfloat16* input, const __nv_bfloat16* weight,
     const __nv_bfloat16* history, __nv_bfloat16* output,
-    unsigned int tokens, unsigned int channels, unsigned int kernel_size) {
+    unsigned int tokens, unsigned int channels, unsigned int kernel_size,
+    unsigned int input_stride, unsigned int input_offset) {
   const unsigned int index = blockIdx.x * blockDim.x + threadIdx.x;
   if (index >= tokens * channels) return;
   const unsigned int token = index / channels;
@@ -13,7 +14,8 @@ extern "C" __global__ void libmir_cuda_gated_delta_convolution_bf16(
     const unsigned int position = token + kernel;
     const float source = position < kernel_size - 1
         ? __bfloat162float(history[position * channels + channel])
-        : __bfloat162float(input[(position - kernel_size + 1) * channels + channel]);
+        : __bfloat162float(input[
+            (position - kernel_size + 1) * input_stride + input_offset + channel]);
     sum += source * __bfloat162float(weight[channel * kernel_size + kernel]);
   }
   output[index] = __float2bfloat16_rn(sum / (1.0f + expf(-sum)));
@@ -22,7 +24,8 @@ extern "C" __global__ void libmir_cuda_gated_delta_convolution_bf16(
 extern "C" __global__ void libmir_cuda_gated_delta_history_bf16(
     const __nv_bfloat16* input, const __nv_bfloat16* history,
     __nv_bfloat16* next_history, unsigned int tokens,
-    unsigned int channels, unsigned int kernel_size) {
+    unsigned int channels, unsigned int kernel_size,
+    unsigned int input_stride, unsigned int input_offset) {
   const unsigned int index = blockIdx.x * blockDim.x + threadIdx.x;
   const unsigned int history_tokens = kernel_size - 1;
   if (index >= history_tokens * channels) return;
@@ -31,14 +34,15 @@ extern "C" __global__ void libmir_cuda_gated_delta_history_bf16(
   const unsigned int combined = tokens + history_token;
   next_history[index] = combined < history_tokens
       ? history[combined * channels + channel]
-      : input[(combined - history_tokens) * channels + channel];
+      : input[(combined - history_tokens) * input_stride + input_offset + channel];
 }
 
 extern "C" __global__ void libmir_cuda_gated_delta_batch_convolution_bf16(
     const __nv_bfloat16* input, const __nv_bfloat16* weight,
     const __nv_bfloat16* history, __nv_bfloat16* next_history,
     __nv_bfloat16* output, unsigned int rows, unsigned int channels,
-    unsigned int kernel_size, unsigned int tokens) {
+    unsigned int kernel_size, unsigned int tokens,
+    unsigned int input_stride, unsigned int input_offset) {
   const unsigned int index = blockIdx.x * blockDim.x + threadIdx.x;
   if (index >= rows * tokens * channels) return;
   const unsigned int token = (index / channels) % tokens;
@@ -51,8 +55,8 @@ extern "C" __global__ void libmir_cuda_gated_delta_batch_convolution_bf16(
     const unsigned int position = token + kernel;
     const float source = position < history_tokens
         ? __bfloat162float(history[history_base + position * channels + channel])
-        : __bfloat162float(input[
-            (row * tokens + position - history_tokens) * channels + channel]);
+        : __bfloat162float(input[(row * tokens + position - history_tokens) *
+            input_stride + input_offset + channel]);
     sum += source * __bfloat162float(weight[channel * kernel_size + kernel]);
   }
   output[index] = __float2bfloat16_rn(sum / (1.0f + expf(-sum)));
@@ -62,7 +66,8 @@ extern "C" __global__ void libmir_cuda_gated_delta_batch_convolution_bf16(
       const unsigned int target = history_base + history_token * channels + channel;
       next_history[target] = combined < history_tokens
           ? history[history_base + combined * channels + channel]
-          : input[(row * tokens + combined - history_tokens) * channels + channel];
+          : input[(row * tokens + combined - history_tokens) * input_stride +
+              input_offset + channel];
     }
   }
 }

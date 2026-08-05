@@ -39,6 +39,7 @@ impl CudaBackend {
         Ok(host.to_vec()?[0])
     }
 
+    #[cfg(test)]
     pub(crate) fn read_tokens(&self, tokens: &DeviceBuffer<u32>) -> Result<Vec<u32>> {
         let mut host = self.inner.context.allocate_pinned::<u32>(tokens.len())?;
         self.inner.stream.copy_to_host(tokens, &mut host)?;

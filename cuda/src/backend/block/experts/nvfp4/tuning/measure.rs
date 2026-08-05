@@ -34,25 +34,13 @@ impl AutoNvFp4Experts {
         let mut timings = vec![Vec::with_capacity(route_sets.len()); self.candidates.len()];
         let mut elapsed = Duration::ZERO;
         for (distribution, routes) in route_sets {
-            for (index, candidate) in self.candidates.iter_mut().enumerate() {
-                for _ in 0..warmup {
-                    candidate.plan.execute(input, routes, routing, output)?;
-                }
-                let started = self.backend.context().create_event(true)?;
-                let completed = self.backend.context().create_event(true)?;
-                started.record(self.backend.stream())?;
-                for _ in 0..iterations {
-                    candidate.plan.execute(input, routes, routing, output)?;
-                }
-                completed.record(self.backend.stream())?;
-                completed.synchronize()?;
-                let average = Duration::from_secs_f32(
-                    started.elapsed_ms(&completed)? / (iterations as f32 * 1_000.0),
-                );
+            let measured =
+                self.measure_interleaved(input, routes, routing, output, warmup, iterations)?;
+            for (index, average) in measured.into_iter().enumerate() {
                 tracing::debug!(
                     target: "libmir::cuda::tuning",
                     distribution,
-                    execution = ?candidate.execution,
+                    execution = ?self.candidates[index].execution,
                     average_us = average.as_secs_f64() * 1_000_000.0,
                     "measured CUDA MoE route distribution"
                 );
@@ -85,6 +73,61 @@ impl AutoNvFp4Experts {
         let total = timings[winner].iter().copied().fold(Duration::ZERO, Duration::saturating_add);
         let scenarios = u32::try_from(timings[winner].len())?;
         Ok((winner, total / scenarios, elapsed))
+    }
+
+    #[allow(clippy::too_many_arguments, clippy::cast_precision_loss)]
+    fn measure_interleaved(
+        &mut self,
+        input: &DeviceBuffer<bf16>,
+        selected: &DeviceBuffer<u32>,
+        routing: &DeviceBuffer<bf16>,
+        output: &mut DeviceBuffer<bf16>,
+        warmup: u32,
+        iterations: u32,
+    ) -> Result<Vec<Duration>> {
+        for round in 0..warmup {
+            self.execute_round(round as usize, input, selected, routing, output, None)?;
+        }
+        let mut totals = vec![Duration::ZERO; self.candidates.len()];
+        for round in 0..iterations {
+            self.execute_round(
+                round as usize,
+                input,
+                selected,
+                routing,
+                output,
+                Some(&mut totals),
+            )?;
+        }
+        Ok(totals.into_iter().map(|total| total / iterations.max(1)).collect())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn execute_round(
+        &mut self,
+        offset: usize,
+        input: &DeviceBuffer<bf16>,
+        selected: &DeviceBuffer<u32>,
+        routing: &DeviceBuffer<bf16>,
+        output: &mut DeviceBuffer<bf16>,
+        mut totals: Option<&mut [Duration]>,
+    ) -> Result<()> {
+        let candidates = self.candidates.len();
+        for step in 0..candidates {
+            let index = (offset + step) % candidates;
+            let started = self.backend.context().create_event(true)?;
+            let completed = self.backend.context().create_event(true)?;
+            started.record(self.backend.stream())?;
+            self.candidates[index].plan.execute(input, selected, routing, output)?;
+            completed.record(self.backend.stream())?;
+            completed.synchronize()?;
+            if let Some(totals) = totals.as_deref_mut() {
+                totals[index] = totals[index].saturating_add(Duration::from_secs_f32(
+                    started.elapsed_ms(&completed)? / 1_000.0,
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn route_patterns(&self) -> Result<RoutePatterns> {

@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use mircuda::{DeviceBuffer, bf16};
 
 use super::CudaBackend;
@@ -11,9 +13,11 @@ use crate::{
 
 mod batch;
 mod checkpoint;
+mod convolution;
 mod layer;
-pub(crate) use batch::CudaGatedDeltaBatchState;
-pub(crate) use checkpoint::CudaGatedDeltaCheckpoint;
+mod residency;
+pub use batch::CudaGatedDeltaBatchState;
+pub use checkpoint::CudaGatedDeltaCheckpoint;
 pub use layer::{
     AffineGatedDeltaLayerConfig, AffineGatedDeltaLayerWeights, CudaAffineGatedDeltaExecution,
     CudaAffineGatedDeltaLayer,
@@ -49,7 +53,12 @@ pub struct CudaGatedDeltaState {
     decay: DeviceBuffer<f32>,
     update: DeviceBuffer<f32>,
     offset: usize,
+    identity: u64,
+    revision: u64,
+    resident: Option<residency::GatedDeltaResidency>,
 }
+
+static NEXT_STATE_IDENTITY: AtomicU64 = AtomicU64::new(1);
 
 impl CudaBackend {
     pub fn prepare_gated_delta_state(
@@ -85,6 +94,9 @@ impl CudaBackend {
             decay: self.inner.pool.allocate(&self.inner.stream, config.value_heads)?,
             update: self.inner.pool.allocate(&self.inner.stream, config.value_heads)?,
             offset: 0,
+            identity: NEXT_STATE_IDENTITY.fetch_add(1, Ordering::Relaxed),
+            revision: 0,
+            resident: None,
         })
     }
 }
@@ -95,39 +107,13 @@ impl CudaGatedDeltaState {
         self.config
     }
 
-    pub fn convolve_silu(
-        &mut self,
-        tokens: usize,
-        input: &DeviceBuffer<bf16>,
-        weight: &DeviceBuffer<bf16>,
-        output: &mut DeviceBuffer<bf16>,
-    ) -> Result<()> {
-        let operation = GatedDeltaConvolution::compile(
-            &self.backend.inner.compiler,
-            GatedDeltaConvolutionSpec {
-                tokens,
-                channels: channels(self.config)?,
-                kernel_size: self.config.convolution_kernel_size,
-            },
-        )?;
-        operation.execute(
-            &self.backend.inner.stream,
-            input,
-            weight,
-            &self.convolution,
-            &mut self.next_convolution,
-            output,
-        )?;
-        std::mem::swap(&mut self.convolution, &mut self.next_convolution);
-        Ok(())
-    }
-
     pub fn execute(
         &mut self,
         tokens: usize,
         inputs: GatedDeltaInputs<'_>,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
+        self.materialize()?;
         let gates = tokens
             .checked_mul(self.config.value_heads)
             .ok_or(crate::Error::InvalidDecoderKernel("Gated Delta gate size overflow"))?;
@@ -165,10 +151,12 @@ impl CudaGatedDeltaState {
             .offset
             .checked_add(tokens)
             .ok_or(crate::Error::InvalidDecoderKernel("Gated Delta state offset overflow"))?;
+        self.revision = self.revision.wrapping_add(1);
         Ok(())
     }
 
     pub fn reset(&mut self) -> Result<()> {
+        self.resident = None;
         self.state = self
             .backend
             .inner
@@ -180,12 +168,26 @@ impl CudaGatedDeltaState {
         self.next_convolution =
             self.backend.inner.pool.allocate_zeroed(&self.backend.inner.stream, history)?;
         self.offset = 0;
+        self.revision = self.revision.wrapping_add(1);
         Ok(())
     }
 
     #[must_use]
     pub const fn offset(&self) -> usize {
         self.offset
+    }
+
+    pub(crate) const fn stamp(&self) -> (u64, u64) {
+        (self.identity, self.revision)
+    }
+
+    pub(crate) fn advance(&mut self, tokens: usize) -> Result<()> {
+        self.offset = self
+            .offset
+            .checked_add(tokens)
+            .ok_or(crate::Error::InvalidDecoderKernel("Gated Delta state offset overflow"))?;
+        self.revision = self.revision.wrapping_add(1);
+        Ok(())
     }
 }
 

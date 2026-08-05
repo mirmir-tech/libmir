@@ -2,7 +2,7 @@ use super::CudaSharedRoutedLayerState;
 use crate::{Error, Result, backend::gated_delta::CudaGatedDeltaCheckpoint};
 
 #[derive(Debug)]
-pub(crate) struct SharedRoutedCheckpoint {
+pub struct SharedRoutedCheckpoint {
     linear: Vec<Option<CudaGatedDeltaCheckpoint>>,
     pub(super) position: usize,
     pub(super) position_delta: i32,

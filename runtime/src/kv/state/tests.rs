@@ -60,6 +60,30 @@ fn prefill_pressure_preserves_selected_prefix_and_evicts_another() -> Result<()>
 }
 
 #[test]
+fn prefill_admission_does_not_pin_shared_prefix_blocks() -> Result<()> {
+    let mut cache = KvCache::with_config(CacheConfig {
+        block_size: 2,
+        block_count: 4,
+        dtype: KvCacheDType::Auto,
+    });
+    let mut cached = cached_session(&mut cache, &[1, 2, 3, 4, 5, 6])?;
+    let shared = cached.table().blocks()[0];
+    cached.release(&mut cache)?;
+    assert_eq!(cache.block_ref_count(shared)?, 1);
+
+    let mut next = KvSessionState::new(Uuid::new_v4(), "gemma", 2);
+    let admission = next.probe_prefill_admission(&cache, &[1, 2, 3, 4, 9, 10, 11, 12], 0)?;
+
+    assert!(admission.needs_eviction);
+    assert_eq!(admission.missing_tokens, 4);
+    assert_eq!(cache.block_ref_count(shared)?, 1);
+    let prefill =
+        next.prepare_prefill_with_reserve_in_place(&mut cache, &[1, 2, 3, 4, 9, 10, 11, 12], 0)?;
+    assert_eq!(prefill.cached_tokens, 4);
+    Ok(())
+}
+
+#[test]
 fn two_phase_prefill_pins_later_hit_before_miss_evicts() -> Result<()> {
     let mut cache = KvCache::with_config(CacheConfig {
         block_size: 2,

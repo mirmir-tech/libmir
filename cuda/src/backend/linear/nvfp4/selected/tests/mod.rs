@@ -1,5 +1,6 @@
 mod prepare;
 pub(super) mod support;
+mod tiled;
 
 use std::{
     fs::File,

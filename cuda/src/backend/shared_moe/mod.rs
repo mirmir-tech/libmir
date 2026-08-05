@@ -8,7 +8,7 @@ mod weights;
 pub use execution::CudaAffineSharedExpertMoeExecution;
 pub use weights::AffineSharedExpertMoeWeights;
 
-use crate::{CudaBackend, CudaTensorSet, Error, GatedActivation, Result};
+use crate::{CudaBackend, CudaTensorSet, Error, ExecutionPhase, GatedActivation, Result};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AffineSharedExpertMoeConfig {
@@ -83,7 +83,22 @@ impl CudaAffineSharedExpertMoe {
     }
 
     pub fn prepare(&self, tokens: usize) -> Result<CudaAffineSharedExpertMoeExecution> {
-        CudaAffineSharedExpertMoeExecution::new(&self.backend, self.config, &self.weights, tokens)
+        let phase = if tokens == 1 {
+            ExecutionPhase::Decode
+        } else {
+            ExecutionPhase::Prefill
+        };
+        self.prepare_phase(tokens, phase)
+    }
+
+    pub(crate) fn prepare_phase(
+        &self,
+        tokens: usize,
+        phase: ExecutionPhase,
+    ) -> Result<CudaAffineSharedExpertMoeExecution> {
+        CudaAffineSharedExpertMoeExecution::new(
+            &self.backend, self.config, &self.weights, tokens, phase,
+        )
     }
 }
 

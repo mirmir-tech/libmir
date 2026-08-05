@@ -29,15 +29,16 @@ impl CudaBackend {
         let context = driver.create_context(device)?;
         let info = context.device_info()?;
         let stream = context.create_stream()?;
+        let auxiliary_stream = context.create_stream()?;
         let pool = context.default_memory_pool()?;
         pool.set_release_threshold(memory_pool_release_threshold)?;
-        let compiler = mircuda::Compiler::with_config(
+        let compiler = Arc::new(mircuda::Compiler::with_config(
             context.clone(),
             mircuda::CompilerConfig {
                 include_paths: nvrtc_include_paths,
                 cache_directory: nvrtc_cache_directory,
             },
-        )?;
+        )?);
         let planner = CudaExecutionPlanner::new(CudaHardwareProfile::from_device(&info)?, planning);
         let tuner = CudaAutoTuner::new(&info, tuning);
         Ok(Self {
@@ -45,10 +46,12 @@ impl CudaBackend {
                 device: info,
                 context,
                 stream,
+                auxiliary_stream,
                 pool,
                 compiler,
                 mxfp8_scratch: std::sync::Mutex::new(std::collections::HashMap::new()),
                 nvfp4_bucket_scratch: std::sync::Mutex::new(std::collections::HashMap::new()),
+                nvfp4_marlin_scratch: std::sync::Mutex::new(std::collections::HashMap::new()),
                 planner,
                 tuner,
             }),
@@ -89,5 +92,23 @@ impl CudaBackend {
 
     pub(crate) fn prepare_dense_cast(&self) -> Result<DenseCast> {
         DenseCast::compile(&self.inner.compiler)
+    }
+
+    pub(crate) fn auxiliary_backend(&self) -> Self {
+        Self {
+            inner: Arc::new(CudaRuntime {
+                device: self.inner.device.clone(),
+                context: self.inner.context.clone(),
+                stream: self.inner.auxiliary_stream.clone(),
+                auxiliary_stream: self.inner.auxiliary_stream.clone(),
+                pool: self.inner.pool.clone(),
+                compiler: self.inner.compiler.clone(),
+                mxfp8_scratch: std::sync::Mutex::new(std::collections::HashMap::new()),
+                nvfp4_bucket_scratch: std::sync::Mutex::new(std::collections::HashMap::new()),
+                nvfp4_marlin_scratch: std::sync::Mutex::new(std::collections::HashMap::new()),
+                planner: self.inner.planner,
+                tuner: self.inner.tuner.clone(),
+            }),
+        }
     }
 }

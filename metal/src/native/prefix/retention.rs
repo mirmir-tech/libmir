@@ -54,6 +54,17 @@ impl PrefixCache {
         true
     }
 
+    pub(in crate::native) fn evict_groups(&mut self, groups: &HashSet<u64>) -> bool {
+        if groups.is_empty() {
+            return false;
+        }
+        let before = self.groups.len();
+        self.groups.retain(|group, _| !groups.contains(group));
+        self.entries.retain(|_, entry| !groups.contains(&entry.memory_group));
+        self.group_recency.retain(|group| !groups.contains(group));
+        self.groups.len() < before
+    }
+
     pub(super) fn remove_unindexed_groups(&mut self) {
         let indexed = self.entries.values().map(|entry| entry.memory_group).collect::<HashSet<_>>();
         self.groups.retain(|group, _| indexed.contains(group));

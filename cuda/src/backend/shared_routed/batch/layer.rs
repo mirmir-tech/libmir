@@ -1,10 +1,10 @@
 use mircuda::{DeviceBuffer, bf16};
-use runtime::backend::DecodeSequence;
 
 use super::super::SharedRoutedLayerTemplate;
 use crate::{
     CudaAffineGatedDeltaMoeExecution, CudaAffineGatedFullAttentionMoeExecution,
-    CudaSharedRoutedModelSession, Result,
+    CudaSharedRoutedModelSession, ExecutionPhase, PagedDecodeBatch, Result,
+    kernels::BatchedSplitAttentionWorkspace,
 };
 
 #[derive(Debug)]
@@ -14,14 +14,20 @@ pub(super) enum SharedRoutedBatchLayer {
 }
 
 impl SharedRoutedBatchLayer {
-    pub(super) fn new(template: &SharedRoutedLayerTemplate, rows: usize) -> Result<Self> {
+    pub(super) fn new(
+        template: &SharedRoutedLayerTemplate,
+        rows: usize,
+        phase: ExecutionPhase,
+        workspace: Option<BatchedSplitAttentionWorkspace>,
+    ) -> Result<Self> {
         match template {
             SharedRoutedLayerTemplate::Linear(layer) => {
-                layer.prepare(rows).map(Box::new).map(Self::Linear)
+                layer.prepare_phase(rows, phase).map(Box::new).map(Self::Linear)
             },
-            SharedRoutedLayerTemplate::Full(layer) => {
-                layer.prepare(rows).map(Box::new).map(Self::Full)
-            },
+            SharedRoutedLayerTemplate::Full(layer) => layer
+                .prepare_phase_with_workspace(rows, phase, workspace)
+                .map(Box::new)
+                .map(Self::Full),
         }
     }
 
@@ -30,9 +36,8 @@ impl SharedRoutedBatchLayer {
         input: &DeviceBuffer<bf16>,
         output: &DeviceBuffer<bf16>,
         sessions: &mut [&mut CudaSharedRoutedModelSession],
-        sequences: &[DecodeSequence],
         layer: usize,
-        max_blocks: usize,
+        paging: &PagedDecodeBatch,
     ) -> Result<()> {
         match self {
             Self::Linear(execution) => {
@@ -41,9 +46,7 @@ impl SharedRoutedBatchLayer {
             },
             Self::Full(execution) => {
                 let states = super::states::full_states(sessions, layer)?;
-                let tables =
-                    sequences.iter().map(|sequence| &sequence.block_table).collect::<Vec<_>>();
-                execution.prepare_packed(input, &states, &tables, max_blocks, output)
+                execution.prepare_packed(input, &states, paging, output)
             },
         }
     }
@@ -52,11 +55,14 @@ impl SharedRoutedBatchLayer {
         &mut self,
         input: &DeviceBuffer<bf16>,
         positions: &DeviceBuffer<u32>,
+        paging: &PagedDecodeBatch,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
         match self {
             Self::Linear(execution) => execution.execute_prepared_packed(input, output),
-            Self::Full(execution) => execution.execute_prepared_packed(input, positions, output),
+            Self::Full(execution) => {
+                execution.execute_prepared_packed(input, positions, paging, output)
+            },
         }
     }
 
@@ -72,10 +78,10 @@ impl SharedRoutedBatchLayer {
         Ok(())
     }
 
-    pub(super) fn capture_partitions(&self) -> usize {
+    pub(super) fn capture_partitions(&self, paging: &PagedDecodeBatch) -> usize {
         match self {
             Self::Linear(_) => 0,
-            Self::Full(execution) => execution.packed_capture_partitions(),
+            Self::Full(execution) => execution.packed_capture_partitions(paging),
         }
     }
 }

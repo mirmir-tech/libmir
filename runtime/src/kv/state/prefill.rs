@@ -1,9 +1,24 @@
 use super::{
-    BlockId, BlockTable, KvCache, KvPrefillPlan, KvPrefillReservation, KvPrefillStep,
-    KvSessionState, Result, RuntimeError,
+    BlockId, BlockTable, KvCache, KvPrefillAdmission, KvPrefillPlan, KvPrefillReservation,
+    KvPrefillStep, KvSessionState, Result, RuntimeError,
 };
 
 impl KvSessionState {
+    pub fn probe_prefill_admission(
+        &self,
+        cache: &KvCache,
+        prompt_tokens: &[u32],
+        reserved_tokens: usize,
+    ) -> Result<KvPrefillAdmission> {
+        let capacity_blocks = capacity_blocks(prompt_tokens.len(), reserved_tokens, cache)?;
+        let probe = cache.probe_prefix(&self.model, prompt_tokens);
+        let missing_blocks = capacity_blocks.saturating_sub(probe.cached_blocks.len());
+        Ok(KvPrefillAdmission {
+            missing_tokens: probe.missing_tokens,
+            needs_eviction: missing_blocks > cache.free_blocks(),
+        })
+    }
+
     pub fn prepare_prefill(
         &mut self,
         cache: &mut KvCache,
@@ -54,13 +69,9 @@ impl KvSessionState {
             self.release(cache)?;
         }
         self.prefix_cacheable = true;
-        let capacity_tokens = prompt_tokens
-            .len()
-            .checked_add(reserved_tokens)
-            .ok_or_else(|| RuntimeError::KvCache("session token capacity overflow".into()))?;
+        let capacity_blocks = capacity_blocks(prompt_tokens.len(), reserved_tokens, cache)?;
         let probe = cache.probe_prefix_recorded(&self.model, prompt_tokens);
         retain_prefix(cache, &probe.cached_blocks)?;
-        let capacity_blocks = capacity_tokens.div_ceil(cache.block_size());
         let missing_blocks = capacity_blocks.saturating_sub(probe.cached_blocks.len());
         let mut table = BlockTable::with_block_size(cache.block_size());
         for block in probe.cached_blocks.iter().copied() {
@@ -136,6 +147,13 @@ impl KvSessionState {
         }
         Ok(committed)
     }
+}
+
+fn capacity_blocks(prompt_tokens: usize, reserved_tokens: usize, cache: &KvCache) -> Result<usize> {
+    prompt_tokens
+        .checked_add(reserved_tokens)
+        .map(|tokens| tokens.div_ceil(cache.block_size()))
+        .ok_or_else(|| RuntimeError::KvCache("session token capacity overflow".into()))
 }
 
 fn retain_prefix(cache: &mut KvCache, blocks: &[BlockId]) -> Result<()> {

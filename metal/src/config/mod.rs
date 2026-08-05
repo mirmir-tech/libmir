@@ -17,6 +17,7 @@ pub struct MetalConfig {
     pub kv_cache: runtime::kv::CacheConfig,
     pub tuning: MetalTuningConfig,
     pub(crate) expert_fusion_reserve_bytes: Option<usize>,
+    max_batch_requests: usize,
 }
 
 impl Default for MetalConfig {
@@ -29,7 +30,18 @@ impl Default for MetalConfig {
             kv_cache: runtime::kv::CacheConfig::new(4_096),
             tuning: MetalTuningConfig::default(),
             expert_fusion_reserve_bytes: None,
+            max_batch_requests: runtime::scheduler::SchedulerConfig::default().max_batch_requests,
         }
+    }
+}
+
+impl MetalConfig {
+    pub fn set_max_batch_requests(&mut self, max_batch_requests: usize) {
+        self.max_batch_requests = max_batch_requests.max(1);
+    }
+
+    pub(crate) const fn max_batch_requests(&self) -> usize {
+        self.max_batch_requests
     }
 }
 pub use batch::{DenseBatchMode, MetalBatchConfig};

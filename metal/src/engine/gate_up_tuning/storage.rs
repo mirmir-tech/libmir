@@ -17,7 +17,7 @@ use super::{
     GateUpExecution, GateUpKey,
 };
 
-const SCHEMA: u32 = 17;
+const SCHEMA: u32 = 18;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct ProfileFile {
@@ -202,7 +202,7 @@ pub(super) fn persist(
 }
 
 pub(super) fn cache_name() -> &'static str {
-    "execution-v17-metal-gpu0.json"
+    "execution-v18-metal-gpu0.json"
 }
 
 fn temporary_path(path: &Path) -> PathBuf {

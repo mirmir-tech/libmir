@@ -38,7 +38,7 @@ impl AutoNvFp4Experts {
     }
 
     fn prepare_candidates(&mut self) {
-        for &execution in candidate_executions(self.request) {
+        for &execution in candidate_executions(self.request, self.weight_only) {
             if self.candidates.iter().any(|candidate| candidate.execution == execution) {
                 continue;
             }
@@ -100,7 +100,40 @@ impl AutoNvFp4Experts {
     }
 }
 
-fn candidate_executions(request: MoePlanRequest) -> &'static [MoeExecution] {
+fn candidate_executions(request: MoePlanRequest, weight_only: bool) -> &'static [MoeExecution] {
+    if weight_only {
+        return match (request.phase, request.tokens) {
+            (ExecutionPhase::Decode, 1) => &[
+                MoeExecution::HybridW4A4,
+                MoeExecution::IndexedGrouped,
+                MoeExecution::SelectedWeightOnly,
+                MoeExecution::SelectedWeightOnlyTensorCore,
+                MoeExecution::SelectedWeightOnlyTiled2,
+                MoeExecution::SelectedWeightOnlyTiled4,
+                MoeExecution::SelectedWeightOnlyTiled8,
+                MoeExecution::MarlinWeightOnlyN128K128,
+                MoeExecution::MarlinWeightOnlyN128K64,
+                MoeExecution::MarlinWeightOnlyN64K128,
+            ],
+            (ExecutionPhase::Decode, _) => &[
+                MoeExecution::Bucketed,
+                MoeExecution::IndexedGrouped,
+                MoeExecution::SelectedWeightOnly,
+                MoeExecution::SelectedWeightOnlyTensorCore,
+                MoeExecution::SelectedWeightOnlyTiled2,
+                MoeExecution::SelectedWeightOnlyTiled4,
+                MoeExecution::SelectedWeightOnlyTiled8,
+                MoeExecution::MarlinWeightOnlyN128K128,
+                MoeExecution::MarlinWeightOnlyN128K64,
+                MoeExecution::MarlinWeightOnlyN64K128,
+            ],
+            (ExecutionPhase::Prefill, _) => &[
+                MoeExecution::Bucketed,
+                MoeExecution::IndexedGrouped,
+                MoeExecution::SelectedWeightOnly,
+            ],
+        };
+    }
     match (request.phase, request.tokens) {
         (ExecutionPhase::Decode, 1) => &[MoeExecution::HybridW4A4, MoeExecution::IndexedGrouped],
         (ExecutionPhase::Prefill, _) => &[
@@ -157,41 +190,4 @@ pub(super) fn trace_selection(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_pre_capture_phases_have_candidates() {
-        let decode = MoePlanRequest::nvfp4(ExecutionPhase::Decode, 1, 128, 8, 2_048, 768);
-        let batch = MoePlanRequest { tokens: 4, ..decode };
-        let prefill = MoePlanRequest {
-            phase: ExecutionPhase::Prefill,
-            tokens: 128,
-            ..decode
-        };
-
-        assert_eq!(
-            candidate_executions(decode),
-            [MoeExecution::HybridW4A4, MoeExecution::IndexedGrouped]
-        );
-        assert!(candidate_executions(batch).is_empty());
-        assert_eq!(
-            candidate_executions(prefill),
-            [
-                MoeExecution::Bucketed,
-                MoeExecution::IndexedGrouped,
-                MoeExecution::SelectedWeightOnly,
-            ]
-        );
-    }
-
-    #[test]
-    fn numerical_gate_accepts_bf16_rounding_only() {
-        let reference = [1.0, -20.0, 0.0].map(bf16::from_f32);
-        let close = [1.5, -20.5, 0.5].map(bf16::from_f32);
-        let drift = [1.75, -20.0, 0.0].map(bf16::from_f32);
-
-        assert!(equivalent(&reference, &close));
-        assert!(!equivalent(&reference, &drift));
-    }
-}
+mod tests;

@@ -1,3 +1,5 @@
+use std::sync::{Arc, Mutex};
+
 use mircuda::{DeviceBuffer, Stream, bf16};
 
 use super::{CudaBackend, NvFp4Config, NvFp4Tensors, u8_tensor, validate_tensors};
@@ -9,9 +11,12 @@ use crate::{
     },
 };
 
+mod marlin;
 mod profile;
 mod tuning;
 mod validation;
+
+pub(in crate::backend) use marlin::MarlinNvFp4Bf16Linear;
 
 #[derive(Clone, Debug)]
 pub struct NvFp4WeightOnlyWeight {
@@ -20,12 +25,15 @@ pub struct NvFp4WeightOnlyWeight {
     global_scale: DeviceBuffer<f32>,
     materialized: CudaTensor,
     config: NvFp4Config,
+    marlin: Arc<Mutex<Option<marlin::MarlinNvFp4Weight>>>,
+    marlin_pair: Arc<Mutex<Option<marlin::MarlinNvFp4Weight>>>,
 }
 
 #[derive(Debug)]
 pub struct NvFp4WeightOnlyBf16Linear {
     compressed: NvFp4WeightOnly,
     tensor_core: NvFp4WeightOnlyTensorCore,
+    marlin: Option<MarlinNvFp4Bf16Linear>,
     materialized: super::super::Bf16Projection,
     stream: Stream,
     weight: NvFp4WeightOnlyWeight,
@@ -72,6 +80,8 @@ impl NvFp4WeightOnlyWeight {
             global_scale,
             materialized,
             config,
+            marlin: Arc::new(Mutex::new(None)),
+            marlin_pair: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -102,12 +112,16 @@ impl NvFp4WeightOnlyBf16Linear {
             input_features: config.input_features,
             output_features: config.output_features,
         };
+        let marlin = (tokens <= 8 && MarlinNvFp4Bf16Linear::supported(config))
+            .then(|| MarlinNvFp4Bf16Linear::new(backend, tokens, &weight))
+            .transpose()?;
         Ok(Self {
             compressed: NvFp4WeightOnly::compile(&backend.inner.compiler, spec, tokens)?,
             tensor_core: NvFp4WeightOnlyTensorCore::compile(&backend.inner.compiler, spec, tokens)?,
+            tuning: tuning::Selection::new(backend, tokens, config, marlin.is_some())?,
+            marlin,
             materialized: backend.prepare_bf16_projection(request)?,
             stream: backend.inner.stream.clone(),
-            tuning: tuning::Selection::new(backend, tokens, config)?,
             weight,
         })
     }
@@ -121,6 +135,7 @@ impl NvFp4WeightOnlyBf16Linear {
             &self.stream,
             &self.compressed,
             &self.tensor_core,
+            self.marlin.as_mut(),
             &mut self.materialized,
             &self.weight,
             input,
@@ -147,6 +162,21 @@ impl NvFp4WeightOnlyBf16Linear {
                     output,
                 },
             ),
+            tuning::Execution::MarlinN128K128 => self
+                .marlin
+                .as_mut()
+                .ok_or(crate::Error::InvalidExecutionPlan("dense Marlin plan is unavailable"))?
+                .execute(input, output, mircuda::MarlinNvFp4ThreadConfig::N128K128),
+            tuning::Execution::MarlinN128K64 => self
+                .marlin
+                .as_mut()
+                .ok_or(crate::Error::InvalidExecutionPlan("dense Marlin plan is unavailable"))?
+                .execute(input, output, mircuda::MarlinNvFp4ThreadConfig::N128K64),
+            tuning::Execution::MarlinN64K128 => self
+                .marlin
+                .as_mut()
+                .ok_or(crate::Error::InvalidExecutionPlan("dense Marlin plan is unavailable"))?
+                .execute(input, output, mircuda::MarlinNvFp4ThreadConfig::N64K128),
             tuning::Execution::Materialized => {
                 self.materialized.execute(input, &self.weight.materialized, output)
             },

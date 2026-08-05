@@ -148,14 +148,23 @@ fn tune(
     fallback: Candidate,
 ) -> Result<Candidate> {
     let started = Instant::now();
-    let alternative = match fallback.execution {
-        DirectFp8ProjectionExecution::Portable => DirectFp8ProjectionExecution::TensorCore,
-        DirectFp8ProjectionExecution::TensorCore => DirectFp8ProjectionExecution::Portable,
-    };
     let mut candidates = vec![fallback];
-    match Candidate::new(backend, spec, tensor_core_scale, weight.bias.is_some(), alternative) {
-        Ok(candidate) => candidates.push(candidate),
-        Err(error) => tracing::debug!(%error, "alternate direct FP8 candidate is unavailable"),
+    for execution in [
+        DirectFp8ProjectionExecution::Portable,
+        DirectFp8ProjectionExecution::PortableCached,
+        DirectFp8ProjectionExecution::TensorCore,
+        DirectFp8ProjectionExecution::TensorCoreWide,
+        DirectFp8ProjectionExecution::CublasLt,
+    ] {
+        if execution == candidates[0].execution {
+            continue;
+        }
+        match Candidate::new(backend, spec, tensor_core_scale, weight.bias.is_some(), execution) {
+            Ok(candidate) => candidates.push(candidate),
+            Err(error) => {
+                tracing::debug!(?execution, %error, "alternate direct FP8 candidate is unavailable");
+            },
+        }
     }
     let input = sample_input(backend, spec.input_elements()?)?;
     let mut output = backend

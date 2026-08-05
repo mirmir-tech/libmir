@@ -36,7 +36,15 @@ pub(super) fn decode(
             },
         };
         let mut sessions = owned.iter_mut().map(|(_, session)| session).collect::<Vec<_>>();
-        batch.execute(&mut sessions, sequences)?;
+        let sampled = batch.execute(&mut sessions, sequences)?;
+        if let Some(sampled) = sampled {
+            return Ok(Some(
+                sampled
+                    .into_iter()
+                    .map(|token| Output { token: Some(token), logits: None })
+                    .collect(),
+            ));
+        }
         owned
             .iter_mut()
             .zip(sequences)

@@ -1,5 +1,6 @@
 mod batch;
 mod execution;
+mod gates;
 mod scratch;
 #[cfg(all(test, target_os = "linux"))]
 mod tests;
@@ -118,6 +119,7 @@ pub struct CudaAffineGatedDeltaLayer {
     backend: CudaBackend,
     config: AffineGatedDeltaLayerConfig,
     weights: AffineGatedDeltaLayerWeights,
+    packed_qkv_gate: Option<crate::backend::linear::CheckpointProjectionWeight>,
 }
 
 impl CudaAffineGatedDeltaLayer {
@@ -137,15 +139,26 @@ impl CudaAffineGatedDeltaLayer {
     ) -> Result<Self> {
         config.validate()?;
         weights.validate(config)?;
+        let packed_qkv_gate = crate::backend::linear::CheckpointProjectionWeight::pack_direct_fp8(
+            backend,
+            [&weights.qkv, &weights.gate],
+        )?;
         Ok(Self {
             backend: backend.clone(),
             config,
             weights,
+            packed_qkv_gate,
         })
     }
 
     pub fn prepare(&self, tokens: usize) -> Result<CudaAffineGatedDeltaExecution> {
-        CudaAffineGatedDeltaExecution::new(&self.backend, self.config, &self.weights, tokens)
+        CudaAffineGatedDeltaExecution::new(
+            &self.backend,
+            self.config,
+            &self.weights,
+            self.packed_qkv_gate.as_ref(),
+            tokens,
+        )
     }
 
     pub fn prepare_state(&self) -> Result<CudaGatedDeltaState> {
@@ -156,4 +169,11 @@ impl CudaAffineGatedDeltaLayer {
 pub(super) fn checked(left: usize, right: usize) -> Result<usize> {
     left.checked_mul(right)
         .ok_or(Error::InvalidDecoderKernel("Gated Delta shape overflow"))
+}
+
+pub(super) fn require_exact(name: &str, expected: usize, actual: usize) -> Result<()> {
+    if expected != actual {
+        return Err(Error::InvalidTensorSize { name: name.into(), expected, actual });
+    }
+    Ok(())
 }

@@ -2,8 +2,8 @@ use std::{env, path::PathBuf};
 
 #[cfg(feature = "cuda")]
 use libmir::{
-    CudaDenseVectorPolicy, CudaDenseVendorPolicy, CudaDenseWeightPolicy, CudaKernelAdmission,
-    CudaNumericalPolicy, DenseRole,
+    CudaAttentionPolicy, CudaDenseVectorPolicy, CudaDenseVendorPolicy, CudaDenseWeightPolicy,
+    CudaKernelAdmission, CudaNumericalPolicy, DenseRole,
 };
 use libmir::{Error, KvCacheDType, RuntimeConfig};
 
@@ -18,6 +18,8 @@ pub struct Config {
     pub kv_cache_dtype: Option<KvCacheDType>,
     #[cfg(feature = "cuda")]
     dense: DenseMode,
+    #[cfg(feature = "cuda")]
+    attention_partition_tokens: Option<usize>,
 }
 
 #[cfg(feature = "cuda")]
@@ -69,6 +71,10 @@ impl Config {
             kv_cache_dtype,
             #[cfg(feature = "cuda")]
             dense: DenseMode::parse(5)?,
+            #[cfg(feature = "cuda")]
+            attention_partition_tokens: environment_optional_usize(
+                "MIRMIR_CUDA_ATTENTION_PARTITION_TOKENS",
+            )?,
         })
     }
 
@@ -88,6 +94,14 @@ impl Config {
     fn configure_cuda(&self, runtime: &mut RuntimeConfig) {
         runtime.cuda.tuning.cache_directory =
             env::var_os("MIRMIR_CUDA_TUNING_CACHE").map(PathBuf::from);
+        if enabled("MIRMIR_CUDA_ATTENTION_DIRECT") {
+            runtime.cuda.planning.attention = CudaAttentionPolicy::Direct;
+        } else if let Some(partition_tokens) = self.attention_partition_tokens {
+            runtime.cuda.planning.attention = CudaAttentionPolicy::SplitKv {
+                partition_tokens,
+                threshold_tokens: partition_tokens.saturating_add(1),
+            };
+        }
         if !matches!(self.dense, DenseMode::Stable) {
             runtime.cuda.planning.numerical = CudaNumericalPolicy::Throughput;
             runtime.cuda.planning.admission = CudaKernelAdmission::Experimental;
@@ -197,6 +211,10 @@ fn environment_usize(name: &str, default: usize) -> Result<usize, Box<dyn std::e
 
 fn environment_u64(name: &str, default: u64) -> Result<u64, Box<dyn std::error::Error>> {
     env::var(name).map_or(Ok(default), |value| Ok(value.parse()?))
+}
+
+fn environment_optional_usize(name: &str) -> Result<Option<usize>, Box<dyn std::error::Error>> {
+    env::var(name).map_or(Ok(None), |value| Ok(Some(value.parse()?)))
 }
 
 fn enabled(name: &str) -> bool {

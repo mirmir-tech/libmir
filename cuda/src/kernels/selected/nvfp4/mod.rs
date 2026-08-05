@@ -9,6 +9,12 @@ use crate::{
     kernels::geometry::{product, require},
 };
 
+mod tensor_core;
+mod tiled;
+
+pub use tensor_core::{SelectedNvFp4TensorCoreGated, SelectedNvFp4TensorCoreLinear};
+pub use tiled::{SelectedNvFp4TiledGated, SelectedNvFp4TiledReduce, SelectedNvFp4TiledRows};
+
 cuda_export!(
     GatedKernel = "libmir_cuda_selected_nvfp4_gated_bf16"(
         input: &DeviceBuffer<bf16>, selected: &DeviceBuffer<u32>,
@@ -54,7 +60,7 @@ pub struct SelectedNvFp4Reduce {
 impl SelectedNvFp4Gated {
     pub fn compile(compiler: &Compiler, spec: SelectedNvFp4Spec) -> Result<Self> {
         validate(spec)?;
-        let source = cuda_kernel_file!("../../../kernels/selected_nvfp4_bf16.cu");
+        let source = cuda_kernel_file!("../../../../kernels/selected_nvfp4_bf16.cu");
         let module = compiler.compile(source, &CompileOptions::default())?;
         Ok(Self { kernel: module.kernel()?, spec })
     }
@@ -128,7 +134,7 @@ impl SelectedNvFp4Gated {
 impl SelectedNvFp4Reduce {
     pub fn compile(compiler: &Compiler, spec: SelectedNvFp4Spec) -> Result<Self> {
         validate(spec)?;
-        let source = cuda_kernel_file!("../../../kernels/selected_nvfp4_bf16.cu");
+        let source = cuda_kernel_file!("../../../../kernels/selected_nvfp4_bf16.cu");
         let module = compiler.compile(source, &CompileOptions::default())?;
         Ok(Self { kernel: module.kernel()?, spec })
     }
@@ -200,7 +206,7 @@ pub struct NvFp4BankView<'a> {
     pub combined: &'a DeviceBuffer<f32>,
 }
 
-fn validate_bank(
+pub(super) fn validate_bank(
     bank: NvFp4BankView<'_>,
     experts: usize,
     input: usize,
@@ -213,7 +219,7 @@ fn validate_bank(
     require("NVFP4 bank combined scales", experts, bank.combined.len())
 }
 
-fn validate(spec: SelectedNvFp4Spec) -> Result<()> {
+pub(super) fn validate(spec: SelectedNvFp4Spec) -> Result<()> {
     if spec.experts == 0
         || spec.selected == 0
         || spec.selected > spec.experts
@@ -228,7 +234,7 @@ fn validate(spec: SelectedNvFp4Spec) -> Result<()> {
     }
 }
 
-fn batch(tokens: usize, width: usize) -> Result<usize> {
+pub(super) fn batch(tokens: usize, width: usize) -> Result<usize> {
     if tokens == 0 {
         Err(Error::InvalidNvFp4("selected expert batch is empty"))
     } else {
@@ -236,7 +242,7 @@ fn batch(tokens: usize, width: usize) -> Result<usize> {
     }
 }
 
-const fn activation(value: GatedActivation) -> u32 {
+pub(super) const fn activation(value: GatedActivation) -> u32 {
     match value {
         GatedActivation::GeluTanh => 0,
         GatedActivation::Silu => 1,

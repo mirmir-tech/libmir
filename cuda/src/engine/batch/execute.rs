@@ -92,7 +92,8 @@ impl CudaEngine {
         let selected = if sampled.is_empty() {
             Vec::new()
         } else {
-            self.backend.read_tokens(bucket.sample(&sampled)?)?
+            bucket.sample(&sampled)?;
+            bucket.read_sampled()?
         };
         runner.selected = None;
         let vocab = bucket.logits()?.len() / rows;

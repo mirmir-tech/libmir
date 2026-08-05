@@ -4,7 +4,7 @@ use super::CudaGatedDeltaState;
 use crate::Result;
 
 #[derive(Debug)]
-pub(crate) struct CudaGatedDeltaCheckpoint {
+pub struct CudaGatedDeltaCheckpoint {
     state: DeviceBuffer<f32>,
     convolution: DeviceBuffer<bf16>,
     offset: usize,
@@ -16,17 +16,15 @@ impl CudaGatedDeltaState {
         let pool = &self.backend.inner.pool;
         let mut state = pool.allocate(stream, self.state.len())?;
         let mut convolution = pool.allocate(stream, self.convolution.len())?;
-        stream.copy_device_range(&self.state, 0..self.state.len(), &mut state, 0)?;
-        stream.copy_device_range(
-            &self.convolution,
-            0..self.convolution.len(),
-            &mut convolution,
-            0,
-        )?;
+        let (source, range) = self.state_source();
+        stream.copy_device_range(source, range, &mut state, 0)?;
+        let (source, range) = self.history_source();
+        stream.copy_device_range(source, range, &mut convolution, 0)?;
         Ok(CudaGatedDeltaCheckpoint { state, convolution, offset: self.offset })
     }
 
     pub(crate) fn restore(&mut self, checkpoint: &CudaGatedDeltaCheckpoint) -> Result<()> {
+        self.clear_residency();
         let stream = &self.backend.inner.stream;
         stream.copy_device_range(
             &checkpoint.state,
@@ -41,6 +39,7 @@ impl CudaGatedDeltaState {
             0,
         )?;
         self.offset = checkpoint.offset;
+        self.revision = self.revision.wrapping_add(1);
         Ok(())
     }
 

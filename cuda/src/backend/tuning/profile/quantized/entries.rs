@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 use super::{
     super::{QuantizedRuntimeEntry, storage::StoredQuantizedEntry},
-    QuantizedProfileFormat, QuantizedProfileRequest,
+    QuantizedProfileRequest,
+    request::QuantizedProfileFormat,
 };
 
 pub(in crate::backend::tuning::profile) fn stored_entries(

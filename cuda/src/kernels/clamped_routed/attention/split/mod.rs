@@ -98,6 +98,7 @@ impl ClampedRoutedSplitDecode {
             request: AttentionProfileRequest {
                 family: AttentionFamily::ClampedSink,
                 plan: attention_request,
+                batch_rows: 1,
                 block_size: storage.cache.block_size,
                 dtype: storage.cache.dtype,
                 window_tokens: None,

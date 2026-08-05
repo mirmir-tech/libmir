@@ -7,19 +7,12 @@ use super::super::geometry::{narrow, product, require};
 use crate::{Error, Result};
 
 cuda_export!(
-    SplitKernel = "libmir_cuda_gated_delta_split_bf16"(
-        input: &DeviceBuffer<bf16>, query: &mut DeviceBuffer<bf16>,
-        key: &mut DeviceBuffer<bf16>, value: &mut DeviceBuffer<bf16>,
-        tokens: u32, key_width: u32, value_width: u32,
-    )
-);
-
-cuda_export!(
-    NormalizeQkKernel = "libmir_cuda_gated_delta_normalize_qk_bf16"(
-        query: &DeviceBuffer<bf16>, key: &DeviceBuffer<bf16>,
+    SplitNormalizeKernel = "libmir_cuda_gated_delta_split_normalize_bf16"(
+        input: &DeviceBuffer<bf16>,
         normalized_query: &mut DeviceBuffer<bf16>,
-        normalized_key: &mut DeviceBuffer<bf16>, rows: u32, columns: u32,
-        epsilon: f32,
+        normalized_key: &mut DeviceBuffer<bf16>, value: &mut DeviceBuffer<bf16>,
+        tokens: u32, key_heads: u32, value_heads: u32,
+        key_dim: u32, value_dim: u32, epsilon: f32,
     )
 );
 
@@ -28,6 +21,7 @@ cuda_export!(
         input: &DeviceBuffer<bf16>, gate: &DeviceBuffer<bf16>,
         weight: &DeviceBuffer<bf16>, output: &mut DeviceBuffer<bf16>,
         rows: u32, columns: u32, epsilon: f32, weight_shift: f32,
+        value_heads: u32, gate_stride: u32, gate_offset: u32,
     )
 );
 
@@ -44,8 +38,7 @@ pub struct GatedDeltaTransformSpec {
 
 #[derive(Clone, Debug)]
 pub struct GatedDeltaTransforms {
-    split: TypedKernel<SplitKernel>,
-    normalize_qk: TypedKernel<NormalizeQkKernel>,
+    split_normalize: TypedKernel<SplitNormalizeKernel>,
     norm_gate: TypedKernel<NormGateKernel>,
     spec: GatedDeltaTransformSpec,
 }
@@ -56,19 +49,18 @@ impl GatedDeltaTransforms {
         let source = cuda_kernel_file!("../../../kernels/gated_delta_transform_bf16.cu");
         let module = compiler.compile(source, &CompileOptions::default())?;
         Ok(Self {
-            split: module.kernel()?,
-            normalize_qk: module.kernel()?,
+            split_normalize: module.kernel()?,
             norm_gate: module.kernel()?,
             spec,
         })
     }
 
-    pub fn split(
+    pub fn split_normalize(
         &self,
         stream: &Stream,
         input: &DeviceBuffer<bf16>,
-        query: &mut DeviceBuffer<bf16>,
-        key: &mut DeviceBuffer<bf16>,
+        normalized_query: &mut DeviceBuffer<bf16>,
+        normalized_key: &mut DeviceBuffer<bf16>,
         value: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
         let key_width = product(self.spec.key_heads, self.spec.key_dim)?;
@@ -77,46 +69,13 @@ impl GatedDeltaTransforms {
             .checked_mul(2)
             .and_then(|value| value.checked_add(value_width))
             .ok_or(Error::InvalidDecoderKernel("Gated Delta projection width overflow"))?;
-        let elements = product(self.spec.tokens, width)?;
-        require("Gated Delta mixed projection", elements, input.len())?;
-        require("Gated Delta split query", product(self.spec.tokens, key_width)?, query.len())?;
-        require("Gated Delta split key", product(self.spec.tokens, key_width)?, key.len())?;
-        require("Gated Delta split value", product(self.spec.tokens, value_width)?, value.len())?;
-        let threads = 256_usize;
-        Ok(self.split.launch(
-            stream,
-            LaunchConfig {
-                grid: (narrow(elements.div_ceil(threads))?, 1, 1),
-                block: (narrow(threads)?, 1, 1),
-                shared_memory_bytes: 0,
-            },
-            (
-                input,
-                query,
-                key,
-                value,
-                narrow(self.spec.tokens)?,
-                narrow(key_width)?,
-                narrow(value_width)?,
-            ),
-        )?)
-    }
-
-    pub fn normalize_qk(
-        &self,
-        stream: &Stream,
-        query: &DeviceBuffer<bf16>,
-        key: &DeviceBuffer<bf16>,
-        normalized_query: &mut DeviceBuffer<bf16>,
-        normalized_key: &mut DeviceBuffer<bf16>,
-    ) -> Result<()> {
         let rows = product(self.spec.tokens, self.spec.key_heads)?;
         let elements = product(rows, self.spec.key_dim)?;
-        require("Gated Delta query normalization input", elements, query.len())?;
-        require("Gated Delta key normalization input", elements, key.len())?;
+        require("Gated Delta mixed projection", product(self.spec.tokens, width)?, input.len())?;
         require("Gated Delta normalized query", elements, normalized_query.len())?;
         require("Gated Delta normalized key", elements, normalized_key.len())?;
-        Ok(self.normalize_qk.launch(
+        require("Gated Delta split value", product(self.spec.tokens, value_width)?, value.len())?;
+        Ok(self.split_normalize.launch(
             stream,
             LaunchConfig {
                 grid: (narrow(rows)?, 1, 1),
@@ -124,12 +83,15 @@ impl GatedDeltaTransforms {
                 shared_memory_bytes: 0,
             },
             (
-                query,
-                key,
+                input,
                 normalized_query,
                 normalized_key,
-                narrow(rows)?,
+                value,
+                narrow(self.spec.tokens)?,
+                narrow(self.spec.key_heads)?,
+                narrow(self.spec.value_heads)?,
                 narrow(self.spec.key_dim)?,
+                narrow(self.spec.value_dim)?,
                 1.0e-6,
             ),
         )?)
@@ -143,10 +105,24 @@ impl GatedDeltaTransforms {
         weight: &DeviceBuffer<bf16>,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
+        self.norm_gate_strided(stream, input, gate, weight, output, self.value_width()?, 0)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn norm_gate_strided(
+        &self,
+        stream: &Stream,
+        input: &DeviceBuffer<bf16>,
+        gate: &DeviceBuffer<bf16>,
+        weight: &DeviceBuffer<bf16>,
+        output: &mut DeviceBuffer<bf16>,
+        gate_stride: usize,
+        gate_offset: usize,
+    ) -> Result<()> {
         let rows = product(self.spec.tokens, self.spec.value_heads)?;
         let elements = product(rows, self.spec.value_dim)?;
         require("Gated Delta norm input", elements, input.len())?;
-        require("Gated Delta gate", elements, gate.len())?;
+        validate_gate(self.spec, gate, gate_stride, gate_offset)?;
         require("Gated Delta norm weight", self.spec.value_dim, weight.len())?;
         require("Gated Delta gated output", elements, output.len())?;
         Ok(self.norm_gate.launch(
@@ -165,15 +141,43 @@ impl GatedDeltaTransforms {
                 narrow(self.spec.value_dim)?,
                 self.spec.epsilon,
                 self.spec.norm_weight_shift,
+                narrow(self.spec.value_heads)?,
+                narrow(gate_stride)?,
+                narrow(gate_offset)?,
             ),
         )?)
     }
+
+    fn value_width(&self) -> Result<usize> {
+        product(self.spec.value_heads, self.spec.value_dim)
+    }
+}
+
+fn validate_gate(
+    spec: GatedDeltaTransformSpec,
+    gate: &DeviceBuffer<bf16>,
+    stride: usize,
+    offset: usize,
+) -> Result<()> {
+    let width = product(spec.value_heads, spec.value_dim)?;
+    let row_end = offset
+        .checked_add(width)
+        .filter(|end| *end <= stride)
+        .ok_or(Error::InvalidDecoderKernel("invalid Gated Delta gate stride"))?;
+    let required = product(spec.tokens.saturating_sub(1), stride)?
+        .checked_add(row_end)
+        .ok_or(Error::InvalidDecoderKernel("Gated Delta gate stride overflow"))?;
+    if gate.len() < required {
+        return Err(Error::InvalidDecoderKernel("strided Gated Delta gate is too small"));
+    }
+    Ok(())
 }
 
 fn validate(spec: GatedDeltaTransformSpec) -> Result<()> {
     if spec.tokens == 0
         || spec.key_heads == 0
         || spec.value_heads == 0
+        || !spec.value_heads.is_multiple_of(spec.key_heads)
         || spec.key_dim == 0
         || spec.value_dim == 0
         || !spec.epsilon.is_finite()

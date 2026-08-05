@@ -148,6 +148,11 @@ impl BatchedSplitPagedAttention {
         self.max_partitions
     }
 
+    #[must_use]
+    pub(crate) const fn spec(&self) -> PagedAttentionSpec {
+        self.spec
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn validate(
         &self,

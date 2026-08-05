@@ -3,14 +3,14 @@ use runtime::kv::KvCacheDType;
 
 use super::LoadedModel;
 use crate::{
-    engine::{Array, KvPageFormat, MemoryStats, clear_memory_cache, memory_stats},
+    engine::{Array, DecoderCache, KvPageFormat, MemoryStats, clear_memory_cache, memory_stats},
     native::{error::Result, prefix::PrefixCache, session::SessionState},
 };
 
 const AUTO_PREFIX_CACHE_NUMERATOR: usize = 2;
 const AUTO_PREFIX_CACHE_DIVISOR: usize = 5;
 const ALLOCATOR_CACHE_DIVISOR: usize = 8;
-const MEMORY_PRESSURE_PERCENT: usize = 85;
+const ALLOCATOR_PRESSURE_PERCENT: usize = 85;
 
 #[cfg(test)]
 mod tests;
@@ -44,7 +44,7 @@ impl LoadedModel {
     }
 
     pub(crate) fn reserve_prefill_pages(&mut self, required: usize) -> Result<()> {
-        let maximum = self.stream.config().kv_cache.block_count as usize;
+        let maximum = DecoderCache::physical_page_capacity(&self.stream, self.info.cache_step);
         let Some(decoder) = self.info.decoder.as_ref() else {
             return Ok(());
         };
@@ -124,7 +124,7 @@ impl LoadedModel {
             return Ok(false);
         }
         let total = before.active.saturating_add(before.cached);
-        let pressure = total > usable.saturating_mul(MEMORY_PRESSURE_PERCENT) / 100
+        let pressure = total > usable.saturating_mul(ALLOCATOR_PRESSURE_PERCENT) / 100
             || before.cached > usable / ALLOCATOR_CACHE_DIVISOR;
         if !pressure {
             return Ok(false);
@@ -155,21 +155,6 @@ pub(in crate::native) fn cache_prefix_snapshot(
         return Ok(false);
     }
     let _reclaimed = LoadedModel::reclaim_prefill_allocator_cache()?;
-    let mut memory = memory_stats()?;
-    while !prefix_snapshot_fits(memory) && prefixes.evict_oldest() {
-        clear_memory_cache()?;
-        memory = memory_stats()?;
-    }
-    if !prefix_snapshot_fits(memory) {
-        tracing::debug!(
-            prefix_bytes = bytes,
-            active_bytes = memory.active,
-            cached_bytes = memory.cached,
-            usable_bytes = usable_memory(memory),
-            "skipped Metal prefix snapshot under memory pressure"
-        );
-        return Ok(false);
-    }
     prefixes.insert(model, tokens, state, logits, block_size, bytes)?;
     Ok(true)
 }
@@ -186,23 +171,8 @@ pub(in crate::native) fn cache_prefix_checkpoint(
         return Ok(false);
     }
     let _reclaimed = LoadedModel::reclaim_prefill_allocator_cache()?;
-    let mut memory = memory_stats()?;
-    while !prefix_snapshot_fits(memory) && prefixes.evict_oldest() {
-        clear_memory_cache()?;
-        memory = memory_stats()?;
-    }
-    if !prefix_snapshot_fits(memory) {
-        return Ok(false);
-    }
     prefixes.insert_checkpoint(model, tokens, state, block_size, bytes)?;
     Ok(true)
-}
-
-fn prefix_snapshot_fits(memory: MemoryStats) -> bool {
-    let usable = usable_memory(memory);
-    usable == 0
-        || memory.active.saturating_add(memory.cached)
-            <= usable.saturating_mul(MEMORY_PRESSURE_PERCENT) / 100
 }
 
 fn usable_memory(memory: MemoryStats) -> usize {

@@ -7,8 +7,8 @@ use super::{
     states::{full_states, linear_states},
 };
 use crate::{
-    CudaBackend, CudaSharedRoutedModelSession, DeviceBatchSamplerBf16, Error, PagedPrefillBatch,
-    Result,
+    CudaBackend, CudaSharedRoutedModelSession, DeviceBatchSamplerBf16, Error, ExecutionPhase,
+    PagedPrefillBatch, Result,
     backend::shared_routed::{
         CudaSharedRoutedModelTemplate,
         boundary::{SharedRoutedEmbedding, SharedRoutedOutputHead},
@@ -17,7 +17,7 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub(crate) struct CudaSharedRoutedPrefillBatch {
+pub struct CudaSharedRoutedPrefillBatch {
     backend: CudaBackend,
     rows: usize,
     row_tokens: usize,
@@ -50,7 +50,7 @@ impl CudaSharedRoutedPrefillBatch {
         let layers = template
             .layers
             .iter()
-            .map(|layer| SharedRoutedBatchLayer::new(layer, tokens))
+            .map(|layer| SharedRoutedBatchLayer::new(layer, tokens, ExecutionPhase::Prefill, None))
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             backend: backend.clone(),
@@ -87,7 +87,7 @@ impl CudaSharedRoutedPrefillBatch {
         self.paging.prepare(tables, starts, &counts)?;
         self.token_staging.copy_from_slice(tokens)?;
         self.position_staging
-            .copy_from_slice(&self.paging_positions(starts).repeat(3))?;
+            .copy_from_slice(&self.paging_positions(starts)?.repeat(3))?;
         let stream = &self.backend.inner.stream;
         stream.copy_to_device(&mut self.token_staging, &mut self.token_ids)?;
         stream.copy_to_device(&mut self.position_staging, &mut self.positions)?;
@@ -129,10 +129,14 @@ impl CudaSharedRoutedPrefillBatch {
             .transpose()
     }
 
-    fn paging_positions(&self, starts: &[usize]) -> Vec<u32> {
+    fn paging_positions(&self, starts: &[usize]) -> Result<Vec<u32>> {
         starts
             .iter()
-            .flat_map(|start| (*start..*start + self.row_tokens).map(|value| value as u32))
+            .flat_map(|start| *start..*start + self.row_tokens)
+            .map(|value| {
+                u32::try_from(value)
+                    .map_err(|_| Error::InvalidPagedKv("shared-routed position exceeds u32"))
+            })
             .collect()
     }
 

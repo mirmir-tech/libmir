@@ -39,7 +39,7 @@ fn variable_paged_contexts_exclude_incompatible_view_candidates() -> Result<()> 
     assert!(!key.view);
     assert_eq!(
         candidates(key, true, true),
-        [BatchAttentionExecution::PagedRows, BatchAttentionExecution::PagedBatched]
+        [BatchAttentionExecution::PagedRows, BatchAttentionExecution::PagedBatched12,]
     );
     Ok(())
 }

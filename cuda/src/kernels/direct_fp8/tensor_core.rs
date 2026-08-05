@@ -1,7 +1,7 @@
 use mircuda::{
     CompileOptions, Compiler, Context, DeviceBuffer, LaunchConfig, MemoryPool, ScaledFp8Plan,
-    ScaledFp8Scale, ScaledFp8Spec, ScaledFp8WeightScale, Stream, TypedKernel, bf16, cuda_export,
-    cuda_kernel_file,
+    ScaledFp8Scale, ScaledFp8Spec, ScaledFp8Tile, ScaledFp8WeightScale, Stream, TypedKernel, bf16,
+    cuda_export, cuda_kernel_file,
 };
 
 use super::{DirectFp8Activation, DirectFp8Scale, DirectFp8Spec};
@@ -41,6 +41,7 @@ impl DirectFp8TensorCoreLinear {
         spec: DirectFp8Spec,
         scale: ScaledFp8Scale,
         has_bias: bool,
+        tile: ScaledFp8Tile,
     ) -> Result<Self> {
         let source = cuda_kernel_file!("../../../kernels/direct_fp8_quantize.cu");
         let module = compiler.compile(
@@ -68,7 +69,8 @@ impl DirectFp8TensorCoreLinear {
                     },
                 },
                 has_bias,
-            )?,
+            )?
+            .with_tile(tile),
         )?;
         Ok(Self {
             dynamic_quantize: module.kernel()?,

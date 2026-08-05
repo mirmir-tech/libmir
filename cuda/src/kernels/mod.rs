@@ -26,6 +26,7 @@ mod output_fp8;
 mod packed_gated;
 mod packed_int8;
 mod paged;
+mod projection_pack;
 mod qkv;
 mod qmm;
 mod rms_norm_shift;
@@ -37,6 +38,7 @@ mod sigmoid;
 #[cfg(test)]
 mod tests;
 mod text;
+mod tuning;
 mod vision;
 
 pub use affine::{
@@ -50,7 +52,10 @@ pub(crate) use clamped_routed::{
 };
 pub use decoder::{RmsNorm, RmsNormUnit, Rope, RopeSpec};
 pub(crate) use dense_cast::DenseCast;
-pub(crate) use direct_fp8::{DirectE5M2WeightOnlyTensorCoreLinear, DirectFp8TensorCoreLinear};
+pub(crate) use direct_fp8::{
+    DirectE5M2WeightOnlyTensorCoreLinear, DirectFp8CachedLinear, DirectFp8CublasLtLinear,
+    DirectFp8TensorCoreLinear,
+};
 pub use direct_fp8::{
     DirectFp8Activation, DirectFp8Embedding, DirectFp8EmbeddingBatch, DirectFp8EmbeddingSpec,
     DirectFp8Format, DirectFp8Linear, DirectFp8Scale, DirectFp8Scales, DirectFp8Spec,
@@ -62,10 +67,10 @@ pub use encoder::{
 };
 pub use gated_attention::GatedAttentionSplit;
 pub use gated_delta::{
-    GatedDeltaBatchConvolution, GatedDeltaBatchConvolutionSpec, GatedDeltaBatchRecurrence,
-    GatedDeltaBatchSpec, GatedDeltaConvolution, GatedDeltaConvolutionSpec,
-    GatedDeltaInputs as GatedDeltaKernelInputs, GatedDeltaLaunch, GatedDeltaRecurrence,
-    GatedDeltaSpec, GatedDeltaTransformSpec, GatedDeltaTransforms,
+    GatedDeltaAlphaBeta, GatedDeltaBatchConvolution, GatedDeltaBatchConvolutionSpec,
+    GatedDeltaBatchRecurrence, GatedDeltaBatchSpec, GatedDeltaConvolution,
+    GatedDeltaConvolutionSpec, GatedDeltaInputs as GatedDeltaKernelInputs, GatedDeltaLaunch,
+    GatedDeltaRecurrence, GatedDeltaSpec, GatedDeltaTransformSpec, GatedDeltaTransforms,
 };
 pub use gptq::{GptqLaunch, GptqLinear, GptqSpec};
 pub use linear_fp8::{BlockFp8LinearKernels, BlockFp8LinearSpec};
@@ -101,6 +106,7 @@ pub use paged::{
     BatchedSplitPagedAttention, PagedAttention, PagedAttentionSpec, PagedKvGather, PagedKvSpec,
     PagedKvStore, PagedPrefillAttention, SplitAttentionWorkspace, SplitPagedAttention,
 };
+pub use projection_pack::ProjectionPackSplit;
 pub(crate) use qkv::{
     BatchedQkvPostprocess, QkvNormalization, QkvPostprocess, QkvPostprocessArguments,
     QkvPostprocessKernel, QkvPostprocessSpec,
@@ -117,10 +123,13 @@ pub use selected::{
     SelectedAffinePair, SelectedAffinePairLaunch, SelectedAffinePairSpec, SelectedAffineReduce,
     SelectedAffineReduceLaunch, SelectedAffineReduceSpec, SelectedDenseDispatch,
     SelectedDenseGateLaunch, SelectedDenseMoe, SelectedDenseMoeSpec, SelectedDenseReduceLaunch,
-    SelectedNvFp4Gated, SelectedNvFp4Reduce, SelectedNvFp4Spec,
+    SelectedNvFp4Gated, SelectedNvFp4Reduce, SelectedNvFp4Spec, SelectedNvFp4TensorCoreGated,
+    SelectedNvFp4TensorCoreLinear, SelectedNvFp4TiledGated, SelectedNvFp4TiledReduce,
+    SelectedNvFp4TiledRows,
 };
 pub use sigmoid::{SigmoidElementwiseBf16, SigmoidMultiplyBf16};
 pub use text::{L2NormalizeBf16, TextAttention, TextAttentionSpec};
+pub(crate) use tuning::CacheEviction;
 pub(crate) use vision::VisionEmbeddingSplice;
 pub use vision::{
     SpatialMergeKernels, VisionAttention, VisionAttentionSpec, VisionClip, VisionClipSpec,

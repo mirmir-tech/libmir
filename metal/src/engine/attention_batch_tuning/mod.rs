@@ -18,7 +18,9 @@ pub enum BatchAttentionExecution {
     Rows,
     Batched,
     PagedRows,
-    PagedBatched,
+    PagedBatched4,
+    PagedBatched8,
+    PagedBatched12,
 }
 
 pub(super) fn forward(
@@ -35,7 +37,7 @@ pub(super) fn forward(
     let paged_batched = paged::batchable(contexts);
     if profile::prefer_paged_batched(key, paged_batched) {
         return execute(
-            BatchAttentionExecution::PagedBatched,
+            BatchAttentionExecution::PagedBatched12,
             queries,
             contexts,
             scale,
@@ -146,7 +148,13 @@ fn candidates(
         candidates.push(BatchAttentionExecution::PagedRows);
     }
     if paged_batched && key.sequence == 1 {
-        candidates.push(BatchAttentionExecution::PagedBatched);
+        if key.batch > 4 {
+            candidates.push(BatchAttentionExecution::PagedBatched4);
+        }
+        if key.batch > 8 {
+            candidates.push(BatchAttentionExecution::PagedBatched8);
+        }
+        candidates.push(BatchAttentionExecution::PagedBatched12);
     }
     candidates
 }
@@ -184,7 +192,15 @@ fn execute_measured(
             batched(queries, contexts, scale, causal, stream, refresh_fragmented)
         },
         BatchAttentionExecution::PagedRows => paged::rows(queries, contexts, scale, stream),
-        BatchAttentionExecution::PagedBatched => paged::batched(queries, contexts, scale, stream),
+        BatchAttentionExecution::PagedBatched4 => {
+            paged::batched(queries, contexts, scale, stream, 4)
+        },
+        BatchAttentionExecution::PagedBatched8 => {
+            paged::batched(queries, contexts, scale, stream, 8)
+        },
+        BatchAttentionExecution::PagedBatched12 => {
+            paged::batched(queries, contexts, scale, stream, 12)
+        },
     }
 }
 

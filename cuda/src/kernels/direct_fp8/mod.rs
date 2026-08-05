@@ -1,10 +1,13 @@
 use super::geometry::product;
 use crate::{Error, Result};
 
+mod cached;
+mod cublaslt;
 mod embedding;
 mod portable;
 mod tensor_core;
 mod weight_only_tensor_core;
+pub use cached::DirectFp8CachedLinear;
 pub use embedding::{DirectFp8Embedding, DirectFp8EmbeddingBatch, DirectFp8EmbeddingSpec};
 pub use portable::{DirectFp8Linear, DirectFp8Scales};
 pub use tensor_core::DirectFp8TensorCoreLinear;
@@ -157,3 +160,4 @@ fn scale_geometry(
 
 #[cfg(test)]
 mod tests;
+pub use cublaslt::DirectFp8CublasLtLinear;

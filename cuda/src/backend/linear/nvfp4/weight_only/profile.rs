@@ -11,6 +11,9 @@ impl From<NvFp4WeightOnlyExecution> for Execution {
         match value {
             NvFp4WeightOnlyExecution::Compressed => Self::Compressed,
             NvFp4WeightOnlyExecution::TensorCore => Self::TensorCore,
+            NvFp4WeightOnlyExecution::MarlinN128K128 => Self::MarlinN128K128,
+            NvFp4WeightOnlyExecution::MarlinN128K64 => Self::MarlinN128K64,
+            NvFp4WeightOnlyExecution::MarlinN64K128 => Self::MarlinN64K128,
             NvFp4WeightOnlyExecution::Materialized => Self::Materialized,
         }
     }
@@ -21,6 +24,9 @@ impl From<Execution> for NvFp4WeightOnlyExecution {
         match value {
             Execution::Compressed => Self::Compressed,
             Execution::TensorCore => Self::TensorCore,
+            Execution::MarlinN128K128 => Self::MarlinN128K128,
+            Execution::MarlinN128K64 => Self::MarlinN128K64,
+            Execution::MarlinN64K128 => Self::MarlinN64K128,
             Execution::Materialized => Self::Materialized,
         }
     }

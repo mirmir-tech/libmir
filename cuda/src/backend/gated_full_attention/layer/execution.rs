@@ -5,7 +5,8 @@ use super::{AffineGatedFullAttentionMoeLayerConfig, scratch::FullAttentionLayerS
 use crate::{
     CudaAffineGatedFullAttention, CudaAffineGatedFullAttentionExecution,
     CudaAffineGatedFullAttentionState, CudaAffineSharedExpertMoe,
-    CudaAffineSharedExpertMoeExecution, CudaBackend, CudaTensor, Error, PagedPrefillBatch, Result,
+    CudaAffineSharedExpertMoeExecution, CudaBackend, CudaTensor, Error, ExecutionPhase,
+    PagedPrefillBatch, Result,
     kernels::{ElementwiseBf16, ShiftedRmsNorm},
 };
 
@@ -32,6 +33,7 @@ impl CudaAffineGatedFullAttentionMoeExecution {
         input_norm_weight: &CudaTensor,
         post_attention_norm_weight: &CudaTensor,
         tokens: usize,
+        phase: ExecutionPhase,
     ) -> Result<Self> {
         let hidden = config.attention.hidden_size;
         let norm = || {
@@ -49,7 +51,7 @@ impl CudaAffineGatedFullAttentionMoeExecution {
         Ok(Self {
             backend: backend.clone(),
             attention: attention.prepare(tokens)?,
-            moe: moe.prepare(tokens)?,
+            moe: moe.prepare_phase(tokens, phase)?,
             input_norm: norm()?,
             post_attention_norm: norm()?,
             residual: ElementwiseBf16::compile(&backend.inner.compiler, elements)?,

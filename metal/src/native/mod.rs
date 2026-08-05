@@ -13,4 +13,4 @@ mod trace;
 pub use backend::{
     MetalBackend, MetalGenerationStepOutput, MetalMemoryStats, MetalPrefillSchedule,
 };
-pub use prefill::MetalPrefillBatch;
+pub use prefill::{MetalPrefillBatch, MetalPrefillCohort};

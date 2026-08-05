@@ -12,16 +12,3 @@ fn bounds_automatic_prefix_cache_to_two_fifths_of_usable_memory() {
     assert_eq!(prefix_cache_budget(memory, None), 320);
     assert_eq!(prefix_cache_budget(memory, Some(75)), 75);
 }
-
-#[test]
-fn prefix_snapshot_preserves_runtime_headroom() {
-    let memory = MemoryStats {
-        active: 700,
-        cached: 50,
-        peak: 750,
-        limit: 1_000,
-        recommended: Some(1_000),
-    };
-    assert!(prefix_snapshot_fits(memory));
-    assert!(!prefix_snapshot_fits(MemoryStats { active: 801, ..memory }));
-}

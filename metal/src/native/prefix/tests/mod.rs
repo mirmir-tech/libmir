@@ -9,6 +9,8 @@ use crate::{
     native::{error::Result, session::SessionState},
 };
 
+mod retention;
+
 #[test]
 fn indexes_storage_efficient_complete_blocks_and_the_exact_prompt() {
     let indexed = indexed_prefixes("model", &[1, 2, 3, 4, 5], Some(2));
@@ -66,7 +68,7 @@ fn continuation_replays_an_unaligned_checkpoint_page() -> Result<()> {
 }
 
 #[test]
-fn message_checkpoint_shares_a_group_with_the_completed_prompt() -> Result<()> {
+fn shared_checkpoints_count_only_the_largest_group_footprint() -> Result<()> {
     let mut cache = PrefixCache::new(2, usize::MAX);
     let mut state = SessionState::new(DecoderCache::new(&[], 1)?);
     state.position = 2;
@@ -82,7 +84,24 @@ fn message_checkpoint_shares_a_group_with_the_completed_prompt() -> Result<()> {
     assert_eq!(restored.position, 2);
     assert!(logits.is_none());
     assert_eq!(cache.groups.len(), 1);
-    assert_eq!(cache.resident_bytes(), 100);
+    assert_eq!(cache.resident_bytes(), 60);
+    Ok(())
+}
+
+#[test]
+fn growing_checkpoints_do_not_sum_shared_kv_pages() -> Result<()> {
+    let mut cache = PrefixCache::new(2, 100);
+    let mut state = SessionState::new(DecoderCache::new(&[], 1)?);
+    state.position = 2;
+    cache.insert_checkpoint("model", &[1, 2], &state, 2, 20)?;
+    state.position = 4;
+    cache.insert_checkpoint("model", &[1, 2, 3, 4], &state, 2, 40)?;
+    state.position = 5;
+    let logits = Array::from_u32(&[0], &[1])?;
+    cache.insert("model", &[1, 2, 3, 4, 5], &state, &logits, None, 60)?;
+
+    assert_eq!(cache.groups.len(), 1);
+    assert_eq!(cache.resident_bytes(), 60);
     Ok(())
 }
 
@@ -124,6 +143,19 @@ fn reserves_one_group_before_computing_a_cache_miss() -> Result<()> {
 }
 
 #[test]
+fn cohort_lease_does_not_evict_prefixes_while_collecting_misses() -> Result<()> {
+    let mut cache = PrefixCache::new(2, usize::MAX);
+    insert_prompt(&mut cache, 1)?;
+    insert_prompt(&mut cache, 2)?;
+
+    assert!(cache.lease_longest("missing", &[9])?.is_none());
+    assert!(cache.lease_longest("model", &[1])?.is_some());
+    assert!(cache.lease_longest("model", &[2])?.is_some());
+    assert_eq!(cache.groups.len(), 2);
+    Ok(())
+}
+
+#[test]
 fn batch_admission_reserves_slots_after_prefix_states_are_restored() -> Result<()> {
     let mut cache = PrefixCache::new(3, usize::MAX);
     insert_snapshot(&mut cache, 1, 1, 100)?;
@@ -155,6 +187,13 @@ fn insert_snapshot(
     bytes: usize,
 ) -> Result<()> {
     insert_snapshot_with_key(cache, PrefixKey([key; 32]), memory_group, bytes)
+}
+
+fn insert_prompt(cache: &mut PrefixCache, token: u32) -> Result<()> {
+    let mut state = SessionState::new(DecoderCache::new(&[], 1)?);
+    state.position = 1;
+    let logits = Array::from_u32(&[token], &[1])?;
+    cache.insert("model", &[token], &state, &logits, None, 100)
 }
 
 fn insert_snapshot_with_key(

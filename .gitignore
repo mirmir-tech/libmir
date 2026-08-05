@@ -10,3 +10,4 @@
 /bench-results/
 __pycache__/
 *.pyc
+rustc-ice-*.txt

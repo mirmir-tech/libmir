@@ -16,6 +16,8 @@ mod vision;
 use cuda::CudaEngine;
 use foundation::model::BackendTarget;
 #[cfg(any(feature = "cuda", feature = "metal"))]
+pub use generation::EnginePrefillCohort;
+#[cfg(any(feature = "cuda", feature = "metal"))]
 pub use generation::PrefillExecutionProfile;
 #[cfg(any(feature = "cuda", feature = "metal"))]
 pub use generation::{EngineGenerationStepOutput, EnginePrefillBatch};
@@ -25,7 +27,7 @@ use metal::MetalBackend;
 use runtime::RuntimeError;
 #[cfg(feature = "cuda")]
 use runtime::backend::DecodeRequest;
-#[cfg(any(feature = "cuda", feature = "metal"))]
+#[cfg(feature = "metal")]
 use runtime::progress::ProgressEvent;
 use runtime::{
     Result as RuntimeResult,

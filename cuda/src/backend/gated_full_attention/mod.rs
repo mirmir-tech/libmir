@@ -155,6 +155,7 @@ pub struct CudaAffineGatedFullAttention {
     backend: CudaBackend,
     config: AffineGatedFullAttentionConfig,
     weights: AffineGatedFullAttentionWeights,
+    packed_qkv: Option<crate::backend::linear::CheckpointProjectionWeight>,
 }
 
 impl CudaAffineGatedFullAttention {
@@ -174,16 +175,25 @@ impl CudaAffineGatedFullAttention {
     ) -> Result<Self> {
         config.validate()?;
         weights.validate(config)?;
+        let packed_qkv = crate::backend::linear::CheckpointProjectionWeight::pack_direct_fp8(
+            backend,
+            [&weights.query, &weights.key, &weights.value],
+        )?;
         Ok(Self {
             backend: backend.clone(),
             config,
             weights,
+            packed_qkv,
         })
     }
 
     pub fn prepare(&self, tokens: usize) -> Result<CudaAffineGatedFullAttentionExecution> {
         CudaAffineGatedFullAttentionExecution::new(
-            &self.backend, self.config, &self.weights, tokens,
+            &self.backend,
+            self.config,
+            &self.weights,
+            self.packed_qkv.as_ref(),
+            tokens,
         )
     }
 

@@ -8,7 +8,8 @@ use runtime::kv::KvStorageSpec;
 use crate::{
     AffineGatedFullAttentionConfig, AffineSharedExpertMoeConfig, CudaAffineGatedFullAttention,
     CudaAffineGatedFullAttentionState, CudaAffineSharedExpertMoe, CudaBackend, CudaTensor,
-    CudaTensorDType, CudaTensorSet, Error, Result,
+    CudaTensorDType, CudaTensorSet, Error, ExecutionPhase, Result,
+    kernels::BatchedSplitAttentionWorkspace,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -93,7 +94,29 @@ impl CudaAffineGatedFullAttentionMoeLayer {
     }
 
     pub fn prepare(&self, tokens: usize) -> Result<CudaAffineGatedFullAttentionMoeExecution> {
-        CudaAffineGatedFullAttentionMoeExecution::new(
+        let phase = if tokens == 1 {
+            ExecutionPhase::Decode
+        } else {
+            ExecutionPhase::Prefill
+        };
+        self.prepare_phase(tokens, phase)
+    }
+
+    pub(crate) fn prepare_phase(
+        &self,
+        tokens: usize,
+        phase: ExecutionPhase,
+    ) -> Result<CudaAffineGatedFullAttentionMoeExecution> {
+        self.prepare_phase_with_workspace(tokens, phase, None)
+    }
+
+    pub(crate) fn prepare_phase_with_workspace(
+        &self,
+        tokens: usize,
+        phase: ExecutionPhase,
+        workspace: Option<BatchedSplitAttentionWorkspace>,
+    ) -> Result<CudaAffineGatedFullAttentionMoeExecution> {
+        let mut execution = CudaAffineGatedFullAttentionMoeExecution::new(
             &self.backend,
             self.config,
             &self.attention,
@@ -101,7 +124,10 @@ impl CudaAffineGatedFullAttentionMoeLayer {
             &self.input_norm,
             &self.post_attention_norm,
             tokens,
-        )
+            phase,
+        )?;
+        execution.attention.batch_workspace = workspace;
+        Ok(execution)
     }
 
     pub fn prepare_state(

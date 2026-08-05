@@ -2,10 +2,17 @@ use std::sync::Arc;
 
 use self::hybrid::HybridLinearLayerCache;
 use crate::engine::{
-    Error, GatedDeltaState, KvCache, KvPageFormat, PagedArenaPool, Result, lowering::MixerLowering,
+    Error, GatedDeltaState, KvCache, KvPageFormat, PagedArenaPool, Result, Stream,
+    lowering::MixerLowering,
 };
 
 mod hybrid;
+#[cfg(test)]
+mod tests;
+
+const TOKEN_ROUNDING_PAGES_PER_SESSION: usize = 1;
+const CONTIGUOUS_TAIL_PAGES_PER_SESSION: usize = 1;
+const COPY_ON_WRITE_PAGES_PER_SESSION: usize = 1;
 
 #[derive(Debug)]
 pub struct DecoderCache {
@@ -19,6 +26,16 @@ enum CacheStorage {
 }
 
 impl DecoderCache {
+    pub(crate) fn physical_page_capacity(stream: &Stream, allocation_step_tokens: usize) -> usize {
+        let page_size = stream.config().kv_cache.block_size.max(1);
+        let allocation_step_pages = allocation_step_tokens.div_ceil(page_size).max(1);
+        physical_page_capacity(
+            stream.config().kv_cache.block_count as usize,
+            stream.config().max_batch_requests(),
+            allocation_step_pages,
+        )
+    }
+
     pub fn new(cache_windows: &[Option<usize>], step: usize) -> Result<Self> {
         Self::new_with_format(cache_windows, step, KvPageFormat::Native, 16)
     }
@@ -223,4 +240,14 @@ impl DecoderCache {
             CacheStorage::HybridLinear(_) => false,
         }
     }
+}
+
+fn physical_page_capacity(logical: usize, sessions: usize, allocation_step: usize) -> usize {
+    let per_session = TOKEN_ROUNDING_PAGES_PER_SESSION
+        + CONTIGUOUS_TAIL_PAGES_PER_SESSION
+        + COPY_ON_WRITE_PAGES_PER_SESSION;
+    logical
+        .saturating_add(sessions.max(1).saturating_mul(per_session))
+        .div_ceil(allocation_step.max(1))
+        .saturating_mul(allocation_step.max(1))
 }

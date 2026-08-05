@@ -1,4 +1,5 @@
 mod packed;
+mod reservation;
 mod sequence;
 
 use std::sync::{Arc, Mutex};
@@ -6,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use runtime::backend::{PrefillRequest, SamplingLogits};
 
 use self::sequence::Sequence;
-use super::{NativePrefill, required_prefill_pages};
+use super::{MetalPrefillCohort, NativePrefill, cohort::restore_prefix, required_prefill_pages};
 use crate::{
     MetalProgressEvent,
     native::{
@@ -41,6 +42,7 @@ impl MetalPrefillBatch {
     pub(in crate::native) fn prepare(
         loaded: &mut LoadedModel,
         requests: Vec<(PrefillRequest, SamplingLogits)>,
+        cohort: Option<&MetalPrefillCohort>,
     ) -> Result<(Self, Vec<(usize, MetalProgressEvent)>)> {
         if requests.is_empty() {
             return Err(Error::InvalidPrefillBatch("prefill batch cannot be empty".into()));
@@ -51,7 +53,9 @@ impl MetalPrefillBatch {
             .into_iter()
             .enumerate()
             .map(|(row, (request, execution_sampling))| {
-                let sequence = Sequence::prepare(loaded, request, execution_sampling)?;
+                let leased = cohort.map(|cohort| cohort.take(request.session_id)).transpose()?;
+                let restored = restore_prefix(loaded, &request, leased)?;
+                let sequence = Sequence::prepare(loaded, request, execution_sampling, restored)?;
                 events.push((
                     row,
                     MetalProgressEvent::prefill_tokens(
@@ -62,7 +66,7 @@ impl MetalPrefillBatch {
                 Ok(sequence)
             })
             .collect::<Result<Vec<_>>>()?;
-        if loaded.prefixes.reserve_batch_slots(sequences.len()) {
+        if cohort.is_none() && loaded.prefixes.reserve_batch_slots(sequences.len()) {
             crate::engine::clear_memory_cache()?;
         }
         let page_size = loaded.stream.config().kv_cache.block_size.max(1);

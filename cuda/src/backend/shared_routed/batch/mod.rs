@@ -6,11 +6,12 @@ use crate::{Error, Result};
 
 mod graph;
 mod layer;
+mod output;
 mod prefill;
 mod states;
 
 use graph::DecodeResources;
-pub(crate) use prefill::CudaSharedRoutedPrefillBatch;
+pub use prefill::CudaSharedRoutedPrefillBatch;
 
 #[derive(Debug)]
 enum DecodeState {
@@ -22,7 +23,7 @@ enum DecodeState {
 }
 
 #[derive(Debug)]
-pub(crate) struct CudaSharedRoutedDecodeBatch {
+pub struct CudaSharedRoutedDecodeBatch {
     state: Option<DecodeState>,
     stream: Stream,
 }
@@ -40,17 +41,24 @@ impl CudaSharedRoutedDecodeBatch {
         &mut self,
         sessions: &mut [&mut CudaSharedRoutedModelSession],
         sequences: &[DecodeSequence],
-    ) -> Result<()> {
+    ) -> Result<Option<Vec<u32>>> {
         let state = self
             .state
             .take()
             .ok_or(Error::InvalidDecoderKernel("shared-routed decode state is unavailable"))?;
-        let next = match state {
+        match state {
             DecodeState::Direct(mut resources) => {
                 if let Err(error) = execute_direct(&mut resources, sessions, sequences) {
                     self.state = Some(DecodeState::Direct(resources));
                     return Err(error);
                 }
+                let sampled = match resources.finish(sessions, sequences) {
+                    Ok(sampled) => sampled,
+                    Err(error) => {
+                        self.state = Some(DecodeState::Direct(resources));
+                        return Err(error);
+                    },
+                };
                 let partitions = resources.capture_partitions();
                 match capture(&self.stream, resources) {
                     Ok(graph) => {
@@ -58,11 +66,13 @@ impl CudaSharedRoutedDecodeBatch {
                             rows = sessions.len(),
                             "captured shared-routed CUDA decode graph"
                         );
-                        DecodeState::Captured { graph, partitions }
+                        self.state = Some(DecodeState::Captured { graph, partitions });
+                        Ok(sampled)
                     },
                     Err((error, resources)) => {
                         tracing::warn!(%error, "CUDA decode graph capture failed; using direct execution");
-                        DecodeState::Direct(resources)
+                        self.state = Some(DecodeState::Direct(resources));
+                        Ok(sampled)
                     },
                 }
             },
@@ -79,43 +89,51 @@ impl CudaSharedRoutedDecodeBatch {
                         self.state = Some(DecodeState::Captured { graph, partitions });
                         return Err(error.into());
                     }
-                    if let Err(error) =
-                        graph.with_resources_mut(|resources| resources.commit(sessions))
+                    let sampled = match graph
+                        .with_resources_mut(|resources| resources.finish(sessions, sequences))
                     {
-                        self.state = Some(DecodeState::Captured { graph, partitions });
-                        return Err(error);
-                    }
-                    DecodeState::Captured { graph, partitions }
-                } else {
-                    let mut resources = graph.into_resources();
-                    if let Err(error) = DecodeResources::execute(&mut resources)
-                        .and_then(|()| resources.commit(sessions))
-                    {
+                        Ok(sampled) => sampled,
+                        Err(error) => {
+                            self.state = Some(DecodeState::Captured { graph, partitions });
+                            return Err(error);
+                        },
+                    };
+                    self.state = Some(DecodeState::Captured { graph, partitions });
+                    return Ok(sampled);
+                }
+                let mut resources = graph.into_resources();
+                if let Err(error) = DecodeResources::execute(&mut resources) {
+                    self.state = Some(DecodeState::Direct(resources));
+                    return Err(error);
+                }
+                let sampled = match resources.finish(sessions, sequences) {
+                    Ok(sampled) => sampled,
+                    Err(error) => {
                         self.state = Some(DecodeState::Direct(resources));
                         return Err(error);
-                    }
-                    match capture(&self.stream, resources) {
-                        Ok(graph) => {
-                            tracing::debug!(
-                                rows = sessions.len(),
-                                partitions = next,
-                                "recaptured shared-routed CUDA decode graph"
-                            );
-                            DecodeState::Captured { graph, partitions: next }
-                        },
-                        Err((error, resources)) => {
-                            tracing::warn!(
-                                %error,
-                                "CUDA decode graph recapture failed; using direct execution"
-                            );
-                            DecodeState::Direct(resources)
-                        },
-                    }
+                    },
+                };
+                match capture(&self.stream, resources) {
+                    Ok(graph) => {
+                        tracing::debug!(
+                            rows = sessions.len(),
+                            partitions = next,
+                            "recaptured shared-routed CUDA decode graph"
+                        );
+                        self.state = Some(DecodeState::Captured { graph, partitions: next });
+                        Ok(sampled)
+                    },
+                    Err((error, resources)) => {
+                        tracing::warn!(
+                            %error,
+                            "CUDA decode graph recapture failed; using direct execution"
+                        );
+                        self.state = Some(DecodeState::Direct(resources));
+                        Ok(sampled)
+                    },
                 }
             },
-        };
-        self.state = Some(next);
-        Ok(())
+        }
     }
 }
 
@@ -125,10 +143,10 @@ fn execute_direct(
     sequences: &[DecodeSequence],
 ) -> Result<()> {
     resources.prepare(sessions, sequences)?;
-    DecodeResources::execute(resources)?;
-    resources.commit(sessions)
+    DecodeResources::execute(resources)
 }
 
+#[allow(clippy::result_large_err)]
 fn capture(
     stream: &Stream,
     resources: DecodeResources,

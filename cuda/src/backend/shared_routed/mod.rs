@@ -8,10 +8,7 @@ mod session;
 #[cfg(all(test, target_os = "linux"))]
 mod tests;
 
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
 use models::{
     layout::DecoderConfig,
@@ -20,14 +17,14 @@ use models::{
 };
 use runtime::kv::{CacheConfig, KvStorageSpec};
 
-pub use self::session::CudaSharedRoutedModelSession;
-pub(crate) use self::{
+pub use self::{
     batch::{CudaSharedRoutedDecodeBatch, CudaSharedRoutedPrefillBatch},
     checkpoint::SharedRoutedCheckpoint,
+    session::CudaSharedRoutedModelSession,
 };
 use self::{
     load::{build_layer, infer_norm_shift, required_norm},
-    plan::SharedRoutedExecutionPlan,
+    plan::SharedRoutedExecutionPlanCache,
 };
 use crate::{
     CudaAffineGatedDeltaMoeLayer, CudaAffineGatedFullAttentionMoeLayer,
@@ -47,8 +44,6 @@ pub enum CudaSharedRoutedLayerState {
     Full(Box<CudaAffineGatedFullAttentionState>),
 }
 
-/// Structurally assembled dense or affine shared-routed model weights with
-/// per-layer mixers.
 #[derive(Clone, Debug)]
 pub struct CudaSharedRoutedModelTemplate {
     backend: CudaBackend,
@@ -60,7 +55,7 @@ pub struct CudaSharedRoutedModelTemplate {
     cache: CacheConfig,
     max_sequence_blocks: usize,
     norm_shift: f32,
-    plans: Arc<Mutex<HashMap<usize, SharedRoutedExecutionPlan>>>,
+    plans: Arc<Mutex<SharedRoutedExecutionPlanCache>>,
 }
 
 impl CudaSharedRoutedModelTemplate {
@@ -130,7 +125,7 @@ impl CudaSharedRoutedModelTemplate {
             cache,
             max_sequence_blocks,
             norm_shift,
-            plans: Arc::new(Mutex::new(HashMap::new())),
+            plans: Arc::new(Mutex::new(SharedRoutedExecutionPlanCache::new())),
         })
     }
 

@@ -13,7 +13,7 @@ use crate::{
     MetalProgressEvent,
     native::{
         error::{Error, Result},
-        prefill::{MetalPrefillBatch, PrefillStep},
+        prefill::{MetalPrefillBatch, MetalPrefillCohort, PrefillStep},
     },
 };
 
@@ -31,6 +31,16 @@ pub struct MetalGenerationStepOutput {
 }
 
 impl MetalBackend {
+    pub fn prepare_prefill_cohort(
+        &self,
+        requests: &[PrefillRequest],
+    ) -> RuntimeResult<MetalPrefillCohort> {
+        let first = validate_prefill_requests(requests)?;
+        let lookup = first.model.id.clone();
+        let requests = requests.to_vec();
+        Ok(self.with_model(&lookup, move |loaded| MetalPrefillCohort::prepare(loaded, &requests))?)
+    }
+
     /// Returns the prompt tokens processed by one graph for `model`.
     pub fn prefill_chunk_tokens(
         &self,
@@ -60,19 +70,18 @@ impl MetalBackend {
     pub fn prepare_prefill_batch(
         &self,
         requests: &[PrefillRequest],
+        cohort: Option<&MetalPrefillCohort>,
         progress: &mut dyn FnMut(usize, MetalProgressEvent),
     ) -> RuntimeResult<MetalPrefillBatch> {
-        let first = requests
-            .first()
-            .ok_or_else(|| Error::InvalidPrefillBatch("prefill batch cannot be empty".into()))?;
-        if requests.iter().any(|request| {
-            request.model.id != first.model.id || request.model.backend != first.model.backend
-        }) {
-            return Err(
-                Error::InvalidPrefillBatch("prefill batch targets multiple models".into()).into()
-            );
+        let first = validate_prefill_requests(requests)?;
+        if cohort.is_some_and(|cohort| cohort.model_id() != first.model.id) {
+            return Err(Error::InvalidPrefillBatch(
+                "prefill batch targets another logical cohort".into(),
+            )
+            .into());
         }
         let lookup = first.model.id.clone();
+        let cohort = cohort.cloned();
         let device_pipeline = self.config.fusion.device_token_pipeline.enabled();
         let requests = requests
             .iter()
@@ -82,8 +91,9 @@ impl MetalBackend {
                 (request, sampling)
             })
             .collect();
-        let (batch, events) =
-            self.with_model(&lookup, move |loaded| MetalPrefillBatch::prepare(loaded, requests))?;
+        let (batch, events) = self.with_model(&lookup, move |loaded| {
+            MetalPrefillBatch::prepare(loaded, requests, cohort.as_ref())
+        })?;
         for (row, event) in events {
             progress(row, event);
         }
@@ -146,6 +156,18 @@ impl MetalBackend {
                 .collect::<Result<Vec<_>>>()
         })?)
     }
+}
+
+fn validate_prefill_requests(requests: &[PrefillRequest]) -> Result<&PrefillRequest> {
+    let first = requests
+        .first()
+        .ok_or_else(|| Error::InvalidPrefillBatch("prefill batch cannot be empty".into()))?;
+    if requests.iter().any(|request| {
+        request.model.id != first.model.id || request.model.backend != first.model.backend
+    }) {
+        return Err(Error::InvalidPrefillBatch("prefill batch targets multiple models".into()));
+    }
+    Ok(first)
 }
 
 const fn prefill_schedule(routed: bool) -> MetalPrefillSchedule {

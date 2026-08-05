@@ -23,7 +23,9 @@ impl Engine {
         progress: &mut dyn FnMut(ProgressEvent),
     ) -> RuntimeResult<ModelHandle> {
         #[cfg(not(any(feature = "cuda", feature = "metal")))]
-        let _ = (&manifest, &progress, reserved_bytes, cache);
+        let _ = (&manifest, &progress);
+        #[cfg(not(feature = "metal"))]
+        let _ = (&reserved_bytes, &cache);
         match &self.inner {
             #[cfg(feature = "cuda")]
             EngineInner::Cuda(cuda) => Ok(cuda.load_model_with_progress(manifest, progress)?),

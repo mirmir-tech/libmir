@@ -46,7 +46,12 @@ fn paged_executions_match_gathered_rows() -> Result<()> {
     let second = paged_context(CONTEXT, HEAD_DIM, 29, &stream)?;
     let queries = [&query, &query];
     let contexts = [&first, &second];
-    for execution in [BatchAttentionExecution::PagedRows, BatchAttentionExecution::PagedBatched] {
+    for execution in [
+        BatchAttentionExecution::PagedRows,
+        BatchAttentionExecution::PagedBatched4,
+        BatchAttentionExecution::PagedBatched8,
+        BatchAttentionExecution::PagedBatched12,
+    ] {
         let expected =
             execute(BatchAttentionExecution::Rows, &queries, &contexts, 0.125, false, &stream)?;
         let actual = execute(execution, &queries, &contexts, 0.125, false, &stream)?;
@@ -93,15 +98,15 @@ fn batched_paged_matches_rows_for_shared_arena() -> Result<()> {
     assert!(paged::batchable(&contexts));
     let expected =
         execute(BatchAttentionExecution::Rows, &queries, &contexts, 0.125, false, &stream)?;
-    let actual = execute(
-        BatchAttentionExecution::PagedBatched,
-        &queries,
-        &contexts,
-        0.125,
-        false,
-        &stream,
-    )?;
-    assert_outputs_close(&expected, &actual, &stream)
+    for execution in [
+        BatchAttentionExecution::PagedBatched4,
+        BatchAttentionExecution::PagedBatched8,
+        BatchAttentionExecution::PagedBatched12,
+    ] {
+        let actual = execute(execution, &queries, &contexts, 0.125, false, &stream)?;
+        assert_outputs_close(&expected, &actual, &stream)?;
+    }
+    Ok(())
 }
 
 #[test]
@@ -164,13 +169,13 @@ fn fragmented_pages_retain_measured_view_candidates() -> Result<()> {
             BatchAttentionExecution::Rows,
             BatchAttentionExecution::Batched,
             BatchAttentionExecution::PagedRows,
-            BatchAttentionExecution::PagedBatched,
+            BatchAttentionExecution::PagedBatched12,
         ]
     );
     key.view = false;
     assert_eq!(
         candidates(key, true, true),
-        vec![BatchAttentionExecution::PagedRows, BatchAttentionExecution::PagedBatched]
+        vec![BatchAttentionExecution::PagedRows, BatchAttentionExecution::PagedBatched12,]
     );
     key.view = true;
     key.head_dim = 128;
@@ -203,7 +208,7 @@ fn groups_native_paged_rows_by_page_span_without_requiring_a_view() -> Result<()
     assert!(paged::batchable(&contexts));
     assert_eq!(
         candidates(key, true, true),
-        [BatchAttentionExecution::PagedRows, BatchAttentionExecution::PagedBatched]
+        [BatchAttentionExecution::PagedRows, BatchAttentionExecution::PagedBatched12,]
     );
     Ok(())
 }

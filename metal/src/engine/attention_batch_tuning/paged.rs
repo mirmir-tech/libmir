@@ -49,17 +49,16 @@ pub(super) fn batched(
     contexts: &[&KvContext],
     scale: f32,
     stream: &Stream,
+    chunk_rows: usize,
 ) -> Result<Vec<Array>> {
     if !batchable(contexts) {
         return Err(super::super::Error::InvalidModel(
             "paged contexts are not batch compatible".into(),
         ));
     }
+    let chunk_rows = chunk_rows.clamp(1, super::super::kernels::BATCHED_PAGED_ROWS);
     let mut chunks = Vec::new();
-    for (queries, contexts) in queries
-        .chunks(super::super::kernels::BATCHED_PAGED_ROWS)
-        .zip(contexts.chunks(super::super::kernels::BATCHED_PAGED_ROWS))
-    {
+    for (queries, contexts) in queries.chunks(chunk_rows).zip(contexts.chunks(chunk_rows)) {
         chunks.push(chunk(queries, contexts, scale, stream)?);
     }
     let output = if chunks.len() == 1 {

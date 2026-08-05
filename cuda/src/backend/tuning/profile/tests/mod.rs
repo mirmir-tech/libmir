@@ -72,7 +72,7 @@ fn device_identity_invalidates_profile() -> Result<(), Box<dyn std::error::Error
 }
 
 #[test]
-fn finishing_startup_prevents_new_runtime_measurements() {
+fn finishing_startup_only_allows_dynamic_attention_measurements() {
     let request = request();
     let moe = MoeProfileRequest::nvfp4(
         MoePlanRequest::nvfp4(ExecutionPhase::Decode, 1, 128, 8, 2_048, 768),
@@ -87,6 +87,8 @@ fn finishing_startup_prevents_new_runtime_measurements() {
     assert!(!tuner.prepares_candidates(PlanSource::Heuristic));
     assert!(!tuner.claim_dense(request));
     assert!(!tuner.claim_moe(moe));
+    assert!(!tuner.claim_attention(attention_request()));
+    assert!(tuner.claim_dynamic_attention(attention_request()));
 }
 
 #[test]
@@ -102,6 +104,7 @@ fn attention_profile_survives_with_window_and_storage_geometry()
             head_dim: 128,
             value_head_dim: 128,
         },
+        batch_rows: 1,
         block_size: 16,
         dtype: runtime::kv::KvCacheDType::BFloat16,
         window_tokens: Some(4_096),
@@ -121,6 +124,23 @@ fn attention_profile_survives_with_window_and_storage_geometry()
     assert!(payload.contains("\"window_tokens\": 4096"));
     fs::remove_dir_all(&directory)?;
     Ok(())
+}
+
+fn attention_request() -> AttentionProfileRequest {
+    AttentionProfileRequest {
+        family: AttentionFamily::Paged,
+        plan: AttentionPlanRequest {
+            max_context_tokens: 100_000,
+            query_heads: 32,
+            kv_heads: 8,
+            head_dim: 128,
+            value_head_dim: 128,
+        },
+        batch_rows: 2,
+        block_size: 16,
+        dtype: runtime::kv::KvCacheDType::BFloat16,
+        window_tokens: None,
+    }
 }
 
 fn request() -> DensePlanRequest {

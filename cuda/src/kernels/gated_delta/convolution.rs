@@ -11,13 +11,14 @@ cuda_export!(
         input: &DeviceBuffer<bf16>, weight: &DeviceBuffer<bf16>,
         history: &DeviceBuffer<bf16>, output: &mut DeviceBuffer<bf16>,
         tokens: u32, channels: u32, kernel_size: u32,
+        input_stride: u32, input_offset: u32,
     )
 );
 cuda_export!(
     HistoryKernel = "libmir_cuda_gated_delta_history_bf16"(
         input: &DeviceBuffer<bf16>, history: &DeviceBuffer<bf16>,
         next_history: &mut DeviceBuffer<bf16>, tokens: u32,
-        channels: u32, kernel_size: u32,
+        channels: u32, kernel_size: u32, input_stride: u32, input_offset: u32,
     )
 );
 
@@ -58,9 +59,33 @@ impl GatedDeltaConvolution {
         next_history: &mut DeviceBuffer<bf16>,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
+        self.execute_strided(
+            stream,
+            input,
+            weight,
+            history,
+            next_history,
+            output,
+            self.spec.channels,
+            0,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn execute_strided(
+        &self,
+        stream: &Stream,
+        input: &DeviceBuffer<bf16>,
+        weight: &DeviceBuffer<bf16>,
+        history: &DeviceBuffer<bf16>,
+        next_history: &mut DeviceBuffer<bf16>,
+        output: &mut DeviceBuffer<bf16>,
+        input_stride: usize,
+        input_offset: usize,
+    ) -> Result<()> {
         let values = product(self.spec.tokens, self.spec.channels)?;
         let history_values = self.history_elements()?;
-        require("Gated Delta convolution input", values, input.len())?;
+        validate_input(self.spec, input, input_stride, input_offset)?;
         require(
             "Gated Delta convolution weight",
             product(self.spec.channels, self.spec.kernel_size)?,
@@ -73,22 +98,49 @@ impl GatedDeltaConvolution {
             narrow(self.spec.tokens)?,
             narrow(self.spec.channels)?,
             narrow(self.spec.kernel_size)?,
+            narrow(input_stride)?,
+            narrow(input_offset)?,
         );
         self.convolution.launch(
             stream,
             launch(values)?,
-            (input, weight, history, output, arguments.0, arguments.1, arguments.2),
+            (
+                input, weight, history, output, arguments.0, arguments.1, arguments.2, arguments.3,
+                arguments.4,
+            ),
         )?;
         Ok(self.history.launch(
             stream,
             launch(history_values)?,
-            (input, history, next_history, arguments.0, arguments.1, arguments.2),
+            (
+                input, history, next_history, arguments.0, arguments.1, arguments.2, arguments.3,
+                arguments.4,
+            ),
         )?)
     }
 
     pub fn history_elements(&self) -> Result<usize> {
         product(self.spec.kernel_size - 1, self.spec.channels)
     }
+}
+
+fn validate_input(
+    spec: GatedDeltaConvolutionSpec,
+    input: &DeviceBuffer<bf16>,
+    stride: usize,
+    offset: usize,
+) -> Result<()> {
+    let row_end = offset
+        .checked_add(spec.channels)
+        .filter(|end| *end <= stride)
+        .ok_or(Error::InvalidDecoderKernel("invalid Gated Delta input stride"))?;
+    let required = product(spec.tokens.saturating_sub(1), stride)?
+        .checked_add(row_end)
+        .ok_or(Error::InvalidDecoderKernel("Gated Delta input stride overflow"))?;
+    if input.len() < required {
+        return Err(Error::InvalidDecoderKernel("strided Gated Delta input is too small"));
+    }
+    Ok(())
 }
 
 fn launch(elements: usize) -> Result<LaunchConfig> {

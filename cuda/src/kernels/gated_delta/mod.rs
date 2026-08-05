@@ -13,6 +13,8 @@ pub use batch::{
 };
 mod convolution;
 pub use convolution::{GatedDeltaConvolution, GatedDeltaConvolutionSpec};
+mod gates;
+pub use gates::GatedDeltaAlphaBeta;
 mod transform;
 pub use transform::{GatedDeltaTransformSpec, GatedDeltaTransforms};
 

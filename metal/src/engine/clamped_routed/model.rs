@@ -77,7 +77,7 @@ impl ClampedRoutedModel {
             self.cache_step,
             KvPageFormat::resolve(stream.config().kv_cache.dtype)?,
             stream.config().kv_cache.block_size,
-            stream.config().kv_cache.block_count as usize,
+            DecoderCache::physical_page_capacity(stream, self.cache_step),
             stream.paged_arenas(),
         )
     }

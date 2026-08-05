@@ -1,6 +1,7 @@
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
+    sync::{Arc, Mutex},
 };
 
 use mircuda::DeviceBuffer;
@@ -11,6 +12,8 @@ use crate::{
     Error, Result,
     kernels::{BankScaleGeometry, NvFp4GroupedPreparation, scale_elements},
 };
+
+mod marlin;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NvFp4ExpertBankConfig {
@@ -38,6 +41,17 @@ pub struct NvFp4ExpertBank {
     pub(super) global_scales: DeviceBuffer<f32>,
     pub(super) input_scales: DeviceBuffer<f32>,
     pub(super) combined_scales: DeviceBuffer<f32>,
+    pub(super) config: NvFp4ExpertBankConfig,
+    global_values: Arc<[f32]>,
+    marlin_single: Arc<Mutex<Option<MarlinNvFp4Bank>>>,
+    marlin_pair: Arc<Mutex<Option<MarlinNvFp4Bank>>>,
+}
+
+#[derive(Clone, Debug)]
+pub(in crate::backend) struct MarlinNvFp4Bank {
+    pub(super) weight: DeviceBuffer<u8>,
+    pub(super) scales: DeviceBuffer<u8>,
+    pub(super) global_scales: DeviceBuffer<f32>,
     pub(super) config: NvFp4ExpertBankConfig,
 }
 
@@ -111,6 +125,9 @@ impl NvFp4ExpertBank {
             input_scales,
             combined_scales,
             config,
+            global_values: global_values.into(),
+            marlin_single: Arc::new(Mutex::new(None)),
+            marlin_pair: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -152,6 +169,9 @@ impl NvFp4ExpertBank {
             input_scales: zero_scales()?,
             combined_scales: zero_scales()?,
             config,
+            global_values: vec![0.0; config.experts].into(),
+            marlin_single: Arc::new(Mutex::new(None)),
+            marlin_pair: Arc::new(Mutex::new(None)),
         };
         backend.inner.stream.synchronize()?;
         Ok(bank)

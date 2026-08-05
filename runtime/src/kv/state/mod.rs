@@ -44,6 +44,12 @@ pub struct KvPrefillPlan {
     pub needs_eviction: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct KvPrefillAdmission {
+    pub missing_tokens: usize,
+    pub needs_eviction: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct KvDecodeReservation {
     pub session_id: Uuid,

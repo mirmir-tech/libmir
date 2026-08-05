@@ -30,6 +30,8 @@ impl U32Metadata {
 pub struct PagedDecodeBatch {
     tables: U32Metadata,
     token_counts: U32Metadata,
+    query_starts: U32Metadata,
+    context_starts: U32Metadata,
     positions: U32Metadata,
     block_counts: U32Metadata,
     stream: Stream,
@@ -55,6 +57,8 @@ impl PagedDecodeBatch {
         Ok(Self {
             tables: U32Metadata::new(backend, table_len, u32::MAX)?,
             token_counts: U32Metadata::new(backend, max_batch, 0)?,
+            query_starts: U32Metadata::new(backend, max_batch + 1, 0)?,
+            context_starts: U32Metadata::new(backend, max_batch + 1, 0)?,
             positions: U32Metadata::new(backend, max_batch, 0)?,
             block_counts: U32Metadata::new(backend, max_batch, 0)?,
             stream: backend.inner.stream.clone(),
@@ -72,8 +76,11 @@ impl PagedDecodeBatch {
         }
         self.tables.host.fill(u32::MAX);
         self.token_counts.host.fill(0);
+        self.query_starts.host.fill(0);
+        self.context_starts.host.fill(0);
         self.positions.host.fill(0);
         self.block_counts.host.fill(0);
+        let mut packed_context = 0_u32;
         for (sequence, table) in batch.iter().copied().enumerate() {
             self.validate_table(table)?;
             let offset = sequence * self.max_blocks;
@@ -81,11 +88,18 @@ impl PagedDecodeBatch {
                 *target = block.0;
             }
             self.token_counts.host[sequence] = u32::try_from(table.token_len())?;
+            self.query_starts.host[sequence + 1] = u32::try_from(sequence + 1)?;
+            packed_context = packed_context
+                .checked_add(u32::try_from(table.token_len())?)
+                .ok_or(Error::InvalidPagedKv("batched context offsets overflow"))?;
+            self.context_starts.host[sequence + 1] = packed_context;
             self.positions.host[sequence] = u32::try_from(table.token_len() - 1)?;
             self.block_counts.host[sequence] = u32::try_from(table.blocks().len())?;
         }
         self.tables.upload(&self.stream)?;
         self.token_counts.upload(&self.stream)?;
+        self.query_starts.upload(&self.stream)?;
+        self.context_starts.upload(&self.stream)?;
         self.positions.upload(&self.stream)?;
         self.block_counts.upload(&self.stream)?;
         self.active = batch.len();
@@ -103,6 +117,14 @@ impl PagedDecodeBatch {
 
     pub(crate) const fn token_counts(&self) -> &DeviceBuffer<u32> {
         &self.token_counts.device
+    }
+
+    pub(crate) const fn query_starts(&self) -> &DeviceBuffer<u32> {
+        &self.query_starts.device
+    }
+
+    pub(crate) const fn context_starts(&self) -> &DeviceBuffer<u32> {
+        &self.context_starts.device
     }
 
     pub(crate) const fn positions(&self) -> &DeviceBuffer<u32> {
@@ -123,6 +145,47 @@ impl PagedDecodeBatch {
             .copied()
             .max()
             .map_or(0, |tokens| tokens as usize)
+    }
+
+    pub(crate) fn tuning_sample(&self, backend: &CudaBackend, tokens: usize) -> Result<Self> {
+        if tokens == 0 || self.active == 0 {
+            return Err(Error::InvalidPagedKv("empty paged decode tuning sample"));
+        }
+        let table_len = self
+            .max_batch
+            .checked_mul(self.max_blocks)
+            .ok_or(Error::InvalidPagedKv("batched block table capacity overflow"))?;
+        let mut sample = Self {
+            tables: U32Metadata::new(backend, table_len, u32::MAX)?,
+            token_counts: U32Metadata::new(backend, self.max_batch, 0)?,
+            query_starts: U32Metadata::new(backend, self.max_batch + 1, 0)?,
+            context_starts: U32Metadata::new(backend, self.max_batch + 1, 0)?,
+            positions: U32Metadata::new(backend, self.max_batch, 0)?,
+            block_counts: U32Metadata::new(backend, self.max_batch, 0)?,
+            stream: backend.inner.stream.clone(),
+            cache: self.cache,
+            max_batch: self.max_batch,
+            max_blocks: self.max_blocks,
+            active: self.active,
+        };
+        sample.tables.host.copy_from_slice(&self.tables.host);
+        sample.query_starts.host.copy_from_slice(&self.query_starts.host);
+        for row in 0..self.active {
+            let visible = tokens.min(self.token_counts.host[row] as usize).max(1);
+            sample.token_counts.host[row] = u32::try_from(visible)?;
+            sample.positions.host[row] = u32::try_from(visible - 1)?;
+            sample.block_counts.host[row] = u32::try_from(visible.div_ceil(self.cache.block_size))?;
+            sample.context_starts.host[row + 1] = sample.context_starts.host[row]
+                .checked_add(u32::try_from(visible)?)
+                .ok_or(Error::InvalidPagedKv("sample context offsets overflow"))?;
+        }
+        sample.tables.upload(&sample.stream)?;
+        sample.token_counts.upload(&sample.stream)?;
+        sample.query_starts.upload(&sample.stream)?;
+        sample.context_starts.upload(&sample.stream)?;
+        sample.positions.upload(&sample.stream)?;
+        sample.block_counts.upload(&sample.stream)?;
+        Ok(sample)
     }
 
     pub(crate) const fn cache_config(&self) -> CacheConfig {

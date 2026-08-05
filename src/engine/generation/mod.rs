@@ -10,13 +10,16 @@ use runtime::{
 use super::{Engine, EngineInner};
 use crate::Result;
 
+mod cohort;
 mod profile;
 #[cfg(feature = "metal")]
 mod progress;
+pub use cohort::EnginePrefillCohort;
 pub use profile::PrefillExecutionProfile;
 #[cfg(feature = "metal")]
 use progress::metal_progress;
 
+#[cfg(feature = "metal")]
 const METAL_COMPLETION_ROUND_ROWS: usize = 4;
 
 pub enum EnginePrefillBatch {
@@ -63,6 +66,7 @@ impl Engine {
             #[cfg(feature = "metal")]
             EngineInner::Metal(_) => max_batch_tokens.div_ceil(METAL_COMPLETION_ROUND_ROWS),
         };
+        #[cfg(feature = "metal")]
         let metal_schedule = match &self.inner {
             #[cfg(feature = "cuda")]
             EngineInner::Cuda(_) => None,
@@ -130,8 +134,11 @@ impl Engine {
     pub(crate) fn prepare_generation_prefill(
         &self,
         requests: &[PrefillRequest],
+        cohort: Option<&EnginePrefillCohort>,
         progress: &mut dyn FnMut(usize, ProgressEvent),
     ) -> Result<EnginePrefillBatch> {
+        #[cfg(not(feature = "metal"))]
+        let _ = cohort;
         match &self.inner {
             #[cfg(feature = "cuda")]
             EngineInner::Cuda(cuda) => {
@@ -140,7 +147,10 @@ impl Engine {
             #[cfg(feature = "metal")]
             EngineInner::Metal(metal) => {
                 let mut mapped = |row, event| progress(row, metal_progress(event));
-                Ok(EnginePrefillBatch::Metal(metal.prepare_prefill_batch(requests, &mut mapped)?))
+                let cohort = cohort.and_then(|cohort| cohort.metal.as_ref());
+                Ok(EnginePrefillBatch::Metal(
+                    metal.prepare_prefill_batch(requests, cohort, &mut mapped)?,
+                ))
             },
         }
     }

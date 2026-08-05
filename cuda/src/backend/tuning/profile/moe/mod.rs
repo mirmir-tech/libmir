@@ -111,6 +111,21 @@ pub(in crate::backend) struct MoeProfileRequest {
 }
 
 impl CudaAutoTuner {
+    pub(in crate::backend) fn prepares_moe_candidates(
+        &self,
+        request: MoeProfileRequest,
+        source: PlanSource,
+    ) -> bool {
+        self.inner.config.mode == super::CudaTuningMode::Startup
+            && source != PlanSource::ExplicitPolicy
+            && self.inner.config.startup_budget_ms > 0
+            && self
+                .inner
+                .state
+                .lock()
+                .is_ok_and(|state| !state.sealed || request.late_decode_allowed())
+    }
+
     pub(in crate::backend) fn lookup_moe(
         &self,
         request: MoeProfileRequest,
@@ -132,7 +147,7 @@ impl CudaAutoTuner {
             return false;
         };
         self.inner.config.mode == super::CudaTuningMode::Startup
-            && !state.sealed
+            && (!state.sealed || request.late_decode_allowed())
             && state.budget.available()
             && !state.moe.contains_key(&request)
             && state.moe_inflight.insert(request)
@@ -168,5 +183,12 @@ impl CudaAutoTuner {
         if let Ok(mut state) = self.inner.state.lock() {
             state.moe_inflight.remove(&request);
         }
+    }
+}
+
+impl MoeProfileRequest {
+    pub(super) const fn late_decode_allowed(self) -> bool {
+        matches!(self.phase, ExecutionPhase::Decode)
+            && matches!(self.format, MoeProfileFormat::NvFp4 { weight_only: true, .. })
     }
 }

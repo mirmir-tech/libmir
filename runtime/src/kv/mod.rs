@@ -13,7 +13,9 @@ pub use dtype::{
     KvCacheDType, KvCacheDTypeParseError, KvElementBits, KvQuantMode, KvScaleGranularity,
 };
 pub use prefix::{PrefixCache, PrefixProbe};
-pub use state::{KvDecodeReservation, KvPrefillPlan, KvPrefillReservation, KvSessionState};
+pub use state::{
+    KvDecodeReservation, KvPrefillAdmission, KvPrefillPlan, KvPrefillReservation, KvSessionState,
+};
 pub use storage::{KvBackendStorage, KvCacheLayout, KvMemoryBudget, KvStorageSpec};
 pub use table::BlockTable;
 pub use write::{KvBlockWrite, KvPageId, KvWritePlan};

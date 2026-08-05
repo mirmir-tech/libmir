@@ -9,6 +9,7 @@ use crate::{CudaBackend, CudaTensor, DensePlanRequest, DenseRole, Error, Executi
 mod execution;
 mod load;
 mod nvfp4;
+mod pack;
 #[derive(Clone, Debug)]
 pub enum CheckpointProjectionWeight {
     Affine(AffineQuantizedWeight),
@@ -54,6 +55,13 @@ pub(in crate::backend) enum CheckpointProjection {
     },
 }
 impl CheckpointProjectionWeight {
+    pub(in crate::backend) fn dense_bf16(&self) -> Option<&CudaTensor> {
+        match self {
+            Self::Dense(weight) if weight.dtype() == crate::CudaTensorDType::Bf16 => Some(weight),
+            _ => None,
+        }
+    }
+
     pub(in crate::backend) fn affine_format(
         &self,
         matrices: usize,

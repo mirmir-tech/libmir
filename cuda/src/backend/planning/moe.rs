@@ -15,6 +15,13 @@ pub enum MoeExecution {
     IndexedGrouped,
     FusedIndexedGrouped,
     SelectedWeightOnly,
+    SelectedWeightOnlyTensorCore,
+    SelectedWeightOnlyTiled2,
+    SelectedWeightOnlyTiled4,
+    SelectedWeightOnlyTiled8,
+    MarlinWeightOnlyN128K128,
+    MarlinWeightOnlyN128K64,
+    MarlinWeightOnlyN64K128,
     Bucketed,
 }
 

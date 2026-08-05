@@ -4,7 +4,7 @@ use super::{AffineGatedDeltaMoeLayerConfig, scratch::HybridLayerScratch};
 use crate::{
     CudaAffineGatedDeltaExecution, CudaAffineGatedDeltaLayer, CudaAffineSharedExpertMoe,
     CudaAffineSharedExpertMoeExecution, CudaBackend, CudaGatedDeltaState, CudaTensor, Error,
-    Result,
+    ExecutionPhase, Result,
     kernels::{ElementwiseBf16, ShiftedRmsNorm},
 };
 
@@ -31,6 +31,7 @@ impl CudaAffineGatedDeltaMoeExecution {
         input_norm_weight: &CudaTensor,
         post_attention_norm_weight: &CudaTensor,
         tokens: usize,
+        phase: ExecutionPhase,
     ) -> Result<Self> {
         let norm = || {
             ShiftedRmsNorm::compile(
@@ -44,7 +45,7 @@ impl CudaAffineGatedDeltaMoeExecution {
         Ok(Self {
             backend: backend.clone(),
             attention: attention.prepare(tokens)?,
-            moe: moe.prepare(tokens)?,
+            moe: moe.prepare_phase(tokens, phase)?,
             input_norm: norm()?,
             post_attention_norm: norm()?,
             residual: ElementwiseBf16::compile(
@@ -133,7 +134,7 @@ impl CudaAffineGatedDeltaMoeExecution {
         self.residual.add(stream, &self.scratch.residual, &self.scratch.moe, output)
     }
 
-    pub(crate) fn commit_packed(&self, states: &mut [&mut CudaGatedDeltaState]) -> Result<()> {
+    pub(crate) fn commit_packed(&mut self, states: &mut [&mut CudaGatedDeltaState]) -> Result<()> {
         self.attention.commit_packed(states)
     }
 

@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use mircuda::{DeviceBuffer, bf16};
 
 use super::{CudaGatedDeltaState, GatedDeltaInputs, GatedDeltaStateConfig, channels};
@@ -10,17 +12,20 @@ use crate::{
 };
 
 #[derive(Debug)]
-pub(crate) struct CudaGatedDeltaBatchState {
+pub struct CudaGatedDeltaBatchState {
     backend: CudaBackend,
     config: GatedDeltaStateConfig,
     rows: usize,
     tokens: usize,
     state: DeviceBuffer<f32>,
     history: DeviceBuffer<bf16>,
-    next_history: DeviceBuffer<bf16>,
     convolution: GatedDeltaBatchConvolution,
     recurrence: GatedDeltaBatchRecurrence,
+    sources: Vec<(u64, u64)>,
+    identity: u64,
 }
+
+static NEXT_BATCH_IDENTITY: AtomicU64 = AtomicU64::new(1);
 
 impl CudaGatedDeltaBatchState {
     pub(crate) fn new(
@@ -43,7 +48,6 @@ impl CudaGatedDeltaBatchState {
                 .pool
                 .allocate(&backend.inner.stream, checked(rows, state_per_row)?)?,
             history: allocate_bf16(checked(rows, history_per_row)?)?,
-            next_history: allocate_bf16(checked(rows, history_per_row)?)?,
             convolution: GatedDeltaBatchConvolution::compile(
                 &backend.inner.compiler,
                 GatedDeltaBatchConvolutionSpec {
@@ -64,6 +68,8 @@ impl CudaGatedDeltaBatchState {
                     value_dim: config.value_dim,
                 },
             )?,
+            sources: Vec::new(),
+            identity: NEXT_BATCH_IDENTITY.fetch_add(1, Ordering::Relaxed),
         })
     }
 
@@ -75,6 +81,11 @@ impl CudaGatedDeltaBatchState {
         if states.len() != self.rows {
             return Err(Error::InvalidDecoderKernel("Gated Delta packed state row mismatch"));
         }
+        if self.sources.len() == states.len()
+            && self.sources.iter().zip(states).all(|(source, state)| *source == state.stamp())
+        {
+            return Ok(());
+        }
         let stream = &self.backend.inner.stream;
         for (row, state) in states.iter().enumerate() {
             if state.config != self.config {
@@ -82,19 +93,24 @@ impl CudaGatedDeltaBatchState {
                     "Gated Delta packed state config mismatch",
                 ));
             }
-            stream.copy_device_range(
-                &state.state,
-                0..state.state.len(),
-                &mut self.state,
-                checked(row, state.state.len())?,
-            )?;
-            stream.copy_device_range(
-                &state.convolution,
-                0..state.convolution.len(),
-                &mut self.history,
-                checked(row, state.convolution.len())?,
-            )?;
+            if !state.resident_in(self.identity, row) {
+                let (source, range) = state.state_source();
+                stream.copy_device_range(
+                    source,
+                    range,
+                    &mut self.state,
+                    checked(row, state.state.len())?,
+                )?;
+                let (source, range) = state.history_source();
+                stream.copy_device_range(
+                    source,
+                    range,
+                    &mut self.history,
+                    checked(row, state.convolution.len())?,
+                )?;
+            }
         }
+        self.sources = states.iter().map(|state| state.stamp()).collect();
         Ok(())
     }
 
@@ -104,13 +120,25 @@ impl CudaGatedDeltaBatchState {
         weight: &DeviceBuffer<bf16>,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
-        self.convolution.execute(
+        self.convolve_strided(input, weight, output, channels(self.config)?, 0)
+    }
+
+    pub(crate) fn convolve_strided(
+        &mut self,
+        input: &DeviceBuffer<bf16>,
+        weight: &DeviceBuffer<bf16>,
+        output: &mut DeviceBuffer<bf16>,
+        input_stride: usize,
+        input_offset: usize,
+    ) -> Result<()> {
+        self.convolution.execute_in_place_strided(
             &self.backend.inner.stream,
             input,
             weight,
-            &self.history,
-            &mut self.next_history,
+            &mut self.history,
             output,
+            input_stride,
+            input_offset,
         )
     }
 
@@ -135,27 +163,11 @@ impl CudaGatedDeltaBatchState {
         )
     }
 
-    pub(crate) fn commit(&self, states: &mut [&mut CudaGatedDeltaState]) -> Result<()> {
-        let stream = &self.backend.inner.stream;
+    pub(crate) fn commit(&mut self, states: &mut [&mut CudaGatedDeltaState]) -> Result<()> {
         for (row, state) in states.iter_mut().enumerate() {
-            let state_len = state.state.len();
-            let history_len = state.convolution.len();
-            stream.copy_device_range(
-                &self.state,
-                checked(row, state_len)?..checked(row + 1, state_len)?,
-                &mut state.state,
-                0,
-            )?;
-            stream.copy_device_range(
-                &self.next_history,
-                checked(row, history_len)?..checked(row + 1, history_len)?,
-                &mut state.convolution,
-                0,
-            )?;
-            state.offset = state
-                .offset
-                .checked_add(self.tokens)
-                .ok_or(Error::InvalidDecoderKernel("Gated Delta state offset overflow"))?;
+            state.advance(self.tokens)?;
+            state.bind_resident(self.identity, row, self.state.clone(), self.history.clone());
+            self.sources[row] = state.stamp();
         }
         Ok(())
     }

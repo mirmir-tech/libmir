@@ -4,7 +4,7 @@ use mircuda::{DeviceBuffer, bf16};
 use runtime::tuning::select_fastest_candidate;
 
 use super::{Candidate, CudaBackend, DirectFp8CheckpointWeight, DirectFp8Spec, Error, Result};
-use crate::backend::tuning::QuantizedProfileRequest;
+use crate::{backend::tuning::QuantizedProfileRequest, kernels::CacheEviction};
 
 const MAX_BF16_ULPS: u16 = 1;
 const VALIDATION_ELEMENTS: usize = 4_096;
@@ -98,23 +98,14 @@ pub(super) fn select(
     output: &mut DeviceBuffer<bf16>,
 ) -> Result<(usize, Duration, Duration)> {
     let (warmup, iterations) = backend.auto_tuner().iterations(spec.tokens);
+    let eviction = CacheEviction::compile(backend.compiler(), backend.pool(), backend.stream())?;
     let mut timings = Vec::with_capacity(candidates.len());
     let mut elapsed = Duration::ZERO;
     for candidate in candidates {
-        for _ in 0..warmup {
-            candidate.execute(backend.stream(), input, weight, identity_scale, output)?;
-        }
-        let started = backend.context().create_event(true)?;
-        let completed = backend.context().create_event(true)?;
-        started.record(backend.stream())?;
-        for _ in 0..iterations {
-            candidate.execute(backend.stream(), input, weight, identity_scale, output)?;
-        }
-        completed.record(backend.stream())?;
-        completed.synchronize()?;
-        let average = Duration::from_secs_f32(
-            started.elapsed_ms(&completed)? / (iterations as f32 * 1_000.0),
-        );
+        let average = measure_candidate(
+            backend, candidate, input, weight, identity_scale, output, &eviction, warmup,
+            iterations,
+        )?;
         elapsed = elapsed.saturating_add(average.saturating_mul(iterations + warmup));
         timings.push(average);
     }
@@ -131,6 +122,43 @@ pub(super) fn select(
         backend.auto_tuner().minimum_improvement_bps(),
     );
     Ok((selected, timings[selected], elapsed))
+}
+
+#[allow(clippy::cast_precision_loss, clippy::too_many_arguments)]
+fn measure_candidate(
+    backend: &CudaBackend,
+    candidate: &Candidate,
+    input: &DeviceBuffer<bf16>,
+    weight: &DirectFp8CheckpointWeight,
+    identity_scale: Option<&DeviceBuffer<f32>>,
+    output: &mut DeviceBuffer<bf16>,
+    eviction: &CacheEviction,
+    warmup: u32,
+    iterations: u32,
+) -> Result<Duration> {
+    for _ in 0..warmup {
+        eviction.execute(backend.stream())?;
+        candidate.execute(backend.stream(), input, weight, identity_scale, output)?;
+    }
+    let mut measurements = Vec::with_capacity(usize::try_from(iterations)?);
+    for _ in 0..iterations {
+        eviction.execute(backend.stream())?;
+        let started = backend.context().create_event(true)?;
+        let completed = backend.context().create_event(true)?;
+        started.record(backend.stream())?;
+        candidate.execute(backend.stream(), input, weight, identity_scale, output)?;
+        completed.record(backend.stream())?;
+        measurements.push((started, completed));
+    }
+    measurements
+        .last()
+        .ok_or(Error::InvalidExecutionPlan("direct FP8 tuner has zero iterations"))?
+        .1
+        .synchronize()?;
+    let total_ms = measurements.iter().try_fold(0.0_f32, |total, (started, completed)| {
+        Ok::<_, Error>(total + started.elapsed_ms(completed)?)
+    })?;
+    Ok(Duration::from_secs_f32(total_ms / (iterations as f32 * 1_000.0)))
 }
 
 #[cfg(test)]

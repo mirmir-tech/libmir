@@ -160,6 +160,14 @@ impl CudaDecodeBatch {
         Ok(self.state()?.sampler.selected())
     }
 
+    pub(crate) fn read_sampled(&mut self) -> Result<Vec<u32>> {
+        let stream = self.stream.clone();
+        self.with_state_mut(|resources| {
+            stream.copy_to_host(resources.sampler.selected(), &mut resources.token_staging)?;
+            Ok(resources.token_staging.to_vec()?)
+        })
+    }
+
     pub fn prepare(&mut self, tokens: &[u32], tables: &[&BlockTable]) -> Result<()> {
         if tokens.len() != self.batch_size || tables.len() != self.batch_size {
             return Err(Error::InvalidDecoderKernel("CUDA decode rows differ from bucket size"));

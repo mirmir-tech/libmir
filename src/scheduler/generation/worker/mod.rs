@@ -5,10 +5,9 @@ use std::{
 
 use runtime::{backend::ModelHandle, kv::BlockId, scheduler::SchedulerConfig};
 
-use self::admission::{completion_wave_rows, prefill_wave_limit};
 use super::{
     ActivePrefill, Command, PendingDecode, PendingPrefill,
-    completion::{complete_decode, complete_decode_errors, complete_prefill_errors},
+    completion::{complete_decode, complete_decode_errors},
 };
 use crate::{Engine, engine::PrefillExecutionProfile};
 
@@ -16,6 +15,7 @@ mod admission;
 mod budget;
 mod finish;
 mod handoff;
+mod prefill;
 mod telemetry;
 
 pub(super) struct Worker {
@@ -27,6 +27,7 @@ pub(super) struct Worker {
     prefill: VecDeque<PendingPrefill>,
     active_decode: HashMap<uuid::Uuid, Vec<BlockId>>,
     active_prefill: Option<ActivePrefill>,
+    prefill_cohort: Option<prefill::PrefillCohort>,
     prefill_profile: PrefillExecutionProfile,
     prefill_handoff: handoff::PrefillHandoff,
     stopping: bool,
@@ -49,6 +50,7 @@ impl Worker {
             prefill: VecDeque::new(),
             active_decode: HashMap::new(),
             active_prefill: None,
+            prefill_cohort: None,
             prefill_profile,
             prefill_handoff: handoff::PrefillHandoff::default(),
             stopping: false,
@@ -122,55 +124,6 @@ impl Worker {
                     return;
                 },
             }
-        }
-    }
-
-    fn prepare_prefill(&mut self) {
-        if self.prefill_handoff_active() || self.active_prefill.is_some() || self.prefill.is_empty()
-        {
-            return;
-        }
-        self.prioritize_prefill();
-        let available = self.prefill.len().min(self.prefill_admission_limit());
-        let max_prompt_tokens = self
-            .prefill
-            .iter()
-            .take(available)
-            .map(|pending| pending.request.prompt_tokens.len())
-            .max()
-            .unwrap_or(1);
-        let max_prefill_tokens = self.prefill_work_tokens(available);
-        let resident_wave_rows = self.resident_prefill_rows(available);
-        let wave_limit = prefill_wave_limit(
-            self.config.max_batch_requests,
-            self.config.max_batch_tokens,
-            max_prefill_tokens,
-            self.prefill_profile,
-            resident_wave_rows,
-        );
-        if wave_limit == 0 {
-            return;
-        }
-        let count = completion_wave_rows(available, wave_limit);
-        let requests = self.prefill.drain(..count).collect::<Vec<_>>();
-        let oldest_queue = requests.iter().map(|pending| pending.enqueued.elapsed()).max();
-        let backend_requests =
-            requests.iter().map(|pending| pending.request.clone()).collect::<Vec<_>>();
-        let mut report = |row: usize, event| requests[row].response.report(event);
-        match self.engine.prepare_generation_prefill(&backend_requests, &mut report) {
-            Ok(batch) => {
-                telemetry::trace_prefill_cohort(
-                    self,
-                    &requests,
-                    wave_limit,
-                    max_prompt_tokens,
-                    max_prefill_tokens,
-                    resident_wave_rows,
-                    oldest_queue.unwrap_or_default(),
-                );
-                self.active_prefill = Some(ActivePrefill { batch, requests });
-            },
-            Err(error) => complete_prefill_errors(requests, &error.to_string()),
         }
     }
 

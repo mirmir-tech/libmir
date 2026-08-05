@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use mircuda::{DeviceBuffer, PinnedBuffer, bf16};
 use runtime::kv::{BlockTable, KvWritePlan};
 use uuid::Uuid;
@@ -15,6 +17,55 @@ use crate::{
 enum SharedRoutedLayerExecution {
     Linear(Box<CudaAffineGatedDeltaMoeExecution>),
     Full(Box<CudaAffineGatedFullAttentionMoeExecution>),
+}
+
+const RETAINED_PLAN_SHAPES: usize = 2;
+
+#[derive(Debug)]
+struct CachedExecutionPlan {
+    plan: SharedRoutedExecutionPlan,
+    last_used: u64,
+}
+
+#[derive(Debug)]
+pub(super) struct SharedRoutedExecutionPlanCache {
+    plans: HashMap<usize, CachedExecutionPlan>,
+    clock: u64,
+}
+
+impl SharedRoutedExecutionPlanCache {
+    pub(super) fn new() -> Self {
+        Self { plans: HashMap::new(), clock: 0 }
+    }
+
+    pub(super) fn get_mut(&mut self, tokens: usize) -> Option<&mut SharedRoutedExecutionPlan> {
+        self.clock = self.clock.wrapping_add(1);
+        let clock = self.clock;
+        self.plans.get_mut(&tokens).map(|cached| {
+            cached.last_used = clock;
+            &mut cached.plan
+        })
+    }
+
+    pub(super) fn reserve(&mut self, tokens: usize) {
+        if self.plans.contains_key(&tokens) || self.plans.len() < RETAINED_PLAN_SHAPES {
+            return;
+        }
+        if let Some(oldest) = self
+            .plans
+            .iter()
+            .min_by_key(|(_, cached)| cached.last_used)
+            .map(|(tokens, _)| *tokens)
+        {
+            self.plans.remove(&oldest);
+        }
+    }
+
+    pub(super) fn insert(&mut self, tokens: usize, plan: SharedRoutedExecutionPlan) {
+        self.reserve(tokens);
+        self.clock = self.clock.wrapping_add(1);
+        self.plans.insert(tokens, CachedExecutionPlan { plan, last_used: self.clock });
+    }
 }
 
 #[derive(Debug)]

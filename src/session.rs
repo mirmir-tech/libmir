@@ -62,15 +62,17 @@ impl Session {
         expects_decode: bool,
         progress: &mut dyn FnMut(ProgressEvent),
     ) -> Result<PrefillOutput> {
-        let (plan, counters_before) = self.model.clone().with_cache(|cache| {
-            let plan =
-                self.state.probe_prefill_with_reserve_in_place(cache, tokens, reserved_tokens)?;
-            Ok((plan, cache.stats().counters))
+        let (admission, counters_before) = self.model.clone().with_cache(|cache| {
+            let admission = self.state.probe_prefill_admission(cache, tokens, reserved_tokens)?;
+            Ok((admission, cache.stats().counters))
         })?;
-        let cohort_wait =
-            self.model.wait_for_cache_cohort(plan.needs_eviction, plan.missing_tokens);
+        let cohort_wait = self
+            .model
+            .wait_for_cache_cohort(admission.needs_eviction, admission.missing_tokens);
         let (request, counters_after) = self.model.clone().with_cache_wait(|cache| {
-            let request = self.state.allocate_prefill_plan_in_place(cache, plan)?;
+            let request = self
+                .state
+                .prepare_prefill_with_reserve_in_place(cache, tokens, reserved_tokens)?;
             Ok((request, cache.stats().counters))
         })?;
         tracing::debug!(
@@ -78,7 +80,7 @@ impl Session {
             cached_tokens = request.cached_tokens,
             missing_tokens = request.missing_tokens,
             reserved_tokens,
-            needs_eviction = plan.needs_eviction,
+            needs_eviction = admission.needs_eviction,
             cohort_wait_ms = cohort_wait.as_secs_f64() * 1_000.0,
             cache_evictions = counters_after.evictions,
             cache_protected_prefix_skips = counters_after.protected_prefix_skips,

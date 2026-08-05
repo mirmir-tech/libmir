@@ -12,7 +12,6 @@ cuda_export!(
         output: &mut DeviceBuffer<bf16>, rows: u32, columns: u32,
     )
 );
-
 cuda_export!(
     SigmoidElementwiseKernel = "libmir_cuda_sigmoid_multiply_elementwise_bf16"(
         input: &DeviceBuffer<bf16>, gate: &DeviceBuffer<bf16>,

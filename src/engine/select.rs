@@ -20,6 +20,7 @@ pub(super) fn engine(config: &RuntimeConfig) -> Result<Engine> {
 pub(super) fn engine(config: &RuntimeConfig) -> Result<Engine> {
     let mut metal = config.metal.clone();
     metal.kv_cache = config.kv_cache;
+    metal.set_max_batch_requests(config.scheduler.max_batch_requests);
     Ok(Engine {
         inner: EngineInner::Metal(metal::MetalBackend::try_new(metal)?),
     })
@@ -33,6 +34,7 @@ pub(super) fn engine(config: &RuntimeConfig) -> Result<Engine> {
 pub(super) fn engine(config: &RuntimeConfig) -> Result<Engine> {
     let mut metal = config.metal.clone();
     metal.kv_cache = config.kv_cache;
+    metal.set_max_batch_requests(config.scheduler.max_batch_requests);
     Ok(Engine {
         inner: EngineInner::Metal(metal::MetalBackend::try_new(metal)?),
     })

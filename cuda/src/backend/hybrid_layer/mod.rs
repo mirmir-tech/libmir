@@ -8,7 +8,7 @@ pub use execution::CudaAffineGatedDeltaMoeExecution;
 use crate::{
     AffineGatedDeltaLayerConfig, AffineSharedExpertMoeConfig, CudaAffineGatedDeltaLayer,
     CudaAffineSharedExpertMoe, CudaBackend, CudaGatedDeltaState, CudaTensor, CudaTensorDType,
-    CudaTensorSet, Error, Result,
+    CudaTensorSet, Error, ExecutionPhase, Result,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -91,6 +91,19 @@ impl CudaAffineGatedDeltaMoeLayer {
     }
 
     pub fn prepare(&self, tokens: usize) -> Result<CudaAffineGatedDeltaMoeExecution> {
+        let phase = if tokens == 1 {
+            ExecutionPhase::Decode
+        } else {
+            ExecutionPhase::Prefill
+        };
+        self.prepare_phase(tokens, phase)
+    }
+
+    pub(crate) fn prepare_phase(
+        &self,
+        tokens: usize,
+        phase: ExecutionPhase,
+    ) -> Result<CudaAffineGatedDeltaMoeExecution> {
         CudaAffineGatedDeltaMoeExecution::new(
             &self.backend,
             self.config,
@@ -99,6 +112,7 @@ impl CudaAffineGatedDeltaMoeLayer {
             &self.input_norm,
             &self.post_attention_norm,
             tokens,
+            phase,
         )
     }
 

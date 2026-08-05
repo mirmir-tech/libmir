@@ -12,10 +12,13 @@ mod bucketed;
 mod direct_down_moe;
 mod grouped;
 mod hybrid_gate_moe;
+mod marlin;
 mod micro_moe;
 mod tensor_core;
+mod tensor_core_weight_only;
 #[cfg(test)]
 mod tests;
+mod tiled;
 
 pub use bucketed::BucketedNvFp4MoeBf16;
 pub(in crate::backend) use bucketed::{BucketedNvFp4Scratch, BucketedNvFp4ScratchConfig};
@@ -23,8 +26,13 @@ pub(in crate::backend) use bucketed::{BucketedNvFp4Scratch, BucketedNvFp4Scratch
 pub use direct_down_moe::DirectDownNvFp4MoeBf16;
 pub use grouped::GroupedNvFp4MoeBf16;
 pub use hybrid_gate_moe::HybridNvFp4MoeBf16;
+pub(in crate::backend) use marlin::{
+    MarlinNvFp4MoeBf16, MarlinNvFp4Scratch, MarlinNvFp4ScratchConfig,
+};
 pub use micro_moe::DirectNvFp4MoeBf16;
 pub use tensor_core::{SelectedNvFp4LinearBf16, SelectedNvFp4TensorCoreMoeBf16};
+pub use tensor_core_weight_only::SelectedNvFp4WeightOnlyTensorCoreMoeBf16;
+pub use tiled::TiledSelectedNvFp4MoeBf16;
 
 /// Two-launch selected-expert NVFP4 MLP with device-side routing inputs.
 #[derive(Debug)]
@@ -63,6 +71,27 @@ impl CudaBackend {
         down: NvFp4ExpertBank,
     ) -> Result<SelectedNvFp4MoeBf16> {
         SelectedNvFp4MoeBf16::new(self, selected, activation, gate, up, down, tokens)
+    }
+
+    pub(in crate::backend) fn prepare_tiled_selected_nvfp4_moe_bf16(
+        &self,
+        tokens: usize,
+        selected: usize,
+        activation: GatedActivation,
+        rows: crate::kernels::SelectedNvFp4TiledRows,
+        banks: [NvFp4ExpertBank; 3],
+    ) -> Result<TiledSelectedNvFp4MoeBf16> {
+        TiledSelectedNvFp4MoeBf16::new(self, tokens, selected, activation, rows, banks)
+    }
+
+    pub(in crate::backend) fn prepare_selected_nvfp4_weight_only_tensor_core_moe_bf16(
+        &self,
+        tokens: usize,
+        selected: usize,
+        activation: GatedActivation,
+        banks: [NvFp4ExpertBank; 3],
+    ) -> Result<SelectedNvFp4WeightOnlyTensorCoreMoeBf16> {
+        SelectedNvFp4WeightOnlyTensorCoreMoeBf16::new(self, tokens, selected, activation, banks)
     }
 }
 

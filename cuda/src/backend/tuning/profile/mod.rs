@@ -96,6 +96,7 @@ pub enum AttentionFamily {
 pub struct AttentionProfileRequest {
     pub(crate) family: AttentionFamily,
     pub(crate) plan: AttentionPlanRequest,
+    pub(crate) batch_rows: usize,
     pub(crate) block_size: usize,
     pub(crate) dtype: runtime::kv::KvCacheDType,
     pub(crate) window_tokens: Option<usize>,

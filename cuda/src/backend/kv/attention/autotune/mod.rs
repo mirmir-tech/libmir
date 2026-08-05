@@ -32,6 +32,7 @@ impl PagedAttentionBf16 {
         let request = AttentionProfileRequest {
             family: AttentionFamily::Paged,
             plan: self.plan_request,
+            batch_rows: 1,
             block_size: self.spec.block_size,
             dtype: self.spec.dtype,
             window_tokens: window,

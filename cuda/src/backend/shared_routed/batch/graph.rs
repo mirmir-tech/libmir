@@ -1,33 +1,38 @@
 use mircuda::{DeviceBuffer, PinnedBuffer, bf16};
-use runtime::backend::DecodeSequence;
+use runtime::{backend::DecodeSequence, kv::KvStorageSpec};
 
 use super::{
     super::{
-        CudaSharedRoutedModelSession, CudaSharedRoutedModelTemplate,
+        CudaSharedRoutedModelSession, CudaSharedRoutedModelTemplate, SharedRoutedLayerTemplate,
         boundary::{SharedRoutedEmbedding, SharedRoutedOutputHead},
     },
     layer::SharedRoutedBatchLayer,
 };
-use crate::{CudaBackend, Error, Result, kernels::ShiftedRmsNorm};
+use crate::{
+    BatchedPagedAttentionBf16, CudaBackend, DeviceBatchSamplerBf16, Error, ExecutionPhase,
+    PagedDecodeBatch, Result,
+    kernels::{BatchedSplitAttentionWorkspace, ShiftedRmsNorm},
+};
 
 #[derive(Debug)]
 pub(super) struct DecodeResources {
-    backend: CudaBackend,
+    pub(super) backend: CudaBackend,
     rows: usize,
-    max_blocks: usize,
-    token_staging: PinnedBuffer<u32>,
+    pub(super) token_staging: PinnedBuffer<u32>,
     token_ids: DeviceBuffer<u32>,
     position_staging: PinnedBuffer<u32>,
     positions: DeviceBuffer<u32>,
+    paging: PagedDecodeBatch,
     first: DeviceBuffer<bf16>,
     second: DeviceBuffer<bf16>,
     embedding: SharedRoutedEmbedding,
-    layers: Vec<SharedRoutedBatchLayer>,
+    pub(super) layers: Vec<SharedRoutedBatchLayer>,
     final_norm: ShiftedRmsNorm,
     output: SharedRoutedOutputHead,
     final_norm_weight: crate::CudaTensor,
     normalized: DeviceBuffer<bf16>,
-    logits: DeviceBuffer<bf16>,
+    pub(super) logits: DeviceBuffer<bf16>,
+    pub(super) sampler: DeviceBatchSamplerBf16,
 }
 
 impl DecodeResources {
@@ -39,21 +44,33 @@ impl DecodeResources {
         let hidden = template.decoder.hidden_size;
         let elements = checked(rows, hidden)?;
         let allocate = |count| backend.inner.pool.allocate(&backend.inner.stream, count);
+        let attention_workspace = attention_workspace(template, rows)?;
         Ok(Self {
             backend: backend.clone(),
             rows,
-            max_blocks: template.max_sequence_blocks,
             token_staging: backend.inner.context.allocate_pinned(rows)?,
             token_ids: backend.inner.pool.allocate(&backend.inner.stream, rows)?,
             position_staging: backend.inner.context.allocate_pinned(checked(3, rows)?)?,
             positions: backend.inner.pool.allocate(&backend.inner.stream, checked(3, rows)?)?,
+            paging: backend.prepare_paged_decode_batch(
+                template.cache_spec()?,
+                template.max_sequence_blocks,
+                rows,
+            )?,
             first: allocate(elements)?,
             second: allocate(elements)?,
             embedding: template.prepare_embedding()?,
             layers: template
                 .layers
                 .iter()
-                .map(|layer| SharedRoutedBatchLayer::new(layer, rows))
+                .map(|layer| {
+                    SharedRoutedBatchLayer::new(
+                        layer,
+                        rows,
+                        ExecutionPhase::Decode,
+                        Some(attention_workspace.clone()),
+                    )
+                })
                 .collect::<Result<Vec<_>>>()?,
             final_norm: ShiftedRmsNorm::compile(
                 &backend.inner.compiler,
@@ -66,6 +83,8 @@ impl DecodeResources {
             final_norm_weight: template.final_norm.clone(),
             normalized: allocate(elements)?,
             logits: allocate(checked(rows, template.decoder.vocab_size)?)?,
+            sampler: backend
+                .prepare_device_batch_sampler_bf16(template.decoder.vocab_size, rows)?,
         })
     }
 
@@ -91,15 +110,15 @@ impl DecodeResources {
         let stream = &self.backend.inner.stream;
         stream.copy_to_device(&mut self.token_staging, &mut self.token_ids)?;
         stream.copy_to_device(&mut self.position_staging, &mut self.positions)?;
+        let tables = sequences.iter().map(|sequence| &sequence.block_table).collect::<Vec<_>>();
+        self.paging.prepare(&tables)?;
         for index in 0..self.layers.len() {
             if index.is_multiple_of(2) {
-                self.layers[index].prepare(
-                    &self.first, &self.second, sessions, sequences, index, self.max_blocks,
-                )?;
+                self.layers[index]
+                    .prepare(&self.first, &self.second, sessions, index, &self.paging)?;
             } else {
-                self.layers[index].prepare(
-                    &self.second, &self.first, sessions, sequences, index, self.max_blocks,
-                )?;
+                self.layers[index]
+                    .prepare(&self.second, &self.first, sessions, index, &self.paging)?;
             }
         }
         Ok(())
@@ -109,11 +128,13 @@ impl DecodeResources {
         self.embedding.execute_batch(&self.token_ids, self.rows, &mut self.first)?;
         for index in 0..self.layers.len() {
             if index.is_multiple_of(2) {
-                self.layers[index]
-                    .execute_prepared(&self.first, &self.positions, &mut self.second)?;
+                self.layers[index].execute_prepared(
+                    &self.first, &self.positions, &self.paging, &mut self.second,
+                )?;
             } else {
-                self.layers[index]
-                    .execute_prepared(&self.second, &self.positions, &mut self.first)?;
+                self.layers[index].execute_prepared(
+                    &self.second, &self.positions, &self.paging, &mut self.first,
+                )?;
             }
         }
         let hidden = if self.layers.len().is_multiple_of(2) {
@@ -130,33 +151,10 @@ impl DecodeResources {
         self.output.execute(&self.normalized, &mut self.logits)
     }
 
-    pub(super) fn commit(
-        &mut self,
-        sessions: &mut [&mut CudaSharedRoutedModelSession],
-    ) -> Result<()> {
-        for index in 0..self.layers.len() {
-            self.layers[index].commit(sessions, index)?;
-        }
-        for (row, session) in sessions.iter_mut().enumerate() {
-            let start = checked(row, session.logits.len())?;
-            self.backend.inner.stream.copy_device_range(
-                &self.logits,
-                start..start + session.logits.len(),
-                &mut session.logits,
-                0,
-            )?;
-            session.position = session
-                .position
-                .checked_add(1)
-                .ok_or(Error::InvalidDecoderKernel("shared-routed session position overflow"))?;
-        }
-        Ok(())
-    }
-
     pub(super) fn capture_partitions(&self) -> usize {
         self.layers
             .iter()
-            .map(SharedRoutedBatchLayer::capture_partitions)
+            .map(|layer| layer.capture_partitions(&self.paging))
             .max()
             .unwrap_or_default()
     }
@@ -179,6 +177,44 @@ impl DecodeResources {
         }
         Ok(())
     }
+}
+
+fn attention_workspace(
+    template: &CudaSharedRoutedModelTemplate,
+    rows: usize,
+) -> Result<BatchedSplitAttentionWorkspace> {
+    let (values, statistics) = template.layers.iter().enumerate().try_fold(
+        (0_usize, 0_usize),
+        |(values, statistics), (layer, template_layer)| match template_layer {
+            SharedRoutedLayerTemplate::Linear(_) => Ok((values, statistics)),
+            SharedRoutedLayerTemplate::Full(_) => {
+                let storage = KvStorageSpec::new(
+                    template.cache,
+                    template.decoder.layer_key_value_heads(layer),
+                    template.decoder.layer_head_dim(layer),
+                );
+                let required = BatchedPagedAttentionBf16::workspace_lengths_for_storage(
+                    &template.backend,
+                    storage,
+                    template.decoder.num_attention_heads,
+                    template.max_sequence_blocks,
+                    rows,
+                )?;
+                Ok::<_, Error>((values.max(required.0), statistics.max(required.1)))
+            },
+        },
+    )?;
+    if values == 0 || statistics == 0 {
+        return Err(Error::InvalidDecoderKernel(
+            "shared-routed CUDA batch has no attention workspace",
+        ));
+    }
+    let backend = &template.backend;
+    Ok(BatchedSplitAttentionWorkspace::new(
+        backend.inner.pool.allocate(&backend.inner.stream, values)?,
+        backend.inner.pool.allocate(&backend.inner.stream, statistics)?,
+        backend.inner.pool.allocate(&backend.inner.stream, statistics)?,
+    ))
 }
 
 pub(super) fn checked(left: usize, right: usize) -> Result<usize> {

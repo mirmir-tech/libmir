@@ -55,7 +55,7 @@ impl CudaAffineGatedFullAttentionExecution {
             return Err(Error::InvalidPagedKv("gated packed prefill cache geometry differs"));
         }
         self.project_and_transform(input, positions)?;
-        let state = &mut states[0];
+        let state = &mut *states[0];
         state
             .cache
             .store_prefill_batch(batch, &self.scratch.rotated_key, &self.scratch.value)?;

@@ -1,21 +1,24 @@
-use std::time::Duration;
-
-use mircuda::{Context, DeviceBuffer, Stream, bf16};
+use mircuda::{Context, DeviceBuffer, MarlinNvFp4ThreadConfig, Stream, bf16};
 use runtime::tuning::select_fastest_candidate;
 
 use super::{
     CudaBackend, NvFp4Config, NvFp4WeightOnly, NvFp4WeightOnlyTensorCore, NvFp4WeightOnlyWeight,
+    marlin::MarlinNvFp4Bf16Linear,
 };
+
+mod measure;
 use crate::{
     PlanSource, Result,
     backend::tuning::{CudaAutoTuner, QuantizedProfileExecution, QuantizedProfileRequest},
-    kernels::NvFp4WeightOnlyLaunch,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Execution {
     Compressed,
     TensorCore,
+    MarlinN128K128,
+    MarlinN128K64,
+    MarlinN64K128,
     Materialized,
 }
 
@@ -32,7 +35,12 @@ pub(super) struct Selection {
 }
 
 impl Selection {
-    pub(super) fn new(backend: &CudaBackend, tokens: usize, config: NvFp4Config) -> Result<Self> {
+    pub(super) fn new(
+        backend: &CudaBackend,
+        tokens: usize,
+        config: NvFp4Config,
+        marlin_available: bool,
+    ) -> Result<Self> {
         let request = QuantizedProfileRequest::nvfp4_bf16_weight_only(
             tokens,
             config.input_features,
@@ -42,7 +50,10 @@ impl Selection {
             let QuantizedProfileExecution::NvFp4WeightOnly(value) = value else {
                 return None;
             };
-            let execution = value.into();
+            let execution: Execution = value.into();
+            if execution.is_marlin() && !marlin_available {
+                return None;
+            }
             super::profile::trace(request, execution, source, None);
             Some(execution)
         });
@@ -60,7 +71,14 @@ impl Selection {
             },
             claimed,
             scratch: backend.pool().allocate(backend.stream(), elements)?,
-            validation: backend.pool().allocate(backend.stream(), elements.min(4_096))?,
+            validation: backend.pool().allocate(
+                backend.stream(),
+                if tokens == 1 {
+                    elements
+                } else {
+                    elements.min(12_288)
+                },
+            )?,
             context: backend.context().clone(),
             tuner: backend.auto_tuner().clone(),
         })
@@ -76,6 +94,7 @@ impl Selection {
         stream: &Stream,
         compressed: &NvFp4WeightOnly,
         tensor_core: &NvFp4WeightOnlyTensorCore,
+        mut marlin: Option<&mut MarlinNvFp4Bf16Linear>,
         materialized: &mut super::super::super::Bf16Projection,
         weight: &NvFp4WeightOnlyWeight,
         input: &DeviceBuffer<bf16>,
@@ -100,11 +119,34 @@ impl Selection {
                 "rejected numerically incompatible CUDA NVFP4 W4A16 Tensor Core candidate"
             );
         }
+        let marlin_compatible = if let Some(marlin) = &mut marlin {
+            super::validation::marlin_compatible(
+                &self.context,
+                stream,
+                compressed,
+                marlin,
+                weight,
+                input,
+                output,
+                &mut self.validation,
+            )?
+        } else {
+            [false; 3]
+        };
+        if marlin.is_some() && !marlin_compatible.iter().all(|compatible| *compatible) {
+            tracing::warn!(
+                request = ?self.request,
+                ?marlin_compatible,
+                "rejected numerically incompatible CUDA NVFP4 W4A16 Marlin candidate"
+            );
+        }
         let result = self.measure_candidates(
             stream,
             compressed,
             tensor_core,
             tensor_core_compatible,
+            marlin,
+            marlin_compatible,
             materialized,
             weight,
             input,
@@ -127,117 +169,43 @@ impl Selection {
         let fastest = timings
             .iter()
             .enumerate()
-            .min_by_key(|(_, duration)| **duration)
+            .min_by_key(|(_, (_, duration))| *duration)
             .map_or(0, |(index, _)| index);
-        let fallback = match self.fallback {
-            Execution::Compressed => 0,
-            Execution::TensorCore => 1,
-            Execution::Materialized => 2,
-        };
+        let fallback = timings
+            .iter()
+            .position(|(execution, _)| *execution == self.fallback)
+            .ok_or(crate::Error::InvalidExecutionPlan("NVFP4 fallback candidate is missing"))?;
+        let durations = timings.iter().map(|(_, duration)| *duration).collect::<Vec<_>>();
         let selected = select_fastest_candidate(
             fastest,
             fallback,
-            &timings,
+            &durations,
             self.tuner.minimum_improvement_bps(),
         );
-        let execution =
-            [Execution::Compressed, Execution::TensorCore, Execution::Materialized][selected];
+        let (execution, average) = timings[selected];
         self.selected = Some(execution);
         self.claimed = false;
         self.tuner.record_quantized(
             self.request,
             QuantizedProfileExecution::NvFp4WeightOnly(execution.into()),
-            timings[selected],
+            average,
             tuning_elapsed,
         );
-        super::profile::trace(
-            self.request,
-            execution,
-            PlanSource::MeasuredStartup,
-            Some(timings[selected]),
-        );
+        super::profile::trace(self.request, execution, PlanSource::MeasuredStartup, Some(average));
         Ok(())
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn measure_candidates(
-        &mut self,
-        stream: &Stream,
-        compressed: &NvFp4WeightOnly,
-        tensor_core: &NvFp4WeightOnlyTensorCore,
-        tensor_core_compatible: bool,
-        materialized: &mut super::super::super::Bf16Projection,
-        weight: &NvFp4WeightOnlyWeight,
-        input: &DeviceBuffer<bf16>,
-        output: &mut DeviceBuffer<bf16>,
-    ) -> Result<([Duration; 3], Duration)> {
-        let (warmup, iterations) = self.tuner.iterations(self.request_tokens());
-        let compressed_time = measure(&self.context, stream, warmup, iterations, || {
-            compressed.execute(
-                stream,
-                &mut NvFp4WeightOnlyLaunch {
-                    input,
-                    weight: &weight.weight,
-                    block_scales: &weight.scales,
-                    global_scale: &weight.global_scale,
-                    output,
-                },
-            )
-        })?;
-        let tensor_core_time = if tensor_core_compatible {
-            measure(&self.context, stream, warmup, iterations, || {
-                tensor_core.execute(
-                    stream,
-                    &mut NvFp4WeightOnlyLaunch {
-                        input,
-                        weight: &weight.weight,
-                        block_scales: &weight.scales,
-                        global_scale: &weight.global_scale,
-                        output,
-                    },
-                )
-            })?
-        } else {
-            Duration::MAX
-        };
-        let materialized_time = measure(&self.context, stream, warmup, iterations, || {
-            materialized.execute(input, &weight.materialized, &mut self.scratch)
-        })?;
-        let executions = u32::from(warmup).saturating_add(iterations);
-        let timings = [compressed_time, tensor_core_time, materialized_time];
-        let tuning_elapsed = timings
-            .iter()
-            .copied()
-            .filter(|duration| *duration != Duration::MAX)
-            .fold(Duration::ZERO, Duration::saturating_add)
-            .saturating_mul(executions);
-        Ok((timings, tuning_elapsed))
-    }
-
-    const fn request_tokens(&self) -> usize {
-        self.request.tokens()
     }
 }
 
-fn measure(
-    context: &Context,
-    stream: &Stream,
-    warmup: u32,
-    iterations: u32,
-    mut execute: impl FnMut() -> Result<()>,
-) -> Result<Duration> {
-    for _ in 0..warmup {
-        execute()?;
+impl Execution {
+    const fn is_marlin(self) -> bool {
+        matches!(self, Self::MarlinN128K128 | Self::MarlinN128K64 | Self::MarlinN64K128)
     }
-    let started = context.create_event(true)?;
-    let completed = context.create_event(true)?;
-    started.record(stream)?;
-    for _ in 0..iterations {
-        execute()?;
-    }
-    completed.record(stream)?;
-    completed.synchronize()?;
-    Ok(Duration::from_secs_f32(
-        started.elapsed_ms(&completed)? / (iterations as f32 * 1_000.0),
-    ))
+}
+
+pub(super) const fn marlin_candidates() -> [(Execution, MarlinNvFp4ThreadConfig); 3] {
+    [
+        (Execution::MarlinN128K128, MarlinNvFp4ThreadConfig::N128K128),
+        (Execution::MarlinN128K64, MarlinNvFp4ThreadConfig::N128K64),
+        (Execution::MarlinN64K128, MarlinNvFp4ThreadConfig::N64K128),
+    ]
 }

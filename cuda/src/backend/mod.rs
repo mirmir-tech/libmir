@@ -82,7 +82,9 @@ pub use linear::{
     SelectedAffineGatedBf16Linear, SelectedAffinePairBf16Linear, SelectedAffineReduceBf16Linear,
     SelectedNvFp4LinearBf16, SelectedNvFp4MoeBf16, SelectedNvFp4TensorCoreMoeBf16,
 };
-use linear::{BucketedNvFp4Scratch, BucketedNvFp4ScratchConfig};
+use linear::{
+    BucketedNvFp4Scratch, BucketedNvFp4ScratchConfig, MarlinNvFp4Scratch, MarlinNvFp4ScratchConfig,
+};
 use mircuda::{Compiler, Context, DeviceInfo, MemoryPool, Stream};
 pub use model::{
     CudaDecodeBatch, CudaModelSessionConfig, CudaMoeModelSession, CudaMoeModelTemplate,
@@ -104,11 +106,9 @@ pub use shared_moe::{
     AffineSharedExpertMoeConfig, AffineSharedExpertMoeWeights, CudaAffineSharedExpertMoe,
     CudaAffineSharedExpertMoeExecution,
 };
-pub(crate) use shared_routed::{
-    CudaSharedRoutedDecodeBatch, CudaSharedRoutedPrefillBatch, SharedRoutedCheckpoint,
-};
 pub use shared_routed::{
-    CudaSharedRoutedLayerState, CudaSharedRoutedModelSession, CudaSharedRoutedModelTemplate,
+    CudaSharedRoutedDecodeBatch, CudaSharedRoutedLayerState, CudaSharedRoutedModelSession,
+    CudaSharedRoutedModelTemplate, CudaSharedRoutedPrefillBatch, SharedRoutedCheckpoint,
 };
 pub use task::{CudaSequenceScoringModel, CudaTextEmbeddingModel};
 pub use tuning::{AttentionFamily, AttentionProfileRequest, CudaTuningConfig, CudaTuningMode};
@@ -127,11 +127,14 @@ struct CudaRuntime {
     device: DeviceInfo,
     context: Context,
     stream: Stream,
+    auxiliary_stream: Stream,
     pool: MemoryPool,
-    compiler: Compiler,
+    compiler: Arc<Compiler>,
     mxfp8_scratch: Mutex<HashMap<(usize, usize), Arc<mircuda::MxFp8TensorCoreScratch>>>,
     nvfp4_bucket_scratch:
         Mutex<HashMap<BucketedNvFp4ScratchConfig, std::sync::Weak<Mutex<BucketedNvFp4Scratch>>>>,
+    nvfp4_marlin_scratch:
+        Mutex<HashMap<MarlinNvFp4ScratchConfig, std::sync::Weak<Mutex<MarlinNvFp4Scratch>>>>,
     planner: CudaExecutionPlanner,
     tuner: tuning::CudaAutoTuner,
 }
