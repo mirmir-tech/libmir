@@ -164,8 +164,8 @@ fn discovers_remote_sequence_scoring_task() -> Result<()> {
 }
 
 fn sequence_scoring_catalog(dtype: &str) -> TensorCatalog {
-    TensorCatalog {
-        tensors: [
+    TensorCatalog::new(
+        [
             "new.embeddings.word_embeddings.weight",
             "new.embeddings.token_type_embeddings.weight",
             "new.embeddings.LayerNorm.weight",
@@ -189,7 +189,7 @@ fn sequence_scoring_catalog(dtype: &str) -> TensorCatalog {
             tensor_with_dtype(name, shape, dtype)
         })
         .collect(),
-    }
+    )
 }
 
 fn decoder_config() -> serde_json::Value {

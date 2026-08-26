@@ -61,10 +61,10 @@ fn catalog() -> TensorCatalog {
         (format!("{layer}.mlp.experts.up_proj.weight"), vec![2, 32, 32]),
         (format!("{layer}.mlp.experts.down_proj.weight"), vec![2, 32, 32]),
     ];
-    TensorCatalog {
-        tensors: specs
+    TensorCatalog::new(
+        specs
             .into_iter()
             .map(|(name, shape)| tensor_with_dtype(&name, shape, "F32"))
             .collect(),
-    }
+    )
 }

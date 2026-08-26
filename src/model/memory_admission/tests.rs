@@ -22,7 +22,7 @@ fn tracks_loading_and_resident_reservations_until_release() -> Result<()> {
             ledger.entries.values().next().map(|entry| entry.state),
             Some(ReservationState::Loading)
         );
-        assert_eq!(ledger.entries.values().next().map(|entry| entry.bytes), Some(6 * GIB));
+        assert_eq!(ledger.entries.values().next().map(|entry| entry.bytes), Some(4 * GIB));
         drop(ledger);
     }
 
@@ -57,7 +57,7 @@ fn rejects_loads_that_exceed_the_remaining_safe_budget() -> Result<()> {
     let error = manager
         .reserve(
             "model-b".into(),
-            estimate(5 * GIB),
+            estimate(8 * GIB),
             None,
             &memory(16 * GIB),
             MemoryRuntimeConfig::default(),
@@ -72,7 +72,7 @@ fn rejects_loads_that_exceed_the_remaining_safe_budget() -> Result<()> {
             required_bytes,
             available_bytes,
             ..
-        } if required_bytes == 15 * GIB / 2 && available_bytes == 9 * GIB / 2
+        } if required_bytes == 8 * GIB && available_bytes == 7 * GIB
     ));
     Ok(())
 }
@@ -150,9 +150,9 @@ fn charges_shared_metal_cache_once_until_the_last_model_unloads() -> Result<()> 
         false,
     )?;
 
-    assert_eq!(manager.committed_bytes()?, 10 * GIB);
+    assert_eq!(manager.committed_bytes()?, 8 * GIB);
     drop(first);
-    assert_eq!(manager.committed_bytes()?, 7 * GIB);
+    assert_eq!(manager.committed_bytes()?, 6 * GIB);
     drop(second);
     assert_eq!(manager.committed_bytes()?, 0);
     Ok(())
