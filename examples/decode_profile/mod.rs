@@ -1,7 +1,7 @@
 use std::{env, path::PathBuf};
 
 #[cfg(feature = "cuda")]
-use libmir::{
+use libmir::cuda::{
     CudaAttentionPolicy, CudaDenseVectorPolicy, CudaDenseVendorPolicy, CudaDenseWeightPolicy,
     CudaKernelAdmission, CudaNumericalPolicy, DenseRole,
 };
@@ -155,7 +155,7 @@ impl Config {
         runtime.metal.tuning.cache_directory =
             env::var_os("MIRMIR_METAL_TUNING_CACHE").map(PathBuf::from);
         if disabled("MIRMIR_METAL_FUSED_DENSE_GATE_UP") {
-            runtime.metal.fusion.dense_gate_up = libmir::FeatureToggle::Disabled;
+            runtime.metal.fusion.dense_gate_up = libmir::metal::FeatureToggle::Disabled;
         }
     }
 

@@ -1,6 +1,6 @@
 use libmir::RuntimeConfig;
 #[cfg(feature = "cuda")]
-use libmir::{
+use libmir::cuda::{
     CudaDenseVectorPolicy, CudaDenseVendorPolicy, CudaDenseWeightPolicy, CudaKernelAdmission,
     CudaMoeBatchPolicy, CudaNumericalPolicy, CudaTuningMode, DenseRole,
 };

@@ -9,7 +9,7 @@ use std::{
 };
 
 #[cfg(feature = "cuda")]
-use libmir::CudaMoeBatchPolicy;
+use libmir::cuda::CudaMoeBatchPolicy;
 use libmir::{
     ChatCompletionRequest, ChatMessage, Error, GenerationOverrides, Library, Model, RuntimeConfig,
     SamplingLogits, runtime::RuntimeError,
