@@ -1,11 +1,11 @@
 use async_trait::async_trait;
 use foundation::model::ModelManifest;
 use runtime::{
-    Result as RuntimeResult, RuntimeError,
+    Result as RuntimeResult,
     backend::{
-        Backend, BackendCapability, BackendInfo, DecodeOutput, DecodeRequest, EmbeddingOutput,
-        EmbeddingRequest, GenerationRequest, ModelHandle, PrefillOutput, PrefillRequest,
-        SequenceScoringOutput, SequenceScoringRequest, TokenEvent,
+        Backend, BackendCapability, BackendInfo, DecodeBatchOutput, DecodeBatchRequest,
+        DecodeOutput, DecodeRequest, EmbeddingOutput, EmbeddingRequest, ModelHandle, PrefillOutput,
+        PrefillRequest, SequenceScoringOutput, SequenceScoringRequest,
     },
     trace::ModelTrace,
 };
@@ -58,6 +58,10 @@ impl Backend for MetalBackend {
         )?)
     }
 
+    async fn decode_batch(&self, request: DecodeBatchRequest) -> RuntimeResult<DecodeBatchOutput> {
+        self.decode_batch_tokens(&request)
+    }
+
     async fn embed(&self, request: EmbeddingRequest) -> RuntimeResult<EmbeddingOutput> {
         let prompt_tokens = request.inputs.iter().map(Vec::len).sum();
         Ok(EmbeddingOutput {
@@ -75,15 +79,5 @@ impl Backend for MetalBackend {
             scores: self.score_tokens(&request.model, &request.pairs)?,
             prompt_tokens,
         })
-    }
-
-    async fn generate(
-        &self,
-        _model: &ModelHandle,
-        _request: GenerationRequest,
-    ) -> RuntimeResult<Vec<TokenEvent>> {
-        Err(RuntimeError::BackendUnavailable(
-            "use prefill/decode for native MLX streaming".into(),
-        ))
     }
 }

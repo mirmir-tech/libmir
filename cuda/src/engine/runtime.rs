@@ -1,12 +1,11 @@
 use async_trait::async_trait;
 use foundation::model::ModelManifest;
 use runtime::{
-    Result as RuntimeResult, RuntimeError,
+    Result as RuntimeResult,
     backend::{
         Backend, BackendCapability, BackendInfo, DecodeBatchOutput, DecodeBatchRequest,
-        DecodeOutput, DecodeRequest, EmbeddingOutput, EmbeddingRequest, GenerationRequest,
-        ModelHandle, PrefillOutput, PrefillRequest, SequenceScoringOutput, SequenceScoringRequest,
-        TokenEvent,
+        DecodeOutput, DecodeRequest, EmbeddingOutput, EmbeddingRequest, ModelHandle, PrefillOutput,
+        PrefillRequest, SequenceScoringOutput, SequenceScoringRequest,
     },
     trace::ModelTrace,
 };
@@ -76,16 +75,5 @@ impl Backend for CudaEngine {
             scores: self.score_tokens(&request.model, &request.pairs)?,
             prompt_tokens,
         })
-    }
-
-    async fn generate(
-        &self,
-        model: &ModelHandle,
-        _request: GenerationRequest,
-    ) -> RuntimeResult<Vec<TokenEvent>> {
-        Err(RuntimeError::BackendUnavailable(format!(
-            "use prefill/decode streaming for CUDA model {}",
-            model.id
-        )))
     }
 }

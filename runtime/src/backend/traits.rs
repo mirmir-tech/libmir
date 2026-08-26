@@ -6,24 +6,12 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::{DecodeBatchOutput, DecodeBatchRequest};
-use crate::{
-    error::{Result, RuntimeError},
-    kv::BlockTable,
-    trace::ModelTrace,
-};
+use crate::{error::Result, kv::BlockTable, trace::ModelTrace};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelHandle {
     pub id: String,
     pub backend: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GenerationRequest {
-    pub session_id: Uuid,
-    pub prompt: String,
-    pub max_tokens: usize,
-    pub temperature: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -193,48 +181,13 @@ pub trait Backend: Send + Sync {
     #[must_use]
     fn info(&self) -> super::BackendInfo;
     async fn load_model(&self, manifest: &ModelManifest) -> Result<ModelHandle>;
-    async fn model_trace(&self, model: &ModelHandle) -> Result<ModelTrace> {
-        Err(RuntimeError::BackendUnavailable(format!(
-            "model trace is not implemented for {}",
-            model.backend
-        )))
-    }
-    async fn prefill(&self, request: PrefillRequest) -> Result<PrefillOutput> {
-        Err(RuntimeError::BackendUnavailable(format!(
-            "prefill is not implemented for {}",
-            request.model.backend
-        )))
-    }
-    async fn decode(&self, request: DecodeRequest) -> Result<DecodeOutput> {
-        Err(RuntimeError::BackendUnavailable(format!(
-            "decode is not implemented for {}",
-            request.model.backend
-        )))
-    }
-    async fn decode_batch(&self, request: DecodeBatchRequest) -> Result<DecodeBatchOutput> {
-        Err(RuntimeError::BackendUnavailable(format!(
-            "batched decode is not implemented for {}",
-            request.model().backend
-        )))
-    }
-    async fn embed(&self, request: EmbeddingRequest) -> Result<EmbeddingOutput> {
-        Err(RuntimeError::BackendUnavailable(format!(
-            "embedding is not implemented for {}",
-            request.model.backend
-        )))
-    }
+    async fn model_trace(&self, model: &ModelHandle) -> Result<ModelTrace>;
+    async fn prefill(&self, request: PrefillRequest) -> Result<PrefillOutput>;
+    async fn decode(&self, request: DecodeRequest) -> Result<DecodeOutput>;
+    async fn decode_batch(&self, request: DecodeBatchRequest) -> Result<DecodeBatchOutput>;
+    async fn embed(&self, request: EmbeddingRequest) -> Result<EmbeddingOutput>;
     async fn score_sequences(
         &self,
         request: SequenceScoringRequest,
-    ) -> Result<SequenceScoringOutput> {
-        Err(RuntimeError::BackendUnavailable(format!(
-            "sequence scoring is not implemented for {}",
-            request.model.backend
-        )))
-    }
-    async fn generate(
-        &self,
-        model: &ModelHandle,
-        request: GenerationRequest,
-    ) -> Result<Vec<TokenEvent>>;
+    ) -> Result<SequenceScoringOutput>;
 }

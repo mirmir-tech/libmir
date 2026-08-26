@@ -6,7 +6,8 @@ use runtime::{
     Result as RuntimeResult,
     backend::{
         Backend, BackendInfo, DecodeBatchOutput, DecodeBatchRequest, DecodeOutput, DecodeRequest,
-        GenerationRequest, ModelHandle, PrefillOutput, PrefillRequest, TokenEvent,
+        EmbeddingOutput, EmbeddingRequest, ModelHandle, PrefillOutput, PrefillRequest,
+        SequenceScoringOutput, SequenceScoringRequest,
     },
     trace::ModelTrace,
 };
@@ -95,18 +96,30 @@ impl Backend for Engine {
         }
     }
 
-    async fn generate(
-        &self,
-        model: &ModelHandle,
-        request: GenerationRequest,
-    ) -> RuntimeResult<Vec<TokenEvent>> {
+    async fn embed(&self, request: EmbeddingRequest) -> RuntimeResult<EmbeddingOutput> {
         #[cfg(not(any(feature = "cuda", feature = "metal")))]
-        let _ = (model, &request);
+        let _ = &request;
         match &self.inner {
             #[cfg(feature = "cuda")]
-            EngineInner::Cuda(cuda) => cuda.generate(model, request).await,
+            EngineInner::Cuda(cuda) => cuda.embed(request).await,
             #[cfg(feature = "metal")]
-            EngineInner::Metal(metal) => metal.generate(model, request).await,
+            EngineInner::Metal(metal) => metal.embed(request).await,
+            #[cfg(not(any(feature = "cuda", feature = "metal")))]
+            EngineInner::Unavailable => unavailable(),
+        }
+    }
+
+    async fn score_sequences(
+        &self,
+        request: SequenceScoringRequest,
+    ) -> RuntimeResult<SequenceScoringOutput> {
+        #[cfg(not(any(feature = "cuda", feature = "metal")))]
+        let _ = &request;
+        match &self.inner {
+            #[cfg(feature = "cuda")]
+            EngineInner::Cuda(cuda) => cuda.score_sequences(request).await,
+            #[cfg(feature = "metal")]
+            EngineInner::Metal(metal) => metal.score_sequences(request).await,
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
             EngineInner::Unavailable => unavailable(),
         }
