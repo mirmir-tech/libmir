@@ -114,12 +114,12 @@ fn benchmarks_kernel_grouping_in_full_expert_path() -> Result<()> {
 
 fn measure(stream: &Stream, operation: impl Fn() -> Result<Array>) -> Result<f64> {
     for _ in 0..3 {
-        operation()?.async_eval()?;
+        operation()?.async_eval(stream)?;
     }
     stream.synchronize()?;
     let started = Instant::now();
     for _ in 0..ITERATIONS {
-        black_box(operation()?).async_eval()?;
+        black_box(operation()?).async_eval(stream)?;
     }
     stream.synchronize()?;
     Ok(started.elapsed().as_secs_f64() * 1_000_000.0 / f64::from(ITERATIONS))
@@ -128,15 +128,15 @@ fn measure(stream: &Stream, operation: impl Fn() -> Result<Array>) -> Result<f64
 fn measure_pair(stream: &Stream, operation: impl Fn() -> Result<(Array, Array)>) -> Result<f64> {
     for _ in 0..3 {
         let (first, second) = operation()?;
-        first.async_eval()?;
-        second.async_eval()?;
+        first.async_eval(stream)?;
+        second.async_eval(stream)?;
     }
     stream.synchronize()?;
     let started = Instant::now();
     for _ in 0..ITERATIONS {
         let (first, second) = black_box(operation()?);
-        first.async_eval()?;
-        second.async_eval()?;
+        first.async_eval(stream)?;
+        second.async_eval(stream)?;
     }
     stream.synchronize()?;
     Ok(started.elapsed().as_secs_f64() * 1_000_000.0 / f64::from(ITERATIONS))

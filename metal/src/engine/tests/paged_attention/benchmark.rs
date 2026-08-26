@@ -146,9 +146,9 @@ fn validate(inputs: &Inputs, stream: &Stream) -> Result<()> {
         .query
         .scaled_dot_product_attention(&inputs.keys, &inputs.values, 1.0, false, stream)?;
     let actual = inputs.query.paged_scaled_dot_product_attention(inputs.paged(), 1.0, stream)?;
-    actual.async_eval()?;
+    actual.async_eval(stream)?;
     stream.synchronize()?;
-    super::assert_approx(&expected.to_vec_f32()?, &actual.to_vec_f32()?, 1.0e-4);
+    super::assert_approx(&expected.to_vec_f32(stream)?, &actual.to_vec_f32(stream)?, 1.0e-4);
     Ok(())
 }
 
@@ -174,7 +174,7 @@ fn measure(stream: &Stream, mut operation: impl FnMut() -> Result<Array>) -> Res
     let started = Instant::now();
     for _ in 0..ITERATIONS {
         let output = operation()?;
-        output.async_eval()?;
+        output.async_eval(stream)?;
         stream.synchronize()?;
         black_box(output);
     }

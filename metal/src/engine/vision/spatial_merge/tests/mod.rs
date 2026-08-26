@@ -26,7 +26,7 @@ fn vision_rope_rotates_the_complete_head_across_both_spatial_axes() -> Result<()
         .zip(angles)
         .map(|((&value, rotated), angle)| rotated.mul_add(angle.sin(), value * angle.cos()))
         .collect::<Vec<_>>();
-    let actual = actual.to_vec_f32_on_stream(&stream)?;
+    let actual = actual.to_vec_f32(&stream)?;
     assert!(
         actual
             .iter()
@@ -79,7 +79,7 @@ fn assert_output(
 ) -> Result<()> {
     let output = tower.forward_preprocessed(image, stream)?;
     assert_eq!(output.shape()?, [1, 1, 8]);
-    assert!(output.to_vec_f32_on_stream(stream)?.iter().all(|value| value.is_finite()));
+    assert!(output.to_vec_f32(stream)?.iter().all(|value| value.is_finite()));
     Ok(())
 }
 

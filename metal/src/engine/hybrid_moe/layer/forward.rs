@@ -94,7 +94,7 @@ pub(in crate::engine::hybrid_moe) fn emit_profile(
     component: &str,
     started: Instant,
 ) -> Result<()> {
-    output.async_eval()?;
+    output.async_eval(stream)?;
     stream.synchronize()?;
     tracing::debug!(layer, component, "MLX hybrid MoE component synchronized");
     tracing::debug!(

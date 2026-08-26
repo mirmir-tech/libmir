@@ -28,9 +28,9 @@ fn samples_a_greedy_batch_with_one_argmax() -> Result<()> {
     let stream = Stream::new_gpu()?;
     let logits = Array::from_f32(&[5.0, 4.0, 1.0, 2.0, 3.0, 4.0], &[2, 1, 3])?;
     let tokens = logits.argmax(&stream)?;
-    tokens.async_eval()?;
+    tokens.async_eval(&stream)?;
 
     assert_eq!(tokens.shape()?, vec![2, 1]);
-    assert_eq!(tokens.to_vec_u32_on_stream(&stream)?, vec![0, 2]);
+    assert_eq!(tokens.to_vec_u32(&stream)?, vec![0, 2]);
     Ok(())
 }

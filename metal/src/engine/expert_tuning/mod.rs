@@ -116,13 +116,13 @@ fn measure(
 ) -> Result<Duration> {
     let config = &stream.config().tuning;
     for _ in 0..config.warmup_iterations {
-        evaluate(execute(execution, gate, up, fused, input, indices, stream)?)?;
+        evaluate(execute(execution, gate, up, fused, input, indices, stream)?, stream)?;
     }
     stream.synchronize()?;
     let iterations = config.measurement_iterations.max(1);
     let started = Instant::now();
     for _ in 0..iterations {
-        evaluate(execute(execution, gate, up, fused, input, indices, stream)?)?;
+        evaluate(execute(execution, gate, up, fused, input, indices, stream)?, stream)?;
     }
     stream.synchronize()?;
     Ok(started.elapsed() / iterations)
@@ -146,9 +146,9 @@ fn execute(
     }
 }
 
-fn evaluate((gate, up): (Array, Array)) -> Result<()> {
-    gate.async_eval()?;
-    up.async_eval()
+fn evaluate((gate, up): (Array, Array), stream: &Stream) -> Result<()> {
+    gate.async_eval(stream)?;
+    up.async_eval(stream)
 }
 
 fn key(fused: &FusedExpertGateUp, input: &Array, indices: &Array) -> Result<ExpertKey> {

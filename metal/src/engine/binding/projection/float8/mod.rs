@@ -77,7 +77,7 @@ pub(super) fn linear(
         };
         let scaled = graph.multiply(&decoded, scale.native())?;
         let weight = Array::from_native(graph.astype(&scaled, mirtal::DType::Bfloat16)?)?;
-        weight.async_eval()?;
+        weight.async_eval(stream)?;
         Float8Operation::Dense(DenseLinear::from_binding_weight(
             weight, checkpoint_bias, false, stream,
         )?)
@@ -92,8 +92,8 @@ pub(super) fn linear(
             },
             Ok,
         )?;
-        scale.async_eval()?;
-        bias.async_eval()?;
+        scale.async_eval(stream)?;
+        bias.async_eval(stream)?;
         let activation = DirectFloat8Activation::prepare(
             tensors,
             *format,

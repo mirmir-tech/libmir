@@ -28,28 +28,24 @@ impl Array {
         Self::from_native(graph.astype(&output, self.native.dtype()?)?)
     }
 
-    pub fn async_eval(&self) -> Result<()> {
-        Ok(self.native.async_eval()?)
+    pub fn async_eval(&self, stream: &Stream) -> Result<()> {
+        Ok(stream.native().eval(&self.native)?)
     }
 
-    pub(crate) fn detach_graph(&self) -> Result<()> {
-        Ok(self.native.detach_graph()?)
+    pub(crate) fn detach_graph(&self, stream: &Stream) -> Result<()> {
+        Ok(stream.native().detach_graph(&self.native)?)
     }
 
-    pub fn to_vec_f32(&self) -> Result<Vec<f32>> {
-        Ok(self.native.to_vec_f32()?)
-    }
-
-    pub fn to_vec_f32_on_stream(&self, stream: &Stream) -> Result<Vec<f32>> {
+    pub fn to_vec_f32(&self, stream: &Stream) -> Result<Vec<f32>> {
         Ok(stream.native().read::<f32>(&self.native)?)
     }
 
-    pub fn to_vec_u32_on_stream(&self, stream: &Stream) -> Result<Vec<u32>> {
+    pub fn to_vec_u32(&self, stream: &Stream) -> Result<Vec<u32>> {
         Ok(stream.native().read::<u32>(&self.native)?)
     }
 
-    pub fn item_u32(&self) -> Result<u32> {
-        Ok(self.native.item_u32()?)
+    pub fn item_u32(&self, stream: &Stream) -> Result<u32> {
+        Ok(stream.native().read_scalar_u32(&self.native)?)
     }
 
     pub(crate) fn concatenate(inputs: &[&Self], axis: i32, stream: &Stream) -> Result<Self> {

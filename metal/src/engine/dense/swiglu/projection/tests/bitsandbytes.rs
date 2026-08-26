@@ -40,7 +40,7 @@ fn execute(
     let output = BoundLinear::load(&tensors, &binding(nested, kind, dtype, shape), &stream)?
         .forward(&input, &stream)?;
     assert_eq!(output.dtype()?, activation_dtype);
-    assert_eq!(output.to_vec_f32_on_stream(&stream)?, [128.0, -192.0]);
+    assert_eq!(output.to_vec_f32(&stream)?, [128.0, -192.0]);
     drop(tensors);
     fs::remove_dir_all(root)?;
     Ok(())

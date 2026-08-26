@@ -31,10 +31,10 @@ fn paged_sdpa_matches_contiguous_gqa() -> Result<()> {
     };
     let actual = queries.paged_scaled_dot_product_attention(paged, 0.5, &stream)?;
 
-    actual.async_eval()?;
+    actual.async_eval(&stream)?;
     stream.synchronize()?;
-    let expected = expected.to_vec_f32()?;
-    let actual = actual.to_vec_f32()?;
+    let expected = expected.to_vec_f32(&stream)?;
+    let actual = actual.to_vec_f32(&stream)?;
     assert_close(&expected, &actual);
     Ok(())
 }
@@ -72,9 +72,9 @@ fn paged_sdpa_matches_gemma_global_attention_shape() -> Result<()> {
         1.0,
         &stream,
     )?;
-    actual.async_eval()?;
+    actual.async_eval(&stream)?;
     stream.synchronize()?;
-    assert_approx(&expected.to_vec_f32()?, &actual.to_vec_f32()?, 0.002);
+    assert_approx(&expected.to_vec_f32(&stream)?, &actual.to_vec_f32(&stream)?, 0.002);
     Ok(())
 }
 
@@ -131,11 +131,11 @@ fn paged_two_pass_matches_contiguous_attention() -> Result<()> {
         1.0,
         &stream,
     )?;
-    second.async_eval()?;
+    second.async_eval(&stream)?;
     stream.synchronize()?;
-    let expected = expected.to_vec_f32()?;
-    assert_approx(&expected, &first.to_vec_f32()?, 1.0e-4);
-    assert_approx(&expected, &second.to_vec_f32()?, 1.0e-4);
+    let expected = expected.to_vec_f32(&stream)?;
+    assert_approx(&expected, &first.to_vec_f32(&stream)?, 1.0e-4);
+    assert_approx(&expected, &second.to_vec_f32(&stream)?, 1.0e-4);
     Ok(())
 }
 
@@ -156,10 +156,10 @@ fn writes_persistent_kv_pages_on_the_mlx_stream() -> Result<()> {
     let expected = queries.scaled_dot_product_attention(&keys, &values, 1.0, false, &stream)?;
     let actual = queries
         .scaled_dot_product_attention(&context.keys, &context.values, 1.0, false, &stream)?;
-    actual.async_eval()?;
+    actual.async_eval(&stream)?;
     stream.synchronize()?;
     assert_eq!(cache.offset()?, 3);
-    assert_close(&expected.to_vec_f32()?, &actual.to_vec_f32()?);
+    assert_close(&expected.to_vec_f32(&stream)?, &actual.to_vec_f32(&stream)?);
     Ok(())
 }
 
@@ -184,23 +184,15 @@ fn paged_bfloat16_gemma_global_attention_matches_contiguous() -> Result<()> {
     let Some(paged) = context.paged else {
         return Err(Error::InvalidModel("paged K/V storage was not created".into()));
     };
-    paged.page_dependency.async_eval()?;
+    paged.page_dependency.async_eval(&stream)?;
     let expected = query.scaled_dot_product_attention(&keys, &values, 1.0, false, &stream)?;
     let flattened =
         query.scaled_dot_product_attention(&context.keys, &context.values, 1.0, false, &stream)?;
     let actual = query.paged_scaled_dot_product_attention(paged.attention(), 1.0, &stream)?;
-    actual.async_eval()?;
+    actual.async_eval(&stream)?;
     stream.synchronize()?;
-    assert_approx(
-        &expected.to_vec_f32_on_stream(&stream)?,
-        &flattened.to_vec_f32_on_stream(&stream)?,
-        0.002,
-    );
-    assert_approx(
-        &expected.to_vec_f32_on_stream(&stream)?,
-        &actual.to_vec_f32_on_stream(&stream)?,
-        0.002,
-    );
+    assert_approx(&expected.to_vec_f32(&stream)?, &flattened.to_vec_f32(&stream)?, 0.002);
+    assert_approx(&expected.to_vec_f32(&stream)?, &actual.to_vec_f32(&stream)?, 0.002);
     Ok(())
 }
 

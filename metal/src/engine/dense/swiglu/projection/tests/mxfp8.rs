@@ -21,7 +21,7 @@ fn executes_pinned_mxfp8_words_and_e8m0_scales() -> Result<()> {
     let linear = BoundLinear::load(&tensors, &binding(), &stream)?;
     let output = linear.forward(&input, &stream)?;
     assert_eq!(output.dtype()?, Dtype::Bfloat16);
-    assert_eq!(output.to_vec_f32_on_stream(&stream)?, [33.0, -34.0]);
+    assert_eq!(output.to_vec_f32(&stream)?, [33.0, -34.0]);
     assert!(linear.has_bias());
 
     drop(tensors);

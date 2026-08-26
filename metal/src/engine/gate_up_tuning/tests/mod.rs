@@ -174,8 +174,8 @@ fn benchmarks_representative_affine_decode_profile() -> Result<()> {
     let fused = gate.fuse_gate_up(&up, &stream)?.ok_or(Error::ShapeOverflow)?;
     let input = Array::from_f32(&values(2_048), &[1, 1, 2_048])?;
     let output = forward(&gate, &up, Some(&fused), &input, &stream)?;
-    output.0.async_eval()?;
-    output.1.async_eval()?;
+    output.0.async_eval(&stream)?;
+    output.1.async_eval(&stream)?;
     stream.synchronize()?;
     let Ok(tuner) = stream.tuner.lock() else {
         return Err(Error::ShapeOverflow);
@@ -203,8 +203,8 @@ fn values(elements: usize) -> Vec<f32> {
 }
 
 fn assert_close(actual: &Array, expected: &Array, stream: &Stream) -> Result<()> {
-    let actual = actual.to_vec_f32_on_stream(stream)?;
-    let expected = expected.to_vec_f32_on_stream(stream)?;
+    let actual = actual.to_vec_f32(stream)?;
+    let expected = expected.to_vec_f32(stream)?;
     assert_eq!(actual.len(), expected.len());
     assert!(
         actual

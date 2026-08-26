@@ -70,7 +70,7 @@ impl HybridMoeModel {
             if evaluation_step
                 .is_some_and(|step| (index + 1) % step == 0 || index + 1 == self.layers.len())
             {
-                hidden.async_eval()?;
+                hidden.async_eval(stream)?;
                 stream.synchronize()?;
             }
         }
@@ -86,7 +86,7 @@ fn emit_batch_profile(
     profile: bool,
 ) -> Result<()> {
     if profile {
-        output.async_eval()?;
+        output.async_eval(stream)?;
         stream.synchronize()?;
         tracing::debug!(
             component,

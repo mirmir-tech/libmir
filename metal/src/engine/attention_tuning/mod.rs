@@ -163,15 +163,17 @@ fn measure(
 ) -> Result<Duration> {
     let config = &stream.config().tuning;
     for _ in 0..config.warmup_iterations {
-        execute(kernels, execution, inputs, scratch, page_size, context_tokens, scale, stream)?
-            .async_eval()?;
+        let output =
+            execute(kernels, execution, inputs, scratch, page_size, context_tokens, scale, stream)?;
+        stream.native().eval(&output)?;
     }
     stream.synchronize()?;
     let iterations = config.measurement_iterations.max(1);
     let started = Instant::now();
     for _ in 0..iterations {
-        execute(kernels, execution, inputs, scratch, page_size, context_tokens, scale, stream)?
-            .async_eval()?;
+        let output =
+            execute(kernels, execution, inputs, scratch, page_size, context_tokens, scale, stream)?;
+        stream.native().eval(&output)?;
     }
     stream.synchronize()?;
     Ok(started.elapsed() / iterations)

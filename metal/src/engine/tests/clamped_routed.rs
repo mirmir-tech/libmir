@@ -27,12 +27,12 @@ fn executes_native_mxfp4_clamped_experts() -> Result<()> {
         [&activated, &down_blocks, &down_scales, &down_bias, &indices, &routing],
         shape,
     )?;
-    output.async_eval()?;
+    output.async_eval(&stream)?;
     stream.synchronize()?;
 
     let expected_activation = 7.0 / (1.0 + (-1.702_f32 * 7.0).exp()) * 8.0;
     let expected = expected_activation * 16.0;
-    assert!(output.to_vec_f32()?.iter().all(|value| (value - expected).abs() < 0.1));
+    assert!(output.to_vec_f32(&stream)?.iter().all(|value| (value - expected).abs() < 0.1));
     Ok(())
 }
 
@@ -59,12 +59,12 @@ fn executes_mlx_u32_split_mxfp4_experts() -> Result<()> {
     )?;
     let output =
         stream.mxfp4_u32_down([&activated, &blocks, &scales, &bias, &indices, &routing], shape)?;
-    output.async_eval()?;
+    output.async_eval(&stream)?;
     stream.synchronize()?;
 
     let expected_activation = 7.0 / (1.0 + (-1.702_f32 * 7.0).exp()) * 8.0;
     let expected = expected_activation * 16.0;
-    assert!(output.to_vec_f32()?.iter().all(|value| (value - expected).abs() < 0.1));
+    assert!(output.to_vec_f32(&stream)?.iter().all(|value| (value - expected).abs() < 0.1));
     Ok(())
 }
 
@@ -77,10 +77,10 @@ fn learned_sink_participates_in_attention_normalization() -> Result<()> {
     let sink = Array::from_f32(&[0.0], &[1])?;
     let output =
         query.scaled_dot_product_attention_with_sinks(&key, &value, 1.0, false, &sink, &stream)?;
-    output.async_eval()?;
+    output.async_eval(&stream)?;
     stream.synchronize()?;
 
-    assert!((output.to_vec_f32()?[0] - 1.0).abs() < 1.0e-5);
+    assert!((output.to_vec_f32(&stream)?[0] - 1.0).abs() < 1.0e-5);
     Ok(())
 }
 

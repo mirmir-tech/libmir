@@ -11,8 +11,8 @@ pub(super) struct DeferredToken {
 }
 
 impl DeferredToken {
-    pub(super) fn enqueue(&self) -> Result<()> {
-        Ok(self.next_logits.async_eval()?)
+    pub(super) fn enqueue(&self, stream: &Stream) -> Result<()> {
+        Ok(self.next_logits.async_eval(stream)?)
     }
 
     pub(super) fn complete(self, state: &mut SessionState) -> NativeOutput {
@@ -95,7 +95,7 @@ pub(super) fn output(
         return Ok(NativeOutput::Logits(logits));
     }
     let deferred = deferred_token(model, stream, state, &logits, sampling)?;
-    deferred.enqueue()?;
+    deferred.enqueue(stream)?;
     Ok(deferred.complete(state))
 }
 
@@ -109,15 +109,15 @@ fn deferred_token(
     let sampled = device_token(logits, sampling, stream)?.ok_or_else(|| {
         Error::InvalidDecodeBatch("batch row does not use device token sampling".into())
     })?;
-    sampled.async_eval()?;
+    sampled.async_eval(stream)?;
     let token_id = sampled
-        .to_vec_u32_on_stream(stream)?
+        .to_vec_u32(stream)?
         .into_iter()
         .next()
         .ok_or_else(|| Error::InvalidDecodeBatch("sampled token is empty".into()))?;
-    sampled.detach_graph()?;
+    sampled.detach_graph(stream)?;
     stream.detach_paged_arena_graphs()?;
-    state.cache.detach_evaluated_graphs()?;
+    state.cache.detach_evaluated_graphs(stream)?;
     let next_logits = forward_ids(
         model,
         stream,

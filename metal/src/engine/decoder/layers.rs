@@ -112,7 +112,7 @@ pub fn forward_layers<L: LoweredLayer>(
                 step != 0 && ((index + 1) % step == 0 || index + 1 == layers.len())
             });
         if evaluate {
-            hidden.async_eval()?;
+            hidden.async_eval(context.stream)?;
             context.stream.synchronize()?;
         }
         if options.profile_layers {

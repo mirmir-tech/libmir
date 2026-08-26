@@ -105,8 +105,8 @@ mod tests {
             Ok(routing(&input, &weights, config, &stream)?.indices)
         })?;
         let route = routing(&input, &weights, config, &stream)?;
-        route.indices.async_eval()?;
-        route.weights.async_eval()?;
+        route.indices.async_eval(&stream)?;
+        route.weights.async_eval(&stream)?;
         stream.synchronize()?;
         let normalized = weights.pre_expert_norm.apply(&input, config.rms_norm_eps, &stream)?;
         let expanded = normalized.expand_dims(&[-2, -3], &stream)?;
@@ -163,14 +163,14 @@ mod tests {
     ) -> Result<f64> {
         for _ in 0..warmup {
             let output = run()?;
-            output.async_eval()?;
+            output.async_eval(stream)?;
             stream.synchronize()?;
             black_box(output);
         }
         let started = Instant::now();
         for _ in 0..iters {
             let output = run()?;
-            output.async_eval()?;
+            output.async_eval(stream)?;
             stream.synchronize()?;
             black_box(output);
         }

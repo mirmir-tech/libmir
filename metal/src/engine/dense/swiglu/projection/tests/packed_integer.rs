@@ -26,17 +26,11 @@ fn executes_packed_int8_embedding_and_output_with_native_affine_qmm() -> Result<
     let embedding =
         BoundEmbedding::load(&tensors, &int8_binding(LogicalTensorRole::Embedding), &stream)?;
     let selected = Array::from_u32(&[1], &[1])?;
-    assert_eq!(
-        embedding.lookup(&selected, &stream)?.to_vec_f32_on_stream(&stream)?,
-        [0.75; INPUT]
-    );
+    assert_eq!(embedding.lookup(&selected, &stream)?.to_vec_f32(&stream)?, [0.75; INPUT]);
 
     let output = BoundLinear::load(&tensors, &int8_binding(LogicalTensorRole::Output), &stream)?;
     let input = Array::from_f32(&[1.0; INPUT], &[1, i32::try_from(INPUT)?])?;
-    assert_eq!(
-        output.forward(&input, &stream)?.to_vec_f32_on_stream(&stream)?,
-        [-1_024.0, 768.0]
-    );
+    assert_eq!(output.forward(&input, &stream)?.to_vec_f32(&stream)?, [-1_024.0, 768.0]);
     drop(tensors);
     fs::remove_dir_all(root)?;
     Ok(())
@@ -56,17 +50,11 @@ fn executes_packed_int4_embedding_and_output_with_native_affine_qmm() -> Result<
     let embedding =
         BoundEmbedding::load(&tensors, &int4_binding(LogicalTensorRole::Embedding), &stream)?;
     let selected = Array::from_u32(&[1], &[1])?;
-    assert_eq!(
-        embedding.lookup(&selected, &stream)?.to_vec_f32_on_stream(&stream)?,
-        [0.75; INPUT]
-    );
+    assert_eq!(embedding.lookup(&selected, &stream)?.to_vec_f32(&stream)?, [0.75; INPUT]);
 
     let output = BoundLinear::load(&tensors, &int4_binding(LogicalTensorRole::Output), &stream)?;
     let input = Array::from_f32(&[1.0; INPUT], &[1, i32::try_from(INPUT)?])?;
-    assert_eq!(
-        output.forward(&input, &stream)?.to_vec_f32_on_stream(&stream)?,
-        [-1_024.0, 768.0]
-    );
+    assert_eq!(output.forward(&input, &stream)?.to_vec_f32(&stream)?, [-1_024.0, 768.0]);
     drop(tensors);
     fs::remove_dir_all(root)?;
     Ok(())

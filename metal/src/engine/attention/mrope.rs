@@ -144,8 +144,8 @@ mod tests {
             },
             &stream,
         )?;
-        let actual = actual.to_vec_f32_on_stream(&stream)?;
-        let expected = expected.to_vec_f32_on_stream(&stream)?;
+        let actual = actual.to_vec_f32(&stream)?;
+        let expected = expected.to_vec_f32(&stream)?;
         assert!(
             actual
                 .iter()

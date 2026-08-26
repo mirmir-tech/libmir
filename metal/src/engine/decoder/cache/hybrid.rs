@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use crate::engine::{
-    Error, GatedDeltaState, KvCache, KvPageFormat, PagedArenaPool, Result, lowering::MixerLowering,
+    Error, GatedDeltaState, KvCache, KvPageFormat, PagedArenaPool, Result, Stream,
+    lowering::MixerLowering,
 };
 
 #[derive(Debug)]
@@ -67,11 +68,14 @@ pub(super) fn plan_contiguous(layers: &mut [HybridLinearLayerCache], tokens: usi
     }
 }
 
-pub(super) fn detach_evaluated_graphs(layers: &[HybridLinearLayerCache]) -> Result<()> {
+pub(super) fn detach_evaluated_graphs(
+    layers: &[HybridLinearLayerCache],
+    stream: &Stream,
+) -> Result<()> {
     for layer in layers {
         match layer {
-            HybridLinearLayerCache::Linear(state) => state.detach_evaluated_graphs()?,
-            HybridLinearLayerCache::Full(cache) => cache.detach_evaluated_graphs()?,
+            HybridLinearLayerCache::Linear(state) => state.detach_evaluated_graphs(stream)?,
+            HybridLinearLayerCache::Full(cache) => cache.detach_evaluated_graphs(stream)?,
         }
     }
     Ok(())

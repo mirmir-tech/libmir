@@ -21,9 +21,9 @@ fn matches_mlx_lm_prefill_through_first_global_layer() -> Result<()> {
         let layer = HybridMoeLayer::load(&tensors, config, &stream)?;
         let mut cache = KvCache::new_with_window(16, config.max_context)?;
         hidden = layer.forward_decode(&hidden, Some(&mut cache), 0, true, &stream)?;
-        hidden.async_eval()?;
+        hidden.async_eval(&stream)?;
         stream.synchronize()?;
-        let values = hidden.to_vec_f32_on_stream(&stream)?;
+        let values = hidden.to_vec_f32(&stream)?;
         assert_prefix(&values, expected, 0.002);
         if index < 2 {
             assert_signature(&values, expected_signatures()[index]);
@@ -47,12 +47,12 @@ fn matches_mlx_lm_layer_zero_components() -> Result<()> {
     let input = embedding
         .lookup(&Array::from_u32(&[1_000, 1_001], &[1, 2])?, &stream)?
         .multiply_scalar(decoder.hidden_size.to_string().parse::<f32>()?.sqrt(), &stream)?;
-    assert_eq!(fingerprint(&input.to_vec_f32_on_stream(&stream)?), 0xc809_b31e_15b3_6ebf);
+    assert_eq!(fingerprint(&input.to_vec_f32(&stream)?), 0xc809_b31e_15b3_6ebf);
     let config = HybridMoeLayerConfig::from_decoder(0, &decoder, 64)?;
     let layer = HybridMoeLayer::load(&tensors, config, &stream)?;
     let mut cache = KvCache::new_with_window(16, config.max_context)?;
     let attention = layer.attention_residual_for_test(&input, &mut cache, 0, true, &stream)?;
-    let attention_values = attention.to_vec_f32_on_stream(&stream)?;
+    let attention_values = attention.to_vec_f32(&stream)?;
     assert_prefix(
         &attention_values,
         &[-0.906_25, -2.562_5, 0.052_734_375, 1.101_562_5, 1.375, -1.015_625, -1.218_75, 1.328_125],
@@ -72,18 +72,18 @@ fn matches_mlx_lm_layer_zero_components() -> Result<()> {
     );
     assert_eq!(fingerprint(&attention_values), 0xf742_8866_7c6f_f48e);
     let (normalized, scores) = layer.router_scores_for_test(&attention, &stream)?;
-    assert_eq!(fingerprint(&normalized.to_vec_f32_on_stream(&stream)?), 0x92b5_25c9_2256_5adc);
-    assert_eq!(fingerprint(&scores.to_vec_f32_on_stream(&stream)?), 0xb9c2_16d0_e6b5_90dc);
+    assert_eq!(fingerprint(&normalized.to_vec_f32(&stream)?), 0x92b5_25c9_2256_5adc);
+    assert_eq!(fingerprint(&scores.to_vec_f32(&stream)?), 0xb9c2_16d0_e6b5_90dc);
 
     let mut routing_cache = KvCache::new_with_window(16, config.max_context)?;
     let routing_input =
         layer.attention_residual_for_test(&input, &mut routing_cache, 0, true, &stream)?;
     let routing = layer.routing_for_test(&routing_input, &stream)?;
-    let mut indices = routing.indices.to_vec_u32_on_stream(&stream)?;
+    let mut indices = routing.indices.to_vec_u32(&stream)?;
     indices[..8].sort_unstable();
     indices[8..].sort_unstable();
     assert_eq!(indices, vec![12, 26, 48, 49, 60, 64, 88, 111, 12, 48, 49, 57, 60, 64, 102, 123]);
-    let weights = routing.weights.to_vec_f32_on_stream(&stream)?;
+    let weights = routing.weights.to_vec_f32(&stream)?;
     assert_eq!(fingerprint(&weights[..8]), 0x9317_8c1d_5079_b75a);
     assert_prefix(
         &weights,
@@ -96,7 +96,7 @@ fn matches_mlx_lm_layer_zero_components() -> Result<()> {
 
     let feed_forward = layer.feed_forward_for_test(&routing_input, &stream)?;
     assert_prefix(
-        &feed_forward.to_vec_f32_on_stream(&stream)?,
+        &feed_forward.to_vec_f32(&stream)?,
         &[
             0.126_953_13, 1.492_187_5, -0.679_687_5, 8.937_5, -0.029_052_734, 0.726_562_5,
             0.033_447_266, -0.414_062_5,
@@ -119,7 +119,7 @@ fn matches_mlx_lm_proportional_rope_frequencies() -> Result<()> {
     let frequencies = layer
         .rope_frequencies_for_test()
         .ok_or_else(|| Error::InvalidModel("missing proportional RoPE frequencies".into()))?;
-    assert_eq!(fingerprint(&frequencies.to_vec_f32_on_stream(&stream)?), 0xffcd_79f9_8a3d_335d);
+    assert_eq!(fingerprint(&frequencies.to_vec_f32(&stream)?), 0xffcd_79f9_8a3d_335d);
     Ok(())
 }
 

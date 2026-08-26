@@ -15,14 +15,14 @@ fn bench_real_gemma_quantized_embedding() -> Result<()> {
 
     for _ in 0..warmup {
         let output = embedding.lookup(&ids, &stream)?;
-        output.async_eval()?;
+        output.async_eval(&stream)?;
         stream.synchronize()?;
         black_box(output);
     }
     let started = Instant::now();
     for _ in 0..iterations {
         let output = embedding.lookup(&ids, &stream)?;
-        output.async_eval()?;
+        output.async_eval(&stream)?;
         stream.synchronize()?;
         black_box(output);
     }

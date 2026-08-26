@@ -38,7 +38,7 @@ impl LoadedModel {
         self.stream.synchronize()?;
         self.stream.detach_paged_arena_graphs()?;
         for state in self.sessions.values() {
-            state.cache.detach_evaluated_graphs()?;
+            state.cache.detach_evaluated_graphs(&self.stream)?;
         }
         Ok(())
     }

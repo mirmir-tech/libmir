@@ -39,14 +39,14 @@ fn measure(
 ) -> Result<f64> {
     for _ in 0..warmup {
         let output = run()?;
-        output.async_eval()?;
+        output.async_eval(stream)?;
         stream.synchronize()?;
         black_box(output);
     }
     let started = Instant::now();
     for _ in 0..iterations {
         let output = run()?;
-        output.async_eval()?;
+        output.async_eval(stream)?;
         stream.synchronize()?;
         black_box(output);
     }

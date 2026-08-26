@@ -80,9 +80,9 @@ impl LoadedModel {
                 &remaining[..count],
                 position,
             )?;
-            state_root.async_eval()?;
+            state_root.async_eval(&self.stream)?;
             self.settle_prefill_graph()?;
-            state.cache.detach_evaluated_graphs()?;
+            state.cache.detach_evaluated_graphs(&self.stream)?;
             position += count;
             remaining = &remaining[count..];
             if checkpoints.next_if_eq(&position).is_some() {

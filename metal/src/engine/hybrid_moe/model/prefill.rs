@@ -87,7 +87,7 @@ impl HybridMoeModel {
             .lookup(token_ids, stream)?
             .multiply_scalar(self.embed_scale, stream)?;
         if profile {
-            hidden.async_eval()?;
+            hidden.async_eval(stream)?;
             stream.synchronize()?;
             tracing::debug!(
                 component = "embedding",

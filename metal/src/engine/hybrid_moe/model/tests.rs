@@ -45,7 +45,7 @@ fn execute_model(fused_experts: bool) -> Result<()> {
 
     assert_eq!(model.layer_count(), 1);
     assert_eq!(logits.shape()?, vec![1, 1, 8]);
-    assert!(logits.to_vec_f32_on_stream(&stream)?.iter().all(|value| value.is_finite()));
+    assert!(logits.to_vec_f32(&stream)?.iter().all(|value| value.is_finite()));
     drop(tensors);
     fs::remove_dir_all(root)?;
     Ok(())

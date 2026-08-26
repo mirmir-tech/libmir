@@ -12,19 +12,13 @@ fn executes_selected_e5m2_embedding_rows_on_metal() -> Result<()> {
     let indices = Array::from_u32(&[1, 0], &[2])?;
 
     let scaled = BoundEmbedding::load(&tensors, &embedding_binding(true), &stream)?;
-    assert_eq!(
-        scaled.lookup(&indices, &stream)?.to_vec_f32_on_stream(&stream)?,
-        [-4.0, 2.0, 2.0, 4.0]
-    );
+    assert_eq!(scaled.lookup(&indices, &stream)?.to_vec_f32(&stream)?, [-4.0, 2.0, 2.0, 4.0]);
     let input =
         Array::from_f32(&[1.0, 2.0], &[1, 2])?.astype(crate::engine::Dtype::Bfloat16, &stream)?;
-    assert_eq!(scaled.project(&input, &stream)?.to_vec_f32_on_stream(&stream)?, [10.0, 0.0]);
+    assert_eq!(scaled.project(&input, &stream)?.to_vec_f32(&stream)?, [10.0, 0.0]);
 
     let unscaled = BoundEmbedding::load(&tensors, &embedding_binding(false), &stream)?;
-    assert_eq!(
-        unscaled.lookup(&indices, &stream)?.to_vec_f32_on_stream(&stream)?,
-        [-1.0, 0.5, 1.0, 2.0]
-    );
+    assert_eq!(unscaled.lookup(&indices, &stream)?.to_vec_f32(&stream)?, [-1.0, 0.5, 1.0, 2.0]);
     drop(tensors);
     fs::remove_dir_all(root)?;
     Ok(())

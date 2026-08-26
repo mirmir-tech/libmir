@@ -79,7 +79,7 @@ mod tests {
             prefix_attention_mask(6, image, None, &stream)?.astype(Dtype::Uint32, &stream)?;
         assert_eq!(mask.shape()?, [6, 6]);
         assert_eq!(
-            mask.to_vec_u32_on_stream(&stream)?,
+            mask.to_vec_u32(&stream)?,
             rows(&["100000", "110000", "111110", "111110", "111110", "111111"])
         );
         Ok(())
@@ -92,7 +92,7 @@ mod tests {
         let mask =
             prefix_attention_mask(6, image, Some(3), &stream)?.astype(Dtype::Uint32, &stream)?;
         assert_eq!(
-            mask.to_vec_u32_on_stream(&stream)?,
+            mask.to_vec_u32(&stream)?,
             rows(&["100000", "110000", "111110", "011110", "001110", "000111"])
         );
         Ok(())

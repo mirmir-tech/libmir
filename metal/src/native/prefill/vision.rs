@@ -61,9 +61,9 @@ impl LoadedModel {
         let hidden = tower.forward_multimodal_prefill(
             model, &prefix_prompt, image, &mut state.cache, &self.stream,
         )?;
-        hidden.async_eval()?;
+        hidden.async_eval(&self.stream)?;
         self.settle_prefill_graph()?;
-        state.cache.detach_evaluated_graphs()?;
+        state.cache.detach_evaluated_graphs(&self.stream)?;
         progress(MetalProgressEvent::prefill_tokens(prefix.len(), prompt.token_ids.len()));
         let logits = step::forward_token(
             model,
@@ -125,9 +125,9 @@ impl LoadedModel {
         let hidden = tower.forward_multimodal_prefill(
             model, &prefix_prompt, image, &mut state.cache, &self.stream,
         )?;
-        hidden.async_eval()?;
+        hidden.async_eval(&self.stream)?;
         self.settle_prefill_graph()?;
-        state.cache.detach_evaluated_graphs()?;
+        state.cache.detach_evaluated_graphs(&self.stream)?;
         progress(MetalProgressEvent::prefill_tokens(prefix.len(), prompt.token_ids.len()));
         state.position = prefix.len();
         let model_position = state.model_position()?;

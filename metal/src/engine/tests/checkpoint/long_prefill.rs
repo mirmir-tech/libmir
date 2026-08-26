@@ -70,17 +70,17 @@ fn matches_mlx_lm_at_long_prefill_entry_layers() -> Result<()> {
     for (index, (layer, cache)) in layers.iter().zip(&mut caches).enumerate() {
         hidden = layer.forward_decode(&hidden, Some(cache), 0, true, &stream)?;
         if index == 0 {
-            assert_positions(&hidden.to_vec_f32_on_stream(&stream)?, decoder.hidden_size);
+            assert_positions(&hidden.to_vec_f32(&stream)?, decoder.hidden_size);
         }
     }
 
     hidden = embed(&embedding, &[3_047], scale, &stream)?;
     hidden = layers[0].forward_decode(&hidden, Some(&mut caches[0]), 2_047, false, &stream)?;
-    assert_prefix(&hidden.to_vec_f32_on_stream(&stream)?, &LAYER_ZERO_DECODE, 1.0e-6);
+    assert_prefix(&hidden.to_vec_f32(&stream)?, &LAYER_ZERO_DECODE, 1.0e-6);
     let mut cache = caches[1].snapshot_at(caches[1].offset()?)?;
     let attention =
         layers[1].attention_residual_for_test(&hidden, &mut cache, 2_047, false, &stream)?;
-    assert_prefix(&attention.to_vec_f32_on_stream(&stream)?, &LAYER_ONE_ATTENTION, 0.002);
+    assert_prefix(&attention.to_vec_f32(&stream)?, &LAYER_ONE_ATTENTION, 0.002);
     Ok(())
 }
 

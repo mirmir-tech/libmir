@@ -82,7 +82,7 @@ impl SequenceScoringModel {
         let cls =
             hidden.slice(&[0, 0, 0], &[1, 1, usize::try_from(hidden.shape()?[2])?], stream)?;
         let pooled = self.pooler.forward(&cls, stream)?.tanh(stream)?;
-        let score = self.classifier.forward(&pooled, stream)?.to_vec_f32_on_stream(stream)?;
+        let score = self.classifier.forward(&pooled, stream)?.to_vec_f32(stream)?;
         score.first().copied().ok_or_else(|| {
             crate::engine::Error::InvalidModel("sequence classifier returned no score".into())
         })

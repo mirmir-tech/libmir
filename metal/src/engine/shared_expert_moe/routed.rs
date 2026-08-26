@@ -67,7 +67,7 @@ impl RoutedGateUp {
                 if fused.is_none() {
                     *fused = gate.fuse_expert_gate_up(up, stream)?.map(Box::new);
                 }
-                fused.as_deref().map_or(Ok(()), FusedExpertGateUp::warm)?;
+                fused.as_deref().map_or(Ok(()), |fused| fused.warm(stream))?;
                 Ok(fused.is_some())
             },
             Self::Fused { .. } => Ok(true),

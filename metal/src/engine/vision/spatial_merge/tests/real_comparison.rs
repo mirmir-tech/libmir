@@ -26,7 +26,7 @@ fn records_a_real_spatial_merge_tower_output() -> Result<()> {
     let stream = Stream::new_gpu()?;
     let output = SpatialMergeVisionTower::load(&tensors, &config, &stream)?
         .forward_preprocessed(&image, &stream)?;
-    let values = output.to_vec_f32_on_stream(&stream)?;
+    let values = output.to_vec_f32(&stream)?;
     assert_eq!(
         output.shape()?,
         [1, i32::try_from(image.soft_tokens)?, i32::try_from(config.output_hidden_size)?,]

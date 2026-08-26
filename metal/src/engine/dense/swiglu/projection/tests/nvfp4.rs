@@ -18,7 +18,7 @@ fn converts_nvfp4_once_on_metal_and_executes_dense_projection() -> Result<()> {
     let linear = BoundLinear::load(&tensors, &binding(), &stream)?;
     let input =
         Array::from_f32(&[1.0; 16], &[1, 16])?.astype(crate::engine::Dtype::Bfloat16, &stream)?;
-    assert_eq!(linear.forward(&input, &stream)?.to_vec_f32_on_stream(&stream)?, [8.0, 6.0]);
+    assert_eq!(linear.forward(&input, &stream)?.to_vec_f32(&stream)?, [8.0, 6.0]);
     drop(tensors);
     fs::remove_dir_all(root)?;
     Ok(())
@@ -36,7 +36,7 @@ fn gathers_nvfp4_matrix_bank_without_requantization() -> Result<()> {
     let input = Array::from_f32(&[1.0; 64], &[2, 1, 32])?
         .astype(crate::engine::Dtype::Bfloat16, &stream)?;
     let indices = Array::from_u32(&[0, 1], &[2])?;
-    let output = linear.gather(&input, &indices, false, &stream)?.to_vec_f32_on_stream(&stream)?;
+    let output = linear.gather(&input, &indices, false, &stream)?.to_vec_f32(&stream)?;
 
     assert_eq!(output, [17.0, 17.0]);
     drop(tensors);
@@ -60,8 +60,8 @@ fn gathers_and_splits_interleaved_nvfp4_gate_up_bank() -> Result<()> {
 
     let output = linear.gather(&input, &indices, false, &stream)?;
     let (gate, up) = crate::engine::fused_gate_up::split_interleaved_last(&output, 2, &stream)?;
-    assert_eq!(gate.to_vec_f32_on_stream(&stream)?, [16.0, 48.0, 96.0, 192.0]);
-    assert_eq!(up.to_vec_f32_on_stream(&stream)?, [32.0, 64.0, 128.0, 16.0]);
+    assert_eq!(gate.to_vec_f32(&stream)?, [16.0, 48.0, 96.0, 192.0]);
+    assert_eq!(up.to_vec_f32(&stream)?, [32.0, 64.0, 128.0, 16.0]);
     drop(tensors);
     fs::remove_dir_all(root)?;
     Ok(())
@@ -83,7 +83,7 @@ fn composes_individual_nvfp4_experts_on_device() -> Result<()> {
         .astype(crate::engine::Dtype::Bfloat16, &stream)?;
     let indices = Array::from_u32(&[0, 1], &[2])?;
     assert_eq!(
-        linear.gather(&input, &indices, false, &stream)?.to_vec_f32_on_stream(&stream)?,
+        linear.gather(&input, &indices, false, &stream)?.to_vec_f32(&stream)?,
         [32.0, 64.0]
     );
     drop(tensors);

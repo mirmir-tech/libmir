@@ -122,10 +122,10 @@ impl Sequence {
         let state_root = step::forward_packed_prefill_state(
             model, &loaded.stream, &mut states, &positions, &tokens, count,
         )?;
-        state_root.async_eval()?;
+        state_root.async_eval(&loaded.stream)?;
         loaded.settle_prefill_graph()?;
         for state in &states {
-            state.cache.detach_evaluated_graphs()?;
+            state.cache.detach_evaluated_graphs(&loaded.stream)?;
         }
         for sequence in sequences {
             sequence.page_reservation_pending = false;
@@ -157,9 +157,9 @@ impl Sequence {
             })?;
             let state_root =
                 step::forward_prefill_state(model, &loaded.stream, state, tokens, self.position)?;
-            state_root.async_eval()?;
+            state_root.async_eval(&loaded.stream)?;
             loaded.settle_prefill_graph()?;
-            state.cache.detach_evaluated_graphs()?;
+            state.cache.detach_evaluated_graphs(&loaded.stream)?;
             self.page_reservation_pending = false;
             self.position += count;
             self.cache_checkpoint(loaded)?;

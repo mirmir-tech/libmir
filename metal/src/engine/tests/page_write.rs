@@ -97,7 +97,7 @@ impl Inputs {
         stream: &Stream,
     ) -> Result<()> {
         self.enqueue(offset, prepared, stream)?;
-        self.page_values.async_eval()?;
+        self.page_values.async_eval(stream)?;
         stream.synchronize()?;
         Ok(())
     }
@@ -177,7 +177,7 @@ fn measure_build(
         inputs.enqueue(iteration % (PAGE_CAPACITY * PAGE_SIZE), dispatch, stream)?;
     }
     let elapsed = started.elapsed().as_secs_f64() * 1_000_000.0;
-    inputs.page_values.async_eval()?;
+    inputs.page_values.async_eval(stream)?;
     stream.synchronize()?;
     Ok(elapsed / f64::from(u32::try_from(BUILD_ITERATIONS)?))
 }

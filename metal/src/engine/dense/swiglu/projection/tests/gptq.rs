@@ -36,7 +36,7 @@ fn check(format: GptqCheckpointFormat, activation_order: bool) -> Result<()> {
     let expected = (0..2)
         .flat_map(|_| (0..OUTPUT).map(|row| expected(row, activation_order)))
         .collect::<Vec<_>>();
-    assert_eq!(linear.forward(&input, &stream)?.to_vec_f32_on_stream(&stream)?, expected);
+    assert_eq!(linear.forward(&input, &stream)?.to_vec_f32(&stream)?, expected);
     drop(tensors);
     fs::remove_dir_all(root)?;
     Ok(())

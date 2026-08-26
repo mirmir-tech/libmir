@@ -31,14 +31,14 @@ fn execute(format: BlockQuantization, dtype: &str, shape: &[usize], label: &str)
     let linear = BoundLinear::load(&tensors, &binding(format, shape, true), &stream)?;
     let output = linear.forward(&input, &stream)?;
     assert_eq!(output.dtype()?, Dtype::Bfloat16);
-    assert_eq!(output.to_vec_f32_on_stream(&stream)?, [33.0, 94.0]);
+    assert_eq!(output.to_vec_f32(&stream)?, [33.0, 94.0]);
     assert!(linear.has_bias());
 
     let embedding = BoundEmbedding::load(&tensors, &binding(format, shape, false), &stream)?;
     let selected = Array::from_u32(&[1], &[1])?;
     let embedded = embedding.lookup(&selected, &stream)?;
     assert_eq!(embedded.dtype()?, Dtype::Bfloat16);
-    assert_eq!(embedded.to_vec_f32_on_stream(&stream)?, [3.0; 32]);
+    assert_eq!(embedded.to_vec_f32(&stream)?, [3.0; 32]);
 
     drop(tensors);
     fs::remove_dir_all(root)?;

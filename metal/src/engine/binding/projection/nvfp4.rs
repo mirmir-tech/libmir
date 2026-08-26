@@ -49,7 +49,7 @@ pub(super) fn linear(
         [output, input],
         stream,
     )?;
-    weight.async_eval()?;
+    weight.async_eval(stream)?;
     DenseLinear::from_binding_weight(weight, None, false, stream).map(NvFp4Fallback::Dense)
 }
 
@@ -89,7 +89,7 @@ pub(super) fn individual_bank(
     )?;
     let global_scale = Array::concatenate(&globals, 0, stream)?;
     for array in [&weight, &scales, &global_scale] {
-        array.async_eval()?;
+        array.async_eval(stream)?;
     }
     Ok(NvFp4Linear {
         weight,

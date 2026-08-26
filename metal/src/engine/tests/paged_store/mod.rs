@@ -22,11 +22,11 @@ fn writes_strided_prefill_kv_pages() -> Result<()> {
     let Some(paged) = context.paged else {
         return Err(Error::InvalidModel("paged K/V storage was not created".into()));
     };
-    paged.page_dependency.async_eval()?;
+    paged.page_dependency.async_eval(&stream)?;
     stream.synchronize()?;
-    let stored = paged.key_pages.to_vec_f32_on_stream(&stream)?;
+    let stored = paged.key_pages.to_vec_f32(&stream)?;
     assert_eq!(&stored[..8], &[1.0, 0.0, 0.0, 1.0, 10.0, 0.0, 20.0, 0.0]);
-    let stored = paged.value_pages.to_vec_f32_on_stream(&stream)?;
+    let stored = paged.value_pages.to_vec_f32(&stream)?;
     assert_eq!(&stored[..8], &[100.0, 0.0, 0.0, 100.0, 300.0, 0.0, 0.0, 200.0]);
 
     let queries = Array::from_f32(&[1.0, 0.0, 1.0, 0.0], &[1, 2, 1, 2])?;
@@ -35,15 +35,15 @@ fn writes_strided_prefill_kv_pages() -> Result<()> {
         .scaled_dot_product_attention(&context.keys, &context.values, 1.0, false, &stream)?;
     let paged_actual =
         queries.paged_scaled_dot_product_attention(paged.attention(), 1.0, &stream)?;
-    actual.async_eval()?;
-    paged_actual.async_eval()?;
+    actual.async_eval(&stream)?;
+    paged_actual.async_eval(&stream)?;
     stream.synchronize()?;
-    let expected = expected.to_vec_f32()?;
-    assert_eq!(expected, actual.to_vec_f32()?);
+    let expected = expected.to_vec_f32(&stream)?;
+    assert_eq!(expected, actual.to_vec_f32(&stream)?);
     assert!(
         expected
             .iter()
-            .zip(paged_actual.to_vec_f32()?)
+            .zip(paged_actual.to_vec_f32(&stream)?)
             .all(|(left, right)| { (left - right).abs() < 1.0e-4 })
     );
     Ok(())
@@ -68,9 +68,9 @@ fn backfills_pages_when_the_context_reaches_its_threshold() -> Result<()> {
         queries.scaled_dot_product_attention(&expected_kv, &expected_kv, 1.0, false, &stream)?;
     let actual = queries
         .scaled_dot_product_attention(&context.keys, &context.values, 1.0, false, &stream)?;
-    actual.async_eval()?;
+    actual.async_eval(&stream)?;
     stream.synchronize()?;
-    assert_eq!(expected.to_vec_f32()?, actual.to_vec_f32()?);
+    assert_eq!(expected.to_vec_f32(&stream)?, actual.to_vec_f32(&stream)?);
     Ok(())
 }
 
@@ -97,12 +97,12 @@ fn snapshots_paged_kv_pages_without_mutation() -> Result<()> {
         .ok_or_else(|| Error::InvalidModel("snapshot paged context is missing".into()))?
         .scratch();
     assert!(!std::ptr::eq(current_scratch, branch_scratch));
-    current.keys.async_eval()?;
-    branch.keys.async_eval()?;
+    current.keys.async_eval(&stream)?;
+    branch.keys.async_eval(&stream)?;
     stream.synchronize()?;
 
-    assert_eq!(current.keys.to_vec_f32_on_stream(&stream)?, vec![1.0, 2.0, 3.0, 4.0]);
-    assert_eq!(branch.keys.to_vec_f32_on_stream(&stream)?, vec![1.0, 2.0, 5.0, 6.0]);
+    assert_eq!(current.keys.to_vec_f32(&stream)?, vec![1.0, 2.0, 3.0, 4.0]);
+    assert_eq!(branch.keys.to_vec_f32(&stream)?, vec![1.0, 2.0, 5.0, 6.0]);
     Ok(())
 }
 
@@ -122,7 +122,7 @@ fn selects_explicit_native_or_gathered_paged_attention() -> Result<()> {
 
     assert!(fragmented.paged.is_some());
     assert!(contiguous.paged.is_none());
-    assert_eq!(contiguous.keys.to_vec_f32_on_stream(&stream)?, vec![1.0, 2.0, 3.0, 4.0]);
+    assert_eq!(contiguous.keys.to_vec_f32(&stream)?, vec![1.0, 2.0, 3.0, 4.0]);
     let query = Array::from_f32(&[1.0, 0.0], &[1, 1, 1, 2])?;
     let expected_kv = Array::from_f32(&[1.0, 2.0, 3.0, 4.0], &[1, 1, 2, 2])?;
     let expected =
@@ -133,13 +133,13 @@ fn selects_explicit_native_or_gathered_paged_attention() -> Result<()> {
         .ok_or_else(|| Error::InvalidModel("fragmented paged context is missing".into()))?;
     assert!(paged.fragmented);
     let actual = query.paged_scaled_dot_product_attention(paged.attention(), 1.0, &stream)?;
-    actual.async_eval()?;
+    actual.async_eval(&stream)?;
     stream.synchronize()?;
     assert!(
         expected
-            .to_vec_f32()?
+            .to_vec_f32(&stream)?
             .iter()
-            .zip(actual.to_vec_f32()?)
+            .zip(actual.to_vec_f32(&stream)?)
             .all(|(left, right)| (left - right).abs() < 1.0e-5)
     );
     Ok(())
@@ -230,7 +230,7 @@ fn decode_step(
 fn attention_step(query: &Array, context: &KvContext, stream: &Stream) -> Result<()> {
     let output =
         query.scaled_dot_product_attention(&context.keys, &context.values, 1.0, false, stream)?;
-    output.async_eval()?;
+    output.async_eval(stream)?;
     stream.synchronize()?;
     black_box(output);
     Ok(())

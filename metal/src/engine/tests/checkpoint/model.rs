@@ -16,13 +16,13 @@ fn executes_real_gemma_model_decode_logits() -> Result<()> {
     let mut cache = model.new_cache(&stream)?;
     let ids = Array::from_u32(&[1], &[1, 1])?;
     let logits = model.forward_decode(&ids, &mut cache, 0, &stream)?;
-    logits.async_eval()?;
+    logits.async_eval(&stream)?;
     stream.synchronize()?;
 
     assert_eq!(model.layer_count(), 30);
     assert_eq!(logits.shape()?, vec![1, 1, 262_144]);
     let expected = [-15.25, 5.156_25, -12.625, -14.875, -16.125, -16.125, -17.25, -12.75];
-    let values = logits.to_vec_f32_on_stream(&stream)?;
+    let values = logits.to_vec_f32(&stream)?;
     assert_prefix(&values, &expected, 0.26);
     let mut best = (0_u32, f32::NEG_INFINITY);
     for (index, value) in values.iter().copied().enumerate() {
@@ -55,7 +55,7 @@ fn compares_real_gemma_first_layer_from_embedding() -> Result<()> {
         .lookup(&ids, &stream)?
         .multiply_scalar(decoder.hidden_size.to_string().parse::<f32>()?.sqrt(), &stream)?;
     let output = layer.forward_uncached_decode(&input, &stream)?;
-    output.async_eval()?;
+    output.async_eval(&stream)?;
     stream.synchronize()?;
 
     assert_eq!(output.dtype()?, Dtype::Bfloat16);
@@ -63,7 +63,7 @@ fn compares_real_gemma_first_layer_from_embedding() -> Result<()> {
         -0.021_484_375, 0.006_591_797, 0.302_734_38, 0.071_289_06, 0.010_559_08, -0.007_690_43,
         -0.087_402_34, 0.053_466_8,
     ];
-    assert_prefix(&output.to_vec_f32_on_stream(&stream)?, &expected, 0.002);
+    assert_prefix(&output.to_vec_f32(&stream)?, &expected, 0.002);
     Ok(())
 }
 
@@ -86,14 +86,14 @@ fn matches_mlx_lm_two_token_prefill_after_layer_one() -> Result<()> {
         let mut cache = KvCache::new_with_window(16, config.max_context)?;
         hidden = layer.forward_decode(&hidden, Some(&mut cache), 0, true, &stream)?;
     }
-    hidden.async_eval()?;
+    hidden.async_eval(&stream)?;
     stream.synchronize()?;
 
     let expected = [
         -0.066_406_25, -0.128_906_25, -0.037_353_516, -0.851_562_5, 0.001_983_642_6, 0.009_338_379,
         -0.043_212_89, -0.010_314_941,
     ];
-    assert_prefix(&hidden.to_vec_f32_on_stream(&stream)?, &expected, 0.002);
+    assert_prefix(&hidden.to_vec_f32(&stream)?, &expected, 0.002);
     Ok(())
 }
 
@@ -116,14 +116,14 @@ fn matches_mlx_lm_two_token_prefill_after_last_sliding_layer() -> Result<()> {
         let mut cache = KvCache::new_with_window(16, config.max_context)?;
         hidden = layer.forward_decode(&hidden, Some(&mut cache), 0, true, &stream)?;
     }
-    hidden.async_eval()?;
+    hidden.async_eval(&stream)?;
     stream.synchronize()?;
 
     let expected = [
         0.067_382_81, -0.128_906_25, -0.006_530_761_7, 0.158_203_13, 0.010_742_187_5,
         0.032_714_844, -0.008_300_781, -0.003_540_039,
     ];
-    assert_prefix(&hidden.to_vec_f32_on_stream(&stream)?, &expected, 0.002);
+    assert_prefix(&hidden.to_vec_f32(&stream)?, &expected, 0.002);
     Ok(())
 }
 
@@ -146,14 +146,14 @@ fn matches_mlx_lm_two_token_prefill_after_first_global_attention() -> Result<()>
         let mut cache = KvCache::new_with_window(16, config.max_context)?;
         hidden = layer.forward_decode(&hidden, Some(&mut cache), 0, true, &stream)?;
     }
-    hidden.async_eval()?;
+    hidden.async_eval(&stream)?;
     stream.synchronize()?;
 
     let expected = [
         0.765_625, -0.138_671_88, -0.011_474_609, -0.239_257_81, -0.014_465_332, 0.332_031_25,
         -0.012_451_172, -0.004_028_320_3,
     ];
-    assert_prefix(&hidden.to_vec_f32_on_stream(&stream)?, &expected, 0.002);
+    assert_prefix(&hidden.to_vec_f32(&stream)?, &expected, 0.002);
     Ok(())
 }
 
@@ -181,20 +181,20 @@ fn matches_token_decode_after_chunked_prefill() -> Result<()> {
     }
     let token_logits =
         token_logits.ok_or_else(|| Error::InvalidModel("test tokens missing".into()))?;
-    token_logits.async_eval()?;
+    token_logits.async_eval(&stream)?;
     stream.synchronize()?;
-    let expected = token_logits.to_vec_f32_on_stream(&stream)?;
+    let expected = token_logits.to_vec_f32(&stream)?;
 
     cache.reset()?;
     let prefix = Array::from_u32(&tokens[..2], &[1, 2])?;
     let prefetched = model.forward_prefill(&prefix, &mut cache, 0, &stream)?;
-    prefetched.async_eval()?;
+    prefetched.async_eval(&stream)?;
     stream.synchronize()?;
     let actual =
         model.forward_decode(&Array::from_u32(&[tokens[2]], &[1, 1])?, &mut cache, 2, &stream)?;
-    actual.async_eval()?;
+    actual.async_eval(&stream)?;
     stream.synchronize()?;
     assert_eq!(cache.cached_tokens()?, tokens.len());
-    assert_prefix(&actual.to_vec_f32_on_stream(&stream)?, &expected[..64], 0.002);
+    assert_prefix(&actual.to_vec_f32(&stream)?, &expected[..64], 0.002);
     Ok(())
 }

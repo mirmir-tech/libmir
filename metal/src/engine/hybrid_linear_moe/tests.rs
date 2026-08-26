@@ -38,7 +38,7 @@ fn executes_a_complete_dense_shared_routed_model() -> Result<()> {
     let logits = model.forward_decode(&Array::from_u32(&[1], &[1, 1])?, &mut cache, 0, &stream)?;
 
     assert_eq!(logits.shape()?, vec![1, 1, 64]);
-    assert!(logits.to_vec_f32_on_stream(&stream)?.iter().all(|value| value.is_finite()));
+    assert!(logits.to_vec_f32(&stream)?.iter().all(|value| value.is_finite()));
     drop(tensors);
     fs::remove_dir_all(root)?;
     Ok(())
@@ -87,8 +87,8 @@ fn packed_prefill_matches_independent_rows() -> Result<()> {
         &[0, 0],
         &stream,
     )?;
-    let expected = scalar.to_vec_f32_on_stream(&stream)?;
-    let actual = packed.to_vec_f32_on_stream(&stream)?;
+    let expected = scalar.to_vec_f32(&stream)?;
+    let actual = packed.to_vec_f32(&stream)?;
     assert_eq!(actual.len(), expected.len());
     assert!(actual.iter().zip(expected).all(|(actual, expected)| {
         (actual - expected).abs() <= 1.0e-4 * expected.abs().max(1.0)

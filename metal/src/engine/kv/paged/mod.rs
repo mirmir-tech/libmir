@@ -83,9 +83,9 @@ impl PagedStore {
         self.reserve_pages = tokens.div_ceil(self.page_size).max(1);
     }
 
-    pub(super) fn detach_evaluated_graph(&self) -> Result<()> {
+    pub(super) fn detach_evaluated_graph(&self, stream: &Stream) -> Result<()> {
         if let Some(storage) = &self.storage {
-            storage.table.native().detach_graph()?;
+            storage.table.detach_graph(stream)?;
         }
         Ok(())
     }

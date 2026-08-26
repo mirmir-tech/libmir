@@ -25,13 +25,13 @@ fn gathers_typed_mxfp8_matrix_bank() -> Result<()> {
     assert!(linear.forward(&input, &stream).is_err());
     let output = linear.gather(&input, &indices, false, &stream)?;
     assert_eq!(output.shape()?, [2, 1, 2]);
-    assert_eq!(output.to_vec_f32_on_stream(&stream)?, [67.0, -28.0, 33.0, 18.0]);
+    assert_eq!(output.to_vec_f32(&stream)?, [67.0, -28.0, 33.0, 18.0]);
 
     let input = Array::from_f32(&[1.0; 32], &[1, 1, 1, 1, 32])?.astype(Dtype::Bfloat16, &stream)?;
     let indices = Array::from_u32(&[1, 0], &[1, 1, 2])?;
     let output = linear.gather(&input, &indices, false, &stream)?;
     assert_eq!(output.shape()?, [1, 1, 2, 1, 2]);
-    assert_eq!(output.to_vec_f32_on_stream(&stream)?, [67.0, -28.0, 33.0, 18.0]);
+    assert_eq!(output.to_vec_f32(&stream)?, [67.0, -28.0, 33.0, 18.0]);
 
     drop(tensors);
     fs::remove_dir_all(root)?;
@@ -54,8 +54,8 @@ fn gathers_and_splits_interleaved_mxfp8_gate_up_bank() -> Result<()> {
 
     let output = linear.gather(&input, &indices, false, &stream)?;
     let (gate, up) = crate::engine::fused_gate_up::split_interleaved_last(&output, 2, &stream)?;
-    assert_eq!(gate.to_vec_f32_on_stream(&stream)?, [32.0, 96.0, 192.0, 384.0]);
-    assert_eq!(up.to_vec_f32_on_stream(&stream)?, [64.0, 128.0, 256.0, 16.0]);
+    assert_eq!(gate.to_vec_f32(&stream)?, [32.0, 96.0, 192.0, 384.0]);
+    assert_eq!(up.to_vec_f32(&stream)?, [64.0, 128.0, 256.0, 16.0]);
 
     drop(tensors);
     fs::remove_dir_all(root)?;

@@ -24,10 +24,7 @@ fn executes_exact_and_padded_block_grids() -> Result<()> {
             &binding("exact", [2, 2], [2, 2], None, activation),
             &stream,
         )?;
-        assert_eq!(
-            exact.forward(&exact_input, &stream)?.to_vec_f32_on_stream(&stream)?,
-            [14.0, 1.0]
-        );
+        assert_eq!(exact.forward(&exact_input, &stream)?.to_vec_f32(&stream)?, [14.0, 1.0]);
     }
 
     let padded_input = Array::from_f32(&[1.0, 2.0, 3.0], &[1, 3])?
@@ -37,10 +34,7 @@ fn executes_exact_and_padded_block_grids() -> Result<()> {
         &binding("padded", [3, 3], [2, 2], Some([2, 2]), Float8ActivationScale::None),
         &stream,
     )?;
-    assert_eq!(
-        padded.forward(&padded_input, &stream)?.to_vec_f32_on_stream(&stream)?,
-        [9.0, 9.0, 21.0]
-    );
+    assert_eq!(padded.forward(&padded_input, &stream)?.to_vec_f32(&stream)?, [9.0, 9.0, 21.0]);
 
     drop(tensors);
     fs::remove_dir_all(root)?;

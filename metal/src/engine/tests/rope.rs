@@ -4,10 +4,10 @@ use super::*;
 fn creates_piecewise_rope_frequencies_on_the_gpu_stream() -> Result<()> {
     let stream = Stream::new_gpu()?;
     let frequencies = Array::piecewise_rope_frequencies(8, 10_000.0, 8.0, 1.0, 4.0, 8192, &stream)?;
-    frequencies.async_eval()?;
+    frequencies.async_eval(&stream)?;
     stream.synchronize()?;
 
-    let values = frequencies.to_vec_f32()?;
+    let values = frequencies.to_vec_f32(&stream)?;
 
     assert_eq!(values.len(), 4);
     assert!((values[0] - 1.0).abs() < 1.0e-6);
@@ -22,10 +22,10 @@ fn creates_truncated_yarn_frequencies_on_the_gpu_stream() -> Result<()> {
     let stream = Stream::new_gpu()?;
     let frequencies =
         Array::yarn_rope_frequencies(128, 1_000_000.0, 4.0, 32.0, 1.0, 32768, &stream)?;
-    frequencies.async_eval()?;
+    frequencies.async_eval(&stream)?;
     stream.synchronize()?;
 
-    let values = frequencies.to_vec_f32()?;
+    let values = frequencies.to_vec_f32(&stream)?;
     let expected = yarn_reference(128, 1_000_000.0, 4.0, 32.0, 1.0, 32768.0)?;
 
     assert_eq!(values.len(), expected.len());

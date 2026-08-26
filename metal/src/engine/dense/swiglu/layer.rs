@@ -105,8 +105,8 @@ impl DenseSwiGluLayer {
             .then(|| weights.mlp.gate.fuse_gate_up(&weights.mlp.up, stream))
             .transpose()?
             .flatten();
-        fused_attention.as_ref().map_or(Ok(()), FusedAttention::warm)?;
-        fused_gate_up.as_ref().map_or(Ok(()), FusedGateUp::warm)?;
+        fused_attention.as_ref().map_or(Ok(()), |fused| fused.warm(stream))?;
+        fused_gate_up.as_ref().map_or(Ok(()), |fused| fused.warm(stream))?;
         Ok(Self {
             config,
             weights,
@@ -179,7 +179,7 @@ fn emit_profile(
     let Some(started) = started else {
         return Ok(());
     };
-    output.async_eval()?;
+    output.async_eval(stream)?;
     stream.synchronize()?;
     tracing::debug!(
         component,

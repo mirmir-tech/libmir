@@ -198,12 +198,12 @@ impl DecoderCache {
         }
     }
 
-    pub(crate) fn detach_evaluated_graphs(&self) -> Result<()> {
+    pub(crate) fn detach_evaluated_graphs(&self, stream: &Stream) -> Result<()> {
         match &self.storage {
             CacheStorage::Attention(caches) => {
-                caches.iter().try_for_each(KvCache::detach_evaluated_graphs)
+                caches.iter().try_for_each(|cache| cache.detach_evaluated_graphs(stream))
             },
-            CacheStorage::HybridLinear(layers) => hybrid::detach_evaluated_graphs(layers),
+            CacheStorage::HybridLinear(layers) => hybrid::detach_evaluated_graphs(layers, stream),
         }
     }
 

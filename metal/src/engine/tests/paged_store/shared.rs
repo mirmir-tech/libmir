@@ -13,16 +13,16 @@ fn isolates_sessions_while_sharing_a_physical_arena() -> Result<()> {
     let second_value = values(&[3.0, 4.0])?;
 
     let first_context = first.update(&first_value, &first_value, &first_stream)?;
-    first_context.keys.async_eval()?;
+    first_context.keys.async_eval(&first_stream)?;
     first_stream.synchronize()?;
     let second_context = second.update(&second_value, &second_value, &second_stream)?;
-    second_context.keys.async_eval()?;
+    second_context.keys.async_eval(&second_stream)?;
     second_stream.synchronize()?;
 
     assert!(first.shares_paged_arena(&second));
     assert_ne!(first.first_physical_page(), second.first_physical_page());
-    assert_eq!(first_context.keys.to_vec_f32_on_stream(&first_stream)?, vec![1.0, 2.0]);
-    assert_eq!(second_context.keys.to_vec_f32_on_stream(&second_stream)?, vec![3.0, 4.0]);
+    assert_eq!(first_context.keys.to_vec_f32(&first_stream)?, vec![1.0, 2.0]);
+    assert_eq!(second_context.keys.to_vec_f32(&second_stream)?, vec![3.0, 4.0]);
     assert_eq!(pool.resident_arenas()?, 1);
     Ok(())
 }
@@ -60,10 +60,10 @@ fn gathers_multiple_physical_runs_in_logical_order() -> Result<()> {
 
     let extension = Array::from_f32(&[3.0, 4.0, 5.0, 6.0], &[1, 1, 2, 2])?;
     let context = first.update(&extension, &extension, &stream)?;
-    context.keys.async_eval()?;
+    context.keys.async_eval(&stream)?;
     stream.synchronize()?;
 
-    assert_eq!(context.keys.to_vec_f32_on_stream(&stream)?, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    assert_eq!(context.keys.to_vec_f32(&stream)?, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
     Ok(())
 }
 
@@ -91,7 +91,7 @@ fn surviving_model_keeps_the_arena_after_its_creator_unloads() -> Result<()> {
     let mut first = cache(&pool, 0)?;
     let first_value = values(&[1.0, 2.0])?;
     let first_context = first.update(&first_value, &first_value, &first_stream)?;
-    first_context.keys.async_eval()?;
+    first_context.keys.async_eval(&first_stream)?;
     first_stream.synchronize()?;
 
     let second_stream = stream(&pool)?;
@@ -104,10 +104,10 @@ fn surviving_model_keeps_the_arena_after_its_creator_unloads() -> Result<()> {
 
     let extension = values(&[5.0, 6.0])?;
     let context = second.update(&extension, &extension, &second_stream)?;
-    context.keys.async_eval()?;
+    context.keys.async_eval(&second_stream)?;
     second_stream.synchronize()?;
 
-    assert_eq!(context.keys.to_vec_f32_on_stream(&second_stream)?, vec![3.0, 4.0, 5.0, 6.0]);
+    assert_eq!(context.keys.to_vec_f32(&second_stream)?, vec![3.0, 4.0, 5.0, 6.0]);
     assert_eq!(pool.resident_arenas()?, 1);
     Ok(())
 }

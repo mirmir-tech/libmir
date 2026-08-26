@@ -142,7 +142,7 @@ impl PagedArenaPool {
         Ok(arena)
     }
 
-    pub(crate) fn detach_evaluated_graphs(&self) -> Result<()> {
+    pub(crate) fn detach_evaluated_graphs(&self, stream: &Stream) -> Result<()> {
         let arenas = {
             let mut arenas = self
                 .arenas
@@ -155,10 +155,10 @@ impl PagedArenaPool {
             let arena = arena
                 .lock()
                 .map_err(|_| Error::InvalidModel("paged arena lock was poisoned".into()))?;
-            arena.keys.native().detach_graph()?;
-            arena.values.native().detach_graph()?;
+            arena.keys.detach_graph(stream)?;
+            arena.values.detach_graph(stream)?;
             for scales in [&arena.key_scales, &arena.value_scales].into_iter().flatten() {
-                scales.native().detach_graph()?;
+                scales.detach_graph(stream)?;
             }
         }
         Ok(())

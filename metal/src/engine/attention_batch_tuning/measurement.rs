@@ -26,6 +26,6 @@ pub(super) fn measure(
 
 fn evaluate(output: &[Array], stream: &Stream) -> Result<()> {
     let refs = output.iter().collect::<Vec<_>>();
-    Array::concatenate(&refs, 0, stream)?.async_eval()?;
+    Array::concatenate(&refs, 0, stream)?.async_eval(stream)?;
     stream.synchronize()
 }

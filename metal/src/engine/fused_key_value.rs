@@ -18,8 +18,8 @@ impl FusedKeyValue {
         })
     }
 
-    pub(crate) fn warm(&self) -> Result<()> {
-        self.pair.warm()
+    pub(crate) fn warm(&self, stream: &Stream) -> Result<()> {
+        self.pair.warm(stream)
     }
 
     pub(crate) fn forward(&self, input: &Array, stream: &Stream) -> Result<(Array, Array)> {

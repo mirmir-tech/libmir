@@ -70,29 +70,20 @@ fn matches_mlx_lm_decode_after_128_token_prefill() -> Result<()> {
     for (index, (layer, cache)) in layers.iter().zip(&mut caches).enumerate() {
         if index == 17 {
             let (query, rotated_query) = layer.query_for_test(&hidden, 128, &stream)?;
-            assert_eq!(fingerprint(&query.to_vec_f32_on_stream(&stream)?), 0xe21e_4739_6b8f_72ec);
-            assert_eq!(
-                fingerprint(&rotated_query.to_vec_f32_on_stream(&stream)?),
-                0x70d9_54cd_f0cc_818e
-            );
+            assert_eq!(fingerprint(&query.to_vec_f32(&stream)?), 0xe21e_4739_6b8f_72ec);
+            assert_eq!(fingerprint(&rotated_query.to_vec_f32(&stream)?), 0x70d9_54cd_f0cc_818e);
             let mut snapshot = cache.snapshot_at(128)?;
             let attention =
                 layer.attention_residual_for_test(&hidden, &mut snapshot, 128, false, &stream)?;
-            assert_eq!(
-                fingerprint(&attention.to_vec_f32_on_stream(&stream)?),
-                0xbbe7_b361_9631_6b71
-            );
+            assert_eq!(fingerprint(&attention.to_vec_f32(&stream)?), 0xbbe7_b361_9631_6b71);
             let feed_forward = layer.feed_forward_for_test(&attention, &stream)?;
-            assert_eq!(
-                fingerprint(&feed_forward.to_vec_f32_on_stream(&stream)?),
-                0xb342_62d6_dfc1_c09c
-            );
+            assert_eq!(fingerprint(&feed_forward.to_vec_f32(&stream)?), 0xb342_62d6_dfc1_c09c);
         }
         hidden = layer.forward_decode(&hidden, Some(cache), 128, false, &stream)?;
-        hidden.async_eval()?;
+        hidden.async_eval(&stream)?;
         stream.synchronize()?;
         assert_eq!(
-            fingerprint(&hidden.to_vec_f32_on_stream(&stream)?),
+            fingerprint(&hidden.to_vec_f32(&stream)?),
             EXPECTED_LAYERS[index],
             "layer {index}"
         );
@@ -122,12 +113,12 @@ fn matches_mlx_lm_layer_one_attention_after_128_token_prefill() -> Result<()> {
         .lookup(&Array::from_u32(&prompt, &[1, i32::try_from(prompt.len())?])?, &stream)?
         .multiply_scalar(scale, &stream)?;
     let hidden = layers[0].forward_decode(&hidden, Some(&mut caches[0]), 0, true, &stream)?;
-    assert_eq!(fingerprint(&hidden.to_vec_f32_on_stream(&stream)?), 0x2f85_f9e8_f0dd_faf1);
+    assert_eq!(fingerprint(&hidden.to_vec_f32(&stream)?), 0x2f85_f9e8_f0dd_faf1);
     let (keys, values) = layers[1].key_value_for_test(&hidden, 0, &stream)?;
-    assert_eq!(fingerprint(&keys.to_vec_f32_on_stream(&stream)?), 0xb1c6_fe70_bb2e_bf3f);
-    assert_eq!(fingerprint(&values.to_vec_f32_on_stream(&stream)?), 0x2936_31ea_baf7_c99e);
+    assert_eq!(fingerprint(&keys.to_vec_f32(&stream)?), 0xb1c6_fe70_bb2e_bf3f);
+    assert_eq!(fingerprint(&values.to_vec_f32(&stream)?), 0x2936_31ea_baf7_c99e);
     let hidden = layers[1].forward_decode(&hidden, Some(&mut caches[1]), 0, true, &stream)?;
-    hidden.async_eval()?;
+    hidden.async_eval(&stream)?;
     stream.synchronize()?;
     let last_prompt = embedding
         .lookup(&Array::from_u32(&[1_127], &[1, 1])?, &stream)?
@@ -138,14 +129,11 @@ fn matches_mlx_lm_layer_one_attention_after_128_token_prefill() -> Result<()> {
         .multiply_scalar(scale, &stream)?;
     hidden = layers[0].forward_decode(&hidden, Some(&mut caches[0]), 128, false, &stream)?;
     let (query, rotated_query) = layers[1].query_for_test(&hidden, 128, &stream)?;
-    assert_eq!(fingerprint(&query.to_vec_f32_on_stream(&stream)?), 0x8645_c0c6_b8e2_c856);
-    assert_eq!(
-        fingerprint(&rotated_query.to_vec_f32_on_stream(&stream)?),
-        0xf52b_625c_8c41_1e09
-    );
+    assert_eq!(fingerprint(&query.to_vec_f32(&stream)?), 0x8645_c0c6_b8e2_c856);
+    assert_eq!(fingerprint(&rotated_query.to_vec_f32(&stream)?), 0xf52b_625c_8c41_1e09);
     let attention =
         layers[1].attention_residual_for_test(&hidden, &mut caches[1], 128, false, &stream)?;
-    assert_eq!(fingerprint(&attention.to_vec_f32_on_stream(&stream)?), 0x3433_da4e_e31e_a7b1);
+    assert_eq!(fingerprint(&attention.to_vec_f32(&stream)?), 0x3433_da4e_e31e_a7b1);
     Ok(())
 }
 
@@ -170,23 +158,20 @@ fn matches_mlx_lm_layer_zero_attention_during_127_token_prefill() -> Result<()> 
         true,
         &stream,
     )?;
-    assert_eq!(fingerprint(&attention.to_vec_f32_on_stream(&stream)?), 0x3f5d_46ff_d385_1d03);
+    assert_eq!(fingerprint(&attention.to_vec_f32(&stream)?), 0x3f5d_46ff_d385_1d03);
     let (dense, routing, experts, feed_forward) =
         layer.feed_forward_components_for_test(&attention, &stream)?;
-    assert_eq!(fingerprint(&dense.to_vec_f32_on_stream(&stream)?), 0xd44f_1db3_e7ea_fe75);
+    assert_eq!(fingerprint(&dense.to_vec_f32(&stream)?), 0xd44f_1db3_e7ea_fe75);
     let indices = routing
         .indices
-        .to_vec_u32_on_stream(&stream)?
+        .to_vec_u32(&stream)?
         .into_iter()
         .map(|index| Ok(f32::from(u16::try_from(index)?)))
         .collect::<Result<Vec<_>>>()?;
     assert_eq!(fingerprint(&indices), 0xcc54_29d7_fa6b_4ac6);
-    assert_eq!(
-        fingerprint(&routing.weights.to_vec_f32_on_stream(&stream)?),
-        0xeccd_db0d_8bd3_9ad3
-    );
-    assert_eq!(fingerprint(&experts.to_vec_f32_on_stream(&stream)?), 0x5b0c_e543_6591_615f);
-    assert_eq!(fingerprint(&feed_forward.to_vec_f32_on_stream(&stream)?), 0x271a_9e8d_9ba4_2113);
+    assert_eq!(fingerprint(&routing.weights.to_vec_f32(&stream)?), 0xeccd_db0d_8bd3_9ad3);
+    assert_eq!(fingerprint(&experts.to_vec_f32(&stream)?), 0x5b0c_e543_6591_615f);
+    assert_eq!(fingerprint(&feed_forward.to_vec_f32(&stream)?), 0x271a_9e8d_9ba4_2113);
     Ok(())
 }
 
@@ -199,7 +184,7 @@ fn prefill(
     for (layer, cache) in layers.iter().zip(caches) {
         hidden = layer.forward_decode(&hidden, Some(cache), 0, true, stream)?;
     }
-    hidden.async_eval()?;
+    hidden.async_eval(stream)?;
     stream.synchronize()
 }
 

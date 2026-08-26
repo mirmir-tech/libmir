@@ -16,11 +16,11 @@ fn applies_independent_row_and_column_rope() -> Result<()> {
     let positions = Array::from_u32(&[0, 0, 1, 0], &[1, 2, 2])?;
     let rope = VisionRope::new(4, 100.0)?;
     let (query, key) = rope.apply(&input, &input, &positions, &stream)?;
-    let values = query.to_vec_f32_on_stream(&stream)?;
+    let values = query.to_vec_f32(&stream)?;
 
     assert_close(&values[..4], &[1.0, 2.0, 3.0, 4.0], 1.0e-6);
     assert_close(&values[4..], &[1.0_f32.cos(), 1.0_f32.sin(), 0.0, 1.0], 1.0e-6);
-    assert_close(&values, &key.to_vec_f32_on_stream(&stream)?, 1.0e-6);
+    assert_close(&values, &key.to_vec_f32(&stream)?, 1.0e-6);
     Ok(())
 }
 
@@ -33,7 +33,7 @@ fn pools_a_two_dimensional_window_before_projection() -> Result<()> {
     let output = pooler.forward(&hidden, 2, 2, &stream)?;
 
     assert_eq!(output.shape()?, vec![1, 1, 2]);
-    assert_close(&output.to_vec_f32_on_stream(&stream)?, &[0.848_528_15, 1.131_370_9], 1.0e-6);
+    assert_close(&output.to_vec_f32(&stream)?, &[0.848_528_15, 1.131_370_9], 1.0e-6);
     Ok(())
 }
 
@@ -63,7 +63,7 @@ fn execute_synthetic_tower(root: &Path) -> Result<()> {
     let output = tower.forward_preprocessed(&image, &stream)?;
 
     assert_eq!(output.shape()?, vec![1, 1, 4]);
-    assert!(output.to_vec_f32_on_stream(&stream)?.iter().all(|value| value.is_finite()));
+    assert!(output.to_vec_f32(&stream)?.iter().all(|value| value.is_finite()));
     Ok(())
 }
 

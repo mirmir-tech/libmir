@@ -27,10 +27,10 @@ fn executes_gated_grouped_query_attention_on_the_gpu_stream() -> Result<()> {
     let mut cache = KvCache::new(16)?;
     let output = attention.forward(&input, &mut cache, 0, 0, true, &stream)?;
 
-    output.async_eval()?;
+    output.async_eval(&stream)?;
     stream.synchronize()?;
     assert_eq!(output.shape()?, vec![1, 2, 64]);
-    assert!(output.to_vec_f32()?.iter().all(|value| *value == 0.0));
+    assert!(output.to_vec_f32(&stream)?.iter().all(|value| *value == 0.0));
     assert_eq!(cache.offset()?, 2);
     Ok(())
 }

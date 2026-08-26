@@ -164,13 +164,13 @@ fn measure(
     paths: RoutingPaths<'_>,
 ) -> Result<Duration> {
     for _ in 0..stream.config().tuning.warmup_iterations {
-        execute(execution, indices, paths)?.async_eval()?;
+        execute(execution, indices, paths)?.async_eval(stream)?;
     }
     stream.synchronize()?;
     let iterations = stream.config().tuning.measurement_iterations.max(1);
     let started = Instant::now();
     for _ in 0..iterations {
-        execute(execution, indices, paths)?.async_eval()?;
+        execute(execution, indices, paths)?.async_eval(stream)?;
     }
     stream.synchronize()?;
     Ok(started.elapsed() / iterations)

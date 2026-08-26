@@ -52,10 +52,10 @@ impl FusedExpertGateUp {
         })
     }
 
-    pub(crate) fn warm(&self) -> Result<()> {
-        self.arrays.weight.async_eval()?;
-        self.arrays.scales.async_eval()?;
-        self.arrays.biases.async_eval()
+    pub(crate) fn warm(&self, stream: &Stream) -> Result<()> {
+        self.arrays.weight.async_eval(stream)?;
+        self.arrays.scales.async_eval(stream)?;
+        self.arrays.biases.async_eval(stream)
     }
 
     pub(crate) fn forward(

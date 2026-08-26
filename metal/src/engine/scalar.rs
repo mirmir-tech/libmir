@@ -15,9 +15,9 @@ mod tests {
         let stream = Stream::new_gpu()?;
         let input = Array::from_f32(&[1.0, 2.0], &[1, 2])?;
         let output = input.add_scalar(1.0, &stream)?;
-        output.async_eval()?;
+        output.async_eval(&stream)?;
         stream.synchronize()?;
-        assert_eq!(output.to_vec_f32()?, vec![2.0, 3.0]);
+        assert_eq!(output.to_vec_f32(&stream)?, vec![2.0, 3.0]);
         Ok(())
     }
 }

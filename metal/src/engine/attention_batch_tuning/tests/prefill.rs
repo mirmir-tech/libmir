@@ -70,7 +70,7 @@ fn runtime_profiles_an_unseen_multi_token_prefill_shape() -> Result<()> {
 
     let outputs = forward(&queries, &contexts, 1.0, true, &stream)?
         .ok_or_else(|| Error::InvalidModel("prefill tuning output is missing".into()))?;
-    Array::concatenate(&outputs.iter().collect::<Vec<_>>(), 0, &stream)?.async_eval()?;
+    Array::concatenate(&outputs.iter().collect::<Vec<_>>(), 0, &stream)?.async_eval(&stream)?;
     stream.synchronize()?;
 
     assert!(

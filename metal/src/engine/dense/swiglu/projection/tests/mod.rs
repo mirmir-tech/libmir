@@ -43,13 +43,13 @@ fn loads_dense_linear_and_tied_embedding_from_binding() -> Result<()> {
 
     let linear = BoundLinear::load(&tensors, &binding, &stream)?;
     let input = Array::from_f32(&[1.0, 2.0], &[1, 2])?;
-    assert_eq!(linear.forward(&input, &stream)?.to_vec_f32_on_stream(&stream)?, [5.0, 11.0]);
+    assert_eq!(linear.forward(&input, &stream)?.to_vec_f32(&stream)?, [5.0, 11.0]);
     assert!(!linear.has_bias());
 
     let embedding = BoundEmbedding::load(&tensors, &binding, &stream)?;
     let indices = Array::from_u32(&[1], &[1])?;
-    assert_eq!(embedding.lookup(&indices, &stream)?.to_vec_f32_on_stream(&stream)?, [3.0, 4.0]);
-    assert_eq!(embedding.project(&input, &stream)?.to_vec_f32_on_stream(&stream)?, [5.0, 11.0]);
+    assert_eq!(embedding.lookup(&indices, &stream)?.to_vec_f32(&stream)?, [3.0, 4.0]);
+    assert_eq!(embedding.project(&input, &stream)?.to_vec_f32(&stream)?, [5.0, 11.0]);
     drop(tensors);
     fs::remove_dir_all(root)?;
     Ok(())
@@ -86,11 +86,11 @@ fn check_affine_roles(bits: AffineBits) -> Result<()> {
         &stream,
     )?;
     let selected = Array::from_u32(&[1], &[1])?;
-    assert_eq!(embedding.lookup(&selected, &stream)?.to_vec_f32_on_stream(&stream)?, [2.0; 64]);
+    assert_eq!(embedding.lookup(&selected, &stream)?.to_vec_f32(&stream)?, [2.0; 64]);
     let output =
         BoundLinear::load(&tensors, &affine_binding(LogicalTensorRole::Output, bits), &stream)?;
     let input = Array::from_f32(&[1.0; 64], &[1, 64])?;
-    assert_eq!(output.forward(&input, &stream)?.to_vec_f32_on_stream(&stream)?, [64.0, 128.0]);
+    assert_eq!(output.forward(&input, &stream)?.to_vec_f32(&stream)?, [64.0, 128.0]);
     drop(tensors);
     fs::remove_dir_all(root)?;
     Ok(())

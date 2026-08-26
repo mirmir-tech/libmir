@@ -27,9 +27,9 @@ fn int8_paged_prefill_matches_native_causal_attention() -> Result<()> {
     assert!(paged.key_scales.is_some());
     assert!(paged.value_scales.is_some());
     let actual = queries.paged_scaled_dot_product_attention(paged.attention(), 0.5, &stream)?;
-    actual.async_eval()?;
+    actual.async_eval(&stream)?;
     stream.synchronize()?;
-    assert_close(&expected.to_vec_f32()?, &actual.to_vec_f32()?, 0.025);
+    assert_close(&expected.to_vec_f32(&stream)?, &actual.to_vec_f32(&stream)?, 0.025);
     Ok(())
 }
 
@@ -64,11 +64,11 @@ fn int8_pages_preserve_scales_across_copy_on_write() -> Result<()> {
         query.scaled_dot_product_attention(&left_keys, &left_values, 1.0, false, &stream)?;
     let right_expected =
         query.scaled_dot_product_attention(&right_keys, &right_values, 1.0, false, &stream)?;
-    left_actual.async_eval()?;
-    right_actual.async_eval()?;
+    left_actual.async_eval(&stream)?;
+    right_actual.async_eval(&stream)?;
     stream.synchronize()?;
-    assert_close(&left_expected.to_vec_f32()?, &left_actual.to_vec_f32()?, 0.035);
-    assert_close(&right_expected.to_vec_f32()?, &right_actual.to_vec_f32()?, 0.035);
+    assert_close(&left_expected.to_vec_f32(&stream)?, &left_actual.to_vec_f32(&stream)?, 0.035);
+    assert_close(&right_expected.to_vec_f32(&stream)?, &right_actual.to_vec_f32(&stream)?, 0.035);
     Ok(())
 }
 

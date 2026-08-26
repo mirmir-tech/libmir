@@ -49,7 +49,7 @@ pub(super) fn materialize(
         },
         NativeOutput::Logits(logits) => {
             let shape = logits.shape()?;
-            let values = logits.to_vec_f32_on_stream(model.stream())?;
+            let values = logits.to_vec_f32(model.stream())?;
             Ok(SamplingOutput {
                 next_token: None,
                 logits: Some(LogitsTrace { shape, values }),
@@ -97,8 +97,8 @@ fn top_k(
         next_token: None,
         logits: None,
         candidates: Some(CandidateLogitsTrace {
-            token_ids: candidates.token_ids.to_vec_u32_on_stream(model.stream())?,
-            scores: candidates.scores.to_vec_f32_on_stream(model.stream())?,
+            token_ids: candidates.token_ids.to_vec_u32(model.stream())?,
+            scores: candidates.scores.to_vec_f32(model.stream())?,
         }),
     })
 }

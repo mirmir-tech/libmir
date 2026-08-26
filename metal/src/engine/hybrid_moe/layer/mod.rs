@@ -111,11 +111,11 @@ impl HybridMoeLayer {
         })
     }
 
-    pub(super) fn warm_fused_projections(&self) -> Result<()> {
-        self.fused_attention.as_ref().map_or(Ok(()), FusedAttention::warm)?;
-        self.fused_key_value.as_ref().map_or(Ok(()), FusedKeyValue::warm)?;
-        self.fused_gate_up.as_ref().map_or(Ok(()), FusedGateUp::warm)?;
-        self.fused_expert_gate_up.as_ref().map_or(Ok(()), FusedExpertGateUp::warm)
+    pub(super) fn warm_fused_projections(&self, stream: &Stream) -> Result<()> {
+        self.fused_attention.as_ref().map_or(Ok(()), |fused| fused.warm(stream))?;
+        self.fused_key_value.as_ref().map_or(Ok(()), |fused| fused.warm(stream))?;
+        self.fused_gate_up.as_ref().map_or(Ok(()), |fused| fused.warm(stream))?;
+        self.fused_expert_gate_up.as_ref().map_or(Ok(()), |fused| fused.warm(stream))
     }
 
     pub(super) fn enable_expert_gate_up(&mut self, stream: &Stream) -> Result<bool> {
@@ -126,7 +126,7 @@ impl HybridMoeLayer {
             return Ok(false);
         };
         self.fused_expert_gate_up = gate.fuse_expert_gate_up(up, stream)?;
-        self.fused_expert_gate_up.as_ref().map_or(Ok(()), FusedExpertGateUp::warm)?;
+        self.fused_expert_gate_up.as_ref().map_or(Ok(()), |fused| fused.warm(stream))?;
         Ok(self.fused_expert_gate_up.is_some())
     }
 

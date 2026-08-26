@@ -26,8 +26,8 @@ fn splits_interleaved_fused_expert_projection() -> Result<()> {
     let indices = Array::from_u32(&[0], &[1])?;
 
     let (gate, up) = gate_up.gather(&input, &indices, false, &stream)?;
-    assert_eq!(gate.to_vec_f32_on_stream(&stream)?, [3.0, 8.0]);
-    assert_eq!(up.to_vec_f32_on_stream(&stream)?, [30.0, 80.0]);
+    assert_eq!(gate.to_vec_f32(&stream)?, [3.0, 8.0]);
+    assert_eq!(up.to_vec_f32(&stream)?, [30.0, 80.0]);
     Ok(())
 }
 
@@ -60,10 +60,10 @@ fn execute(fused: bool, stream: &Stream) -> Result<()> {
     let input = Array::from_f32(&vec![0.0; 64], &[1, 1, 64])?;
     let output = moe.forward(&input, stream)?;
 
-    output.async_eval()?;
+    output.async_eval(stream)?;
     stream.synchronize()?;
     assert_eq!(output.shape()?, vec![1, 1, 64]);
-    assert!(output.to_vec_f32()?.iter().all(|value| *value == 0.0));
+    assert!(output.to_vec_f32(stream)?.iter().all(|value| *value == 0.0));
     Ok(())
 }
 

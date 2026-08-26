@@ -60,7 +60,7 @@ impl DenseSwiGluModel {
             if evaluation_step
                 .is_some_and(|step| (index + 1) % step == 0 || index + 1 == self.layers.len())
             {
-                hidden.async_eval()?;
+                hidden.async_eval(stream)?;
                 stream.synchronize()?;
             }
         }

@@ -45,12 +45,12 @@ fn execute_model(dtype: &str) -> Result<()> {
 
     assert_eq!(model.layer_count(), 1);
     assert_eq!(logits.shape()?, vec![1, 1, 4]);
-    assert!(logits.to_vec_f32_on_stream(&stream)?.iter().all(|value| value.is_finite()));
+    assert!(logits.to_vec_f32(&stream)?.iter().all(|value| value.is_finite()));
     cache.reset()?;
     let state =
         model.forward_prefill_state(&Array::from_u32(&[1, 2], &[1, 2])?, &mut cache, 0, &stream)?;
     assert_eq!(state.shape()?, vec![1, 2, 2]);
-    state.async_eval()?;
+    state.async_eval(&stream)?;
     stream.synchronize()?;
     assert_eq!(cache.cached_tokens()?, 2);
     drop(tensors);

@@ -26,10 +26,10 @@ fn batched_attention_matches_independent_rows() -> Result<()> {
         execute(BatchAttentionExecution::Batched, &queries, &contexts, 0.5, false, &stream)?;
     let rows = Array::concatenate(&rows.iter().collect::<Vec<_>>(), 0, &stream)?;
     let batched = Array::concatenate(&batched.iter().collect::<Vec<_>>(), 0, &stream)?;
-    batched.async_eval()?;
+    batched.async_eval(&stream)?;
     stream.synchronize()?;
-    let expected = rows.to_vec_f32()?;
-    let actual = batched.to_vec_f32()?;
+    let expected = rows.to_vec_f32(&stream)?;
+    let actual = batched.to_vec_f32(&stream)?;
     assert_eq!(expected.len(), actual.len());
     assert!(expected.iter().zip(actual).all(|(left, right)| (left - right).abs() < 1.0e-5));
     Ok(())

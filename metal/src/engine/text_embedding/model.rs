@@ -55,6 +55,6 @@ impl TextEmbeddingModel {
             .slice(&[0, sequence - 1, 0], &[1, sequence, dimensions], stream)?
             .reshape(&[1, i32::try_from(dimensions)?], stream)?
             .l2_normalize(-1, 1.0e-12, stream)?;
-        pooled.to_vec_f32_on_stream(stream)
+        pooled.to_vec_f32(stream)
     }
 }

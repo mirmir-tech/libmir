@@ -35,7 +35,7 @@ fn broadcasts_mlx_mxfp4_input_across_expert_selections() -> Result<()> {
 
     let output = linear.gather(&input, &indices, false, &stream)?;
     assert_eq!(output.shape()?, [1, 1, 2, 1, 2]);
-    assert_eq!(output.to_vec_f32_on_stream(&stream)?, [51.0, 68.0, 17.0, 34.0]);
+    assert_eq!(output.to_vec_f32(&stream)?, [51.0, 68.0, 17.0, 34.0]);
 
     drop(tensors);
     fs::remove_dir_all(root)?;
@@ -59,8 +59,8 @@ fn gathers_and_splits_interleaved_mxfp4_gate_up_bank() -> Result<()> {
     let output = linear.gather(&input, &indices, false, &stream)?;
     let (gate, up) = crate::engine::fused_gate_up::split_interleaved_last(&output, 2, &stream)?;
     assert_eq!(gate.shape()?, [2, 1, 2]);
-    assert_eq!(gate.to_vec_f32_on_stream(&stream)?, [16.0, 48.0, 96.0, 192.0]);
-    assert_eq!(up.to_vec_f32_on_stream(&stream)?, [32.0, 64.0, 128.0, 16.0]);
+    assert_eq!(gate.to_vec_f32(&stream)?, [16.0, 48.0, 96.0, 192.0]);
+    assert_eq!(up.to_vec_f32(&stream)?, [32.0, 64.0, 128.0, 16.0]);
 
     drop(tensors);
     fs::remove_dir_all(root)?;
@@ -83,7 +83,7 @@ fn gather(format: BlockQuantization, dtype: &str, shape: &[usize], label: &str) 
     assert!(linear.forward(&input, &stream).is_err());
     let output = linear.gather(&input, &indices, false, &stream)?;
     assert_eq!(output.shape()?, [2, 1, 2]);
-    assert_eq!(output.to_vec_f32_on_stream(&stream)?, [51.0, 68.0, 17.0, 34.0]);
+    assert_eq!(output.to_vec_f32(&stream)?, [51.0, 68.0, 17.0, 34.0]);
 
     drop(tensors);
     fs::remove_dir_all(root)?;

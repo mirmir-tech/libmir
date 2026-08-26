@@ -26,30 +26,21 @@ fn executes_direct_fp8_formats_on_metal() -> Result<()> {
     let multiplied = BoundLinear::load(&tensors, &binding(Float8ScaleMode::Multiplier), &stream)?;
     let output = multiplied.forward(&input, &stream)?;
     assert_eq!(output.dtype()?, crate::engine::Dtype::Bfloat16);
-    assert_eq!(output.to_vec_f32_on_stream(&stream)?, [11.0, -1.0]);
+    assert_eq!(output.to_vec_f32(&stream)?, [11.0, -1.0]);
     let divided =
         BoundLinear::load(&tensors, &binding(Float8ScaleMode::InverseMultiplier), &stream)?;
-    assert_eq!(divided.forward(&input, &stream)?.to_vec_f32_on_stream(&stream)?, [3.5, -1.0]);
+    assert_eq!(divided.forward(&input, &stream)?.to_vec_f32(&stream)?, [3.5, -1.0]);
     for binding in [
         static_binding(Float8ParameterDType::F32, "input_scale"),
         static_binding(Float8ParameterDType::BF16, "input_scale_bf16"),
     ] {
         let static_linear = BoundLinear::load(&tensors, &binding, &stream)?;
-        assert_eq!(
-            static_linear.forward(&input, &stream)?.to_vec_f32_on_stream(&stream)?,
-            [11.0, -1.0]
-        );
+        assert_eq!(static_linear.forward(&input, &stream)?.to_vec_f32(&stream)?, [11.0, -1.0]);
     }
     let scaled_e5m2 = BoundLinear::load(&tensors, &e5m2_binding(true), &stream)?;
-    assert_eq!(
-        scaled_e5m2.forward(&input, &stream)?.to_vec_f32_on_stream(&stream)?,
-        [11.0, -1.0]
-    );
+    assert_eq!(scaled_e5m2.forward(&input, &stream)?.to_vec_f32(&stream)?, [11.0, -1.0]);
     let unscaled_e5m2 = BoundLinear::load(&tensors, &e5m2_binding(false), &stream)?;
-    assert_eq!(
-        unscaled_e5m2.forward(&input, &stream)?.to_vec_f32_on_stream(&stream)?,
-        [6.0, -1.0]
-    );
+    assert_eq!(unscaled_e5m2.forward(&input, &stream)?.to_vec_f32(&stream)?, [6.0, -1.0]);
     drop(tensors);
     fs::remove_dir_all(root)?;
     Ok(())
@@ -82,7 +73,7 @@ fn checkpoint_layer_zero_matches_the_fp8_oracle() -> Result<()> {
     let normalized = norm.apply(&input, 1.0e-6, &stream)?;
     let value = BoundLinear::load(&tensors, layer.attention.value, &stream)?
         .forward(&normalized, &stream)?
-        .to_vec_f32_on_stream(&stream)?;
+        .to_vec_f32(&stream)?;
     let mut attention = Vec::with_capacity(decoder.hidden_size);
     for query_head in 0..decoder.num_attention_heads {
         let kv_head = query_head * decoder.num_key_value_heads / decoder.num_attention_heads;
@@ -145,7 +136,7 @@ fn checkpoint_layer_zero_matches_the_fp8_oracle() -> Result<()> {
 }
 
 fn assert_values(actual: &Array, expected: &[f32], label: &str, stream: &Stream) -> Result<()> {
-    let actual = actual.to_vec_f32_on_stream(stream)?;
+    let actual = actual.to_vec_f32(stream)?;
     let maximum = actual
         .iter()
         .zip(expected)

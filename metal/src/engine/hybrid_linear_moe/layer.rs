@@ -183,7 +183,7 @@ fn emit_component(
     component: &str,
     started: Instant,
 ) -> Result<()> {
-    output.async_eval()?;
+    output.async_eval(stream)?;
     stream.synchronize()?;
     tracing::debug!(
         layer,

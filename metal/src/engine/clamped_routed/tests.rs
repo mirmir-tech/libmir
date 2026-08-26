@@ -47,7 +47,7 @@ fn execute_dense_clamped_routed_model(fused: bool) -> Result<()> {
     let logits = model.forward(&Array::from_u32(&[1], &[1, 1])?, &mut cache, 0, false, &stream)?;
 
     assert_eq!(logits.shape()?, vec![1, 1, 64]);
-    assert!(logits.to_vec_f32_on_stream(&stream)?.iter().all(|value| value.is_finite()));
+    assert!(logits.to_vec_f32(&stream)?.iter().all(|value| value.is_finite()));
     drop(tensors);
     fs::remove_dir_all(root)?;
     Ok(())

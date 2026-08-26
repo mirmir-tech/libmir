@@ -120,7 +120,7 @@ impl HybridMoeModel {
         });
         if warm_fusions {
             for layer in &layers {
-                layer.warm_fused_projections()?;
+                layer.warm_fused_projections(stream)?;
             }
             stream.synchronize()?;
         }
@@ -191,7 +191,7 @@ impl HybridMoeModel {
         let logits = self.logits(&hidden, apply_softcap, stream)?;
         decode_graph::export_once(&logits, stream)?;
         if profile_components {
-            logits.async_eval()?;
+            logits.async_eval(stream)?;
             stream.synchronize()?;
             tracing::debug!(
                 component = "logits",

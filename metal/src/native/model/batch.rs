@@ -104,15 +104,15 @@ fn decode_states(
     states: &mut [(Uuid, SessionState)],
 ) -> Result<Vec<NativeOutput>> {
     let token_ids = sample_batch(inputs, states, stream)?;
-    token_ids.async_eval()?;
-    let tokens = token_ids.to_vec_u32_on_stream(stream)?;
+    token_ids.async_eval(stream)?;
+    let tokens = token_ids.to_vec_u32(stream)?;
     if tokens.len() != states.len() {
         return Err(Error::InvalidDecodeBatch("sampled token count does not match rows".into()));
     }
-    token_ids.detach_graph()?;
+    token_ids.detach_graph(stream)?;
     stream.detach_paged_arena_graphs()?;
     for (_, state) in states.iter() {
-        state.cache.detach_evaluated_graphs()?;
+        state.cache.detach_evaluated_graphs(stream)?;
     }
     let positions = states
         .iter()
@@ -163,7 +163,7 @@ fn complete_batch(
     let rows = (0..states.len())
         .map(|row| Ok(logits.slice(&[row, 0, 0], &[row + 1, 1, width], stream)?))
         .collect::<Result<Vec<_>>>()?;
-    logits.async_eval()?;
+    logits.async_eval(stream)?;
     Ok(states
         .iter_mut()
         .zip(rows)

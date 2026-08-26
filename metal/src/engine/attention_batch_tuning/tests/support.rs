@@ -41,10 +41,10 @@ pub(super) fn assert_outputs_close(
 ) -> Result<()> {
     let expected = Array::concatenate(&expected.iter().collect::<Vec<_>>(), 0, stream)?;
     let actual = Array::concatenate(&actual.iter().collect::<Vec<_>>(), 0, stream)?;
-    actual.async_eval()?;
+    actual.async_eval(stream)?;
     stream.synchronize()?;
-    let expected = expected.to_vec_f32()?;
-    let actual = actual.to_vec_f32()?;
+    let expected = expected.to_vec_f32(stream)?;
+    let actual = actual.to_vec_f32(stream)?;
     assert_eq!(expected.len(), actual.len());
     assert!(expected.iter().zip(actual).all(|(left, right)| (left - right).abs() < 1.0e-4));
     Ok(())

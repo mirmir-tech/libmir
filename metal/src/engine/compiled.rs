@@ -121,7 +121,7 @@ mod tests {
         let input = Array::from_f32(&[4.0], &[1])?;
         let output = gate.sigmoid_mul(&input, &stream)?;
 
-        assert_eq!(output.to_vec_f32_on_stream(&stream)?, vec![2.0]);
+        assert_eq!(output.to_vec_f32(&stream)?, vec![2.0]);
         Ok(())
     }
 
@@ -131,11 +131,11 @@ mod tests {
         let gate = Array::from_f32(&[1.0, 0.0], &[2])?;
         let input = Array::from_f32(&[2.0, 4.0], &[2])?;
 
-        let geglu = gate.gelu_approx_mul(&input, &stream)?.to_vec_f32_on_stream(&stream)?;
-        let swiglu = gate.silu_mul(&input, &stream)?.to_vec_f32_on_stream(&stream)?;
+        let geglu = gate.gelu_approx_mul(&input, &stream)?.to_vec_f32(&stream)?;
+        let swiglu = gate.silu_mul(&input, &stream)?.to_vec_f32(&stream)?;
         let softcap = Array::from_f32(&[20.0, -20.0], &[2])?
             .logit_softcap(10.0, &stream)?
-            .to_vec_f32_on_stream(&stream)?;
+            .to_vec_f32(&stream)?;
 
         let expected_geglu = approximate_gelu(1.0) * 2.0;
         assert!((geglu[0] - expected_geglu).abs() < 1.0e-5);
@@ -163,7 +163,7 @@ mod tests {
                 .astype_like(&gate, &stream)?,
             &stream,
         )?
-        .to_vec_f32_on_stream(&stream)?;
+        .to_vec_f32(&stream)?;
 
         assert!((candidate[3_516] + 0.820_312_5).abs() < f32::EPSILON);
         Ok(())
@@ -179,7 +179,7 @@ mod tests {
         let [output] =
             compiled.call(stream.native(), [reference.native(), gate.native(), input.native()])?;
         let precise = stream.native().read::<f32>(&output)?;
-        let ordinary = gate.silu_mul(&input, &stream)?.to_vec_f32_on_stream(&stream)?;
+        let ordinary = gate.silu_mul(&input, &stream)?.to_vec_f32(&stream)?;
 
         assert_eq!(output.dtype()?, mirtal::DType::Bfloat16);
         assert_eq!(precise, vec![-0.015_380_859]);

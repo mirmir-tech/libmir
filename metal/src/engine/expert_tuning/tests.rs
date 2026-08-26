@@ -53,8 +53,8 @@ fn benchmarks_representative_expert_gate_up_profile() -> Result<()> {
     let input = Array::from_f32(&values(512), &[1, 1, 1, 512])?;
     let indices = Array::from_u32(&[1, 3, 5, 7], &[1, 1, 4])?;
     let output = forward(&gate, &up, &fused, &input, &indices, &stream)?;
-    output.0.async_eval()?;
-    output.1.async_eval()?;
+    output.0.async_eval(&stream)?;
+    output.1.async_eval(&stream)?;
     stream.synchronize()?;
     println!("metal_expert_gate_up_profile experts=8 input=512 output=1024 routes=4");
     Ok(())
@@ -81,8 +81,8 @@ fn values(elements: usize) -> Vec<f32> {
 }
 
 fn assert_close(actual: &Array, expected: &Array, stream: &Stream) -> Result<()> {
-    let actual = actual.to_vec_f32_on_stream(stream)?;
-    let expected = expected.to_vec_f32_on_stream(stream)?;
+    let actual = actual.to_vec_f32(stream)?;
+    let expected = expected.to_vec_f32(stream)?;
     assert_eq!(actual.len(), expected.len());
     assert!(
         actual

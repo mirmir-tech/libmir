@@ -7,12 +7,12 @@ fn keeps_recurrent_gated_delta_state_on_the_explicit_gpu_stream() -> Result<()> 
     let mut state = GatedDeltaState::new()?;
     let inputs = inputs(&[2.0, 4.0, 3.0, 5.0], 2)?;
     let output = state.update(inputs.as_borrowed(), &stream)?;
-    output.async_eval()?;
+    output.async_eval(&stream)?;
     stream.synchronize()?;
 
-    assert_close(&output.to_vec_f32()?, &[1.0, 2.0, 1.75, 3.0]);
+    assert_close(&output.to_vec_f32(&stream)?, &[1.0, 2.0, 1.75, 3.0]);
     assert_eq!(state.offset()?, 2);
-    assert_close(&state.values()?.to_vec_f32_on_stream(&stream)?, &[1.75, 3.0]);
+    assert_close(&state.values()?.to_vec_f32(&stream)?, &[1.75, 3.0]);
     Ok(())
 }
 
@@ -34,10 +34,10 @@ fn uses_the_metal_recurrence_kernel_for_supported_key_dimensions() -> Result<()>
     };
     let output = state.update(inputs, &stream)?;
 
-    output.async_eval()?;
+    output.async_eval(&stream)?;
     stream.synchronize()?;
-    assert_close(&output.to_vec_f32()?, &[1.0, 2.25]);
-    assert_close(&state.values()?.to_vec_f32_on_stream(&stream)?[..1], &[2.25]);
+    assert_close(&output.to_vec_f32(&stream)?, &[1.0, 2.25]);
+    assert_close(&state.values()?.to_vec_f32(&stream)?[..1], &[2.25]);
     Ok(())
 }
 
@@ -51,14 +51,11 @@ fn fused_decode_matches_the_general_recurrence_step() -> Result<()> {
         let fused_inputs = decode_inputs(step)?;
         let general_output = general.update(general_inputs.as_borrowed(), &stream)?;
         let fused_output = fused.update_fused(fused_inputs.as_borrowed(), &stream)?;
-        general_output.async_eval()?;
-        fused_output.async_eval()?;
+        general_output.async_eval(&stream)?;
+        fused_output.async_eval(&stream)?;
         stream.synchronize()?;
-        assert_eq!(general_output.to_vec_f32()?, fused_output.to_vec_f32()?);
-        assert_eq!(
-            general.values()?.to_vec_f32_on_stream(&stream)?,
-            fused.values()?.to_vec_f32_on_stream(&stream)?,
-        );
+        assert_eq!(general_output.to_vec_f32(&stream)?, fused_output.to_vec_f32(&stream)?);
+        assert_eq!(general.values()?.to_vec_f32(&stream)?, fused.values()?.to_vec_f32(&stream)?,);
     }
     Ok(())
 }
@@ -75,10 +72,10 @@ fn snapshots_recurrent_state_without_a_host_round_trip() -> Result<()> {
     let snapshot_inputs = inputs(&[3.0, 5.0], 1)?;
     let snapshot_output = snapshot.update(snapshot_inputs.as_borrowed(), &stream)?;
 
-    original_output.async_eval()?;
-    snapshot_output.async_eval()?;
+    original_output.async_eval(&stream)?;
+    snapshot_output.async_eval(&stream)?;
     stream.synchronize()?;
-    assert_close(&original_output.to_vec_f32()?, &snapshot_output.to_vec_f32()?);
+    assert_close(&original_output.to_vec_f32(&stream)?, &snapshot_output.to_vec_f32(&stream)?);
     assert_eq!(original.offset()?, 2);
     assert_eq!(snapshot.offset()?, 2);
     Ok(())
@@ -110,12 +107,12 @@ fn keeps_depthwise_convolution_history_in_a_state_snapshot() -> Result<()> {
     let original_output = original.convolve_silu(&next, &weight, &stream)?;
     let snapshot_output = snapshot.convolve_silu(&next, &weight, &stream)?;
 
-    first_output.async_eval()?;
-    original_output.async_eval()?;
-    snapshot_output.async_eval()?;
+    first_output.async_eval(&stream)?;
+    original_output.async_eval(&stream)?;
+    snapshot_output.async_eval(&stream)?;
     stream.synchronize()?;
     assert_eq!(first_output.shape()?, vec![1, 2, 1]);
-    assert_close(&original_output.to_vec_f32()?, &snapshot_output.to_vec_f32()?);
+    assert_close(&original_output.to_vec_f32(&stream)?, &snapshot_output.to_vec_f32(&stream)?);
     Ok(())
 }
 

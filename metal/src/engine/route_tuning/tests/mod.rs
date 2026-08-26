@@ -73,9 +73,9 @@ fn kernel_grouping_is_sorted_and_restorable() -> Result<()> {
     let input = Array::from_f32(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0], &[1, 4, 2])?;
     let indices = Array::from_u32(&[3, 0, 3, 1, 3, 2, 3, 0], &[1, 4, 2])?;
     let grouped = input.group_expert_inputs(&indices, 4, &stream)?;
-    assert_eq!(grouped.indices.to_vec_u32_on_stream(&stream)?, [0, 0, 1, 2, 3, 3, 3, 3]);
+    assert_eq!(grouped.indices.to_vec_u32(&stream)?, [0, 0, 1, 2, 3, 3, 3, 3]);
     assert_eq!(
-        grouped.restore(&grouped.input, &stream)?.to_vec_f32_on_stream(&stream)?,
+        grouped.restore(&grouped.input, &stream)?.to_vec_f32(&stream)?,
         [0.0, 1.0, 0.0, 1.0, 2.0, 3.0, 2.0, 3.0, 4.0, 5.0, 4.0, 5.0, 6.0, 7.0, 6.0, 7.0]
     );
     Ok(())
@@ -136,7 +136,7 @@ fn benchmarks_sorted_unsorted_crossover() -> Result<()> {
                     },
                 ),
             )?
-            .async_eval()?;
+            .async_eval(&stream)?;
             stream.synchronize()?;
             println!(
                 "metal_expert_routing_profile fused_unsorted={fused} tokens={tokens} routes={routes}"
@@ -237,8 +237,8 @@ fn values(elements: usize) -> Vec<f32> {
 }
 
 fn assert_close(actual: &Array, expected: &Array, stream: &Stream) -> Result<()> {
-    let actual = actual.to_vec_f32_on_stream(stream)?;
-    let expected = expected.to_vec_f32_on_stream(stream)?;
+    let actual = actual.to_vec_f32(stream)?;
+    let expected = expected.to_vec_f32(stream)?;
     assert_eq!(actual.len(), expected.len());
     assert!(
         actual

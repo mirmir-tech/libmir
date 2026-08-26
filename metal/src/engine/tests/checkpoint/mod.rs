@@ -19,14 +19,14 @@ fn projects_with_real_gemma_q_weight() -> Result<()> {
     let quantized = quantized(&tensors, &format!("{LAYER}.self_attn.q_proj"))?;
     let input = Array::from_f32(&vec![0.25; 2_816], &[1, 1, 2_816])?;
     let output = input.quantized_matmul(&quantized, true, &stream)?;
-    output.async_eval()?;
+    output.async_eval(&stream)?;
     stream.synchronize()?;
     assert!(!tensors.is_empty());
     assert_eq!(tensors.file_count(), 4);
     assert_eq!(tensors.len(), 1_339);
     assert_eq!(quantized.weight.dtype()?, Dtype::Uint32);
     assert_eq!(output.shape()?, vec![1, 1, 4_096]);
-    let values = output.to_vec_f32()?;
+    let values = output.to_vec_f32(&stream)?;
     let expected = [
         0.311_720_85, -0.176_174_16, -0.121_078_97, -0.502_513_9, 0.128_841_4, 0.342_447_28,
         -0.117_445_47, -0.282_201_3,
@@ -42,7 +42,7 @@ fn loads_real_gemma_quantized_embedding() -> Result<()> {
     let embedding = QuantizedEmbedding::load(&tensors, "language_model.model.embed_tokens", 64)?;
     let ids = Array::from_u32(&[1], &[1, 1])?;
     let output = embedding.lookup(&ids, &stream)?;
-    output.async_eval()?;
+    output.async_eval(&stream)?;
     stream.synchronize()?;
 
     assert_eq!(embedding.bits(), 8);
@@ -51,7 +51,7 @@ fn loads_real_gemma_quantized_embedding() -> Result<()> {
         -0.011_230_469, 0.071_777_344, 0.048_339_844, -0.052_734_375, 0.007_293_701, 0.011_230_469,
         -0.016_235_352, 0.019_653_32,
     ];
-    assert_prefix(&output.to_vec_f32_on_stream(&stream)?, &expected, 1.0e-6);
+    assert_prefix(&output.to_vec_f32(&stream)?, &expected, 1.0e-6);
     Ok(())
 }
 
@@ -61,7 +61,7 @@ fn executes_real_gemma_layer_zero_attention() -> Result<()> {
     let (tensors, stream) = load_model()?;
     let input = Array::from_f32(&gemma_input(), &[1, 1, 2_816])?;
     let output = hybrid_moe_attention(&tensors, &input, &stream)?;
-    output.async_eval()?;
+    output.async_eval(&stream)?;
     stream.synchronize()?;
 
     assert_eq!(output.shape()?, vec![1, 1, 2_816]);
@@ -69,7 +69,7 @@ fn executes_real_gemma_layer_zero_attention() -> Result<()> {
         1.008_520_8, -6.367_076, 1.805_791_1, 0.184_957_98, -2.887_073, 0.695_407_87, -3.078_099_5,
         0.637_955_9,
     ];
-    assert_prefix(&output.to_vec_f32()?, &expected, 1.0e-4);
+    assert_prefix(&output.to_vec_f32(&stream)?, &expected, 1.0e-4);
     Ok(())
 }
 

@@ -41,9 +41,9 @@ impl GatedDeltaState {
         Ok(())
     }
 
-    pub(crate) fn detach_evaluated_graphs(&self) -> Result<()> {
+    pub(crate) fn detach_evaluated_graphs(&self, stream: &Stream) -> Result<()> {
         for array in [&self.value, &self.convolution].into_iter().flatten() {
-            array.native().detach_graph()?;
+            array.detach_graph(stream)?;
         }
         Ok(())
     }

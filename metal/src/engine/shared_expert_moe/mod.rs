@@ -125,7 +125,7 @@ impl SharedExpertMoe {
             .then(|| self.shared_gate.fuse_gate_up(&self.shared_up, stream))
             .transpose()?
             .flatten();
-        self.fused_shared_gate_up.as_ref().map_or(Ok(()), FusedGateUp::warm)?;
+        self.fused_shared_gate_up.as_ref().map_or(Ok(()), |fused| fused.warm(stream))?;
         Ok(routed)
     }
 

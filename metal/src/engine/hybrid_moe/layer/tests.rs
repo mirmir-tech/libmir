@@ -23,7 +23,7 @@ fn bench_hybrid_moe_attention_decode() -> Result<()> {
     let prefill = benchmark_input(128, decoder.hidden_size, &reference, &stream)?;
     let mut cache = KvCache::new_with_window(256, config.max_context)?;
     let warmup = layer.attention_residual_for_test(&prefill, &mut cache, 0, true, &stream)?;
-    warmup.async_eval()?;
+    warmup.async_eval(&stream)?;
     stream.synchronize()?;
     let decode = benchmark_input(1, decoder.hidden_size, &reference, &stream)?;
     let iters = env_usize("MIRMIR_BENCH_ITERS", 20)?;
@@ -216,7 +216,7 @@ fn eval_attention(
 ) -> Result<()> {
     let output =
         layer.attention_residual_for_test(input, cache, i32::try_from(position)?, false, stream)?;
-    output.async_eval()?;
+    output.async_eval(stream)?;
     stream.synchronize()?;
     black_box(output);
     Ok(())

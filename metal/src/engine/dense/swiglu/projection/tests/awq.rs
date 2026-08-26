@@ -25,7 +25,7 @@ fn repacks_awq_on_gpu_and_executes_native_affine_qmm() -> Result<()> {
     let expected = (0..2)
         .flat_map(|_| (1_u16..=8).map(|row| 512.0 * f32::from(row)))
         .collect::<Vec<_>>();
-    assert_eq!(linear.forward(&input, &stream)?.to_vec_f32_on_stream(&stream)?, expected);
+    assert_eq!(linear.forward(&input, &stream)?.to_vec_f32(&stream)?, expected);
     drop(tensors);
     fs::remove_dir_all(root)?;
     Ok(())

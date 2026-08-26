@@ -64,7 +64,7 @@ impl DirectFloat8Activation {
                 require(&scale, dtype, &[], binding, "input scale")
                     .or_else(|_| require(&scale, dtype, &[1], binding, "input scale"))?;
                 let scale = scale.astype(Dtype::Float32, stream)?.reshape(&[1, 1], stream)?;
-                scale.async_eval()?;
+                scale.async_eval(stream)?;
                 Ok(Self::Static(scale))
             },
             Float8ActivationScale::None => Ok(Self::Bfloat16),

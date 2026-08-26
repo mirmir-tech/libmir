@@ -48,7 +48,7 @@ impl Stream {
     }
 
     pub(crate) fn detach_paged_arena_graphs(&self) -> Result<()> {
-        self.paged_arenas.detach_evaluated_graphs()
+        self.paged_arenas.detach_evaluated_graphs(self)
     }
 
     pub(crate) fn finish_startup_tuning(&self) {
