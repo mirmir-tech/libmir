@@ -78,15 +78,15 @@ pub(super) fn ensure(
         storage.append_pages(&mut arena, appended)?;
     }
     let mut remapped = false;
-    for logical in first..=last {
-        let source = usize::try_from(storage.page_ids[logical])?;
+    for page_id in &mut storage.page_ids[first..=last] {
+        let source = usize::try_from(*page_id)?;
         if arena.references[source] == 1 {
             continue;
         }
         let target = arena.allocate()?;
         copy_page(&mut arena, source, usize::try_from(target)?, stream)?;
         arena.references[source] -= 1;
-        storage.page_ids[logical] = target;
+        *page_id = target;
         remapped = true;
     }
     if table_resized || remapped {

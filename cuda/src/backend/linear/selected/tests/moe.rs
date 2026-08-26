@@ -59,8 +59,8 @@ fn check_moe(bits: usize) -> Result<()> {
         let gate_three = rounded_activation(3.0, activation);
         let gate_one = rounded_activation(1.0, activation);
         let expected = [
-            rounded(rounded(gate_three * 3.0) * 0.25 + rounded(gate_one) * 0.75),
-            rounded(rounded(gate_three) * 0.25 + rounded(gate_one * 2.0) * 0.75),
+            rounded(rounded(gate_one).mul_add(0.75, rounded(gate_three * 3.0) * 0.25)),
+            rounded(rounded(gate_one * 2.0).mul_add(0.75, rounded(gate_three) * 0.25)),
         ];
         for (actual, expected) in actual.iter().zip(expected) {
             assert!((actual.to_f32() - expected).abs() < 0.04);

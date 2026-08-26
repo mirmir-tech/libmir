@@ -129,8 +129,8 @@ fn prepares_real_qwen35_multi_turn_checkpoint() -> Result<()> {
     };
 
     let prepared = descriptor.prepare(&request)?;
-    assert!(!prepared.tokens.token_ids.is_empty());
-    assert!(prepared.cache_checkpoints.is_empty());
+    assert_ne!(prepared.tokens.token_ids, Vec::<u32>::new());
+    assert_eq!(prepared.cache_checkpoints, Vec::<usize>::new());
 
     request.messages.extend([
         ChatMessage {

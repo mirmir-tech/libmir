@@ -200,6 +200,6 @@ mod tests {
     fn prepares_canonical_output_buckets() {
         assert_eq!(bucket_sizes(10), [2, 4, 5, 8, 10]);
         assert_eq!(bucket_sizes(3), [2, 3]);
-        assert!(bucket_sizes(1).is_empty());
+        assert_eq!(bucket_sizes(1), Vec::<usize>::new());
     }
 }

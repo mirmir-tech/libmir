@@ -149,7 +149,6 @@ impl AutoBf16Plan {
                     PlanSource::MeasuredStartup,
                     Some(average),
                 );
-                Ok(())
             },
             Err(error) => {
                 self.tuner.abandon_dense(self.request);
@@ -159,9 +158,9 @@ impl AutoBf16Plan {
                     "CUDA dense tuning failed; retaining the stable fallback"
                 );
                 self.retain(self.fallback);
-                Ok(())
             },
         }
+        Ok(())
     }
 
     fn retain(&mut self, selected: usize) {

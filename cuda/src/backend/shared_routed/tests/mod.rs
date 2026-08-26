@@ -112,7 +112,8 @@ fn concurrent_sessions_reuse_model_kv_pages_and_plans() -> Result<()> {
     let after_first_prefill = backend.memory_pool_stats()?.used;
     second.prefill(Uuid::from_u128(2), &[1, 2], &table)?;
     backend.synchronize()?;
-    assert_eq!(template.plans.lock().expect("plan cache").len(), 1);
+    let plans = template.plans.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    assert_eq!(plans.len(), 1);
     assert_eq!(backend.memory_pool_stats()?.used, after_first_prefill);
     drop((first, second));
     Ok(())

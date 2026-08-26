@@ -53,6 +53,10 @@ enum EngineInner {
     )]
     Cuda(CudaEngine),
     #[cfg(feature = "metal")]
+    #[cfg_attr(
+        all(feature = "cuda", target_os = "linux"),
+        expect(dead_code, reason = "all-features builds select CUDA on Linux")
+    )]
     Metal(MetalBackend),
     #[cfg(not(any(feature = "cuda", feature = "metal")))]
     Unavailable,

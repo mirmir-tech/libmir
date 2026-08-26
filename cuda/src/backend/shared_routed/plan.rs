@@ -66,6 +66,11 @@ impl SharedRoutedExecutionPlanCache {
         self.clock = self.clock.wrapping_add(1);
         self.plans.insert(tokens, CachedExecutionPlan { plan, last_used: self.clock });
     }
+
+    #[cfg(test)]
+    pub(super) fn len(&self) -> usize {
+        self.plans.len()
+    }
 }
 
 #[derive(Debug)]

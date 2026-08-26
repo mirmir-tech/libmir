@@ -45,9 +45,8 @@ impl CudaBackend {
         let mut completed = bytes_for_names(catalog, &boundary_names)?;
         progress(completed, "clamped-routed model boundary tensors".into());
         let mut layers = Vec::with_capacity(decoder.num_hidden_layers);
-        for layer in 0..decoder.num_hidden_layers {
-            let MixerSpec::SoftmaxAttention(attention) = &semantic.decoder.layers[layer].mixer
-            else {
+        for (layer, semantic_layer) in semantic.decoder.layers.iter().enumerate() {
+            let MixerSpec::SoftmaxAttention(attention) = &semantic_layer.mixer else {
                 return Err(Error::UnsupportedDecoderLayer(format!(
                     "clamped-routed layer {layer} requires softmax attention"
                 )));

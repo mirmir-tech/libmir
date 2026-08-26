@@ -9,7 +9,7 @@ fn initializes_real_cuda_resources_and_reports_the_device() -> libmir_cuda::Resu
     let engine = CudaEngine::new(CudaConfig::default(), CacheConfig::new(128))?;
     let info = engine.info();
     assert_eq!(info.name, "cuda-native");
-    assert!(!info.device.is_empty());
-    assert!(!info.capabilities.is_empty());
+    assert_ne!(info.device, "");
+    assert_ne!(info.capabilities, Vec::<runtime::backend::BackendCapability>::new());
     Ok(())
 }

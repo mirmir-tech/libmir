@@ -23,7 +23,7 @@ impl Engine {
         progress: &mut dyn FnMut(ProgressEvent),
     ) -> RuntimeResult<ModelHandle> {
         #[cfg(not(any(feature = "cuda", feature = "metal")))]
-        let _ = (&manifest, &progress);
+        let _ = (&manifest, &mut *progress);
         #[cfg(not(feature = "metal"))]
         let _ = (&reserved_bytes, &cache);
         match &self.inner {

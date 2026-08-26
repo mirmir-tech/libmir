@@ -5,6 +5,8 @@ use libmir::cuda::{
     CudaAttentionPolicy, CudaDenseVectorPolicy, CudaDenseVendorPolicy, CudaDenseWeightPolicy,
     CudaKernelAdmission, CudaNumericalPolicy, DenseRole,
 };
+#[cfg(feature = "metal")]
+use libmir::metal;
 use libmir::{Error, KvCacheDType, RuntimeConfig};
 
 pub struct Config {
@@ -155,7 +157,7 @@ impl Config {
         runtime.metal.tuning.cache_directory =
             env::var_os("MIRMIR_METAL_TUNING_CACHE").map(PathBuf::from);
         if disabled("MIRMIR_METAL_FUSED_DENSE_GATE_UP") {
-            runtime.metal.fusion.dense_gate_up = libmir::metal::FeatureToggle::Disabled;
+            runtime.metal.fusion.dense_gate_up = metal::FeatureToggle::Disabled;
         }
     }
 
@@ -213,6 +215,7 @@ fn environment_u64(name: &str, default: u64) -> Result<u64, Box<dyn std::error::
     env::var(name).map_or(Ok(default), |value| Ok(value.parse()?))
 }
 
+#[cfg(feature = "cuda")]
 fn environment_optional_usize(name: &str) -> Result<Option<usize>, Box<dyn std::error::Error>> {
     env::var(name).map_or(Ok(None), |value| Ok(Some(value.parse()?)))
 }

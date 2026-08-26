@@ -14,7 +14,7 @@ fn weight_only_preserves_prefill_and_tunes_decode_buckets() {
         candidate_executions(decode, false),
         [MoeExecution::HybridW4A4, MoeExecution::IndexedGrouped]
     );
-    assert!(candidate_executions(batch, false).is_empty());
+    assert_eq!(candidate_executions(batch, false), []);
     assert_eq!(
         candidate_executions(prefill, false),
         [MoeExecution::Bucketed, MoeExecution::IndexedGrouped, MoeExecution::SelectedWeightOnly,]

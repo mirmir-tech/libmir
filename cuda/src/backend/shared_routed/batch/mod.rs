@@ -67,14 +67,13 @@ impl CudaSharedRoutedDecodeBatch {
                             "captured shared-routed CUDA decode graph"
                         );
                         self.state = Some(DecodeState::Captured { graph, partitions });
-                        Ok(sampled)
                     },
                     Err((error, resources)) => {
                         tracing::warn!(%error, "CUDA decode graph capture failed; using direct execution");
                         self.state = Some(DecodeState::Direct(resources));
-                        Ok(sampled)
                     },
                 }
+                Ok(sampled)
             },
             DecodeState::Captured { mut graph, partitions } => {
                 if let Err(error) =
@@ -121,7 +120,6 @@ impl CudaSharedRoutedDecodeBatch {
                             "recaptured shared-routed CUDA decode graph"
                         );
                         self.state = Some(DecodeState::Captured { graph, partitions: next });
-                        Ok(sampled)
                     },
                     Err((error, resources)) => {
                         tracing::warn!(
@@ -129,9 +127,9 @@ impl CudaSharedRoutedDecodeBatch {
                             "CUDA decode graph recapture failed; using direct execution"
                         );
                         self.state = Some(DecodeState::Direct(resources));
-                        Ok(sampled)
                     },
                 }
+                Ok(sampled)
             },
         }
     }
