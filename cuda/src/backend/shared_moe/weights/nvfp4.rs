@@ -4,7 +4,7 @@ use models::weights::{
 };
 
 use crate::{
-    CudaBackend, Error, NvFp4ExpertBankConfig, NvFp4ExpertSource, Result,
+    CudaBackend, Error, NvFp4ExpertBankConfig, NvFp4ExpertSource, NvFp4ScaleMode, Result,
     backend::block::experts::ExpertWeights,
 };
 
@@ -74,6 +74,7 @@ fn source<'a>(
         weight_scale: get(scales)?,
         weight_scale_2: get(global_scale)?,
         input_scale: get(input_scale)?,
+        scale_mode: NvFp4ScaleMode::from_names(global_scale, input_scale)?,
     })
 }
 

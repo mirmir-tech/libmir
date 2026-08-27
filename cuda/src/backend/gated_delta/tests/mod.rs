@@ -1,9 +1,14 @@
+mod chunked;
+mod fused;
 mod transform;
 
 use mircuda::{DeviceBuffer, DeviceElement, bf16};
 
 use super::*;
-use crate::CudaConfig;
+use crate::{
+    CudaConfig,
+    kernels::{GatedDeltaLaunch, GatedDeltaRecurrenceMode},
+};
 
 #[test]
 fn retains_gated_delta_recurrence_on_cuda() -> Result<()> {
@@ -36,6 +41,104 @@ fn retains_gated_delta_recurrence_on_cuda() -> Result<()> {
     assert!((actual[1].to_f32() - 2.25).abs() < 0.01);
     assert_eq!(state.offset(), 2);
     Ok(())
+}
+
+#[test]
+fn value_tiled_recurrence_matches_serial_for_partial_tile() -> Result<()> {
+    let backend = CudaBackend::new(CudaConfig::default())?;
+    let spec = GatedDeltaSpec {
+        tokens: 3,
+        key_heads: 1,
+        value_heads: 1,
+        key_dim: 32,
+        value_dim: 5,
+    };
+    let query = copy(&backend, &pattern(spec.tokens * spec.key_dim, 0.01))?;
+    let key = copy(&backend, &pattern(spec.tokens * spec.key_dim, -0.008))?;
+    let value = copy(&backend, &pattern(spec.tokens * spec.value_dim, 0.02))?;
+    let alpha = copy(&backend, &pattern(spec.tokens, 0.03))?;
+    let beta = copy(&backend, &pattern(spec.tokens, -0.04))?;
+    let parameter = copy(&backend, &bf16s(&[0.1]))?;
+    let operation = GatedDeltaRecurrence::compile(&backend.inner.compiler, spec)?;
+    let mut serial = state_for(&backend, spec)?;
+    let mut tiled = state_for(&backend, spec)?;
+    let serial_output = execute_mode(
+        &backend,
+        &operation,
+        &mut serial,
+        (&query, &key, &value, &alpha, &beta, &parameter),
+        GatedDeltaRecurrenceMode::Serial,
+    )?;
+    let tiled_output = execute_mode(
+        &backend,
+        &operation,
+        &mut tiled,
+        (&query, &key, &value, &alpha, &beta, &parameter),
+        GatedDeltaRecurrenceMode::ValueTiled2,
+    )?;
+    assert_eq!(serial_output, tiled_output);
+    assert_eq!(read(&backend, &serial.state)?, read(&backend, &tiled.state)?);
+    Ok(())
+}
+
+type Inputs<'a> = (
+    &'a DeviceBuffer<bf16>,
+    &'a DeviceBuffer<bf16>,
+    &'a DeviceBuffer<bf16>,
+    &'a DeviceBuffer<bf16>,
+    &'a DeviceBuffer<bf16>,
+    &'a DeviceBuffer<bf16>,
+);
+
+fn execute_mode(
+    backend: &CudaBackend,
+    operation: &GatedDeltaRecurrence,
+    state: &mut CudaGatedDeltaState,
+    (query, key, value, alpha, beta, parameter): Inputs<'_>,
+    mode: GatedDeltaRecurrenceMode,
+) -> Result<Vec<bf16>> {
+    if state.decay.len() != alpha.len() {
+        state.decay = backend.inner.pool.allocate(&backend.inner.stream, alpha.len())?;
+        state.update = backend.inner.pool.allocate(&backend.inner.stream, alpha.len())?;
+    }
+    let mut output = backend.inner.pool.allocate(&backend.inner.stream, value.len())?;
+    operation.execute_with(
+        &backend.inner.stream,
+        &mut GatedDeltaLaunch {
+            query,
+            key,
+            value,
+            alpha,
+            beta,
+            a_log: parameter,
+            dt_bias: parameter,
+            decay: &mut state.decay,
+            update: &mut state.update,
+            state: &mut state.state,
+            output: &mut output,
+        },
+        mode,
+    )?;
+    read(backend, &output)
+}
+
+fn state_for(backend: &CudaBackend, spec: GatedDeltaSpec) -> Result<CudaGatedDeltaState> {
+    backend.prepare_gated_delta_state(GatedDeltaStateConfig {
+        key_heads: spec.key_heads,
+        value_heads: spec.value_heads,
+        key_dim: spec.key_dim,
+        value_dim: spec.value_dim,
+        convolution_kernel_size: 2,
+    })
+}
+
+fn pattern(elements: usize, scale: f32) -> Vec<bf16> {
+    (0..elements)
+        .map(|index| {
+            let value = u8::try_from(index % 13).unwrap_or_default();
+            bf16::from_f32(f32::from(value) * scale)
+        })
+        .collect()
 }
 
 #[test]

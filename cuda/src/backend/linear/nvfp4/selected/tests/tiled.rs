@@ -213,6 +213,7 @@ fn source<'a>(catalog: &'a TensorCatalog, prefix: &str) -> Result<NvFp4ExpertSou
         weight_scale: required(catalog, &format!("{prefix}.weight_scale"))?,
         weight_scale_2: required(catalog, &format!("{prefix}.weight_scale_2"))?,
         input_scale: required(catalog, &format!("{prefix}.input_scale"))?,
+        scale_mode: crate::NvFp4ScaleMode::Multiplier,
     })
 }
 

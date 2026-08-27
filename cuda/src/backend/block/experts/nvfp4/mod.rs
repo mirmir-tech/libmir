@@ -121,6 +121,28 @@ impl AutoNvFp4Experts {
         self.candidates[self.fallback].plan.execute(input, selected, routing, output)
     }
 
+    pub(super) fn prequant_scale(&self) -> Option<DeviceBuffer<f32>> {
+        (!self.tunable)
+            .then(|| self.candidates[self.fallback].plan.prequant_scale())
+            .flatten()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn execute_prequantized_residual_shared(
+        &mut self,
+        packed: &DeviceBuffer<u8>,
+        scales: &DeviceBuffer<u8>,
+        selected: &DeviceBuffer<u32>,
+        routing: &DeviceBuffer<bf16>,
+        residual: &DeviceBuffer<bf16>,
+        shared: &DeviceBuffer<bf16>,
+        output: &mut DeviceBuffer<bf16>,
+    ) -> Result<()> {
+        self.candidates[self.fallback].plan.execute_prequantized_residual_shared(
+            packed, scales, selected, routing, residual, shared, output,
+        )
+    }
+
     fn select(
         &mut self,
         input: &DeviceBuffer<bf16>,

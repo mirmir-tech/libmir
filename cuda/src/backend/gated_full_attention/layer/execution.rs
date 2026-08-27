@@ -101,16 +101,18 @@ impl CudaAffineGatedFullAttentionMoeExecution {
             batch,
             &mut self.scratch.attention,
         )?;
-        self.residual
-            .add(stream, input, &self.scratch.attention, &mut self.scratch.residual)?;
-        self.post_attention_norm.execute(
-            stream,
-            &self.scratch.residual,
+        self.moe.execute_residual_norm(
+            &self.post_attention_norm,
+            input,
+            &self.scratch.attention,
             bf16_tensor(&self.post_attention_norm_weight)?,
+            &mut self.scratch.residual,
             &mut self.scratch.normalized,
+            &mut self.scratch.moe,
+            output,
+            &self.residual,
         )?;
-        self.moe.execute(&self.scratch.normalized, &mut self.scratch.moe)?;
-        self.residual.add(stream, &self.scratch.residual, &self.scratch.moe, output)
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -145,16 +147,18 @@ impl CudaAffineGatedFullAttentionMoeExecution {
             image_span,
             &mut self.scratch.attention,
         )?;
-        self.residual
-            .add(stream, input, &self.scratch.attention, &mut self.scratch.residual)?;
-        self.post_attention_norm.execute(
-            stream,
-            &self.scratch.residual,
+        self.moe.execute_residual_norm(
+            &self.post_attention_norm,
+            input,
+            &self.scratch.attention,
             bf16_tensor(&self.post_attention_norm_weight)?,
+            &mut self.scratch.residual,
             &mut self.scratch.normalized,
+            &mut self.scratch.moe,
+            output,
+            &self.residual,
         )?;
-        self.moe.execute(&self.scratch.normalized, &mut self.scratch.moe)?;
-        self.residual.add(stream, &self.scratch.residual, &self.scratch.moe, output)
+        Ok(())
     }
 
     pub(super) fn validate(

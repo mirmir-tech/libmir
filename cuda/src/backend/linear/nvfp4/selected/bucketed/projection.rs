@@ -1,6 +1,6 @@
 use mircuda::{DeviceBuffer, Stream, VariableGroupedFp4Spec, bf16};
 
-use super::{CudaBackend, NvFp4ExpertBank, moe::ExpertBuckets, scratch::ProjectionScratch};
+use super::{CudaBackend, NvFp4ExpertBank, buckets::ExpertBuckets, scratch::ProjectionScratch};
 use crate::{
     Error, Result,
     kernels::{BucketQuantize, NvFp4BucketPreparation, NvFp4Spec},
@@ -73,7 +73,7 @@ impl BucketedNvFp4Projection {
         )
     }
 
-    pub(super) fn quantize_ranked(
+    pub(super) fn quantize_shared(
         &self,
         preparation: &NvFp4BucketPreparation,
         buckets: &ExpertBuckets,
@@ -81,7 +81,7 @@ impl BucketedNvFp4Projection {
         selected: &DeviceBuffer<u32>,
         scratch: &mut ProjectionScratch,
     ) -> Result<()> {
-        let geometry = self.quantize_geometry(true);
+        let geometry = self.quantize_geometry(false);
         preparation.quantize(
             &self.stream,
             input,
@@ -121,6 +121,10 @@ impl BucketedNvFp4Projection {
         self.spec.input_features
     }
 
+    pub(super) const fn tokens(&self) -> usize {
+        self.tokens
+    }
+
     fn require_compatible(&self, other: &Self) -> Result<()> {
         if self.spec.input_features == other.spec.input_features
             && self.spec.output_features == other.spec.output_features
@@ -135,7 +139,7 @@ impl BucketedNvFp4Projection {
         }
     }
 
-    const fn quantize_geometry(&self, ranked: bool) -> BucketQuantize {
+    pub(super) const fn quantize_geometry(&self, ranked: bool) -> BucketQuantize {
         BucketQuantize {
             assignments: self.assignments,
             experts: self.experts,

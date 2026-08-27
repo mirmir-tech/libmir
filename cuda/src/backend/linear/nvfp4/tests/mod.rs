@@ -48,6 +48,7 @@ fn checkpoint_native_projection_matches_reference() -> Result<()> {
         weight_scale: scale,
         weight_scale_2: global,
         input_scale,
+        scale_mode: NvFp4ScaleMode::Multiplier,
     };
     let mut reference = ReferenceNvFp4::new(&backend, 1, config, checkpoint)?;
     let mut native = NativeNvFp4::new(&backend, 1, config, checkpoint)?;

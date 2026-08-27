@@ -45,7 +45,7 @@ pub use backend::{
     MxFp4ExpertWeights, MxFp4GatheredBf16Linear, MxFp4GatheredMoeBf16, MxFp8Bf16Linear,
     MxFp8CheckpointWeight, MxFp8EmbeddingLookup, MxFp8ExpertWeights, MxFp8GatheredBf16Linear,
     MxFp8GatheredMoeBf16, NvFp4Bf16Linear, NvFp4Bf16Pack, NvFp4Config, NvFp4ExpertBank,
-    NvFp4ExpertBankConfig, NvFp4ExpertSource, NvFp4LinearWeight, NvFp4Tensors,
+    NvFp4ExpertBankConfig, NvFp4ExpertSource, NvFp4LinearWeight, NvFp4ScaleMode, NvFp4Tensors,
     NvFp4WeightOnlyBf16Linear, NvFp4WeightOnlyWeight, OutputHeadExecution, OutputHeadPlan,
     OutputHeadPlanRequest, PackedIntegerBf16Linear, PackedIntegerWeight, PagedAttentionBf16,
     PagedDecodeBatch, PagedKvCache, PagedPrefillBatch, PlanSource, PrefillAttentionBf16,

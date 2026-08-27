@@ -10,6 +10,13 @@ pub struct EnginePrefillCohort {
 }
 
 impl Engine {
+    #[cfg_attr(
+        not(feature = "metal"),
+        expect(
+            clippy::unnecessary_wraps,
+            reason = "Metal and CUDA builds share one fallible cohort preparation contract"
+        )
+    )]
     pub(crate) fn prepare_generation_prefill_cohort(
         &self,
         requests: &[PrefillRequest],

@@ -3,7 +3,10 @@ use mircuda::{DeviceBuffer, DeviceElement, bf16};
 use super::*;
 use crate::{
     CudaConfig, Result,
-    kernels::{GatedDeltaTransformSpec, GatedDeltaTransforms},
+    kernels::{
+        DirectFp8Activation, DirectFp8NormGate, DirectFp8Scale, DirectFp8Spec,
+        GatedDeltaTransformSpec, GatedDeltaTransforms,
+    },
 };
 
 #[test]
@@ -53,6 +56,76 @@ fn transforms_gated_delta_projections_on_cuda() -> Result<()> {
         let expected = f32::from(u16::try_from(index + 1)?) / rms * silu;
         assert!((actual.to_f32() - expected).abs() < 0.01);
     }
+    Ok(())
+}
+
+#[test]
+fn fused_norm_gate_dynamic_fp8_matches_composed_path() -> Result<()> {
+    const TOKENS: usize = 2;
+    const HEADS: usize = 2;
+    const HEAD_WIDTH: usize = 128;
+    let backend = CudaBackend::new(CudaConfig::default())?;
+    let columns = HEADS * HEAD_WIDTH;
+    let elements = TOKENS * columns;
+    let values = (0..elements)
+        .map(|index| -> Result<f32> { Ok((f32::from(u16::try_from(index % 29)?) - 14.0) * 0.125) })
+        .collect::<Result<Vec<_>>>()?;
+    let activation_values = (0..elements)
+        .map(|index| -> Result<f32> { Ok((f32::from(u16::try_from(index % 17)?) - 8.0) * 0.25) })
+        .collect::<Result<Vec<_>>>()?;
+    let input = copy(&backend, &bf16s(&values))?;
+    let gate = copy(&backend, &bf16s(&activation_values))?;
+    let weight = copy(&backend, &bf16s(&vec![0.0; HEAD_WIDTH]))?;
+    let transforms = GatedDeltaTransforms::compile(
+        &backend.inner.compiler,
+        GatedDeltaTransformSpec {
+            tokens: TOKENS,
+            key_heads: 1,
+            value_heads: HEADS,
+            key_dim: HEAD_WIDTH,
+            value_dim: HEAD_WIDTH,
+            epsilon: 1.0e-6,
+            norm_weight_shift: 1.0,
+        },
+    )?;
+    let mut gated = allocate(&backend, elements)?;
+    transforms.norm_gate(&backend.inner.stream, &input, &gate, &weight, &mut gated)?;
+    let spec = DirectFp8Spec::new(
+        TOKENS,
+        columns,
+        columns,
+        DirectFp8Scale::Tensor,
+        false,
+        DirectFp8Activation::DynamicE4M3Token,
+    )?;
+    let fused = DirectFp8NormGate::compile(&backend.inner.compiler)?;
+    let mut expected = backend.inner.pool.allocate(&backend.inner.stream, elements)?;
+    let mut expected_scales = backend.inner.pool.allocate(&backend.inner.stream, TOKENS)?;
+    fused.quantize_reference(
+        &backend.inner.stream,
+        spec,
+        &gated,
+        &mut expected,
+        &mut expected_scales,
+    )?;
+    let mut actual = backend.inner.pool.allocate(&backend.inner.stream, elements)?;
+    let mut actual_scales = backend.inner.pool.allocate(&backend.inner.stream, TOKENS)?;
+    fused.execute(
+        &backend.inner.stream,
+        spec,
+        &input,
+        &gate,
+        &weight,
+        &mut actual,
+        &mut actual_scales,
+        HEADS,
+        columns,
+        0,
+        1.0e-6,
+        1.0,
+    )?;
+    assert_eq!(read(&backend, &actual)?, read(&backend, &expected)?);
+    assert_eq!(read(&backend, &actual_scales)?, read(&backend, &expected_scales)?);
     Ok(())
 }
 

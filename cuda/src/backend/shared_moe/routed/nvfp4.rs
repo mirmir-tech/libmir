@@ -78,4 +78,23 @@ impl NvFp4RoutedExecution {
     ) -> Result<()> {
         self.experts.execute(input, &self.selected, &self.routing, weights, output)
     }
+
+    pub(super) fn prequant_scale(&self) -> Option<DeviceBuffer<f32>> {
+        self.experts.nvfp4_prequant_scale()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn execute_prequantized_residual_shared(
+        &mut self,
+        packed: &DeviceBuffer<u8>,
+        scales: &DeviceBuffer<u8>,
+        weights: &ExpertWeights,
+        residual: &DeviceBuffer<bf16>,
+        shared: &DeviceBuffer<bf16>,
+        output: &mut DeviceBuffer<bf16>,
+    ) -> Result<()> {
+        self.experts.execute_nvfp4_prequantized_residual_shared(
+            packed, scales, &self.selected, &self.routing, weights, residual, shared, output,
+        )
+    }
 }

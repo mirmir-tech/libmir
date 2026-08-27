@@ -14,6 +14,7 @@ pub(super) struct GatedDeltaScratch {
     pub(super) gate: DeviceBuffer<bf16>,
     pub(super) alpha: DeviceBuffer<bf16>,
     pub(super) beta: DeviceBuffer<bf16>,
+    pub(super) packed_alpha_beta: Option<DeviceBuffer<bf16>>,
     pub(super) recurrent: DeviceBuffer<bf16>,
     pub(super) gated: DeviceBuffer<bf16>,
 }
@@ -24,11 +25,13 @@ impl GatedDeltaScratch {
         config: AffineGatedDeltaLayerConfig,
         tokens: usize,
         packed_qkv_gate: bool,
+        packed_alpha_beta: bool,
     ) -> Result<Self> {
         let mixed = checked(tokens, config.mixed_width()?)?;
         let key = checked(tokens, config.key_width()?)?;
         let value = checked(tokens, config.value_width()?)?;
         let heads = checked(tokens, config.value_heads)?;
+        let paired_heads = checked(heads, 2)?;
         let packed = mixed
             .checked_add(value)
             .ok_or(crate::Error::InvalidDecoderKernel("packed Gated Delta size overflow"))?;
@@ -43,6 +46,7 @@ impl GatedDeltaScratch {
             gate: allocate(value)?,
             alpha: allocate(heads)?,
             beta: allocate(heads)?,
+            packed_alpha_beta: packed_alpha_beta.then(|| allocate(paired_heads)).transpose()?,
             recurrent: allocate(value)?,
             gated: allocate(value)?,
         })

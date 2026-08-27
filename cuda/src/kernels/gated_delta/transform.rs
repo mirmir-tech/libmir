@@ -75,11 +75,16 @@ impl GatedDeltaTransforms {
         require("Gated Delta normalized query", elements, normalized_query.len())?;
         require("Gated Delta normalized key", elements, normalized_key.len())?;
         require("Gated Delta split value", product(self.spec.tokens, value_width)?, value.len())?;
+        let threads = if self.spec.key_dim <= 128 {
+            128
+        } else {
+            256
+        };
         Ok(self.split_normalize.launch(
             stream,
             LaunchConfig {
                 grid: (narrow(rows)?, 1, 1),
-                block: (256, 1, 1),
+                block: (threads, 1, 1),
                 shared_memory_bytes: 0,
             },
             (
@@ -125,11 +130,16 @@ impl GatedDeltaTransforms {
         validate_gate(self.spec, gate, gate_stride, gate_offset)?;
         require("Gated Delta norm weight", self.spec.value_dim, weight.len())?;
         require("Gated Delta gated output", elements, output.len())?;
+        let threads = if self.spec.value_dim <= 128 {
+            128
+        } else {
+            256
+        };
         Ok(self.norm_gate.launch(
             stream,
             LaunchConfig {
                 grid: (narrow(rows)?, 1, 1),
-                block: (256, 1, 1),
+                block: (threads, 1, 1),
                 shared_memory_bytes: 0,
             },
             (

@@ -50,8 +50,9 @@ extern "C" __global__ void libmir_cuda_gated_delta_split_normalize_bf16(
   }
   __syncthreads();
   if (warp == 0) {
-    query_sum = lane < 8 ? query_warps[lane] : 0.0f;
-    key_sum = lane < 8 ? key_warps[lane] : 0.0f;
+    const unsigned int active_warps = blockDim.x / 32u;
+    query_sum = lane < active_warps ? query_warps[lane] : 0.0f;
+    key_sum = lane < active_warps ? key_warps[lane] : 0.0f;
     query_sum = warp_sum(query_sum);
     key_sum = warp_sum(key_sum);
     if (lane == 0) {
@@ -95,7 +96,7 @@ extern "C" __global__ void libmir_cuda_gated_delta_norm_gate_bf16(
   if (lane == 0) warps[warp] = sum;
   __syncthreads();
   if (warp == 0) {
-    sum = lane < 8 ? warps[lane] : 0.0f;
+    sum = lane < blockDim.x / 32u ? warps[lane] : 0.0f;
     sum = warp_sum(sum);
     if (lane == 0) warps[0] = rsqrtf(sum / columns + epsilon);
   }
@@ -109,7 +110,7 @@ extern "C" __global__ void libmir_cuda_gated_delta_norm_gate_bf16(
     const unsigned int head = row % value_heads;
     const unsigned int gate_index = token * gate_stride + gate_offset + head * columns + column;
     const float gate_value = __bfloat162float(gate[gate_index]);
-    const float activated = gate_value / (1.0f + expf(-gate_value));
+    const float activated = gate_value / (1.0f + __expf(-gate_value));
     output[index] = __float2bfloat16_rn(
         activated * __bfloat162float(normalized));
   }

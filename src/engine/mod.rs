@@ -6,6 +6,7 @@ mod lifecycle;
 mod load;
 mod memory;
 mod prefill;
+mod profile;
 mod select;
 mod tasks;
 mod telemetry;
@@ -78,23 +79,6 @@ impl Engine {
             EngineInner::Metal(_) => BackendTarget::Metal,
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
             EngineInner::Unavailable => BackendTarget::CpuReference,
-        }
-    }
-
-    /// Enables or disables backend decode profiling where supported.
-    pub fn set_profile_decode(&self, enabled: bool) -> Result<()> {
-        #[cfg(not(any(feature = "cuda", feature = "metal")))]
-        let _ = enabled;
-        match &self.inner {
-            #[cfg(feature = "cuda")]
-            EngineInner::Cuda(cuda) => Ok(cuda.set_profile_decode(enabled)?),
-            #[cfg(feature = "metal")]
-            EngineInner::Metal(metal) => {
-                metal.set_profile_decode(enabled);
-                Ok(())
-            },
-            #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => Ok(()),
         }
     }
 

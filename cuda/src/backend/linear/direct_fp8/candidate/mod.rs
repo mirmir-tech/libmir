@@ -3,6 +3,7 @@ use std::sync::Arc;
 use mircuda::{DeviceBuffer, ScaledFp8Scale, ScaledFp8Tile, Stream, bf16};
 
 mod admission;
+mod norm_gate;
 
 pub(super) use admission::tensor_core_admitted;
 use admission::{bias, cublaslt_admitted};

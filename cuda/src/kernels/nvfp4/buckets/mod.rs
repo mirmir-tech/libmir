@@ -1,4 +1,7 @@
+mod gated;
 mod quantize;
+#[cfg(test)]
+mod tests;
 
 use mircuda::{
     CompileOptions, Compiler, DeviceBuffer, LaunchConfig, Stream, TypedKernel, bf16, cuda_export,
@@ -35,12 +38,29 @@ cuda_export!(QuantizeBucketPairKernel = "libmir_cuda_nvfp4_quantize_bucket_pair_
     assignments: u32, selected_count: u32, input_rows: u32,
     columns: u32,
 ));
+cuda_export!(GatherQuantizedBucketsKernel = "libmir_cuda_nvfp4_gather_quantized_buckets"(
+    selected: &DeviceBuffer<u32>, order: &DeviceBuffer<u32>,
+    offsets: &DeviceBuffer<u32>, scale_offsets: &DeviceBuffer<u32>,
+    source_packed: &DeviceBuffer<u8>, source_scales: &DeviceBuffer<u8>,
+    packed: &mut DeviceBuffer<u8>, scales: &mut DeviceBuffer<u8>,
+    assignments: u32, selected_count: u32, input_rows: u32, columns: u32,
+));
+cuda_export!(GatedQuantizeBucketsKernel = "libmir_cuda_nvfp4_gated_quantize_buckets_bf16"(
+    gate: &DeviceBuffer<bf16>, up: &DeviceBuffer<bf16>,
+    selected: &DeviceBuffer<u32>, order: &DeviceBuffer<u32>,
+    offsets: &DeviceBuffer<u32>, scale_offsets: &DeviceBuffer<u32>,
+    global_scales: &DeviceBuffer<f32>, packed: &mut DeviceBuffer<u8>,
+    scales: &mut DeviceBuffer<u8>, assignments: u32, columns: u32,
+    activation: u32,
+));
 
 #[derive(Clone, Debug)]
 pub struct NvFp4BucketPreparation {
     prepare: TypedKernel<PrepareBucketsKernel>,
     quantize: TypedKernel<QuantizeBucketsKernel>,
     quantize_pair: TypedKernel<QuantizeBucketPairKernel>,
+    gather_quantized: TypedKernel<GatherQuantizedBucketsKernel>,
+    gated_quantize: TypedKernel<GatedQuantizeBucketsKernel>,
 }
 
 impl NvFp4BucketPreparation {
@@ -52,6 +72,8 @@ impl NvFp4BucketPreparation {
             prepare: module.kernel()?,
             quantize: module.kernel()?,
             quantize_pair: module.kernel()?,
+            gather_quantized: module.kernel()?,
+            gated_quantize: module.kernel()?,
         })
     }
 

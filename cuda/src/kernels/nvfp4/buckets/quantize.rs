@@ -98,6 +98,71 @@ impl NvFp4BucketPreparation {
             ),
         )?)
     }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn gather_quantized(
+        &self,
+        stream: &Stream,
+        selected: &DeviceBuffer<u32>,
+        order: &DeviceBuffer<u32>,
+        offsets: &DeviceBuffer<u32>,
+        scale_offsets: &DeviceBuffer<u32>,
+        source_packed: &DeviceBuffer<u8>,
+        source_scales: &DeviceBuffer<u8>,
+        packed: &mut DeviceBuffer<u8>,
+        scales: &mut DeviceBuffer<u8>,
+        geometry: BucketQuantize,
+    ) -> Result<()> {
+        if geometry.ranked {
+            return Err(Error::InvalidNvFp4("quantized bucket gather requires token input"));
+        }
+        require("bucket selections", geometry.assignments, selected.len())?;
+        require("bucket order", geometry.assignments, order.len())?;
+        require("bucket offsets", geometry.experts, offsets.len())?;
+        require("bucket scale offsets", geometry.experts, scale_offsets.len())?;
+        require(
+            "unique packed input",
+            product(geometry.input_rows, geometry.columns / 2)?,
+            source_packed.len(),
+        )?;
+        require(
+            "unique input scales",
+            scale_elements(geometry.input_rows, geometry.columns)?,
+            source_scales.len(),
+        )?;
+        require(
+            "bucket packed input",
+            product(geometry.assignments, geometry.columns / 2)?,
+            packed.len(),
+        )?;
+        require(
+            "bucket scales",
+            scale_elements(padded_rows(geometry.assignments, geometry.experts)?, geometry.columns)?,
+            scales.len(),
+        )?;
+        Ok(self.gather_quantized.launch(
+            stream,
+            LaunchConfig {
+                grid: (narrow(geometry.assignments)?, 1, 1),
+                block: (256, 1, 1),
+                shared_memory_bytes: 0,
+            },
+            (
+                selected,
+                order,
+                offsets,
+                scale_offsets,
+                source_packed,
+                source_scales,
+                packed,
+                scales,
+                narrow(geometry.assignments)?,
+                narrow(geometry.selected)?,
+                narrow(geometry.input_rows)?,
+                narrow(geometry.columns)?,
+            ),
+        )?)
+    }
 }
 
 impl BucketQuantize {
@@ -141,7 +206,7 @@ fn launch(geometry: BucketQuantize) -> Result<LaunchConfig> {
     })
 }
 
-fn padded_rows(assignments: usize, experts: usize) -> Result<usize> {
+pub(super) fn padded_rows(assignments: usize, experts: usize) -> Result<usize> {
     let rows = assignments
         .checked_add(product(experts, 127)?)
         .ok_or(Error::InvalidNvFp4("bucketed scale capacity overflow"))?;

@@ -2,6 +2,7 @@ mod bank;
 mod native;
 #[cfg(all(test, target_os = "linux"))]
 mod reference;
+mod scale;
 mod selected;
 #[cfg(all(test, target_os = "linux"))]
 mod tests;
@@ -9,6 +10,7 @@ mod weight_only;
 
 pub use bank::{NvFp4ExpertBank, NvFp4ExpertBankConfig, NvFp4ExpertSource};
 use mircuda::{DeviceBuffer, bf16};
+pub use scale::NvFp4ScaleMode;
 pub use selected::{
     BucketedNvFp4MoeBf16, DirectNvFp4MoeBf16, GroupedNvFp4MoeBf16, HybridNvFp4MoeBf16,
     SelectedNvFp4LinearBf16, SelectedNvFp4MoeBf16, SelectedNvFp4TensorCoreMoeBf16,
@@ -44,6 +46,7 @@ pub struct NvFp4Tensors<'a> {
     pub weight_scale: &'a CudaTensor,
     pub weight_scale_2: &'a CudaTensor,
     pub input_scale: &'a CudaTensor,
+    pub scale_mode: NvFp4ScaleMode,
 }
 
 /// Native W4A4 Tensor Core projection with persistent accelerator scratch.
@@ -184,8 +187,20 @@ impl CudaBackend {
 fn validate_tensors(spec: NvFp4Spec, tensors: NvFp4Tensors<'_>) -> Result<()> {
     validate_shape(tensors.weight, &[spec.output_features, spec.input_features / 2])?;
     validate_shape(tensors.weight_scale, &[spec.output_features, spec.input_features / 16])?;
-    validate_shape(tensors.weight_scale_2, &[])?;
-    validate_shape(tensors.input_scale, &[])
+    validate_scalar(tensors.weight_scale_2)?;
+    validate_scalar(tensors.input_scale)
+}
+
+fn validate_scalar(tensor: &CudaTensor) -> Result<()> {
+    if tensor.shape().is_empty() || tensor.shape() == [1] {
+        Ok(())
+    } else {
+        Err(Error::InvalidQuantizedTensor {
+            name: tensor.name().into(),
+            expected: vec![1],
+            actual: tensor.shape().to_vec(),
+        })
+    }
 }
 
 fn validate_shape(tensor: &CudaTensor, expected: &[usize]) -> Result<()> {

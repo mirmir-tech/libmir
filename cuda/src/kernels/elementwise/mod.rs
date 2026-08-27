@@ -15,6 +15,15 @@ cuda_export!(
     )
 );
 cuda_export!(
+    WeightedReduceBucketedResidualSharedKernel =
+        "libmir_cuda_weighted_reduce_bucketed_residual_shared_bf16"(
+            input: &DeviceBuffer<bf16>, weights: &DeviceBuffer<bf16>,
+            positions: &DeviceBuffer<u32>, residual: &DeviceBuffer<bf16>,
+            shared: &DeviceBuffer<bf16>, output: &mut DeviceBuffer<bf16>,
+            rows: u32, columns: u32, tokens: u32,
+        )
+);
+cuda_export!(
     WeightedReduceKernel = "libmir_cuda_weighted_reduce_bf16"(
         input: &DeviceBuffer<bf16>, weights: &DeviceBuffer<bf16>,
         output: &mut DeviceBuffer<bf16>, rows: u32, columns: u32, tokens: u32,
@@ -54,6 +63,8 @@ pub struct ElementwiseBf16 {
     packed_gated: TypedKernel<PackedGatedKernel>,
     weighted_reduce: TypedKernel<WeightedReduceKernel>,
     weighted_reduce_bucketed: TypedKernel<WeightedReduceBucketedKernel>,
+    weighted_reduce_bucketed_residual_shared:
+        TypedKernel<WeightedReduceBucketedResidualSharedKernel>,
     elements: usize,
 }
 
@@ -71,6 +82,7 @@ impl ElementwiseBf16 {
             packed_gated: module.kernel()?,
             weighted_reduce: module.kernel()?,
             weighted_reduce_bucketed: module.kernel()?,
+            weighted_reduce_bucketed_residual_shared: module.kernel()?,
             elements,
         })
     }

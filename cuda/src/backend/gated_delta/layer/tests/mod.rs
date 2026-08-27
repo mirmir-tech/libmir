@@ -1,4 +1,5 @@
 mod fixture;
+mod gates;
 
 use mircuda::{DeviceBuffer, DeviceElement, bf16};
 

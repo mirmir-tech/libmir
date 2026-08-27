@@ -131,6 +131,7 @@ fn weight(backend: &CudaBackend, tensors: &CudaTensorSet, name: &str) -> Result<
             weight_scale: get(tensors, &format!("{base}.weight_scale"))?,
             weight_scale_2: get(tensors, &format!("{base}.weight_scale_2"))?,
             input_scale: get(tensors, &format!("{base}.input_scale"))?,
+            scale_mode: NvFp4ScaleMode::Multiplier,
         },
     )
 }

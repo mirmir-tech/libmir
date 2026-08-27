@@ -7,13 +7,14 @@ use std::{
 use mircuda::DeviceBuffer;
 use models::weights::TensorInfo;
 
-use super::CudaBackend;
+use super::{CudaBackend, NvFp4ScaleMode};
 use crate::{
     Error, Result,
     kernels::{BankScaleGeometry, NvFp4GroupedPreparation, scale_elements},
 };
 
 mod marlin;
+mod validation;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct NvFp4ExpertBankConfig {
@@ -28,6 +29,7 @@ pub struct NvFp4ExpertSource<'a> {
     pub weight_scale: &'a TensorInfo,
     pub weight_scale_2: &'a TensorInfo,
     pub input_scale: &'a TensorInfo,
+    pub scale_mode: NvFp4ScaleMode,
 }
 
 /// Reusable shared handles to one contiguous device-resident expert bank.
@@ -43,6 +45,7 @@ pub struct NvFp4ExpertBank {
     pub(super) combined_scales: DeviceBuffer<f32>,
     pub(super) config: NvFp4ExpertBankConfig,
     global_values: Arc<[f32]>,
+    input_values: Arc<[f32]>,
     marlin_single: Arc<Mutex<Option<MarlinNvFp4Bank>>>,
     marlin_pair: Arc<Mutex<Option<MarlinNvFp4Bank>>>,
 }
@@ -77,7 +80,7 @@ impl NvFp4ExpertBank {
         config: NvFp4ExpertBankConfig,
         sources: &[NvFp4ExpertSource<'_>],
     ) -> Result<Self> {
-        validate(config, sources)?;
+        validation::validate(config, sources)?;
         let weight_bytes = config.output_features * config.input_features / 2;
         let scale_bytes = config.output_features * config.input_features / 16;
         let weight = upload_bytes(backend, sources, weight_bytes, |source| source.weight)?;
@@ -102,12 +105,12 @@ impl NvFp4ExpertBank {
         )?;
         let global_values = sources
             .iter()
-            .map(|source| read_scalar(source.weight_scale_2))
+            .map(|source| source.scale_mode.multiplier(read_scalar(source.weight_scale_2)?))
             .collect::<Result<Vec<_>>>()?;
         let global_scales = upload_scalars(backend, &global_values)?;
         let input_values = sources
             .iter()
-            .map(|source| read_scalar(source.input_scale))
+            .map(|source| source.scale_mode.multiplier(read_scalar(source.input_scale)?))
             .collect::<Result<Vec<_>>>()?;
         let input_scales = upload_scalars(backend, &input_values)?;
         let combined_values = input_values
@@ -126,6 +129,7 @@ impl NvFp4ExpertBank {
             combined_scales,
             config,
             global_values: global_values.into(),
+            input_values: input_values.into(),
             marlin_single: Arc::new(Mutex::new(None)),
             marlin_pair: Arc::new(Mutex::new(None)),
         })
@@ -170,11 +174,24 @@ impl NvFp4ExpertBank {
             combined_scales: zero_scales()?,
             config,
             global_values: vec![0.0; config.experts].into(),
+            input_values: vec![0.0; config.experts].into(),
             marlin_single: Arc::new(Mutex::new(None)),
             marlin_pair: Arc::new(Mutex::new(None)),
         };
         backend.inner.stream.synchronize()?;
         Ok(bank)
+    }
+
+    pub(super) fn shares_input_quantization(&self, other: &Self) -> bool {
+        self.config.input_features == other.config.input_features
+            && self.input_values == other.input_values
+    }
+
+    pub(super) fn shares_uniform_input_quantization(&self, other: &Self) -> bool {
+        self.shares_input_quantization(other)
+            && self.input_values.first().is_some_and(|first| {
+                self.input_values.iter().all(|value| value.to_bits() == first.to_bits())
+            })
     }
 }
 
@@ -220,31 +237,4 @@ fn read_scalar(info: &TensorInfo) -> Result<f32> {
     let mut bytes = [0_u8; 4];
     file.read_exact(&mut bytes)?;
     Ok(f32::from_le_bytes(bytes))
-}
-
-fn validate(config: NvFp4ExpertBankConfig, sources: &[NvFp4ExpertSource<'_>]) -> Result<()> {
-    if config.experts == 0
-        || config.input_features == 0
-        || config.output_features == 0
-        || !config.input_features.is_multiple_of(16)
-        || sources.len() != config.experts
-    {
-        return Err(Error::InvalidNvFp4("invalid expert bank geometry"));
-    }
-    let weight_shape = [config.output_features, config.input_features / 2];
-    let scale_shape = [config.output_features, config.input_features / 16];
-    for source in sources {
-        validate_tensor(source.weight, "U8", &weight_shape)?;
-        validate_tensor(source.weight_scale, "F8_E4M3", &scale_shape)?;
-        validate_tensor(source.weight_scale_2, "F32", &[])?;
-        validate_tensor(source.input_scale, "F32", &[])?;
-    }
-    Ok(())
-}
-
-fn validate_tensor(info: &TensorInfo, dtype: &str, shape: &[usize]) -> Result<()> {
-    if info.dtype != dtype || info.shape != shape {
-        return Err(Error::InvalidNvFp4("expert bank tensor metadata mismatch"));
-    }
-    Ok(())
 }

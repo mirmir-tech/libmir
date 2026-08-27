@@ -120,6 +120,7 @@ fn sources(catalog: &TensorCatalog) -> Result<Vec<NvFp4ExpertSource<'_>>> {
                 weight_scale: required(catalog, &format!("{prefix}.weight_scale"))?,
                 weight_scale_2: required(catalog, &format!("{prefix}.weight_scale_2"))?,
                 input_scale: required(catalog, &format!("{prefix}.input_scale"))?,
+                scale_mode: crate::NvFp4ScaleMode::Multiplier,
             })
         })
         .collect()
