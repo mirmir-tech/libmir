@@ -62,11 +62,7 @@ impl AutoNvFp4Experts {
                 | MoeProfileExecution::MxFp8(_) => None,
             });
         let weights = [gate, up, down];
-        let fallback_execution = if weight_only {
-            MoeExecution::SelectedWeightOnly
-        } else {
-            planned.execution()
-        };
+        let fallback_execution = fallback_execution(phase, weight_only, planned.execution());
         let selected_execution = cached.map_or(fallback_execution, |value| value.0);
         let (candidate, cache_applied) =
             match Candidate::new(backend, request, activation, &weights, selected_execution) {
@@ -203,5 +199,17 @@ impl AutoNvFp4Experts {
         self.candidates.clear();
         self.candidates.push(selected);
         self.fallback = 0;
+    }
+}
+
+const fn fallback_execution(
+    phase: ExecutionPhase,
+    weight_only: bool,
+    planned: MoeExecution,
+) -> MoeExecution {
+    if weight_only && matches!(phase, ExecutionPhase::Decode) {
+        MoeExecution::SelectedWeightOnly
+    } else {
+        planned
     }
 }
