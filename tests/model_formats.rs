@@ -2,17 +2,16 @@ use foundation::model::BackendTarget;
 use libmir::{
     BackendAdmissionReport, CheckpointEncoding, MODEL_FORMAT_REGISTRY_SCHEMA_VERSION,
     WeightEncoding,
-    models::weights::{
-        AffineBits, AffineGroupAxis, AffinePacking, AffineParameterDType, AffineSignedness,
-        AffineStorageDType, AffineZeroPointMode, AwqBits, AwqPacking, AwqQuantization,
-        AwqScaleDType, AwqStorageDType, BlockQuantization, CompressedIntegerActivationOrder,
-        CompressedIntegerBits, CompressedIntegerPacking, CompressedIntegerQuantization,
-        CompressedIntegerScaleDType, CompressedIntegerScaleStrategy, CompressedIntegerSignedness,
-        CompressedIntegerStorageDType, CompressedIntegerZeroPointMode, Float8ActivationScale,
-        Float8Format, Float8ParameterDType, Float8Quantization, Float8ScaleGranularity,
-        Float8ScaleMode, GptqBits, GptqCheckpointFormat, GptqPacking, GptqQuantization,
-        GptqScaleDType, GptqStorageDType, GroupedAffineQuantization,
-    },
+};
+use models::weights::{
+    AffineBits, AffineGroupAxis, AffinePacking, AffineParameterDType, AffineSignedness,
+    AffineStorageDType, AffineZeroPointMode, AwqBits, AwqPacking, AwqQuantization, AwqScaleDType,
+    AwqStorageDType, BlockQuantization, CompressedIntegerActivationOrder, CompressedIntegerBits,
+    CompressedIntegerPacking, CompressedIntegerQuantization, CompressedIntegerScaleDType,
+    CompressedIntegerScaleStrategy, CompressedIntegerSignedness, CompressedIntegerStorageDType,
+    CompressedIntegerZeroPointMode, Float8ActivationScale, Float8Format, Float8ParameterDType,
+    Float8Quantization, Float8ScaleGranularity, Float8ScaleMode, GptqBits, GptqCheckpointFormat,
+    GptqPacking, GptqQuantization, GptqScaleDType, GptqStorageDType, GroupedAffineQuantization,
 };
 use serde::Deserialize;
 

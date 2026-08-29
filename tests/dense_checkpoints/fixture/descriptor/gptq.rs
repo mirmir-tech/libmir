@@ -1,8 +1,7 @@
 use std::collections::BTreeSet;
 
-use libmir::{
-    AdmissionStatus, ModelDescriptor, WeightEncoding, models::weights::GptqCheckpointFormat,
-};
+use libmir::{AdmissionStatus, ModelDescriptor, WeightEncoding};
+use models::weights::GptqCheckpointFormat;
 
 use super::{family, validate_tokenizer};
 use crate::{

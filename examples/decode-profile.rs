@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use libmir::{
     Conversation, DecodeTimings, GenerationOverrides, Library, Message, RuntimeConfig,
-    SamplingLogits, runtime::RuntimeError,
+    RuntimeError, SamplingLogits,
 };
 
 mod decode_profile;

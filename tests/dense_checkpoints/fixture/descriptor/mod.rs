@@ -1,9 +1,7 @@
 use std::collections::BTreeSet;
 
-use libmir::{
-    AdmissionStatus, ArchitectureCapability, ModelDescriptor, WeightEncoding,
-    models::weights::{AffineStorageDType, GroupedAffineQuantization},
-};
+use libmir::{AdmissionStatus, ArchitectureCapability, ModelDescriptor, WeightEncoding};
+use models::weights::{AffineStorageDType, GroupedAffineQuantization};
 
 use super::{Family, Reference, TestResult, active_target, require, validation_error};
 

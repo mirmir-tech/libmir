@@ -1,10 +1,8 @@
 use std::collections::BTreeSet;
 
-use libmir::{
-    AdmissionStatus, ModelDescriptor, WeightEncoding,
-    models::weights::{
-        Float8ActivationScale, Float8ParameterDType, Float8ScaleGranularity, Float8ScaleMode,
-    },
+use libmir::{AdmissionStatus, ModelDescriptor, WeightEncoding};
+use models::weights::{
+    Float8ActivationScale, Float8ParameterDType, Float8ScaleGranularity, Float8ScaleMode,
 };
 
 use super::{Family, Reference, TestResult, active_target, require, validation_error};

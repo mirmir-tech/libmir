@@ -2,7 +2,7 @@ use models::execution::ModelTask;
 use runtime::backend::SamplingLogits;
 
 use super::Model;
-use crate::{Error, ProgressEvent, Result, runtime::RuntimeError};
+use crate::{Error, ProgressEvent, Result, RuntimeError};
 
 const PROFILE_CONTEXT_TOKENS: usize = 2_048;
 const PROFILE_DECODE_STEPS: usize = 2;

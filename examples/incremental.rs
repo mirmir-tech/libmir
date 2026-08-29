@@ -7,8 +7,8 @@ use std::{
 };
 
 use libmir::{
-    Conversation, Error, GenerationOverrides, Library, Message, RuntimeConfig, SamplingLogits,
-    runtime::RuntimeError,
+    Conversation, Error, GenerationOverrides, Library, Message, RuntimeConfig, RuntimeError,
+    SamplingLogits,
 };
 
 const TOKEN_LIMIT: usize = 32;

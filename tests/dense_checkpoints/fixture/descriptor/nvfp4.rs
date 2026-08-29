@@ -1,11 +1,9 @@
 use std::collections::BTreeSet;
 
-use libmir::{
-    AdmissionStatus, ModelDescriptor, WeightEncoding,
-    models::weights::{
-        BlockProjectionLayout, BlockQuantization, ExpertProjectionRole, LayerTensorRole,
-        LogicalTensorRole,
-    },
+use libmir::{AdmissionStatus, ModelDescriptor, WeightEncoding};
+use models::weights::{
+    BlockProjectionLayout, BlockQuantization, ExpertProjectionRole, LayerTensorRole,
+    LogicalTensorRole,
 };
 
 use super::{Family, Reference, TestResult, active_target, require, validation_error};

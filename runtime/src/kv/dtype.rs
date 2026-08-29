@@ -40,9 +40,10 @@ pub enum KvCacheDType {
     TurboQuant3BitNc,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum KvQuantMode {
+    #[default]
     None,
     Fp8PerTensor,
     Fp8MlaPacked,

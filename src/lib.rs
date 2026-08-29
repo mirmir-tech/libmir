@@ -16,21 +16,17 @@ mod telemetry;
 
 pub use cancellation::CancellationToken;
 pub use config::{MemoryRuntimeConfig, RuntimeConfig, VisionRuntimeConfig};
-#[cfg(feature = "cuda")]
-pub use cuda;
 pub use embedding::{EmbeddingOutput, EmbeddingRequest};
 pub use engine::Engine;
 pub use error::{Error, Result};
 pub use foundation::{
-    self,
     conversation::{
         Conversation, FunctionCall, FunctionDefinition, Message, Tool, ToolCall, ToolChoice,
     },
+    model::BackendTarget,
 };
 pub use generation::{GenerationOutput, GenerationRequest};
 pub use memory::{MemorySnapshot, ModelMemoryEstimate};
-#[cfg(feature = "metal")]
-pub use metal;
 pub use model::{
     AdmissionCheck, AdmissionCheckKind, AdmissionStatus, BackendAdmissionReport,
     CheckpointEncoding, IMAGE_PLACEHOLDER, Library, MODEL_FORMAT_REGISTRY_SCHEMA_VERSION, Model,
@@ -38,13 +34,18 @@ pub use model::{
     RemoteTaskMetadata, RemoteVisionContract, WeightEncoding,
 };
 pub use models::{
-    self,
-    execution::{ArchitectureCapability, ArchitectureRequirements},
+    chat::TemplateKind,
+    execution::{
+        ArchitectureCapability, ArchitectureRequirements, EmbeddingTask, ModelTask, PoolingMode,
+        TaskExecutionPlan,
+    },
     generation::{GenerationChannel, GenerationOverrides, GenerationSettings, GenerationToken},
+    tokenizer::{TokenizerAssets, TokenizerKind},
+    weights::{TensorCatalog, TensorInfo, safetensors_header_len},
 };
 pub use rerank::{RerankOutput, RerankRequest, RerankResult};
 pub use runtime::{
-    self,
+    RuntimeError,
     backend::{
         BackendInfo, DecodeOutput, DecodeTimings, ModelHandle, PrefillOutput, SamplingLogits,
     },

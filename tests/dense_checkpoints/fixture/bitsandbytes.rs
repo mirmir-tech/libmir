@@ -1,4 +1,4 @@
-use libmir::models::weights::{
+use models::weights::{
     BitsAndBytes4BitQuantization, BitsAndBytes4BitType, BitsAndBytesComputeDType,
     BitsAndBytesStorageDType,
 };

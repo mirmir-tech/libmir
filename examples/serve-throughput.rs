@@ -9,10 +9,10 @@ use std::{
 };
 
 #[cfg(feature = "cuda")]
-use libmir::cuda::CudaMoeBatchPolicy;
+use cuda::CudaMoeBatchPolicy;
 use libmir::{
-    Conversation, Error, GenerationOverrides, Library, Message, Model, RuntimeConfig,
-    SamplingLogits, runtime::RuntimeError,
+    Conversation, Error, GenerationOverrides, Library, Message, Model, RuntimeConfig, RuntimeError,
+    SamplingLogits,
 };
 
 struct Config {
