@@ -7,13 +7,13 @@ use std::{
 };
 
 use libmir::{
-    ChatCompletionRequest, ChatMessage, Error, GenerationOverrides, Library, RuntimeConfig,
+    Conversation, Error, GenerationOverrides, GenerationRequest, Library, Message, RuntimeConfig,
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let library = Library::new(RuntimeConfig::default());
     let model = library.load(model_path()?, GenerationOverrides::default(), &mut |_| {})?;
-    let request = request(&model.handle().id);
+    let request = request();
     let mut stdout = io::stdout().lock();
     let mut stream_error = None;
     let output = model.generate(&request, &mut |_| {}, &mut |token| {
@@ -30,26 +30,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn request(model: &str) -> ChatCompletionRequest {
-    ChatCompletionRequest {
-        model: model.into(),
-        messages: vec![ChatMessage {
-            role: "user".into(),
-            content: "Hello".into(),
-            reasoning_content: None,
-            tool_calls: None,
-            tool_call_id: None,
-        }],
-        tools: Vec::new(),
-        tool_choice: None,
-        stream: true,
-        max_tokens: Some(256),
-        min_tokens: None,
-        ignore_eos: None,
-        temperature: Some(0.0),
-        top_p: Some(1.0),
-        top_k: Some(0),
-        repetition_penalty: Some(1.0),
+fn request() -> GenerationRequest {
+    GenerationRequest {
+        conversation: Conversation {
+            messages: vec![Message {
+                role: "user".into(),
+                content: "Hello".into(),
+                reasoning_content: None,
+                tool_calls: None,
+                tool_call_id: None,
+            }],
+            tools: Vec::new(),
+            tool_choice: libmir::ToolChoice::default(),
+        },
+        options: GenerationOverrides {
+            max_tokens: Some(256),
+            temperature: Some(0.0),
+            top_p: Some(1.0),
+            top_k: Some(0),
+            repetition_penalty: Some(1.0),
+            ..GenerationOverrides::default()
+        },
         seed: None,
     }
 }

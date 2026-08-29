@@ -1,6 +1,5 @@
-use foundation::protocol::{
-    ChatCompletionRequest, ChatFunctionCall, ChatFunctionDefinition, ChatMessage, ChatTool,
-    ChatToolCall,
+use foundation::conversation::{
+    Conversation, FunctionCall, FunctionDefinition, Message, Tool, ToolCall,
 };
 use libmir_models::{
     ModelsError, Result,
@@ -61,32 +60,32 @@ fn renders_official_ministral_tool_conversation() -> Result<()> {
     Ok(())
 }
 
-fn tool_request() -> ChatCompletionRequest {
+fn tool_request() -> Conversation {
     let mut request = request("Weather in Warsaw?");
-    request.tools.push(ChatTool {
+    request.tools.push(Tool {
         kind: "function".into(),
-        function: ChatFunctionDefinition {
+        function: FunctionDefinition {
             name: "weather".into(),
             description: Some("Get current weather".into()),
             parameters: serde_json::json!({"type": "object"}),
         },
     });
     request.messages.extend([
-        ChatMessage {
+        Message {
             role: "assistant".into(),
             content: String::new(),
             reasoning_content: None,
-            tool_calls: Some(vec![ChatToolCall {
+            tool_calls: Some(vec![ToolCall {
                 id: "abc123456".into(),
                 kind: "function".into(),
-                function: ChatFunctionCall {
+                function: FunctionCall {
                     name: "weather".into(),
                     arguments: serde_json::json!({"city": "Warsaw"}),
                 },
             }]),
             tool_call_id: None,
         },
-        ChatMessage {
+        Message {
             role: "tool".into(),
             content: r#"{"temperature":12}"#.into(),
             reasoning_content: None,
@@ -97,10 +96,9 @@ fn tool_request() -> ChatCompletionRequest {
     request
 }
 
-fn request(content: &str) -> ChatCompletionRequest {
-    ChatCompletionRequest {
-        model: "ministral".into(),
-        messages: vec![ChatMessage {
+fn request(content: &str) -> Conversation {
+    Conversation {
+        messages: vec![Message {
             role: "user".into(),
             content: content.into(),
             reasoning_content: None,
@@ -108,15 +106,6 @@ fn request(content: &str) -> ChatCompletionRequest {
             tool_call_id: None,
         }],
         tools: Vec::new(),
-        tool_choice: None,
-        stream: false,
-        max_tokens: None,
-        min_tokens: None,
-        ignore_eos: None,
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        repetition_penalty: None,
-        seed: None,
+        tool_choice: foundation::conversation::ToolChoice::default(),
     }
 }

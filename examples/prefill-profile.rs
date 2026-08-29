@@ -2,7 +2,7 @@
 
 use std::time::Instant;
 
-use libmir::{ChatCompletionRequest, ChatMessage, GenerationOverrides, Library, SamplingLogits};
+use libmir::{Conversation, GenerationOverrides, Library, Message, SamplingLogits};
 
 mod prefill_profile;
 
@@ -58,10 +58,9 @@ fn exact_tokens(source: &[u32], count: usize) -> Result<Vec<u32>, &'static str> 
     Ok(source.iter().copied().cycle().take(count).collect())
 }
 
-fn request(model: &libmir::Model, prompt: &str) -> ChatCompletionRequest {
-    ChatCompletionRequest {
-        model: model.handle().id.clone(),
-        messages: vec![ChatMessage {
+fn request(_model: &libmir::Model, prompt: &str) -> Conversation {
+    Conversation {
+        messages: vec![Message {
             role: "user".into(),
             content: prompt.into(),
             reasoning_content: None,
@@ -69,15 +68,6 @@ fn request(model: &libmir::Model, prompt: &str) -> ChatCompletionRequest {
             tool_call_id: None,
         }],
         tools: Vec::new(),
-        tool_choice: None,
-        stream: false,
-        max_tokens: Some(1),
-        min_tokens: None,
-        ignore_eos: None,
-        temperature: Some(0.0),
-        top_p: Some(1.0),
-        top_k: Some(0),
-        repetition_penalty: Some(1.0),
-        seed: Some(7),
+        tool_choice: libmir::ToolChoice::default(),
     }
 }

@@ -23,12 +23,11 @@ pub use engine::Engine;
 pub use error::{Error, Result};
 pub use foundation::{
     self,
-    protocol::{
-        ChatCompletionRequest, ChatFunctionCall, ChatFunctionDefinition, ChatMessage, ChatTool,
-        ChatToolCall,
+    conversation::{
+        Conversation, FunctionCall, FunctionDefinition, Message, Tool, ToolCall, ToolChoice,
     },
 };
-pub use generation::GenerationOutput;
+pub use generation::{GenerationOutput, GenerationRequest};
 pub use memory::{MemorySnapshot, ModelMemoryEstimate};
 #[cfg(feature = "metal")]
 pub use metal;

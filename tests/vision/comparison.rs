@@ -1,8 +1,8 @@
 use std::{cmp::Ordering, path::PathBuf};
 
 use libmir::{
-    ChatCompletionRequest, ChatMessage, GenerationOverrides, IMAGE_PLACEHOLDER, Library, Result,
-    RuntimeConfig, SamplingLogits,
+    Conversation, GenerationOverrides, IMAGE_PLACEHOLDER, Library, Message, Result, RuntimeConfig,
+    SamplingLogits,
 };
 use runtime::backend::LogitsTrace;
 
@@ -59,10 +59,9 @@ fn required_path(name: &'static str) -> Result<PathBuf> {
         .ok_or(libmir::Error::MissingEnvironment(name))
 }
 
-fn request(model: &libmir::Model) -> ChatCompletionRequest {
-    ChatCompletionRequest {
-        model: model.handle().id.clone(),
-        messages: vec![ChatMessage {
+fn request(_model: &libmir::Model) -> Conversation {
+    Conversation {
+        messages: vec![Message {
             role: "user".into(),
             content: format!("{IMAGE_PLACEHOLDER}Describe the image in one short sentence."),
             reasoning_content: None,
@@ -70,16 +69,7 @@ fn request(model: &libmir::Model) -> ChatCompletionRequest {
             tool_call_id: None,
         }],
         tools: Vec::new(),
-        tool_choice: None,
-        stream: false,
-        max_tokens: Some(GENERATED_TOKENS),
-        min_tokens: None,
-        ignore_eos: None,
-        temperature: Some(0.0),
-        top_p: Some(1.0),
-        top_k: Some(0),
-        repetition_penalty: Some(1.0),
-        seed: Some(7),
+        tool_choice: libmir::ToolChoice::default(),
     }
 }
 

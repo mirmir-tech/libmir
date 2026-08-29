@@ -1,5 +1,6 @@
 use libmir::{
-    ChatCompletionRequest, ChatMessage, Error, GenerationOverrides, Library, Result, RuntimeConfig,
+    Conversation, Error, GenerationOverrides, GenerationRequest, Library, Message, Result,
+    RuntimeConfig,
 };
 
 #[test]
@@ -13,25 +14,26 @@ fn preserves_deepseek_qwen_greedy_digest() -> Result<()> {
         &mut |_event| {},
     )?;
     let output = model.generate(
-        &ChatCompletionRequest {
-            model: model.handle().id.clone(),
-            messages: vec![ChatMessage {
-                role: "user".into(),
-                content: "Hello".into(),
-                reasoning_content: None,
-                tool_calls: None,
-                tool_call_id: None,
-            }],
-            tools: Vec::new(),
-            tool_choice: None,
-            stream: false,
-            max_tokens: Some(16),
-            min_tokens: None,
-            ignore_eos: None,
-            temperature: Some(0.0),
-            top_p: Some(1.0),
-            top_k: Some(0),
-            repetition_penalty: Some(1.0),
+        &GenerationRequest {
+            conversation: Conversation {
+                messages: vec![Message {
+                    role: "user".into(),
+                    content: "Hello".into(),
+                    reasoning_content: None,
+                    tool_calls: None,
+                    tool_call_id: None,
+                }],
+                tools: Vec::new(),
+                tool_choice: libmir::ToolChoice::default(),
+            },
+            options: GenerationOverrides {
+                max_tokens: Some(16),
+                temperature: Some(0.0),
+                top_p: Some(1.0),
+                top_k: Some(0),
+                repetition_penalty: Some(1.0),
+                ..GenerationOverrides::default()
+            },
             seed: None,
         },
         &mut |_event| {},

@@ -1,31 +1,31 @@
-use foundation::protocol::ChatCompletionRequest;
+use foundation::conversation::Conversation;
 
 use super::{TemplateKind, config::TemplateTokens};
 
 pub(super) fn render_builtin(
-    request: &ChatCompletionRequest,
+    conversation: &Conversation,
     kind: TemplateKind,
     tokens: &TemplateTokens,
 ) -> String {
     match kind {
-        TemplateKind::ChatMl => render_chatml(request),
-        TemplateKind::QwenChatMl => render_qwen(request),
-        TemplateKind::TurnDelimited => render_turns(request, tokens),
-        TemplateKind::MistralInst => render_mistral(request, tokens),
-        TemplateKind::Gemma4 => render_gemma4(request, tokens),
-        TemplateKind::Plain => render_plain(request),
+        TemplateKind::ChatMl => render_chatml(conversation),
+        TemplateKind::QwenChatMl => render_qwen(conversation),
+        TemplateKind::TurnDelimited => render_turns(conversation, tokens),
+        TemplateKind::MistralInst => render_mistral(conversation, tokens),
+        TemplateKind::Gemma4 => render_gemma4(conversation, tokens),
+        TemplateKind::Plain => render_plain(conversation),
         TemplateKind::ModelJinja => unreachable!("model template has a Jinja body"),
     }
 }
 
-fn render_qwen(request: &ChatCompletionRequest) -> String {
-    let mut prompt = render_chatml(request);
+fn render_qwen(conversation: &Conversation) -> String {
+    let mut prompt = render_chatml(conversation);
     prompt.push_str("<think>\n");
     prompt
 }
 
-fn render_chatml(request: &ChatCompletionRequest) -> String {
-    let mut prompt = request.messages.iter().fold(String::new(), |mut prompt, message| {
+fn render_chatml(conversation: &Conversation) -> String {
+    let mut prompt = conversation.messages.iter().fold(String::new(), |mut prompt, message| {
         prompt.push_str("<|im_start|>");
         prompt.push_str(&message.role);
         prompt.push('\n');
@@ -37,8 +37,8 @@ fn render_chatml(request: &ChatCompletionRequest) -> String {
     prompt
 }
 
-fn render_plain(request: &ChatCompletionRequest) -> String {
-    request
+fn render_plain(conversation: &Conversation) -> String {
+    conversation
         .messages
         .iter()
         .map(|message| format!("{}: {}", message.role, message.content))
@@ -46,8 +46,8 @@ fn render_plain(request: &ChatCompletionRequest) -> String {
         .join("\n")
 }
 
-fn render_mistral(request: &ChatCompletionRequest, tokens: &TemplateTokens) -> String {
-    let mut messages = request.messages.as_slice();
+fn render_mistral(conversation: &Conversation, tokens: &TemplateTokens) -> String {
+    let mut messages = conversation.messages.as_slice();
     let system = messages
         .first()
         .filter(|message| matches!(message.role.as_str(), "system" | "developer"));
@@ -75,11 +75,11 @@ fn render_mistral(request: &ChatCompletionRequest, tokens: &TemplateTokens) -> S
     prompt
 }
 
-fn render_turns(request: &ChatCompletionRequest, tokens: &TemplateTokens) -> String {
+fn render_turns(conversation: &Conversation, tokens: &TemplateTokens) -> String {
     let Some((start, end)) = tokens.turn_tokens() else {
         unreachable!("turn-delimited template requires start and end tokens");
     };
-    let mut prompt = request.messages.iter().fold(String::new(), |mut prompt, message| {
+    let mut prompt = conversation.messages.iter().fold(String::new(), |mut prompt, message| {
         prompt.push_str(start);
         prompt.push_str(&message.role);
         prompt.push('\n');
@@ -93,11 +93,11 @@ fn render_turns(request: &ChatCompletionRequest, tokens: &TemplateTokens) -> Str
     prompt
 }
 
-fn render_gemma4(request: &ChatCompletionRequest, tokens: &TemplateTokens) -> String {
+fn render_gemma4(conversation: &Conversation, tokens: &TemplateTokens) -> String {
     let Some((start, end)) = tokens.turn_tokens() else {
         unreachable!("Gemma 4 fallback requires turn tokens");
     };
-    let mut messages = request.messages.as_slice();
+    let mut messages = conversation.messages.as_slice();
     let mut prompt = tokens.bos().to_owned();
     prompt.push_str(start);
     prompt.push_str("system\n<|think|>\n");
@@ -135,14 +135,13 @@ fn render_gemma4(request: &ChatCompletionRequest, tokens: &TemplateTokens) -> St
 
 #[cfg(test)]
 mod tests {
-    use foundation::protocol::ChatMessage;
+    use foundation::conversation::Message;
 
     use super::*;
 
     #[test]
     fn renders_mistral_inst_conversation() {
-        let request = ChatCompletionRequest {
-            model: "mistral".into(),
+        let request = Conversation {
             messages: vec![
                 message("system", "Be concise."),
                 message("user", "Hello"),
@@ -150,16 +149,7 @@ mod tests {
                 message("user", "Two plus two?"),
             ],
             tools: Vec::new(),
-            tool_choice: None,
-            stream: false,
-            max_tokens: None,
-            min_tokens: None,
-            ignore_eos: None,
-            temperature: None,
-            top_p: None,
-            top_k: None,
-            repetition_penalty: None,
-            seed: None,
+            tool_choice: foundation::conversation::ToolChoice::default(),
         };
 
         let prompt = render_mistral(&request, &TemplateTokens::new("<s>", "</s>"));
@@ -170,8 +160,8 @@ mod tests {
         );
     }
 
-    fn message(role: &str, content: &str) -> ChatMessage {
-        ChatMessage {
+    fn message(role: &str, content: &str) -> Message {
+        Message {
             role: role.into(),
             content: content.into(),
             reasoning_content: None,

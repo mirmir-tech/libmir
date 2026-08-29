@@ -7,8 +7,8 @@ use std::{
 };
 
 use libmir::{
-    ChatCompletionRequest, ChatMessage, Error, GenerationOverrides, Library, RuntimeConfig,
-    SamplingLogits, runtime::RuntimeError,
+    Conversation, Error, GenerationOverrides, Library, Message, RuntimeConfig, SamplingLogits,
+    runtime::RuntimeError,
 };
 
 const TOKEN_LIMIT: usize = 32;
@@ -41,10 +41,9 @@ fn required_token(token: Option<u32>) -> Result<u32, RuntimeError> {
     token.ok_or_else(|| RuntimeError::Backend("device sampling returned no token".into()))
 }
 
-fn request(model: &str) -> ChatCompletionRequest {
-    ChatCompletionRequest {
-        model: model.into(),
-        messages: vec![ChatMessage {
+fn request(_model: &str) -> Conversation {
+    Conversation {
+        messages: vec![Message {
             role: "user".into(),
             content: "Hello".into(),
             reasoning_content: None,
@@ -52,16 +51,7 @@ fn request(model: &str) -> ChatCompletionRequest {
             tool_call_id: None,
         }],
         tools: Vec::new(),
-        tool_choice: None,
-        stream: true,
-        max_tokens: Some(TOKEN_LIMIT),
-        min_tokens: None,
-        ignore_eos: None,
-        temperature: Some(0.0),
-        top_p: Some(1.0),
-        top_k: Some(0),
-        repetition_penalty: Some(1.0),
-        seed: None,
+        tool_choice: libmir::ToolChoice::default(),
     }
 }
 

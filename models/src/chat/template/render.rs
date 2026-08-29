@@ -1,4 +1,4 @@
-use foundation::protocol::ChatCompletionRequest;
+use foundation::conversation::{Conversation, ToolChoice};
 use minijinja::{Environment, Error, ErrorKind, context};
 use minijinja_contrib::pycompat::unknown_method_callback;
 use time::OffsetDateTime;
@@ -8,7 +8,7 @@ use crate::error::Result;
 
 pub(super) fn render_model_template(
     body: &str,
-    request: &ChatCompletionRequest,
+    conversation: &Conversation,
     tokens: &TemplateTokens,
 ) -> Result<String> {
     let mut environment = Environment::new();
@@ -17,10 +17,10 @@ pub(super) fn render_model_template(
     environment.add_function("raise_exception", raise_exception);
     environment.add_template("chat", body)?;
     let template = environment.get_template("chat")?;
-    let disabled = request.tool_choice.as_ref().and_then(serde_json::Value::as_str) == Some("none");
-    let tools = (!disabled && !request.tools.is_empty()).then_some(&request.tools);
+    let enabled = !matches!(conversation.tool_choice, ToolChoice::None);
+    let tools = (enabled && !conversation.tools.is_empty()).then_some(&conversation.tools);
     Ok(template.render(context! {
-        messages => &request.messages,
+        messages => &conversation.messages,
         tools => tools,
         bos_token => tokens.bos(),
         eos_token => tokens.eos(),
@@ -52,20 +52,10 @@ mod tests {
     fn exposes_hugging_face_current_date_function() -> Result<()> {
         let rendered = render_model_template(
             "{{ strftime_now(\"%Y-%m-%d\") }}",
-            &ChatCompletionRequest {
-                model: "test".into(),
+            &Conversation {
                 messages: Vec::new(),
                 tools: Vec::new(),
-                tool_choice: None,
-                stream: false,
-                max_tokens: None,
-                min_tokens: None,
-                ignore_eos: None,
-                temperature: None,
-                top_p: None,
-                top_k: None,
-                repetition_penalty: None,
-                seed: None,
+                tool_choice: ToolChoice::default(),
             },
             &TemplateTokens::default(),
         )?;
@@ -107,9 +97,9 @@ mod tests {
         let body = r"{%- if tools is not none -%}[AVAILABLE_TOOLS]{{ tools|tojson }}[/AVAILABLE_TOOLS]{%- endif -%}";
         let mut request = request("Weather?");
         assert_eq!(render_model_template(body, &request, &TemplateTokens::default())?, "");
-        request.tools.push(foundation::protocol::ChatTool {
+        request.tools.push(foundation::conversation::Tool {
             kind: "function".into(),
-            function: foundation::protocol::ChatFunctionDefinition {
+            function: foundation::conversation::FunctionDefinition {
                 name: "weather".into(),
                 description: None,
                 parameters: serde_json::json!({"type": "object"}),
@@ -119,15 +109,14 @@ mod tests {
         assert!(rendered.starts_with("[AVAILABLE_TOOLS]["));
         assert!(rendered.contains(r#""name":"weather""#));
         assert!(rendered.ends_with("][/AVAILABLE_TOOLS]"));
-        request.tool_choice = Some(serde_json::json!("none"));
+        request.tool_choice = ToolChoice::None;
         assert_eq!(render_model_template(body, &request, &TemplateTokens::default())?, "");
         Ok(())
     }
 
-    fn request(content: &str) -> ChatCompletionRequest {
-        ChatCompletionRequest {
-            model: "test".into(),
-            messages: vec![foundation::protocol::ChatMessage {
+    fn request(content: &str) -> Conversation {
+        Conversation {
+            messages: vec![foundation::conversation::Message {
                 role: "user".into(),
                 content: content.into(),
                 reasoning_content: None,
@@ -135,16 +124,7 @@ mod tests {
                 tool_call_id: None,
             }],
             tools: Vec::new(),
-            tool_choice: None,
-            stream: false,
-            max_tokens: None,
-            min_tokens: None,
-            ignore_eos: None,
-            temperature: None,
-            top_p: None,
-            top_k: None,
-            repetition_penalty: None,
-            seed: None,
+            tool_choice: ToolChoice::default(),
         }
     }
 }

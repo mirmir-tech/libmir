@@ -1,8 +1,7 @@
 use std::time::{Duration, Instant};
 
-use foundation::protocol::ChatCompletionRequest;
 use models::generation::{
-    GenerationChannel, GenerationOverrides, GenerationSettings, GenerationToken, OutputNormalizer,
+    GenerationChannel, GenerationSettings, GenerationToken, OutputNormalizer,
 };
 use runtime::{metrics::GenerationMetricsRecorder, sampling::Sampler};
 
@@ -10,17 +9,19 @@ use crate::{CancellationToken, Error, Model, ProgressEvent, Result};
 
 mod input;
 mod output;
+mod request;
 mod sampling;
 
 use input::PreparedGeneration;
 pub use output::GenerationOutput;
+pub use request::GenerationRequest;
 use sampling::{choose, request_sampling, sampler_config};
 
 impl Model {
     /// Generates and streams a complete normalized response.
     pub fn generate(
         &self,
-        request: &ChatCompletionRequest,
+        request: &GenerationRequest,
         progress: &mut dyn FnMut(ProgressEvent),
         token: &mut dyn FnMut(GenerationToken),
     ) -> Result<GenerationOutput> {
@@ -31,7 +32,7 @@ impl Model {
     /// signalled.
     pub fn generate_cancellable(
         &self,
-        request: &ChatCompletionRequest,
+        request: &GenerationRequest,
         progress: &mut dyn FnMut(ProgressEvent),
         token: &mut dyn FnMut(GenerationToken),
         cancellation: &CancellationToken,
@@ -43,7 +44,7 @@ impl Model {
     /// by the loaded checkpoint.
     pub fn generate_image_cancellable(
         &self,
-        request: &ChatCompletionRequest,
+        request: &GenerationRequest,
         encoded_image: &[u8],
         progress: &mut dyn FnMut(ProgressEvent),
         token: &mut dyn FnMut(GenerationToken),
@@ -54,7 +55,7 @@ impl Model {
 
     fn generate_inner(
         &self,
-        request: &ChatCompletionRequest,
+        request: &GenerationRequest,
         encoded_image: Option<&[u8]>,
         progress: &mut dyn FnMut(ProgressEvent),
         token: &mut dyn FnMut(GenerationToken),
@@ -62,8 +63,9 @@ impl Model {
     ) -> Result<GenerationOutput> {
         cancellation.check()?;
         let descriptor = self.descriptor();
-        let settings = descriptor.resolve_generation(overrides(request))?;
-        let prepared = PreparedGeneration::prepare(self, request, settings, encoded_image)?;
+        let settings = descriptor.resolve_generation(request.options)?;
+        let prepared =
+            PreparedGeneration::new(self, &request.conversation, settings, encoded_image)?;
         let prompt_tokens = prepared.token_ids().len();
         let mut metrics = GenerationMetricsRecorder::new();
         metrics.record_prompt(Duration::ZERO, prompt_tokens);
@@ -71,10 +73,7 @@ impl Model {
         let stop_token_ids = tokenizer.stop_token_ids();
         let mut normalizer = OutputNormalizer::new(tokenizer, prepared.prompt_text());
         let mut text_decoder = tokenizer.decoder();
-        let decoder = descriptor.decoder().ok_or(Error::TaskMismatch {
-            requested: "generation",
-            actual: "sequence scoring",
-        })?;
+        let decoder = descriptor.decoder().ok_or_else(missing_decoder)?;
         let vocab_size = tokenizer.vocab_size().min(decoder.vocab_size);
         let mut sampler = Sampler::new(sampler_config(settings, request.seed, vocab_size))?;
         let mut session = self.session();
@@ -163,6 +162,13 @@ impl Model {
     }
 }
 
+fn missing_decoder() -> Error {
+    Error::TaskMismatch {
+        requested: "generation",
+        actual: "sequence scoring",
+    }
+}
+
 fn should_stop(
     settings: GenerationSettings,
     generated_tokens: usize,
@@ -170,18 +176,6 @@ fn should_stop(
     stop_tokens: &[u32],
 ) -> bool {
     !settings.ignore_eos && generated_tokens >= settings.min_tokens && stop_tokens.contains(&token)
-}
-
-fn overrides(request: &ChatCompletionRequest) -> GenerationOverrides {
-    GenerationOverrides {
-        max_tokens: request.max_tokens,
-        min_tokens: request.min_tokens,
-        ignore_eos: request.ignore_eos,
-        temperature: request.temperature,
-        top_p: request.top_p,
-        top_k: request.top_k,
-        repetition_penalty: request.repetition_penalty,
-    }
 }
 
 #[cfg(test)]

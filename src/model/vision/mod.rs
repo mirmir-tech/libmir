@@ -1,4 +1,4 @@
-use foundation::protocol::ChatCompletionRequest;
+use foundation::conversation::Conversation;
 use models::{
     generation::GenerationSettings,
     layout::{ImageProcessorConfig, VisionConfig},
@@ -47,24 +47,24 @@ impl ModelDescriptor {
     /// the rendered request.
     pub fn prepare_image(
         &self,
-        request: &ChatCompletionRequest,
+        conversation: &Conversation,
         encoded_image: &[u8],
     ) -> Result<PreparedVisionPrompt> {
-        self.prepare_image_with_settings(request, encoded_image, self.generation)
+        self.prepare_image_with_settings(conversation, encoded_image, self.generation)
     }
 
     pub(crate) fn prepare_image_with_settings(
         &self,
-        request: &ChatCompletionRequest,
+        conversation: &Conversation,
         encoded_image: &[u8],
         generation: GenerationSettings,
     ) -> Result<PreparedVisionPrompt> {
-        self.prepare_image_with_limits(request, encoded_image, generation, None)
+        self.prepare_image_with_limits(conversation, encoded_image, generation, None)
     }
 
     fn prepare_image_with_limits(
         &self,
-        request: &ChatCompletionRequest,
+        conversation: &Conversation,
         encoded_image: &[u8],
         generation: GenerationSettings,
         limits: Option<VisionLimits>,
@@ -86,7 +86,7 @@ impl ModelDescriptor {
                 Some(VisionConfig::PooledEncoder(vision)),
                 Some(ImageProcessorConfig::Pooled(processor)),
             ) => {
-                let request = self.with_image_token(request, vision.image_token_id)?;
+                let request = self.with_image_token(conversation, vision.image_token_id)?;
                 let prepared = self.prepare_with_settings(&request, generation)?;
                 let image = match limits {
                     Some(limits) => processor.preprocess_encoded_with_patch_limit(
@@ -114,7 +114,7 @@ impl ModelDescriptor {
                 Some(VisionConfig::SpatialMergeEncoder(vision)),
                 Some(ImageProcessorConfig::SpatialMerge(processor)),
             ) => {
-                let request = self.with_image_token(request, vision.image_token_id)?;
+                let request = self.with_image_token(conversation, vision.image_token_id)?;
                 let prepared = self.prepare_with_settings(&request, generation)?;
                 let image = match limits {
                     Some(limits) => processor.preprocess_encoded_with_max_pixels(
@@ -150,16 +150,16 @@ impl ModelDescriptor {
 
     fn with_image_token(
         &self,
-        request: &ChatCompletionRequest,
+        conversation: &Conversation,
         image_token_id: u32,
-    ) -> Result<ChatCompletionRequest> {
-        let occurrences = request
+    ) -> Result<Conversation> {
+        let occurrences = conversation
             .messages
             .iter()
             .map(|message| message.content.matches(IMAGE_PLACEHOLDER).count())
             .sum::<usize>();
         if occurrences == 0 {
-            return Ok(request.clone());
+            return Ok(conversation.clone());
         }
         if occurrences != 1 {
             return Err(models::ModelsError::InvalidConfig(
@@ -172,7 +172,7 @@ impl ModelDescriptor {
                 "image token id {image_token_id} is missing from the tokenizer"
             ))
         })?;
-        let mut request = request.clone();
+        let mut request = conversation.clone();
         for message in &mut request.messages {
             message.content = message.content.replace(IMAGE_PLACEHOLDER, &token);
         }
@@ -185,20 +185,24 @@ impl Model {
     /// contract discovered from the loaded checkpoint.
     pub fn prepare_image(
         &self,
-        request: &ChatCompletionRequest,
+        conversation: &Conversation,
         encoded_image: &[u8],
     ) -> Result<PreparedVisionPrompt> {
-        self.prepare_image_with_settings(request, encoded_image, self.inner.descriptor.generation)
+        self.prepare_image_with_settings(
+            conversation,
+            encoded_image,
+            self.inner.descriptor.generation,
+        )
     }
 
     pub(crate) fn prepare_image_with_settings(
         &self,
-        request: &ChatCompletionRequest,
+        conversation: &Conversation,
         encoded_image: &[u8],
         generation: GenerationSettings,
     ) -> Result<PreparedVisionPrompt> {
         self.inner.descriptor.prepare_image_with_limits(
-            request,
+            conversation,
             encoded_image,
             generation,
             Some(self.vision_limits()),

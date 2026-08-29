@@ -1,4 +1,4 @@
-use foundation::protocol::ChatCompletionRequest;
+use foundation::conversation::Conversation;
 use models::generation::GenerationSettings;
 use runtime::backend::{PrefillOutput, SamplingLogits};
 
@@ -13,19 +13,21 @@ pub(super) enum PreparedGeneration {
 }
 
 impl PreparedGeneration {
-    pub(super) fn prepare(
+    pub(super) fn new(
         model: &Model,
-        request: &ChatCompletionRequest,
+        conversation: &Conversation,
         settings: GenerationSettings,
         encoded_image: Option<&[u8]>,
     ) -> Result<Self> {
         let Some(encoded_image) = encoded_image else {
-            return Ok(Self::Text(model.descriptor().prepare_with_settings(request, settings)?));
+            return Ok(Self::Text(
+                model.descriptor().prepare_with_settings(conversation, settings)?,
+            ));
         };
         #[cfg(any(feature = "cuda", feature = "metal"))]
         {
             Ok(Self::Vision(
-                model.prepare_image_with_settings(request, encoded_image, settings)?,
+                model.prepare_image_with_settings(conversation, encoded_image, settings)?,
             ))
         }
         #[cfg(not(any(feature = "cuda", feature = "metal")))]

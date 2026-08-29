@@ -25,8 +25,8 @@ pub use admission::{
     CheckpointEncoding, MODEL_FORMAT_REGISTRY_SCHEMA_VERSION, WeightEncoding,
 };
 use foundation::{
+    conversation::Conversation,
     model::{BackendTarget, ModelManifest},
-    protocol::ChatCompletionRequest,
 };
 use models::{
     chat::{ChatPrompt, ChatTemplate},
@@ -146,19 +146,19 @@ impl ModelDescriptor {
 
     /// Renders and tokenizes a request, validating it against the model context
     /// window.
-    pub fn prepare(&self, request: &ChatCompletionRequest) -> Result<PreparedPrompt> {
+    pub fn prepare(&self, conversation: &Conversation) -> Result<PreparedPrompt> {
         if !matches!(self.task_plan.task(), ModelTask::Generation) {
             return Err(task_mismatch("generation", &self.task_plan));
         }
-        self.prepare_with_settings(request, self.generation)
+        self.prepare_with_settings(conversation, self.generation)
     }
 
     pub(crate) fn prepare_with_settings(
         &self,
-        request: &ChatCompletionRequest,
+        conversation: &Conversation,
         generation: GenerationSettings,
     ) -> Result<PreparedPrompt> {
-        let prompt = self.template.render(request)?;
+        let prompt = self.template.render(conversation)?;
         let tokens = self
             .tokenizer
             .encode_with_special_tokens(&prompt.text, prompt.add_special_tokens)?;
@@ -166,7 +166,7 @@ impl ModelDescriptor {
             return Err(Error::EmptyPrompt);
         }
         validate_context(tokens.token_ids.len(), generation.max_tokens, self.metadata.context_len)?;
-        let cache_checkpoints = self.cache_checkpoints(request, &tokens.token_ids)?;
+        let cache_checkpoints = self.cache_checkpoints(conversation, &tokens.token_ids)?;
         Ok(PreparedPrompt { prompt, tokens, cache_checkpoints })
     }
 
@@ -234,8 +234,8 @@ impl Model {
     }
 
     /// Renders, tokenizes, and validates a chat request for this model.
-    pub fn prepare(&self, request: &ChatCompletionRequest) -> Result<PreparedPrompt> {
-        self.inner.descriptor.prepare(request)
+    pub fn prepare(&self, conversation: &Conversation) -> Result<PreparedPrompt> {
+        self.inner.descriptor.prepare(conversation)
     }
 }
 

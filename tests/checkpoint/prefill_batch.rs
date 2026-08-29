@@ -13,7 +13,7 @@ fn interleaves_concurrent_prefills_without_crossing_kv_sessions() -> Result<()> 
     config.scheduler.decode_batch_wait_us = 50_000;
     let model =
         Library::new(config).load(path, GenerationOverrides::default(), &mut |_event| {})?;
-    let prompt = model.prepare(&request(&model))?.tokens.token_ids;
+    let prompt = model.prepare(&request().conversation)?.tokens.token_ids;
     let first_prompt = prompt.iter().copied().cycle().take(512).collect::<Vec<_>>();
     let second_prompt = prompt.iter().copied().cycle().take(640).collect::<Vec<_>>();
     let first_reference_prompt = first_prompt.clone();
