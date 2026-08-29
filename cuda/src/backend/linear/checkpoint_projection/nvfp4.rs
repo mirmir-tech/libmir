@@ -1,8 +1,8 @@
 use models::weights::{BlockQuantization, TensorBinding, TensorStorage};
 
 use crate::{
-    CudaBackend, CudaTensorSet, Error, NvFp4Config, NvFp4LinearWeight, NvFp4Tensors,
-    NvFp4WeightOnlyWeight, Result,
+    CudaBackend, CudaTensorSet, Error, NvFp4Config, NvFp4LinearWeight, NvFp4ScaleMode,
+    NvFp4Tensors, NvFp4WeightOnlyWeight, Result,
 };
 
 pub(super) fn load_native(
@@ -40,6 +40,7 @@ pub(super) fn load_native(
             weight_scale: get(scales)?,
             weight_scale_2: get(global_scale)?,
             input_scale: get(input_scale)?,
+            scale_mode: NvFp4ScaleMode::from_names(global_scale, input_scale)?,
         },
     )
 }
@@ -91,6 +92,7 @@ fn tensors<'a>(
             weight_scale: get(scales)?,
             weight_scale_2: get(global_scale)?,
             input_scale: get(input_scale)?,
+            scale_mode: NvFp4ScaleMode::from_names(global_scale, input_scale)?,
         },
     ))
 }

@@ -67,6 +67,32 @@ pub(super) fn nvfp4_storage(
     })
 }
 
+pub(super) fn nvfp4_packed_storage(
+    prefix: &str,
+    catalog: &TensorCatalog,
+    consumed: &mut BTreeSet<String>,
+    hint: Option<BlockQuantization>,
+) -> Option<TensorStorage> {
+    let scales = format!("{prefix}.weight_scale");
+    let global_scale = format!("{prefix}.weight_global_scale");
+    let input_scale = format!("{prefix}.input_global_scale");
+    if !catalog.contains(&scales)
+        || !catalog.contains(&global_scale)
+        || !catalog.contains(&input_scale)
+    {
+        return None;
+    }
+    consumed.extend([scales.clone(), global_scale.clone(), input_scale.clone()]);
+    Some(TensorStorage::BlockQuantized {
+        format: hint.unwrap_or(BlockQuantization::NVFP4),
+        scales,
+        global_scale: Some(global_scale),
+        input_scale: Some(input_scale),
+        bias: None,
+        packing: TensorPacking::Separate,
+    })
+}
+
 fn invalid(message: impl Into<String>) -> ModelsError {
     ModelsError::InvalidConfig(format!("quantization_config: {}", message.into()))
 }

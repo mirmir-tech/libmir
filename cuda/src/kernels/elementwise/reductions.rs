@@ -107,4 +107,56 @@ impl ElementwiseBf16 {
             ),
         )?)
     }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn weighted_reduce_bucketed_residual_shared(
+        &self,
+        stream: &Stream,
+        input: &DeviceBuffer<bf16>,
+        weights: &DeviceBuffer<bf16>,
+        positions: &DeviceBuffer<u32>,
+        residual: &DeviceBuffer<bf16>,
+        shared: &DeviceBuffer<bf16>,
+        output: &mut DeviceBuffer<bf16>,
+        rows: usize,
+        tokens: usize,
+    ) -> Result<()> {
+        let assignments = rows
+            .checked_mul(tokens)
+            .ok_or(Error::InvalidDecoderKernel("fused bucketed reduction overflow"))?;
+        let input_elements = self
+            .elements
+            .checked_mul(assignments)
+            .ok_or(Error::InvalidDecoderKernel("fused bucketed reduction overflow"))?;
+        let output_elements = self
+            .elements
+            .checked_mul(tokens)
+            .ok_or(Error::InvalidDecoderKernel("fused bucketed reduction overflow"))?;
+        require("fused bucketed reduction input", input_elements, input.len())?;
+        require("fused bucketed reduction weights", assignments, weights.len())?;
+        require("fused bucketed reduction positions", assignments, positions.len())?;
+        require("fused bucketed reduction residual", output_elements, residual.len())?;
+        require("fused bucketed reduction shared", output_elements, shared.len())?;
+        require("fused bucketed reduction output", output_elements, output.len())?;
+        let threads = 256_usize;
+        Ok(self.weighted_reduce_bucketed_residual_shared.launch(
+            stream,
+            LaunchConfig {
+                grid: (u32::try_from(output_elements.div_ceil(threads))?, 1, 1),
+                block: (u32::try_from(threads)?, 1, 1),
+                shared_memory_bytes: 0,
+            },
+            (
+                input,
+                weights,
+                positions,
+                residual,
+                shared,
+                output,
+                u32::try_from(rows)?,
+                self.count()?,
+                u32::try_from(tokens)?,
+            ),
+        )?)
+    }
 }

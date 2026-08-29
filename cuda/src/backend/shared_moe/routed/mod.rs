@@ -16,6 +16,7 @@ mod affine;
 mod mxfp;
 mod nvfp4;
 mod parallel;
+mod prequant;
 
 #[derive(Debug)]
 pub(super) enum SharedRoutedExecution {

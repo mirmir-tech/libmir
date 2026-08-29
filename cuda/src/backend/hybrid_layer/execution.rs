@@ -74,16 +74,18 @@ impl CudaAffineGatedDeltaMoeExecution {
         )?;
         self.attention
             .execute(&self.scratch.normalized, state, &mut self.scratch.attention)?;
-        self.residual
-            .add(stream, input, &self.scratch.attention, &mut self.scratch.residual)?;
-        self.post_attention_norm.execute(
-            stream,
-            &self.scratch.residual,
+        self.moe.execute_residual_norm(
+            &self.post_attention_norm,
+            input,
+            &self.scratch.attention,
             bf16(&self.post_attention_norm_weight)?,
+            &mut self.scratch.residual,
             &mut self.scratch.normalized,
+            &mut self.scratch.moe,
+            output,
+            &self.residual,
         )?;
-        self.moe.execute(&self.scratch.normalized, &mut self.scratch.moe)?;
-        self.residual.add(stream, &self.scratch.residual, &self.scratch.moe, output)
+        Ok(())
     }
 
     pub(crate) fn execute_packed(
@@ -122,16 +124,18 @@ impl CudaAffineGatedDeltaMoeExecution {
         )?;
         self.attention
             .execute_prepared_packed(&self.scratch.normalized, &mut self.scratch.attention)?;
-        self.residual
-            .add(stream, input, &self.scratch.attention, &mut self.scratch.residual)?;
-        self.post_attention_norm.execute(
-            stream,
-            &self.scratch.residual,
+        self.moe.execute_residual_norm(
+            &self.post_attention_norm,
+            input,
+            &self.scratch.attention,
             bf16(&self.post_attention_norm_weight)?,
+            &mut self.scratch.residual,
             &mut self.scratch.normalized,
+            &mut self.scratch.moe,
+            output,
+            &self.residual,
         )?;
-        self.moe.execute(&self.scratch.normalized, &mut self.scratch.moe)?;
-        self.residual.add(stream, &self.scratch.residual, &self.scratch.moe, output)
+        Ok(())
     }
 
     pub(crate) fn commit_packed(&mut self, states: &mut [&mut CudaGatedDeltaState]) -> Result<()> {

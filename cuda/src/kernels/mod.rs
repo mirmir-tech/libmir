@@ -58,7 +58,8 @@ pub(crate) use direct_fp8::{
 };
 pub use direct_fp8::{
     DirectFp8Activation, DirectFp8Embedding, DirectFp8EmbeddingBatch, DirectFp8EmbeddingSpec,
-    DirectFp8Format, DirectFp8Linear, DirectFp8Scale, DirectFp8Scales, DirectFp8Spec,
+    DirectFp8Format, DirectFp8Linear, DirectFp8NormGate, DirectFp8Scale, DirectFp8Scales,
+    DirectFp8Spec,
 };
 pub use elementwise::ElementwiseBf16;
 pub use embedding::Embedding;
@@ -67,10 +68,11 @@ pub use encoder::{
 };
 pub use gated_attention::GatedAttentionSplit;
 pub use gated_delta::{
-    GatedDeltaAlphaBeta, GatedDeltaBatchConvolution, GatedDeltaBatchConvolutionSpec,
-    GatedDeltaBatchRecurrence, GatedDeltaBatchSpec, GatedDeltaConvolution,
-    GatedDeltaConvolutionSpec, GatedDeltaInputs as GatedDeltaKernelInputs, GatedDeltaLaunch,
-    GatedDeltaRecurrence, GatedDeltaSpec, GatedDeltaTransformSpec, GatedDeltaTransforms,
+    GatedDeltaAlphaBeta, GatedDeltaAlphaBetaSplit, GatedDeltaBatchConvolution,
+    GatedDeltaBatchConvolutionSpec, GatedDeltaBatchRecurrence, GatedDeltaBatchSpec,
+    GatedDeltaChunked, GatedDeltaChunkedScratch, GatedDeltaConvolution, GatedDeltaConvolutionSpec,
+    GatedDeltaInputs as GatedDeltaKernelInputs, GatedDeltaLaunch, GatedDeltaRecurrence,
+    GatedDeltaRecurrenceMode, GatedDeltaSpec, GatedDeltaTransformSpec, GatedDeltaTransforms,
 };
 pub use gptq::{GptqLaunch, GptqLinear, GptqSpec};
 pub use linear_fp8::{BlockFp8LinearKernels, BlockFp8LinearSpec};

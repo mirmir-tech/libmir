@@ -4,7 +4,7 @@ use mircuda::{
     cuda_export, cuda_kernel_file,
 };
 
-use super::{DirectFp8Activation, DirectFp8Scale, DirectFp8Spec};
+use super::{DirectFp8Activation, DirectFp8NormGate, DirectFp8Scale, DirectFp8Spec};
 use crate::{Error, Result, kernels::geometry::narrow};
 
 cuda_export!(DynamicE4M3QuantizeKernel = "libmir_cuda_dynamic_e4m3_quantize_bf16"(
@@ -25,10 +25,11 @@ pub struct DirectFp8TensorCoreLinear {
     dynamic_quantize: TypedKernel<DynamicE4M3QuantizeKernel>,
     static_quantize_f32: TypedKernel<StaticE4M3QuantizeF32Kernel>,
     static_quantize_bf16: TypedKernel<StaticE4M3QuantizeBf16Kernel>,
-    plan: ScaledFp8Plan,
-    quantized: DeviceBuffer<u8>,
-    input_scales: DeviceBuffer<f32>,
-    spec: DirectFp8Spec,
+    pub(super) norm_gate: DirectFp8NormGate,
+    pub(super) plan: ScaledFp8Plan,
+    pub(super) quantized: DeviceBuffer<u8>,
+    pub(super) input_scales: DeviceBuffer<f32>,
+    pub(super) spec: DirectFp8Spec,
 }
 
 impl DirectFp8TensorCoreLinear {
@@ -76,6 +77,7 @@ impl DirectFp8TensorCoreLinear {
             dynamic_quantize: module.kernel()?,
             static_quantize_f32: module.kernel()?,
             static_quantize_bf16: module.kernel()?,
+            norm_gate: DirectFp8NormGate::compile(compiler)?,
             plan,
             quantized: pool.allocate::<u8>(stream, spec.input_elements()?)?,
             input_scales: pool.allocate::<f32>(stream, spec.tokens)?,

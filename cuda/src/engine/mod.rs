@@ -68,17 +68,29 @@ impl CudaEngine {
     }
 
     pub fn set_profile_decode(&self, enabled: bool) -> Result<()> {
-        let Ok(mut capture) = self.profiler_capture.lock() else {
-            return Err(Error::State("CUDA profiler capture lock is poisoned".into()));
-        };
         if enabled {
-            if capture.is_none() {
-                *capture = Some(self.backend.start_profiler_capture()?);
-            }
+            self.start_profiler_capture()?;
             self.profile_decode.store(true, Ordering::Relaxed);
             return Ok(());
         }
         self.profile_decode.store(false, Ordering::Relaxed);
+        self.stop_profiler_capture()
+    }
+
+    pub fn start_profiler_capture(&self) -> Result<()> {
+        let Ok(mut capture) = self.profiler_capture.lock() else {
+            return Err(Error::State("CUDA profiler capture lock is poisoned".into()));
+        };
+        if capture.is_none() {
+            *capture = Some(self.backend.start_profiler_capture()?);
+        }
+        Ok(())
+    }
+
+    pub fn stop_profiler_capture(&self) -> Result<()> {
+        let Ok(mut capture) = self.profiler_capture.lock() else {
+            return Err(Error::State("CUDA profiler capture lock is poisoned".into()));
+        };
         let active = capture.take();
         drop(capture);
         active.map_or(Ok(()), ProfilerCapture::stop)

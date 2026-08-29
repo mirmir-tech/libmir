@@ -12,37 +12,12 @@ use crate::{
     kernels::{BucketGeometry, ElementwiseBf16, NvFp4BucketPreparation},
 };
 
-#[derive(Debug)]
-pub(in crate::backend::linear::nvfp4::selected) struct ExpertBuckets {
-    pub(super) counts: DeviceBuffer<u32>,
-    pub(super) offsets: DeviceBuffer<u32>,
-    pub(super) scale_offsets: DeviceBuffer<u32>,
-    pub(super) order: DeviceBuffer<u32>,
-    pub(super) positions: DeviceBuffer<u32>,
-    pub(super) indices: DeviceBuffer<u32>,
-}
-
-impl ExpertBuckets {
-    pub(super) fn new(backend: &CudaBackend, assignments: usize, experts: usize) -> Result<Self> {
-        let allocate = |elements| backend.inner.pool.allocate(&backend.inner.stream, elements);
-        Ok(Self {
-            counts: allocate(experts)?,
-            offsets: allocate(experts)?,
-            scale_offsets: allocate(experts)?,
-            order: allocate(assignments)?,
-            positions: allocate(assignments)?,
-            indices: allocate(experts)?,
-        })
-    }
-}
-
 /// Prefill-oriented NVFP4 `MoE` with device-side token bucketing per expert.
 #[derive(Debug)]
 pub struct BucketedNvFp4MoeBf16 {
     preparation: NvFp4BucketPreparation,
-    gate_up: BucketedNvFp4PairBf16,
+    pub(super) gate_up: BucketedNvFp4PairBf16,
     down: BucketedNvFp4LinearBf16,
-    gated: ElementwiseBf16,
     reduce: ElementwiseBf16,
     scratch: Arc<Mutex<BucketedNvFp4Scratch>>,
     activation: GatedActivation,
@@ -51,27 +26,30 @@ pub struct BucketedNvFp4MoeBf16 {
     selected: usize,
     experts: usize,
     assignments: usize,
-    output_elements: usize,
+    pub(super) output_elements: usize,
 }
 
-impl CudaBackend {
-    #[allow(clippy::too_many_arguments)]
-    pub(in crate::backend) fn prepare_bucketed_nvfp4_moe_bf16(
-        &self,
-        tokens: usize,
-        selected: usize,
-        activation: GatedActivation,
-        gate: NvFp4ExpertBank,
-        up: NvFp4ExpertBank,
-        down: NvFp4ExpertBank,
-    ) -> Result<BucketedNvFp4MoeBf16> {
-        BucketedNvFp4MoeBf16::new(self, tokens, selected, activation, gate, up, down)
-    }
+#[derive(Clone, Copy)]
+enum BucketedInput<'a> {
+    Bf16(&'a DeviceBuffer<bf16>),
+    NvFp4 {
+        packed: &'a DeviceBuffer<u8>,
+        scales: &'a DeviceBuffer<u8>,
+    },
+}
+
+enum BucketedOutput<'a> {
+    Routed(&'a mut DeviceBuffer<bf16>),
+    ResidualShared {
+        residual: &'a DeviceBuffer<bf16>,
+        shared: &'a DeviceBuffer<bf16>,
+        output: &'a mut DeviceBuffer<bf16>,
+    },
 }
 
 impl BucketedNvFp4MoeBf16 {
     #[allow(clippy::too_many_arguments)]
-    fn new(
+    pub(super) fn new(
         backend: &CudaBackend,
         tokens: usize,
         selected: usize,
@@ -86,7 +64,6 @@ impl BucketedNvFp4MoeBf16 {
             .ok_or(Error::InvalidNvFp4("bucketed assignment count overflow"))?;
         let gate_up = BucketedNvFp4PairBf16::new(backend, tokens, selected, gate_bank, up_bank)?;
         let down = BucketedNvFp4LinearBf16::new(backend, tokens, selected, down_bank)?;
-        let intermediate_elements = gate_up.output_elements()?;
         if down.output_features() == 0 || gate_up.output_features() != down.input_features() {
             return Err(Error::InvalidNvFp4("incompatible bucketed expert banks"));
         }
@@ -111,7 +88,6 @@ impl BucketedNvFp4MoeBf16 {
         })?;
         Ok(Self {
             preparation: NvFp4BucketPreparation::compile(&backend.inner.compiler)?,
-            gated: ElementwiseBf16::compile(&backend.inner.compiler, intermediate_elements)?,
             reduce: ElementwiseBf16::compile(&backend.inner.compiler, down.output_features())?,
             scratch,
             gate_up,
@@ -133,6 +109,40 @@ impl BucketedNvFp4MoeBf16 {
         routing: &DeviceBuffer<bf16>,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
+        self.execute_input(
+            BucketedInput::Bf16(input),
+            selected,
+            routing,
+            BucketedOutput::Routed(output),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::backend) fn execute_prequantized_residual_shared(
+        &mut self,
+        packed: &DeviceBuffer<u8>,
+        scales: &DeviceBuffer<u8>,
+        selected: &DeviceBuffer<u32>,
+        routing: &DeviceBuffer<bf16>,
+        residual: &DeviceBuffer<bf16>,
+        shared: &DeviceBuffer<bf16>,
+        output: &mut DeviceBuffer<bf16>,
+    ) -> Result<()> {
+        self.execute_input(
+            BucketedInput::NvFp4 { packed, scales },
+            selected,
+            routing,
+            BucketedOutput::ResidualShared { residual, shared, output },
+        )
+    }
+
+    fn execute_input(
+        &mut self,
+        input: BucketedInput<'_>,
+        selected: &DeviceBuffer<u32>,
+        routing: &DeviceBuffer<bf16>,
+        output: BucketedOutput<'_>,
+    ) -> Result<()> {
         let mut scratch = self
             .scratch
             .lock()
@@ -144,7 +154,6 @@ impl BucketedNvFp4MoeBf16 {
             down,
             gate_output,
             up_output,
-            intermediate,
             down_output,
         } = &mut *scratch;
         self.preparation.prepare(
@@ -161,46 +170,64 @@ impl BucketedNvFp4MoeBf16 {
                 experts: self.experts,
             },
         )?;
-        self.gate_up.execute(
+        match input {
+            BucketedInput::Bf16(input) => self.gate_up.execute(
+                &self.preparation,
+                buckets,
+                input,
+                selected,
+                gate_output,
+                up_output,
+                gate,
+                up,
+            )?,
+            BucketedInput::NvFp4 { packed, scales } => self.gate_up.execute_prequantized(
+                &self.preparation,
+                buckets,
+                selected,
+                packed,
+                scales,
+                gate_output,
+                up_output,
+                gate,
+                up,
+            )?,
+        }
+        self.down.execute_gated(
             &self.preparation,
             buckets,
-            input,
-            selected,
             gate_output,
             up_output,
-            gate,
-            up,
-        )?;
-        self.gated.gated(
-            &self.stream,
-            gate_output,
-            up_output,
-            intermediate,
-            self.activation.into(),
-        )?;
-        self.down.execute_ranked(
-            &self.preparation,
-            buckets,
-            intermediate,
             selected,
+            self.activation,
             down_output,
             down,
         )?;
-        let result = self.reduce.weighted_reduce_bucketed(
-            &self.stream,
-            down_output,
-            routing,
-            &buckets.positions,
-            output,
-            self.selected,
-            self.tokens,
-        );
+        let result = match output {
+            BucketedOutput::Routed(output) => self.reduce.weighted_reduce_bucketed(
+                &self.stream,
+                down_output,
+                routing,
+                &buckets.positions,
+                output,
+                self.selected,
+                self.tokens,
+            ),
+            BucketedOutput::ResidualShared { residual, shared, output } => {
+                self.reduce.weighted_reduce_bucketed_residual_shared(
+                    &self.stream,
+                    down_output,
+                    routing,
+                    &buckets.positions,
+                    residual,
+                    shared,
+                    output,
+                    self.selected,
+                    self.tokens,
+                )
+            },
+        };
         drop(scratch);
         result
-    }
-
-    #[must_use]
-    pub const fn output_elements(&self) -> usize {
-        self.output_elements
     }
 }

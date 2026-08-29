@@ -89,6 +89,42 @@ fn rejects_nvfp4_with_a_mismatched_block_scale_dtype() -> Result<()> {
 }
 
 #[test]
+fn binds_compressed_tensors_nvfp4_names() -> Result<()> {
+    let decoder = DecoderConfig::from_value(&json!({
+        "hidden_size": 32,
+        "intermediate_size": 32,
+        "num_hidden_layers": 1,
+        "num_attention_heads": 4,
+        "num_key_value_heads": 2,
+        "head_dim": 8,
+        "vocab_size": 64,
+        "hidden_act": "silu"
+    }))?;
+    let catalog = TensorCatalog::new(vec![
+        tensor("model.layers.0.self_attn.q_proj.input_global_scale", "F32", vec![1]),
+        tensor("model.layers.0.self_attn.q_proj.weight_global_scale", "F32", vec![1]),
+        tensor("model.layers.0.self_attn.q_proj.weight_packed", "U8", vec![32, 16]),
+        tensor("model.layers.0.self_attn.q_proj.weight_scale", "F8_E4M3", vec![32, 2]),
+    ]);
+    let spec = SemanticModelSpec::discover(&decoder, &catalog)?;
+
+    let bindings = WeightBindingPlan::discover(&spec, &catalog)?;
+
+    assert_eq!(bindings.tensors.len(), 1);
+    assert!(bindings.uses_block_format(BlockFormat::NvFp4));
+    assert!(matches!(
+        bindings.tensors[0].storage,
+        TensorStorage::BlockQuantized {
+            format: BlockQuantization::NVFP4,
+            global_scale: Some(_),
+            input_scale: Some(_),
+            ..
+        }
+    ));
+    Ok(())
+}
+
+#[test]
 fn rejects_mxfp4_with_a_non_bf16_output_bias() -> Result<()> {
     let decoder = DecoderConfig::from_value(&json!({
         "hidden_size": 32,

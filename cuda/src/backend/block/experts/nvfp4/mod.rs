@@ -62,11 +62,7 @@ impl AutoNvFp4Experts {
                 | MoeProfileExecution::MxFp8(_) => None,
             });
         let weights = [gate, up, down];
-        let fallback_execution = if weight_only {
-            MoeExecution::SelectedWeightOnly
-        } else {
-            planned.execution()
-        };
+        let fallback_execution = fallback_execution(phase, weight_only, planned.execution());
         let selected_execution = cached.map_or(fallback_execution, |value| value.0);
         let (candidate, cache_applied) =
             match Candidate::new(backend, request, activation, &weights, selected_execution) {
@@ -119,6 +115,28 @@ impl AutoNvFp4Experts {
             self.select(input, selected, routing, output);
         }
         self.candidates[self.fallback].plan.execute(input, selected, routing, output)
+    }
+
+    pub(super) fn prequant_scale(&self) -> Option<DeviceBuffer<f32>> {
+        (!self.tunable)
+            .then(|| self.candidates[self.fallback].plan.prequant_scale())
+            .flatten()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn execute_prequantized_residual_shared(
+        &mut self,
+        packed: &DeviceBuffer<u8>,
+        scales: &DeviceBuffer<u8>,
+        selected: &DeviceBuffer<u32>,
+        routing: &DeviceBuffer<bf16>,
+        residual: &DeviceBuffer<bf16>,
+        shared: &DeviceBuffer<bf16>,
+        output: &mut DeviceBuffer<bf16>,
+    ) -> Result<()> {
+        self.candidates[self.fallback].plan.execute_prequantized_residual_shared(
+            packed, scales, selected, routing, residual, shared, output,
+        )
     }
 
     fn select(
@@ -181,5 +199,17 @@ impl AutoNvFp4Experts {
         self.candidates.clear();
         self.candidates.push(selected);
         self.fallback = 0;
+    }
+}
+
+const fn fallback_execution(
+    phase: ExecutionPhase,
+    weight_only: bool,
+    planned: MoeExecution,
+) -> MoeExecution {
+    if weight_only && matches!(phase, ExecutionPhase::Decode) {
+        MoeExecution::SelectedWeightOnly
+    } else {
+        planned
     }
 }

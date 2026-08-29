@@ -17,6 +17,7 @@ mod embedding;
 use contract::{execution_contract, unsupported};
 pub use embedding::DirectFp8EmbeddingLookup;
 mod load;
+mod norm_gate;
 mod pack;
 mod storage;
 mod tuning;

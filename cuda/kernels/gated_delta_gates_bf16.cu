@@ -30,3 +30,15 @@ extern "C" __global__ void libmir_cuda_gated_delta_alpha_beta_bf16(
     beta[output] = __float2bfloat16_rn(beta_sum);
   }
 }
+
+extern "C" __global__ void libmir_cuda_gated_delta_split_alpha_beta_bf16(
+    const __nv_bfloat16* packed, __nv_bfloat16* alpha,
+    __nv_bfloat16* beta, unsigned int elements, unsigned int heads) {
+  const unsigned int index = blockIdx.x * blockDim.x + threadIdx.x;
+  if (index >= elements) return;
+  const unsigned int token = index / heads;
+  const unsigned int head = index % heads;
+  const unsigned int offset = token * 2 * heads;
+  alpha[index] = packed[offset + head];
+  beta[index] = packed[offset + heads + head];
+}

@@ -5,7 +5,7 @@ use models::weights::{
     TensorCatalog, TensorInfo, TensorStorage,
 };
 
-use crate::{Error, NvFp4ExpertSource, Result};
+use crate::{Error, NvFp4ExpertSource, NvFp4ScaleMode, Result};
 
 pub(super) struct LayerSource<'a> {
     pub tensors: Vec<&'a TensorInfo>,
@@ -97,6 +97,7 @@ fn expert_source<'a>(
         weight_scale: required(catalog, scales)?,
         weight_scale_2: required(catalog, global_scale)?,
         input_scale: required(catalog, input_scale)?,
+        scale_mode: NvFp4ScaleMode::from_names(global_scale, input_scale)?,
     })
 }
 

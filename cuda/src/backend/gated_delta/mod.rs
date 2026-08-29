@@ -16,6 +16,7 @@ mod checkpoint;
 mod convolution;
 mod layer;
 mod residency;
+pub(super) mod workspace;
 pub use batch::CudaGatedDeltaBatchState;
 pub use checkpoint::CudaGatedDeltaCheckpoint;
 pub use layer::{
@@ -121,32 +122,36 @@ impl CudaGatedDeltaState {
             self.decay = self.backend.inner.pool.allocate(&self.backend.inner.stream, gates)?;
             self.update = self.backend.inner.pool.allocate(&self.backend.inner.stream, gates)?;
         }
-        let operation = GatedDeltaRecurrence::compile(
-            &self.backend.inner.compiler,
-            GatedDeltaSpec {
-                tokens,
-                key_heads: self.config.key_heads,
-                value_heads: self.config.value_heads,
-                key_dim: self.config.key_dim,
-                value_dim: self.config.value_dim,
-            },
-        )?;
-        operation.execute(
-            &self.backend.inner.stream,
-            &mut GatedDeltaLaunch {
-                query: inputs.query,
-                key: inputs.key,
-                value: inputs.value,
-                alpha: inputs.alpha,
-                beta: inputs.beta,
-                a_log: inputs.a_log,
-                dt_bias: inputs.dt_bias,
-                decay: &mut self.decay,
-                update: &mut self.update,
-                state: &mut self.state,
-                output,
-            },
-        )?;
+        let spec = GatedDeltaSpec {
+            tokens,
+            key_heads: self.config.key_heads,
+            value_heads: self.config.value_heads,
+            key_dim: self.config.key_dim,
+            value_dim: self.config.value_dim,
+        };
+        let backend = self.backend.clone();
+        let mut launch = GatedDeltaLaunch {
+            query: inputs.query,
+            key: inputs.key,
+            value: inputs.value,
+            alpha: inputs.alpha,
+            beta: inputs.beta,
+            a_log: inputs.a_log,
+            dt_bias: inputs.dt_bias,
+            decay: &mut self.decay,
+            update: &mut self.update,
+            state: &mut self.state,
+            output,
+        };
+        if crate::kernels::GatedDeltaChunked::supports(
+            backend.inner.device.compute_capability,
+            spec,
+        ) {
+            backend.execute_gated_delta_chunked(spec, &mut launch)?;
+        } else {
+            GatedDeltaRecurrence::compile(&backend.inner.compiler, spec)?
+                .execute(&backend.inner.stream, &mut launch)?;
+        }
         self.offset = self
             .offset
             .checked_add(tokens)

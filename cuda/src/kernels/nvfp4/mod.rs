@@ -153,14 +153,16 @@ impl NvFp4Preparation {
         packed: &mut DeviceBuffer<u8>,
         scales: &mut DeviceBuffer<u8>,
     ) -> Result<()> {
+        const WARPS_PER_BLOCK: usize = 8;
         let elements = product(rows, columns)?;
         require("NVFP4 input", elements, input.len())?;
         require("NVFP4 input global scale", 1, global_scale.len())?;
         require("NVFP4 packed input", elements / 2, packed.len())?;
         require("NVFP4 input scales", scale_elements(rows, columns)?, scales.len())?;
+        let warps = (elements / 16).div_ceil(2);
         let config = LaunchConfig {
-            grid: (narrow(elements / 16)?, 1, 1),
-            block: (32, 1, 1),
+            grid: (narrow(warps.div_ceil(WARPS_PER_BLOCK))?, 1, 1),
+            block: (narrow(WARPS_PER_BLOCK * 32)?, 1, 1),
             shared_memory_bytes: 0,
         };
         Ok(self.quantize.launch(

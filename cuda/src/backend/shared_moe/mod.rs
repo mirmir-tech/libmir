@@ -1,4 +1,5 @@
 mod execution;
+mod gate_up;
 mod routed;
 mod scratch;
 #[cfg(all(test, target_os = "linux"))]

@@ -19,7 +19,7 @@ enum SharedRoutedLayerExecution {
     Full(Box<CudaAffineGatedFullAttentionMoeExecution>),
 }
 
-const RETAINED_PLAN_SHAPES: usize = 2;
+const RETAINED_PLAN_SHAPES: usize = 8;
 
 #[derive(Debug)]
 struct CachedExecutionPlan {

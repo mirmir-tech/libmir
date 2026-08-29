@@ -177,4 +177,32 @@ impl Plan {
             Self::MarlinWeightOnly(plan) => plan.execute(input, selected, routing, output),
         }
     }
+
+    pub(super) fn prequant_scale(&self) -> Option<DeviceBuffer<f32>> {
+        match self {
+            Self::Bucketed(plan) => plan.prequant_scale(),
+            _ => None,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn execute_prequantized_residual_shared(
+        &mut self,
+        packed: &DeviceBuffer<u8>,
+        scales: &DeviceBuffer<u8>,
+        selected: &DeviceBuffer<u32>,
+        routing: &DeviceBuffer<bf16>,
+        residual: &DeviceBuffer<bf16>,
+        shared: &DeviceBuffer<bf16>,
+        output: &mut DeviceBuffer<bf16>,
+    ) -> Result<()> {
+        let Self::Bucketed(plan) = self else {
+            return Err(crate::Error::InvalidExecutionPlan(
+                "NVFP4 expert plan cannot fuse routed output",
+            ));
+        };
+        plan.execute_prequantized_residual_shared(
+            packed, scales, selected, routing, residual, shared, output,
+        )
+    }
 }

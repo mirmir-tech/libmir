@@ -1,3 +1,5 @@
+mod api;
+mod buckets;
 mod moe;
 mod pair;
 mod projection;
@@ -10,9 +12,9 @@ use projection::BucketedNvFp4Projection;
 use scratch::ProjectionScratch;
 pub(in crate::backend) use scratch::{BucketedNvFp4Scratch, BucketedNvFp4ScratchConfig};
 
-use self::moe::ExpertBuckets;
+use self::buckets::ExpertBuckets;
 use super::{CudaBackend, NvFp4ExpertBank};
-use crate::{Error, Result, kernels::NvFp4BucketPreparation};
+use crate::{Error, GatedActivation, Result, kernels::NvFp4BucketPreparation};
 
 /// Expert-bucketed W4A4 projection with variable rows per CUTLASS group.
 #[derive(Debug)]
@@ -37,17 +39,32 @@ impl BucketedNvFp4LinearBf16 {
         Ok(Self { plan, projection })
     }
 
-    pub(super) fn execute_ranked(
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn execute_gated(
         &mut self,
         preparation: &NvFp4BucketPreparation,
         buckets: &ExpertBuckets,
-        input: &DeviceBuffer<bf16>,
+        gate: &DeviceBuffer<bf16>,
+        up: &DeviceBuffer<bf16>,
         selected: &DeviceBuffer<u32>,
+        activation: GatedActivation,
         output: &mut DeviceBuffer<bf16>,
         scratch: &mut ProjectionScratch,
     ) -> Result<()> {
-        self.projection
-            .quantize_ranked(preparation, buckets, input, selected, scratch)?;
+        preparation.quantize_gated(
+            &self.projection.stream,
+            gate,
+            up,
+            selected,
+            &buckets.order,
+            &buckets.offsets,
+            &buckets.scale_offsets,
+            &self.projection.bank.input_scales,
+            &mut scratch.packed,
+            &mut scratch.scales,
+            self.projection.quantize_geometry(true),
+            activation,
+        )?;
         self.execute_prepared(buckets, output, scratch)
     }
 

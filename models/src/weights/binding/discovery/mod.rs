@@ -122,7 +122,16 @@ fn bind(
             None => awq::storage(prefix, logical_shape.as_deref(), tensor, catalog, consumed)?,
         }
     } else if let Some(prefix) = tensor.name.strip_suffix(".weight_packed") {
-        packed_integer::storage(prefix, logical_shape.as_deref(), tensor, catalog, consumed)?
+        match block::nvfp4_packed_storage(prefix, catalog, consumed, hints.nvfp4) {
+            Some(storage) => storage,
+            None => packed_integer::storage(
+                prefix,
+                logical_shape.as_deref(),
+                tensor,
+                catalog,
+                consumed,
+            )?,
+        }
     } else if tensor.name.ends_with(".weight")
         || matches!(
             role,

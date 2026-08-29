@@ -15,6 +15,7 @@ mod bitsandbytes;
 mod float8;
 mod gptq;
 mod packed_integer;
+mod scalar;
 
 pub(super) fn validate(plan: &WeightBindingPlan, catalog: &TensorCatalog) -> Result<()> {
     unique_roles(plan)?;
@@ -163,13 +164,13 @@ fn block(
         return Err(invalid(&binding.source, "scale hierarchy differs from block contract"));
     }
     if let Some(global) = global_scale {
-        companion(catalog, global, &[])?;
+        scalar::companion(catalog, global)?;
         let expected =
             format.global_scale.ok_or_else(|| invalid(global, "unexpected global scale"))?;
         companion_dtype(catalog, global, expected.storage_dtype.as_str())?;
     }
     if let Some(input_scale) = input_scale {
-        companion(catalog, input_scale, &[])?;
+        scalar::companion(catalog, input_scale)?;
         let expected = format
             .input_scale
             .ok_or_else(|| invalid(input_scale, "unexpected input scale"))?;

@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use mircuda::{DeviceBuffer, bf16};
 
-use super::moe::ExpertBuckets;
+use super::buckets::ExpertBuckets;
 use crate::{CudaBackend, Error, Result, kernels::scale_elements};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -28,7 +28,6 @@ pub(in crate::backend) struct BucketedNvFp4Scratch {
     pub(super) down: ProjectionScratch,
     pub(super) gate_output: DeviceBuffer<bf16>,
     pub(super) up_output: DeviceBuffer<bf16>,
-    pub(super) intermediate: DeviceBuffer<bf16>,
     pub(super) down_output: DeviceBuffer<bf16>,
 }
 
@@ -69,7 +68,6 @@ impl BucketedNvFp4Scratch {
             )?,
             gate_output: allocate(backend, output(config.intermediate)?)?,
             up_output: allocate(backend, output(config.intermediate)?)?,
-            intermediate: allocate(backend, output(config.intermediate)?)?,
             down_output: allocate(backend, output(config.hidden)?)?,
         })
     }

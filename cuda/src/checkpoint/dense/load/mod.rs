@@ -9,8 +9,8 @@ use super::source::DenseLayerSource;
 use crate::{
     CudaBackend, CudaTensor, CudaTensorSet, DenseDownSource, DenseGateUpSource, DenseOutputSource,
     DenseQkvSource, DenseSwiGluLayerLoadConfig, DenseSwiGluLayerTemplate, DenseWeightSource, Error,
-    NvFp4Config, NvFp4LinearWeight, NvFp4Tensors, PackedIntegerWeight, ProjectionFormat, Result,
-    checkpoint::model::payload_bytes,
+    NvFp4Config, NvFp4LinearWeight, NvFp4ScaleMode, NvFp4Tensors, PackedIntegerWeight,
+    ProjectionFormat, Result, checkpoint::model::payload_bytes,
 };
 
 mod direct_fp8;
@@ -221,6 +221,7 @@ fn nvfp4_weight(
             weight_scale: tensor(tensors, scales)?,
             weight_scale_2: tensor(tensors, global_scale)?,
             input_scale: tensor(tensors, input_scale)?,
+            scale_mode: NvFp4ScaleMode::from_names(global_scale, input_scale)?,
         },
     )
 }

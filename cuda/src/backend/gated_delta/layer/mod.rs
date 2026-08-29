@@ -1,4 +1,5 @@
 mod batch;
+mod convolution;
 mod execution;
 mod gates;
 mod scratch;
@@ -11,7 +12,7 @@ use models::layout::LinearAttentionConfig;
 pub use weights::AffineGatedDeltaLayerWeights;
 
 use super::{CudaGatedDeltaState, GatedDeltaStateConfig};
-use crate::{CudaBackend, CudaTensorSet, Error, Result};
+use crate::{Bf16LinearPairWeights, CudaBackend, CudaTensorSet, Error, Result};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AffineGatedDeltaLayerConfig {
@@ -120,6 +121,7 @@ pub struct CudaAffineGatedDeltaLayer {
     config: AffineGatedDeltaLayerConfig,
     weights: AffineGatedDeltaLayerWeights,
     packed_qkv_gate: Option<crate::backend::linear::CheckpointProjectionWeight>,
+    packed_alpha_beta: Option<Bf16LinearPairWeights>,
 }
 
 impl CudaAffineGatedDeltaLayer {
@@ -143,11 +145,18 @@ impl CudaAffineGatedDeltaLayer {
             backend,
             [&weights.qkv, &weights.gate],
         )?;
+        let packed_alpha_beta = weights
+            .alpha
+            .dense_bf16()
+            .zip(weights.beta.dense_bf16())
+            .map(|(alpha, beta)| backend.pack_bf16_linear_pair(alpha, beta))
+            .transpose()?;
         Ok(Self {
             backend: backend.clone(),
             config,
             weights,
             packed_qkv_gate,
+            packed_alpha_beta,
         })
     }
 
@@ -157,6 +166,7 @@ impl CudaAffineGatedDeltaLayer {
             self.config,
             &self.weights,
             self.packed_qkv_gate.as_ref(),
+            self.packed_alpha_beta.as_ref(),
             tokens,
         )
     }

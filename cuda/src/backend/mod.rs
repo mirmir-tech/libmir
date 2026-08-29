@@ -47,6 +47,7 @@ pub use dense::{
     DenseSwiGluWeights, DenseWeightSource, PrefillDenseSwiGlu,
 };
 pub use embedding::{AffineQuantizedEmbedding, Bf16Embedding};
+use gated_delta::workspace::CudaGatedDeltaWorkspace;
 pub use gated_delta::{
     AffineGatedDeltaLayerConfig, AffineGatedDeltaLayerWeights, CudaAffineGatedDeltaExecution,
     CudaAffineGatedDeltaLayer, CudaGatedDeltaState, GatedDeltaInputs, GatedDeltaStateConfig,
@@ -77,7 +78,7 @@ pub use linear::{
     MxFp4GatheredBf16Linear, MxFp4GatheredMoeBf16, MxFp8Bf16Linear, MxFp8CheckpointWeight,
     MxFp8EmbeddingLookup, MxFp8ExpertWeights, MxFp8GatheredBf16Linear, MxFp8GatheredMoeBf16,
     NvFp4Bf16Linear, NvFp4Bf16Pack, NvFp4Config, NvFp4ExpertBank, NvFp4ExpertBankConfig,
-    NvFp4ExpertSource, NvFp4LinearWeight, NvFp4Tensors, NvFp4WeightOnlyBf16Linear,
+    NvFp4ExpertSource, NvFp4LinearWeight, NvFp4ScaleMode, NvFp4Tensors, NvFp4WeightOnlyBf16Linear,
     NvFp4WeightOnlyWeight, PackedIntegerBf16Linear, PackedIntegerWeight, ProjectionFormat,
     SelectedAffineGatedBf16Linear, SelectedAffinePairBf16Linear, SelectedAffineReduceBf16Linear,
     SelectedNvFp4LinearBf16, SelectedNvFp4MoeBf16, SelectedNvFp4TensorCoreMoeBf16,
@@ -135,6 +136,7 @@ struct CudaRuntime {
         Mutex<HashMap<BucketedNvFp4ScratchConfig, std::sync::Weak<Mutex<BucketedNvFp4Scratch>>>>,
     nvfp4_marlin_scratch:
         Mutex<HashMap<MarlinNvFp4ScratchConfig, std::sync::Weak<Mutex<MarlinNvFp4Scratch>>>>,
+    gated_delta_workspace: Mutex<Option<CudaGatedDeltaWorkspace>>,
     planner: CudaExecutionPlanner,
     tuner: tuning::CudaAutoTuner,
 }

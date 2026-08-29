@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{
     Error, Result,
-    kernels::{GatedActivation, NvFp4Gated, NvFp4Preparation, NvFp4Spec, scale_elements},
+    kernels::{NvFp4Gated, NvFp4Preparation, NvFp4Spec, scale_elements},
 };
 
 mod pack;
@@ -102,7 +102,7 @@ impl NativeNvFp4 {
         &mut self,
         gate: &DeviceBuffer<bf16>,
         up: &DeviceBuffer<bf16>,
-        activation: GatedActivation,
+        activation: crate::kernels::GatedActivation,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
         self.gated.execute(
@@ -157,8 +157,12 @@ impl NativeNvFp4Weight {
             &mut weight,
             &mut weight_scales,
         )?;
-        let input_global = read_scalar(backend, f32_tensor(tensors.input_scale)?)?;
-        let weight_global = read_scalar(backend, f32_tensor(tensors.weight_scale_2)?)?;
+        let input_global = tensors
+            .scale_mode
+            .multiplier(read_scalar(backend, f32_tensor(tensors.input_scale)?)?)?;
+        let weight_global = tensors
+            .scale_mode
+            .multiplier(read_scalar(backend, f32_tensor(tensors.weight_scale_2)?)?)?;
         Ok(Self {
             weight,
             weight_scales,

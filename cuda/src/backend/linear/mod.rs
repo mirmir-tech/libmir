@@ -43,7 +43,7 @@ pub use mxfp8::{
 pub use nvfp4::{
     BucketedNvFp4MoeBf16, DirectNvFp4MoeBf16, GroupedNvFp4MoeBf16, HybridNvFp4MoeBf16,
     NvFp4Bf16Linear, NvFp4Bf16Pack, NvFp4Config, NvFp4ExpertBank, NvFp4ExpertBankConfig,
-    NvFp4ExpertSource, NvFp4LinearWeight, NvFp4Tensors, NvFp4WeightOnlyBf16Linear,
+    NvFp4ExpertSource, NvFp4LinearWeight, NvFp4ScaleMode, NvFp4Tensors, NvFp4WeightOnlyBf16Linear,
     NvFp4WeightOnlyWeight, SelectedNvFp4LinearBf16, SelectedNvFp4MoeBf16,
     SelectedNvFp4TensorCoreMoeBf16,
 };

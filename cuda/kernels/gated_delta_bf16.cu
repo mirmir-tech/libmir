@@ -1,5 +1,96 @@
 #include <cuda_bf16.h>
 
+__device__ __forceinline__ __nv_bfloat16 libmir_gated_delta_convolve_silu(
+    const __nv_bfloat16* input, const __nv_bfloat16* weight,
+    const __nv_bfloat16* history, unsigned int token, unsigned int channel,
+    unsigned int channels, unsigned int kernel_size,
+    unsigned int input_stride, unsigned int input_offset) {
+  float sum = 0.0f;
+  for (unsigned int kernel = 0; kernel < kernel_size; ++kernel) {
+    const unsigned int position = token + kernel;
+    const float source = position < kernel_size - 1u
+        ? __bfloat162float(history[position * channels + channel])
+        : __bfloat162float(input[(position - kernel_size + 1u) * input_stride +
+                                input_offset + channel]);
+    sum += source * __bfloat162float(weight[channel * kernel_size + kernel]);
+  }
+  return __float2bfloat16_rn(sum / (1.0f + __expf(-sum)));
+}
+
+extern "C" __global__ void
+libmir_cuda_gated_delta_convolution_split_normalize_128_bf16(
+    const __nv_bfloat16* input, const __nv_bfloat16* weight,
+    const __nv_bfloat16* history, __nv_bfloat16* normalized_query,
+    __nv_bfloat16* normalized_key, __nv_bfloat16* value,
+    unsigned int tokens, unsigned int key_heads, unsigned int value_heads,
+    unsigned int value_dim, unsigned int kernel_size,
+    unsigned int input_stride, unsigned int input_offset, float epsilon) {
+  constexpr unsigned int key_dim = 128u;
+  const unsigned int row = blockIdx.x;
+  if (row >= tokens * key_heads) return;
+  const unsigned int token = row / key_heads;
+  const unsigned int head = row % key_heads;
+  const unsigned int column = threadIdx.x;
+  const unsigned int key_width = key_heads * key_dim;
+  const unsigned int value_width = value_heads * value_dim;
+  const unsigned int channels = 2u * key_width + value_width;
+  const unsigned int query_channel = head * key_dim + column;
+  const unsigned int key_channel = key_width + query_channel;
+  const __nv_bfloat16 query = libmir_gated_delta_convolve_silu(
+      input, weight, history, token, query_channel, channels, kernel_size,
+      input_stride, input_offset);
+  const __nv_bfloat16 key = libmir_gated_delta_convolve_silu(
+      input, weight, history, token, key_channel, channels, kernel_size,
+      input_stride, input_offset);
+  float query_sum = __bfloat162float(query);
+  query_sum *= query_sum;
+  float key_sum = __bfloat162float(key);
+  key_sum *= key_sum;
+  for (int delta = 16; delta > 0; delta >>= 1) {
+    query_sum += __shfl_down_sync(0xffffffffu, query_sum, delta);
+    key_sum += __shfl_down_sync(0xffffffffu, key_sum, delta);
+  }
+  __shared__ float query_warps[4];
+  __shared__ float key_warps[4];
+  const unsigned int lane = column % 32u;
+  const unsigned int warp = column / 32u;
+  if (lane == 0u) {
+    query_warps[warp] = query_sum;
+    key_warps[warp] = key_sum;
+  }
+  const unsigned int heads_per_key = value_heads / key_heads;
+  const unsigned int head_values = heads_per_key * value_dim;
+  for (unsigned int local = column; local < head_values; local += blockDim.x) {
+    const unsigned int value_column = head * head_values + local;
+    value[token * value_width + value_column] = libmir_gated_delta_convolve_silu(
+        input, weight, history, token, 2u * key_width + value_column,
+        channels, kernel_size, input_stride, input_offset);
+  }
+  __syncthreads();
+  if (warp == 0u) {
+    query_sum = lane < 4u ? query_warps[lane] : 0.0f;
+    key_sum = lane < 4u ? key_warps[lane] : 0.0f;
+    for (int delta = 16; delta > 0; delta >>= 1) {
+      query_sum += __shfl_down_sync(0xffffffffu, query_sum, delta);
+      key_sum += __shfl_down_sync(0xffffffffu, key_sum, delta);
+    }
+    if (lane == 0u) {
+      query_warps[0] = rsqrtf(query_sum / key_dim + epsilon);
+      key_warps[0] = rsqrtf(key_sum / key_dim + epsilon);
+    }
+  }
+  __syncthreads();
+  const unsigned int output_index = row * key_dim + column;
+  const __nv_bfloat16 query_unit = __float2bfloat16_rn(
+      __bfloat162float(query) * query_warps[0]);
+  const __nv_bfloat16 key_unit = __float2bfloat16_rn(
+      __bfloat162float(key) * key_warps[0]);
+  normalized_query[output_index] = __float2bfloat16_rn(
+      __bfloat162float(query_unit) / static_cast<float>(key_dim));
+  normalized_key[output_index] = __float2bfloat16_rn(
+      __bfloat162float(key_unit) * rsqrtf(static_cast<float>(key_dim)));
+}
+
 extern "C" __global__ void libmir_cuda_gated_delta_convolution_bf16(
     const __nv_bfloat16* input, const __nv_bfloat16* weight,
     const __nv_bfloat16* history, __nv_bfloat16* output,
@@ -85,6 +176,22 @@ extern "C" __global__ void libmir_cuda_gated_delta_parameters_bf16(
   const float softplus = fmaxf(parameter, 0.0f)
       + log1pf(expf(-fabsf(parameter)));
   decay[index] = expf(-expf(__bfloat162float(a_log[head])) * softplus);
+  update[index] = 1.0f / (1.0f + expf(-__bfloat162float(beta[index])));
+}
+
+extern "C" __global__ void libmir_cuda_gated_delta_log_parameters_bf16(
+    const __nv_bfloat16* alpha, const __nv_bfloat16* beta,
+    const __nv_bfloat16* a_log, const __nv_bfloat16* dt_bias,
+    float* log_decay, float* update, unsigned int tokens,
+    unsigned int value_heads) {
+  const unsigned int index = blockIdx.x * blockDim.x + threadIdx.x;
+  if (index >= tokens * value_heads) return;
+  const unsigned int head = index % value_heads;
+  const float parameter = __bfloat162float(alpha[index])
+      + __bfloat162float(dt_bias[head]);
+  const float softplus = fmaxf(parameter, 0.0f)
+      + log1pf(expf(-fabsf(parameter)));
+  log_decay[index] = -expf(__bfloat162float(a_log[head])) * softplus;
   update[index] = 1.0f / (1.0f + expf(-__bfloat162float(beta[index])));
 }
 

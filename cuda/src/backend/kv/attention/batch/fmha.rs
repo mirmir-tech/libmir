@@ -20,7 +20,7 @@ pub(super) struct PagedFmhaDecode {
     num_splits: usize,
 }
 
-const MAX_SPLITS: usize = 4;
+const MAX_SPLITS: usize = 32;
 
 impl PagedFmhaDecode {
     pub(super) fn prepare(
@@ -152,7 +152,7 @@ impl PagedFmhaDecode {
     ) -> Result<()> {
         let mut selected = 1;
         let mut selected_ms = f32::INFINITY;
-        for candidate in [1, 2, 4] {
+        for candidate in [1, 2, 4, 8, 16, 32] {
             self.execute_with_splits(query, cache, batch, output, scale, candidate)?;
             let started = self.context.create_event(true)?;
             let completed = self.context.create_event(true)?;

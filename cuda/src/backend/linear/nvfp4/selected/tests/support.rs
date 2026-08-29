@@ -125,6 +125,7 @@ fn sources<'a>(catalog: &'a TensorCatalog, projection: &str) -> Result<Vec<NvFp4
                 weight_scale: required(catalog, &format!("{prefix}.weight_scale"))?,
                 weight_scale_2: required(catalog, &format!("{prefix}.weight_scale_2"))?,
                 input_scale: required(catalog, &format!("{prefix}.input_scale"))?,
+                scale_mode: crate::NvFp4ScaleMode::Multiplier,
             })
         })
         .collect()

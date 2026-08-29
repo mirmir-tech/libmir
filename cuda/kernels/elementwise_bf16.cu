@@ -103,3 +103,26 @@ extern "C" __global__ void libmir_cuda_weighted_reduce_bucketed_bf16(
   }
   output[index] = __float2bfloat16_rn(sum);
 }
+
+extern "C" __global__ void libmir_cuda_weighted_reduce_bucketed_residual_shared_bf16(
+    const __nv_bfloat16* input, const __nv_bfloat16* weights,
+    const unsigned int* positions, const __nv_bfloat16* residual,
+    const __nv_bfloat16* shared, __nv_bfloat16* output,
+    unsigned int rows, unsigned int columns, unsigned int tokens) {
+  const unsigned int index = blockIdx.x * blockDim.x + threadIdx.x;
+  if (index >= tokens * columns) return;
+  const unsigned int token = index / columns;
+  const unsigned int column = index % columns;
+  float sum = 0.0f;
+  for (unsigned int row = 0u; row < rows; ++row) {
+    const unsigned int assignment = token * rows + row;
+    const unsigned int compact = positions[assignment];
+    sum += __bfloat162float(input[compact * columns + column]) *
+           __bfloat162float(weights[assignment]);
+  }
+  const __nv_bfloat16 routed = __float2bfloat16_rn(sum);
+  const __nv_bfloat16 moe = __float2bfloat16_rn(
+      __bfloat162float(routed) + __bfloat162float(shared[index]));
+  output[index] = __float2bfloat16_rn(
+      __bfloat162float(residual[index]) + __bfloat162float(moe));
+}

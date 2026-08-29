@@ -2,15 +2,17 @@ use mircuda::{DeviceBuffer, bf16};
 
 use super::{
     AffineGatedDeltaLayerConfig, AffineGatedDeltaLayerWeights, CudaGatedDeltaState,
-    gates::prepare_dense_alpha_beta, require_exact, scratch::GatedDeltaScratch,
+    gates::{DenseAlphaBeta, prepare_dense_alpha_beta},
+    require_exact,
+    scratch::GatedDeltaScratch,
 };
 use crate::{
     CudaBackend, DenseRole, Error, GatedDeltaInputs, Result,
     backend::{
         gated_delta::CudaGatedDeltaBatchState,
-        linear::{CheckpointProjection, CheckpointProjectionWeight},
+        linear::{Bf16LinearPairWeights, CheckpointProjection, CheckpointProjectionWeight},
     },
-    kernels::{GatedDeltaAlphaBeta, GatedDeltaTransformSpec, GatedDeltaTransforms},
+    kernels::{GatedDeltaTransformSpec, GatedDeltaTransforms},
 };
 
 #[derive(Debug)]
@@ -18,12 +20,12 @@ pub struct CudaAffineGatedDeltaExecution {
     pub(super) backend: CudaBackend,
     pub(super) config: AffineGatedDeltaLayerConfig,
     pub(super) tokens: usize,
-    qkv: Option<CheckpointProjection>,
-    gate: Option<CheckpointProjection>,
-    packed_qkv_gate: Option<CheckpointProjection>,
+    pub(super) qkv: Option<CheckpointProjection>,
+    pub(super) gate: Option<CheckpointProjection>,
+    pub(super) packed_qkv_gate: Option<CheckpointProjection>,
     pub(super) alpha: Option<CheckpointProjection>,
     pub(super) beta: Option<CheckpointProjection>,
-    pub(super) dense_alpha_beta: Option<GatedDeltaAlphaBeta>,
+    pub(super) dense_alpha_beta: Option<DenseAlphaBeta>,
     pub(super) output: CheckpointProjection,
     pub(super) transforms: GatedDeltaTransforms,
     pub(super) weights: AffineGatedDeltaLayerWeights,
@@ -37,6 +39,7 @@ impl CudaAffineGatedDeltaExecution {
         config: AffineGatedDeltaLayerConfig,
         weights: &AffineGatedDeltaLayerWeights,
         packed_qkv_gate: Option<&CheckpointProjectionWeight>,
+        packed_alpha_beta: Option<&Bf16LinearPairWeights>,
         tokens: usize,
     ) -> Result<Self> {
         let projection = |input, output, weights| {
@@ -66,7 +69,9 @@ impl CudaAffineGatedDeltaExecution {
                 )
             })
             .transpose()?;
-        let dense_alpha_beta = prepare_dense_alpha_beta(backend, config, weights, tokens)?;
+        let dense_alpha_beta =
+            prepare_dense_alpha_beta(backend, config, weights, packed_alpha_beta, tokens)?;
+        let paired_alpha_beta = dense_alpha_beta.as_ref().is_some_and(DenseAlphaBeta::paired);
         Ok(Self {
             backend: backend.clone(),
             config,
@@ -112,7 +117,13 @@ impl CudaAffineGatedDeltaExecution {
                 },
             )?,
             weights: weights.clone(),
-            scratch: GatedDeltaScratch::new(backend, config, tokens, packed_qkv_gate.is_some())?,
+            scratch: GatedDeltaScratch::new(
+                backend,
+                config,
+                tokens,
+                packed_qkv_gate.is_some(),
+                paired_alpha_beta,
+            )?,
             batch_state: None,
         })
     }
@@ -126,36 +137,8 @@ impl CudaAffineGatedDeltaExecution {
         self.validate(input, state, output)?;
         let packed = self.project_qkv_gate(input)?;
         self.project_alpha_beta(input)?;
+        self.convolve_projected(state, packed)?;
         let stream = &self.backend.inner.stream;
-        if packed {
-            let source = self
-                .scratch
-                .packed_qkv_gate
-                .as_ref()
-                .ok_or(Error::InvalidExecutionPlan("packed Gated Delta output is missing"))?;
-            state.convolve_silu_strided(
-                self.tokens,
-                source,
-                bf16(&self.weights.convolution)?,
-                &mut self.scratch.convolved,
-                self.config.mixed_width()? + self.config.value_width()?,
-                0,
-            )?;
-        } else {
-            state.convolve_silu(
-                self.tokens,
-                &self.scratch.mixed,
-                bf16(&self.weights.convolution)?,
-                &mut self.scratch.convolved,
-            )?;
-        }
-        self.transforms.split_normalize(
-            stream,
-            &self.scratch.convolved,
-            &mut self.scratch.normalized_query,
-            &mut self.scratch.normalized_key,
-            &mut self.scratch.value,
-        )?;
         state.execute(
             self.tokens,
             GatedDeltaInputs {
@@ -169,6 +152,33 @@ impl CudaAffineGatedDeltaExecution {
             },
             &mut self.scratch.recurrent,
         )?;
+        let (gate, gate_stride, gate_offset) = if packed {
+            (
+                self.scratch
+                    .packed_qkv_gate
+                    .as_ref()
+                    .ok_or(Error::InvalidExecutionPlan("packed Gated Delta output is missing"))?,
+                self.config.mixed_width()? + self.config.value_width()?,
+                self.config.mixed_width()?,
+            )
+        } else {
+            (&self.scratch.gate, self.config.value_width()?, 0)
+        };
+        if self.config.value_dim == 128
+            && self.output.execute_norm_gate(
+                &self.scratch.recurrent,
+                gate,
+                bf16(&self.weights.norm)?,
+                self.config.rms_norm_epsilon,
+                self.config.norm_weight_shift,
+                self.config.value_heads,
+                gate_stride,
+                gate_offset,
+                output,
+            )?
+        {
+            return Ok(());
+        }
         if packed {
             self.transforms.norm_gate_strided(
                 stream,
@@ -194,29 +204,6 @@ impl CudaAffineGatedDeltaExecution {
         self.output.execute(&self.scratch.gated, output)
     }
 
-    pub(super) fn project_qkv_gate(&mut self, input: &DeviceBuffer<bf16>) -> Result<bool> {
-        match (&mut self.packed_qkv_gate, &mut self.scratch.packed_qkv_gate) {
-            (Some(projection), Some(packed)) => {
-                projection.execute(input, packed)?;
-                Ok(true)
-            },
-            (None, None) => {
-                self.qkv
-                    .as_mut()
-                    .ok_or(Error::InvalidExecutionPlan("Gated Delta QKV projection is missing"))?
-                    .execute(input, &mut self.scratch.mixed)?;
-                self.gate
-                    .as_mut()
-                    .ok_or(Error::InvalidExecutionPlan("Gated Delta gate projection is missing"))?
-                    .execute(input, &mut self.scratch.gate)?;
-                Ok(false)
-            },
-            _ => Err(Error::InvalidExecutionPlan(
-                "Gated Delta packed projection contract is incomplete",
-            )),
-        }
-    }
-
     pub(super) fn validate(
         &self,
         input: &DeviceBuffer<bf16>,
@@ -239,7 +226,7 @@ impl CudaAffineGatedDeltaExecution {
     }
 }
 
-fn bf16(tensor: &crate::CudaTensor) -> Result<&DeviceBuffer<bf16>> {
+pub(super) fn bf16(tensor: &crate::CudaTensor) -> Result<&DeviceBuffer<bf16>> {
     tensor.as_bf16().ok_or_else(|| Error::DTypeMismatch {
         name: tensor.name().into(),
         expected: "BF16",

@@ -88,4 +88,34 @@ impl Experts {
             )),
         }
     }
+
+    pub(in crate::backend) fn nvfp4_prequant_scale(&self) -> Option<DeviceBuffer<f32>> {
+        match self {
+            Self::NvFp4(experts) => experts.prequant_scale(),
+            Self::Dense { .. } => None,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::backend) fn execute_nvfp4_prequantized_residual_shared(
+        &mut self,
+        packed: &DeviceBuffer<u8>,
+        scales: &DeviceBuffer<u8>,
+        selected: &DeviceBuffer<u32>,
+        routing: &DeviceBuffer<bf16>,
+        weights: &ExpertWeights,
+        residual: &DeviceBuffer<bf16>,
+        shared: &DeviceBuffer<bf16>,
+        output: &mut DeviceBuffer<bf16>,
+    ) -> Result<()> {
+        match (self, weights) {
+            (Self::NvFp4(experts), ExpertWeights::NvFp4 { .. }) => experts
+                .execute_prequantized_residual_shared(
+                    packed, scales, selected, routing, residual, shared, output,
+                ),
+            _ => Err(Error::InvalidExecutionPlan(
+                "fused routed-expert output differs from layer storage",
+            )),
+        }
+    }
 }

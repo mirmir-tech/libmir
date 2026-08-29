@@ -1,13 +1,15 @@
 use mircuda::{DeviceBuffer, Event, Stream, bf16};
 
 use super::{
-    AffineSharedExpertMoeConfig, AffineSharedExpertMoeWeights, routed::SharedRoutedExecution,
+    AffineSharedExpertMoeConfig, AffineSharedExpertMoeWeights,
+    gate_up::{SharedGateUp, prepare_shared_gate_up},
+    routed::SharedRoutedExecution,
     scratch::AffineSharedMoeScratch,
 };
 use crate::{
     CudaBackend, DenseRole, Error, ExecutionPhase, Result,
-    backend::linear::{CheckpointProjection, CheckpointProjectionWeight, MarlinNvFp4Bf16Linear},
-    kernels::{ElementwiseBf16, SigmoidMultiplyBf16},
+    backend::linear::CheckpointProjection,
+    kernels::{ElementwiseBf16, ShiftedRmsNorm, SigmoidMultiplyBf16},
 };
 
 #[derive(Debug)]
@@ -32,15 +34,6 @@ struct ParallelSharedExpert {
     stream: Stream,
     input_ready: Event,
     output_ready: Event,
-}
-
-#[derive(Debug)]
-enum SharedGateUp {
-    Separate {
-        gate: Box<CheckpointProjection>,
-        up: Box<CheckpointProjection>,
-    },
-    PackedNvFp4(MarlinNvFp4Bf16Linear),
 }
 
 impl CudaAffineSharedExpertMoeExecution {
@@ -143,6 +136,64 @@ impl CudaAffineSharedExpertMoeExecution {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn execute_residual_norm(
+        &mut self,
+        norm: &ShiftedRmsNorm,
+        input: &DeviceBuffer<bf16>,
+        update: &DeviceBuffer<bf16>,
+        weight: &DeviceBuffer<bf16>,
+        residual: &mut DeviceBuffer<bf16>,
+        normalized: &mut DeviceBuffer<bf16>,
+        moe_output: &mut DeviceBuffer<bf16>,
+        output: &mut DeviceBuffer<bf16>,
+        residual_add: &ElementwiseBf16,
+    ) -> Result<()> {
+        let scale = self.parallel.is_none().then(|| self.routed.nvfp4_prequant_scale()).flatten();
+        let Some(scale) = scale else {
+            norm.execute_residual(
+                &self.backend.inner.stream,
+                input,
+                update,
+                weight,
+                residual,
+                normalized,
+            )?;
+            self.execute(normalized, moe_output)?;
+            return residual_add.add(&self.backend.inner.stream, residual, moe_output, output);
+        };
+        {
+            let prequant = self.scratch.nvfp4_input.as_mut().ok_or(Error::InvalidExecutionPlan(
+                "NVFP4 prequantized input scratch is unavailable",
+            ))?;
+            norm.execute_residual_nvfp4(
+                &self.backend.inner.stream,
+                input,
+                update,
+                weight,
+                &scale,
+                residual,
+                normalized,
+                &mut prequant.packed,
+                &mut prequant.scales,
+            )?;
+        }
+        self.shared(normalized)?;
+        let prequant = self.scratch.nvfp4_input.as_ref().ok_or(Error::InvalidExecutionPlan(
+            "NVFP4 prequantized input scratch is unavailable",
+        ))?;
+        self.routed.execute_nvfp4_prequantized_residual_shared(
+            &self.backend,
+            &self.weights,
+            normalized,
+            &prequant.packed,
+            &prequant.scales,
+            residual,
+            &self.scratch.gated_shared_output,
+            output,
+        )
+    }
+
     fn shared(&mut self, input: &DeviceBuffer<bf16>) -> Result<()> {
         let stream = self
             .parallel
@@ -193,38 +244,4 @@ impl CudaAffineSharedExpertMoeExecution {
         }
         Ok(())
     }
-}
-
-fn prepare_shared_gate_up(
-    backend: &CudaBackend,
-    config: AffineSharedExpertMoeConfig,
-    weights: &AffineSharedExpertMoeWeights,
-    tokens: usize,
-) -> Result<SharedGateUp> {
-    if let (
-        CheckpointProjectionWeight::NvFp4WeightOnly(gate),
-        CheckpointProjectionWeight::NvFp4WeightOnly(up),
-    ) = (&weights.shared_gate, &weights.shared_up)
-        && let Some(operation) = MarlinNvFp4Bf16Linear::new_pair(backend, tokens, gate, up)?
-    {
-        return Ok(SharedGateUp::PackedNvFp4(operation));
-    }
-    Ok(SharedGateUp::Separate {
-        gate: Box::new(CheckpointProjection::new(
-            backend,
-            tokens,
-            config.hidden_size,
-            config.shared_intermediate_size,
-            DenseRole::DenseGateUp,
-            &weights.shared_gate,
-        )?),
-        up: Box::new(CheckpointProjection::new(
-            backend,
-            tokens,
-            config.hidden_size,
-            config.shared_intermediate_size,
-            DenseRole::DenseGateUp,
-            &weights.shared_up,
-        )?),
-    })
 }
