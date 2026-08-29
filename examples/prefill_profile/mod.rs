@@ -39,6 +39,7 @@ impl Config {
         })
     }
 
+    #[cfg_attr(not(feature = "cuda"), allow(clippy::unused_self))]
     pub fn runtime(&self) -> RuntimeConfig {
         let runtime = RuntimeConfig {
             automatic_kv_cache: true,

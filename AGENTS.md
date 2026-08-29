@@ -44,6 +44,10 @@ The target shape is:
   reason to opt out.
 - Imports are grouped and ordered by `rustfmt.toml`; do not hand-format `use`
   groups against formatter output.
+- Keep domain states, stages, units, outcomes, and error codes typed throughout
+  runtime and public contracts. Convert them to stable strings only at protocol,
+  serialization, persistence, logging, or UI boundaries. Never infer state from
+  display strings or duplicate enum-to-string mappings across consumers.
 
 ## Sliding KV Cache Invariants
 
