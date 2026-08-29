@@ -12,12 +12,8 @@ use crate::Result;
 
 mod cohort;
 mod profile;
-#[cfg(feature = "metal")]
-mod progress;
 pub use cohort::EnginePrefillCohort;
 pub use profile::PrefillExecutionProfile;
-#[cfg(feature = "metal")]
-use progress::metal_progress;
 
 #[cfg(feature = "metal")]
 const METAL_COMPLETION_ROUND_ROWS: usize = 4;
@@ -146,10 +142,9 @@ impl Engine {
             },
             #[cfg(feature = "metal")]
             EngineInner::Metal(metal) => {
-                let mut mapped = |row, event| progress(row, metal_progress(event));
                 let cohort = cohort.and_then(|cohort| cohort.metal.as_ref());
                 Ok(EnginePrefillBatch::Metal(
-                    metal.prepare_prefill_batch(requests, cohort, &mut mapped)?,
+                    metal.prepare_prefill_batch(requests, cohort, progress)?,
                 ))
             },
         }
@@ -200,12 +195,11 @@ impl Engine {
                     #[cfg(feature = "cuda")]
                     Some(EnginePrefillBatch::Cuda(_)) => return Err(batch_backend_mismatch()),
                 };
-                let mut mapped = |row, event| progress(row, metal_progress(event));
                 let output = metal.execute_generation_step(
                     request.as_ref(),
                     batch.as_deref(),
                     prefill_budget,
-                    &mut mapped,
+                    progress,
                 )?;
                 Ok(EngineGenerationStepOutput {
                     decode: output.decode,

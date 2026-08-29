@@ -30,14 +30,11 @@ impl Engine {
             #[cfg(feature = "cuda")]
             EngineInner::Cuda(cuda) => Ok(cuda.load_model_with_progress(manifest, progress)?),
             #[cfg(feature = "metal")]
-            EngineInner::Metal(metal) => {
-                let mut mapped = |event| progress(super::metal_progress(event));
-                match (reserved_bytes, cache) {
-                    (Some(bytes), Some(cache)) => metal.load_model_with_progress_and_reservation(
-                        manifest, bytes, cache, &mut mapped,
-                    ),
-                    _ => metal.load_model_with_progress(manifest, &mut mapped),
-                }
+            EngineInner::Metal(metal) => match (reserved_bytes, cache) {
+                (Some(bytes), Some(cache)) => {
+                    metal.load_model_with_progress_and_reservation(manifest, bytes, cache, progress)
+                },
+                _ => metal.load_model_with_progress(manifest, progress),
             },
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
             EngineInner::Unavailable => super::unavailable(),

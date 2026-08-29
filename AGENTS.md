@@ -48,6 +48,9 @@ The target shape is:
   runtime and public contracts. Convert them to stable strings only at protocol,
   serialization, persistence, logging, or UI boundaries. Never infer state from
   display strings or duplicate enum-to-string mappings across consumers.
+- Typed models must make invalid states unrepresentable. Do not replace related
+  strings with parallel enums, booleans, and optional fields that can contradict
+  one another. Wrapper enums must add domain semantics, not merely rename values.
 
 ## Sliding KV Cache Invariants
 

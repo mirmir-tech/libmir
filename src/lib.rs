@@ -51,7 +51,7 @@ pub use runtime::{
     },
     kv::{CacheStats, KvCacheDType},
     metrics::GenerationMetrics,
-    progress::{ProgressEvent, ProgressStage, ProgressUnit},
+    progress::{ProgressCount, ProgressEvent, ProgressStage, ProgressUnit},
 };
 pub use session::Session;
 pub use telemetry::DeviceTelemetrySnapshot;

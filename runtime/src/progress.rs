@@ -16,68 +16,118 @@ pub enum ProgressUnit {
     Token,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProgressCount {
+    current: u64,
+    total: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProgressEvent {
-    pub stage: ProgressStage,
-    pub current: u64,
-    pub total: u64,
-    pub unit: ProgressUnit,
-    pub detail: String,
+pub enum ProgressEvent {
+    LoadWeights { count: ProgressCount, detail: String },
+    InitializeRuntime { count: ProgressCount, detail: String },
+    Warmup { count: ProgressCount, detail: String },
+    PrefillTokens { count: ProgressCount, detail: String },
+    DecodeTokens { count: ProgressCount, detail: String },
+}
+
+impl ProgressCount {
+    #[must_use]
+    pub const fn new(current: u64, total: u64) -> Self {
+        Self { current, total }
+    }
+
+    #[must_use]
+    pub const fn current(self) -> u64 {
+        self.current
+    }
+
+    #[must_use]
+    pub const fn total(self) -> u64 {
+        self.total
+    }
 }
 
 impl ProgressEvent {
     #[must_use]
     pub fn load_weights(current: u64, total: u64, detail: impl Into<String>) -> Self {
-        Self {
-            stage: ProgressStage::LoadWeights,
-            current,
-            total,
-            unit: ProgressUnit::Byte,
+        Self::LoadWeights {
+            count: ProgressCount::new(current, total),
             detail: detail.into(),
         }
     }
 
     #[must_use]
     pub fn initialize_runtime(current: u64, total: u64, detail: impl Into<String>) -> Self {
-        Self {
-            stage: ProgressStage::InitializeRuntime,
-            current,
-            total,
-            unit: ProgressUnit::Item,
+        Self::InitializeRuntime {
+            count: ProgressCount::new(current, total),
             detail: detail.into(),
         }
     }
 
     #[must_use]
     pub fn warmup(current: usize, total: usize, detail: impl Into<String>) -> Self {
-        Self {
-            stage: ProgressStage::Warmup,
-            current: current as u64,
-            total: total as u64,
-            unit: ProgressUnit::Item,
+        Self::Warmup {
+            count: ProgressCount::new(current as u64, total as u64),
             detail: detail.into(),
         }
     }
 
     #[must_use]
     pub fn prefill_tokens(current: usize, total: usize) -> Self {
-        Self {
-            stage: ProgressStage::PrefillTokens,
-            current: current as u64,
-            total: total as u64,
-            unit: ProgressUnit::Token,
+        Self::PrefillTokens {
+            count: ProgressCount::new(current as u64, total as u64),
             detail: format!("token {current}/{total}"),
         }
     }
 
     #[must_use]
     pub fn decode_tokens(current: usize, total: usize) -> Self {
-        Self {
-            stage: ProgressStage::DecodeTokens,
-            current: current as u64,
-            total: total as u64,
-            unit: ProgressUnit::Token,
+        Self::DecodeTokens {
+            count: ProgressCount::new(current as u64, total as u64),
             detail: format!("token {current}/{total}"),
+        }
+    }
+
+    #[must_use]
+    pub const fn stage(&self) -> ProgressStage {
+        match self {
+            Self::LoadWeights { .. } => ProgressStage::LoadWeights,
+            Self::InitializeRuntime { .. } => ProgressStage::InitializeRuntime,
+            Self::Warmup { .. } => ProgressStage::Warmup,
+            Self::PrefillTokens { .. } => ProgressStage::PrefillTokens,
+            Self::DecodeTokens { .. } => ProgressStage::DecodeTokens,
+        }
+    }
+
+    #[must_use]
+    pub const fn unit(&self) -> ProgressUnit {
+        match self {
+            Self::LoadWeights { .. } => ProgressUnit::Byte,
+            Self::InitializeRuntime { .. } | Self::Warmup { .. } => ProgressUnit::Item,
+            Self::PrefillTokens { .. } | Self::DecodeTokens { .. } => ProgressUnit::Token,
+        }
+    }
+
+    #[must_use]
+    pub const fn count(&self) -> ProgressCount {
+        match self {
+            Self::LoadWeights { count, .. }
+            | Self::InitializeRuntime { count, .. }
+            | Self::Warmup { count, .. }
+            | Self::PrefillTokens { count, .. }
+            | Self::DecodeTokens { count, .. } => *count,
+        }
+    }
+
+    #[must_use]
+    pub fn detail(&self) -> &str {
+        match self {
+            Self::LoadWeights { detail, .. }
+            | Self::InitializeRuntime { detail, .. }
+            | Self::Warmup { detail, .. }
+            | Self::PrefillTokens { detail, .. }
+            | Self::DecodeTokens { detail, .. } => detail,
         }
     }
 }

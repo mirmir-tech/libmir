@@ -51,21 +51,18 @@ impl Engine {
                 progress,
             )?),
             #[cfg(feature = "metal")]
-            EngineInner::Metal(metal) => {
-                let mut mapped = |event| progress(super::metal_progress(event));
-                metal.prefill_request_with_progress(
-                    &PrefillRequest {
-                        model: model.clone(),
-                        session_id,
-                        prompt_tokens: prompt_tokens.to_vec(),
-                        cache_checkpoints: cache_checkpoints.to_vec(),
-                        block_table: block_table.clone(),
-                        cached_tokens,
-                        sampling_logits: sampling,
-                    },
-                    &mut mapped,
-                )
-            },
+            EngineInner::Metal(metal) => metal.prefill_request_with_progress(
+                &PrefillRequest {
+                    model: model.clone(),
+                    session_id,
+                    prompt_tokens: prompt_tokens.to_vec(),
+                    cache_checkpoints: cache_checkpoints.to_vec(),
+                    block_table: block_table.clone(),
+                    cached_tokens,
+                    sampling_logits: sampling,
+                },
+                progress,
+            ),
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
             EngineInner::Unavailable => super::unavailable(),
         }
