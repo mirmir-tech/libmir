@@ -1,3 +1,4 @@
+mod batch;
 mod chunked;
 mod fused;
 mod transform;

@@ -193,22 +193,3 @@ fn unavailable<T>() -> RuntimeResult<T> {
         "libmir was built without an accelerator feature".into(),
     ))
 }
-
-#[cfg(feature = "metal")]
-fn metal_progress(event: metal::MetalProgressEvent) -> ProgressEvent {
-    ProgressEvent {
-        stage: match event.stage {
-            metal::MetalProgressStage::LoadWeights => runtime::progress::ProgressStage::LoadWeights,
-            metal::MetalProgressStage::PrefillTokens => {
-                runtime::progress::ProgressStage::PrefillTokens
-            },
-        },
-        current: event.current,
-        total: event.total,
-        unit: match event.unit {
-            metal::MetalProgressUnit::Byte => runtime::progress::ProgressUnit::Byte,
-            metal::MetalProgressUnit::Token => runtime::progress::ProgressUnit::Token,
-        },
-        detail: event.detail,
-    }
-}

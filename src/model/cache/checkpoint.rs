@@ -1,4 +1,4 @@
-use foundation::protocol::ChatCompletionRequest;
+use foundation::conversation::Conversation;
 
 use super::super::ModelDescriptor;
 use crate::Result;
@@ -6,12 +6,12 @@ use crate::Result;
 impl ModelDescriptor {
     pub(in crate::model) fn cache_checkpoints(
         &self,
-        request: &ChatCompletionRequest,
+        conversation: &Conversation,
         full_tokens: &[u32],
     ) -> Result<Vec<usize>> {
         let mut checkpoints = Vec::new();
-        for message_count in 1..request.messages.len() {
-            let mut prefix = request.clone();
+        for message_count in 1..conversation.messages.len() {
+            let mut prefix = conversation.clone();
             prefix.messages.truncate(message_count);
             let Ok(prompt) = self.template.render(&prefix) else {
                 continue;

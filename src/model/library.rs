@@ -82,6 +82,7 @@ impl Library {
             resolved_metal_cache(&target, &config),
             progress,
         )?;
+        progress(ProgressEvent::initialize_runtime(0, 1, "initializing model runtime"));
         let coordinator = match ModelCoordinator::new(
             engine.clone(),
             handle.clone(),
@@ -98,7 +99,7 @@ impl Library {
             cleanup_failed_load(&engine, &handle);
             return Err(error);
         }
-        Ok(Model {
+        let model = Model {
             inner: Arc::new(ModelInner {
                 descriptor,
                 engine,
@@ -112,7 +113,9 @@ impl Library {
                 _memory: reservation,
                 config,
             }),
-        })
+        };
+        progress(ProgressEvent::initialize_runtime(1, 1, "model runtime initialized"));
+        Ok(model)
     }
 
     /// Returns the backend, cache, and scheduler configuration used by this

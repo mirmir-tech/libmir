@@ -3,7 +3,7 @@ mod fallback;
 mod protocol;
 mod render;
 
-use foundation::protocol::ChatCompletionRequest;
+use foundation::conversation::Conversation;
 
 use self::{
     config::{ModelTemplateConfig, TemplateTokens},
@@ -67,10 +67,10 @@ impl ChatTemplate {
         })
     }
 
-    pub fn render(&self, request: &ChatCompletionRequest) -> Result<ChatPrompt> {
+    pub fn render(&self, conversation: &Conversation) -> Result<ChatPrompt> {
         let text = self.template.as_deref().map_or_else(
-            || Ok(render_builtin(request, self.kind, &self.tokens)),
-            |template| render_model_template(template, request, &self.tokens),
+            || Ok(render_builtin(conversation, self.kind, &self.tokens)),
+            |template| render_model_template(template, conversation, &self.tokens),
         )?;
         Ok(ChatPrompt {
             add_special_tokens: self.tokens.requires_automatic_bos(&text),
@@ -98,7 +98,7 @@ fn builtin_kind(model_type: Option<&str>, has_turns: bool, has_chatml: bool) -> 
 
 #[cfg(test)]
 mod tests {
-    use foundation::protocol::ChatMessage;
+    use foundation::conversation::Message;
 
     use super::*;
 
@@ -224,10 +224,9 @@ mod tests {
         Ok(())
     }
 
-    fn request(content: &str) -> ChatCompletionRequest {
-        ChatCompletionRequest {
-            model: "test".into(),
-            messages: vec![ChatMessage {
+    fn request(content: &str) -> Conversation {
+        Conversation {
+            messages: vec![Message {
                 role: "user".into(),
                 content: content.into(),
                 reasoning_content: None,
@@ -235,16 +234,7 @@ mod tests {
                 tool_call_id: None,
             }],
             tools: Vec::new(),
-            tool_choice: None,
-            stream: false,
-            max_tokens: None,
-            min_tokens: None,
-            ignore_eos: None,
-            temperature: None,
-            top_p: None,
-            top_k: None,
-            repetition_penalty: None,
-            seed: None,
+            tool_choice: foundation::conversation::ToolChoice::default(),
         }
     }
 }

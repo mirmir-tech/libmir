@@ -1,9 +1,7 @@
 use std::collections::BTreeSet;
 
-use libmir::{
-    AdmissionStatus, ModelDescriptor, WeightEncoding,
-    models::weights::{CompressedIntegerScaleDType, CompressedIntegerScaleStrategy},
-};
+use libmir::{AdmissionStatus, ModelDescriptor, WeightEncoding};
+use models::weights::{CompressedIntegerScaleDType, CompressedIntegerScaleStrategy};
 
 use super::{family, validate_tokenizer};
 use crate::{

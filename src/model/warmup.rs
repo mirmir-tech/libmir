@@ -2,7 +2,7 @@ use models::execution::ModelTask;
 use runtime::backend::SamplingLogits;
 
 use super::Model;
-use crate::{Error, ProgressEvent, Result, runtime::RuntimeError};
+use crate::{Error, ProgressEvent, Result, RuntimeError};
 
 const PROFILE_CONTEXT_TOKENS: usize = 2_048;
 const PROFILE_DECODE_STEPS: usize = 2;
@@ -41,6 +41,8 @@ impl Model {
             decode_steps = PROFILE_DECODE_STEPS,
             "warming accelerator execution profiles"
         );
+        let total = PROFILE_SESSIONS * (PROFILE_DECODE_STEPS + 1);
+        progress(ProgressEvent::warmup(0, total, "warming accelerator execution profiles"));
         for session_index in 0..PROFILE_SESSIONS {
             let prompt = if session_index == 0 {
                 prompt.as_slice()
@@ -48,14 +50,17 @@ impl Model {
                 &prompt[..prompt.len().saturating_sub(1)]
             };
             let mut session = self.session();
-            let output = session.prefill(prompt, SamplingLogits::None, progress)?;
+            let output = session.prefill(prompt, SamplingLogits::None, &mut |_| {})?;
             let mut token = required_token(output.next_token)?;
+            let completed = session_index * (PROFILE_DECODE_STEPS + 1) + 1;
+            progress(ProgressEvent::warmup(completed, total, "prefill profile is warm"));
             for step in 0..PROFILE_DECODE_STEPS {
                 token =
                     required_token(session.decode(token, SamplingLogits::None)?.event.token_id)?;
-                progress(ProgressEvent::decode_tokens(
-                    session_index * PROFILE_DECODE_STEPS + step + 1,
-                    PROFILE_SESSIONS * PROFILE_DECODE_STEPS,
+                progress(ProgressEvent::warmup(
+                    completed + step + 1,
+                    total,
+                    "decode profile is warm",
                 ));
             }
         }

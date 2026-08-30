@@ -6,8 +6,6 @@ use runtime::{
 };
 use uuid::Uuid;
 
-#[cfg(feature = "metal")]
-use super::super::metal_progress;
 use super::super::{Engine, EngineInner};
 
 impl Engine {
@@ -24,12 +22,9 @@ impl Engine {
     ) -> runtime::Result<PrefillOutput> {
         match &self.inner {
             #[cfg(feature = "metal")]
-            EngineInner::Metal(metal) => {
-                let mut mapped = |event| progress(metal_progress(event));
-                metal.prefill_pooled_vision_with_progress(
-                    model, session_id, prompt, image, block_table, sampling, &mut mapped,
-                )
-            },
+            EngineInner::Metal(metal) => metal.prefill_pooled_vision_with_progress(
+                model, session_id, prompt, image, block_table, sampling, progress,
+            ),
             #[cfg(feature = "cuda")]
             EngineInner::Cuda(cuda) => Ok(cuda.prefill_pooled_vision_with_progress(
                 model, session_id, prompt, image, block_table, sampling, progress,

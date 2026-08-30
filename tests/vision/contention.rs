@@ -6,8 +6,8 @@ use std::{
 };
 
 use libmir::{
-    ChatCompletionRequest, ChatMessage, GenerationOverrides, IMAGE_PLACEHOLDER, Library, Result,
-    RuntimeConfig, SamplingLogits,
+    Conversation, GenerationOverrides, IMAGE_PLACEHOLDER, Library, Message, Result, RuntimeConfig,
+    SamplingLogits,
 };
 
 const BLACK_PNG: &[u8] = &[
@@ -150,18 +150,17 @@ fn scheduler_error(message: &str) -> runtime::RuntimeError {
     runtime::RuntimeError::Scheduler(message.into())
 }
 
-fn text_request(model: &libmir::Model) -> ChatCompletionRequest {
+fn text_request(model: &libmir::Model) -> Conversation {
     request(model, "Hi")
 }
 
-fn vision_request(model: &libmir::Model) -> ChatCompletionRequest {
+fn vision_request(model: &libmir::Model) -> Conversation {
     request(model, &format!("{IMAGE_PLACEHOLDER}Describe the image."))
 }
 
-fn request(model: &libmir::Model, content: &str) -> ChatCompletionRequest {
-    ChatCompletionRequest {
-        model: model.handle().id.clone(),
-        messages: vec![ChatMessage {
+fn request(_model: &libmir::Model, content: &str) -> Conversation {
+    Conversation {
+        messages: vec![Message {
             role: "user".into(),
             content: content.into(),
             reasoning_content: None,
@@ -169,15 +168,6 @@ fn request(model: &libmir::Model, content: &str) -> ChatCompletionRequest {
             tool_call_id: None,
         }],
         tools: Vec::new(),
-        tool_choice: None,
-        stream: false,
-        max_tokens: Some(CONTENDED_TOKENS),
-        min_tokens: None,
-        ignore_eos: None,
-        temperature: Some(0.0),
-        top_p: Some(1.0),
-        top_k: Some(0),
-        repetition_penalty: Some(1.0),
-        seed: Some(7),
+        tool_choice: libmir::ToolChoice::default(),
     }
 }

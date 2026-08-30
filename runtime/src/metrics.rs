@@ -22,7 +22,7 @@ pub struct GenerationMetricsRecorder {
     decode_steps: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GenerationMetrics {
     pub durations_ms: GenerationDurationsMs,
     pub tokens: GenerationTokenCounts,
@@ -30,7 +30,7 @@ pub struct GenerationMetrics {
     pub kv_cache: CacheStats,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GenerationDurationsMs {
     pub total: f64,
     pub active: f64,
@@ -42,7 +42,7 @@ pub struct GenerationDurationsMs {
     pub sampling: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GenerationTokenCounts {
     pub prompt: usize,
     pub prefill: usize,
@@ -50,7 +50,7 @@ pub struct GenerationTokenCounts {
     pub decode_steps: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GenerationThroughput {
     pub prefill: ThroughputRate,
     pub decode: ThroughputRate,
@@ -58,15 +58,16 @@ pub struct GenerationThroughput {
     pub generated_active: ThroughputRate,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct ThroughputRate {
     pub per_second: Option<f64>,
     pub unit: ThroughputUnit,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ThroughputUnit {
+    #[default]
     Token,
 }
 

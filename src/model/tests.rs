@@ -1,4 +1,4 @@
-use foundation::protocol::ChatMessage;
+use foundation::conversation::Message;
 use models::chat::TemplateKind;
 
 use super::*;
@@ -23,9 +23,8 @@ fn prepares_real_gemma4_turn_protocol_like_mlx_lm() -> Result<()> {
     let path = std::env::var_os("MIRMIR_GEMMA4_MODEL")
         .ok_or(Error::MissingEnvironment("MIRMIR_GEMMA4_MODEL"))?;
     let descriptor = ModelDescriptor::inspect(path, GenerationOverrides::default())?;
-    let request = ChatCompletionRequest {
-        model: "gemma4".into(),
-        messages: vec![ChatMessage {
+    let request = Conversation {
+        messages: vec![Message {
             role: "user".into(),
             content: "Napisz jedno krótkie zdanie po polsku.".into(),
             reasoning_content: None,
@@ -33,16 +32,7 @@ fn prepares_real_gemma4_turn_protocol_like_mlx_lm() -> Result<()> {
             tool_call_id: None,
         }],
         tools: Vec::new(),
-        tool_choice: None,
-        stream: false,
-        max_tokens: Some(32),
-        min_tokens: None,
-        ignore_eos: None,
-        temperature: Some(0.0),
-        top_p: None,
-        top_k: None,
-        repetition_penalty: None,
-        seed: None,
+        tool_choice: foundation::conversation::ToolChoice::default(),
     };
 
     let prepared = descriptor.prepare(&request)?;
@@ -68,23 +58,13 @@ fn prepares_real_gemma4_message_boundary_checkpoint() -> Result<()> {
     let path = std::env::var_os("MIRMIR_GEMMA4_MODEL")
         .ok_or(Error::MissingEnvironment("MIRMIR_GEMMA4_MODEL"))?;
     let descriptor = ModelDescriptor::inspect(path, GenerationOverrides::default())?;
-    let mut request = ChatCompletionRequest {
-        model: "gemma4".into(),
+    let mut request = Conversation {
         messages: Vec::new(),
         tools: Vec::new(),
-        tool_choice: None,
-        stream: false,
-        max_tokens: Some(32),
-        min_tokens: None,
-        ignore_eos: None,
-        temperature: Some(0.0),
-        top_p: None,
-        top_k: None,
-        repetition_penalty: None,
-        seed: None,
+        tool_choice: foundation::conversation::ToolChoice::default(),
     };
     for (role, content) in [("system", "Stały kontekst."), ("user", "Odpowiedz krótko.")] {
-        request.messages.push(ChatMessage {
+        request.messages.push(Message {
             role: role.into(),
             content: content.into(),
             reasoning_content: None,
@@ -106,9 +86,8 @@ fn prepares_real_qwen35_multi_turn_checkpoint() -> Result<()> {
     let path = std::env::var_os("MIRMIR_QWEN35_MODEL")
         .ok_or(Error::MissingEnvironment("MIRMIR_QWEN35_MODEL"))?;
     let descriptor = ModelDescriptor::inspect(path, GenerationOverrides::default())?;
-    let mut request = ChatCompletionRequest {
-        model: "qwen35".into(),
-        messages: vec![ChatMessage {
+    let mut request = Conversation {
+        messages: vec![Message {
             role: "user".into(),
             content: "Napisz jedno zdanie o Warszawie.".into(),
             reasoning_content: None,
@@ -116,16 +95,7 @@ fn prepares_real_qwen35_multi_turn_checkpoint() -> Result<()> {
             tool_call_id: None,
         }],
         tools: Vec::new(),
-        tool_choice: None,
-        stream: false,
-        max_tokens: Some(32),
-        min_tokens: None,
-        ignore_eos: None,
-        temperature: Some(0.0),
-        top_p: None,
-        top_k: None,
-        repetition_penalty: None,
-        seed: None,
+        tool_choice: foundation::conversation::ToolChoice::default(),
     };
 
     let prepared = descriptor.prepare(&request)?;
@@ -133,14 +103,14 @@ fn prepares_real_qwen35_multi_turn_checkpoint() -> Result<()> {
     assert_eq!(prepared.cache_checkpoints, Vec::<usize>::new());
 
     request.messages.extend([
-        ChatMessage {
+        Message {
             role: "assistant".into(),
             content: "Warszawa jest stolicą Polski.".into(),
             reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
         },
-        ChatMessage {
+        Message {
             role: "user".into(),
             content: "Rozwiń odpowiedź.".into(),
             reasoning_content: None,

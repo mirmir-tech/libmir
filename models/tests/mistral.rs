@@ -1,4 +1,4 @@
-use foundation::protocol::{ChatCompletionRequest, ChatMessage};
+use foundation::conversation::{Conversation, Message};
 use libmir_models::{
     ModelsError, Result,
     chat::ChatTemplate,
@@ -12,9 +12,8 @@ fn renders_and_tokenizes_official_mistral_v3_prompt() -> Result<()> {
     let root = std::env::var_os("MISTRAL_MODEL")
         .ok_or_else(|| ModelsError::InvalidConfig("missing MISTRAL_MODEL".into()))?;
     let layout = ModelLayout::inspect(root)?;
-    let prompt = ChatTemplate::from_layout(&layout)?.render(&ChatCompletionRequest {
-        model: "mistral".into(),
-        messages: vec![ChatMessage {
+    let prompt = ChatTemplate::from_layout(&layout)?.render(&Conversation {
+        messages: vec![Message {
             role: "user".into(),
             content: "Hello".into(),
             reasoning_content: None,
@@ -22,16 +21,7 @@ fn renders_and_tokenizes_official_mistral_v3_prompt() -> Result<()> {
             tool_call_id: None,
         }],
         tools: Vec::new(),
-        tool_choice: None,
-        stream: false,
-        max_tokens: None,
-        min_tokens: None,
-        ignore_eos: None,
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        repetition_penalty: None,
-        seed: None,
+        tool_choice: foundation::conversation::ToolChoice::default(),
     })?;
     let tokenizer = TextTokenizer::from_layout(&layout)?;
     let encoded = tokenizer.encode_with_special_tokens(&prompt.text, prompt.add_special_tokens)?;

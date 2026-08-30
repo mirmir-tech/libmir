@@ -9,10 +9,10 @@ use std::{
 };
 
 #[cfg(feature = "cuda")]
-use libmir::cuda::CudaMoeBatchPolicy;
+use cuda::CudaMoeBatchPolicy;
 use libmir::{
-    ChatCompletionRequest, ChatMessage, Error, GenerationOverrides, Library, Model, RuntimeConfig,
-    SamplingLogits, runtime::RuntimeError,
+    Conversation, Error, GenerationOverrides, Library, Message, Model, RuntimeConfig, RuntimeError,
+    SamplingLogits,
 };
 
 struct Config {
@@ -162,10 +162,9 @@ fn required_token(token: Option<u32>) -> libmir::Result<u32> {
     token.ok_or_else(|| RuntimeError::Backend("device sampling returned no token".into()).into())
 }
 
-fn request(model: &Model) -> ChatCompletionRequest {
-    ChatCompletionRequest {
-        model: model.handle().id.clone(),
-        messages: vec![ChatMessage {
+fn request(_model: &Model) -> Conversation {
+    Conversation {
+        messages: vec![Message {
             role: "user".into(),
             content: "Explain continuous batching in an LLM inference server.".into(),
             reasoning_content: None,
@@ -173,16 +172,7 @@ fn request(model: &Model) -> ChatCompletionRequest {
             tool_call_id: None,
         }],
         tools: Vec::new(),
-        tool_choice: None,
-        stream: false,
-        max_tokens: Some(1),
-        min_tokens: None,
-        ignore_eos: None,
-        temperature: Some(0.0),
-        top_p: Some(1.0),
-        top_k: Some(0),
-        repetition_penalty: Some(1.0),
-        seed: Some(7),
+        tool_choice: libmir::ToolChoice::default(),
     }
 }
 

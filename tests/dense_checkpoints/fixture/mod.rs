@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use libmir::foundation::model::BackendTarget;
+use libmir::BackendTarget;
 
 use super::TestResult;
 

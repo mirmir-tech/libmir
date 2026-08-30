@@ -1,12 +1,10 @@
 use std::{env, path::PathBuf};
 
 #[cfg(feature = "cuda")]
-use libmir::cuda::{
+use cuda::{
     CudaAttentionPolicy, CudaDenseVectorPolicy, CudaDenseVendorPolicy, CudaDenseWeightPolicy,
     CudaKernelAdmission, CudaNumericalPolicy, DenseRole,
 };
-#[cfg(feature = "metal")]
-use libmir::metal;
 use libmir::{Error, KvCacheDType, RuntimeConfig};
 
 pub struct Config {

@@ -21,7 +21,7 @@ pub struct CacheCounters {
     pub protected_prefix_skips: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CacheStats {
     pub block_size: usize,
     pub dtype: KvCacheDType,

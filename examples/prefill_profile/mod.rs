@@ -39,8 +39,9 @@ impl Config {
         })
     }
 
+    #[cfg_attr(not(feature = "cuda"), allow(clippy::unused_self))]
     pub fn runtime(&self) -> RuntimeConfig {
-        let mut runtime = RuntimeConfig {
+        let runtime = RuntimeConfig {
             automatic_kv_cache: true,
             memory: libmir::MemoryRuntimeConfig {
                 reserve_percent: Some(1),
@@ -48,6 +49,8 @@ impl Config {
             },
             ..RuntimeConfig::default()
         };
+        #[cfg(feature = "cuda")]
+        let mut runtime = runtime;
         #[cfg(feature = "cuda")]
         {
             runtime.cuda.model_session.prefill_chunk_tokens = self.chunk_tokens;

@@ -1,5 +1,5 @@
 use libmir::{
-    ChatCompletionRequest, ChatMessage, GenerationOverrides, Library, Result, RuntimeConfig,
+    Conversation, GenerationOverrides, GenerationRequest, Library, Message, Result, RuntimeConfig,
     SamplingLogits,
 };
 
@@ -14,27 +14,7 @@ fn generates_through_the_public_library_api() -> Result<()> {
     config.kv_cache.block_count = 128;
     let library = Library::new(config);
     let model = library.load(path, GenerationOverrides::default(), &mut |_event| {})?;
-    let request = ChatCompletionRequest {
-        model: model.handle().id.clone(),
-        messages: vec![ChatMessage {
-            role: "user".into(),
-            content: "Hi".into(),
-            reasoning_content: None,
-            tool_calls: None,
-            tool_call_id: None,
-        }],
-        tools: Vec::new(),
-        tool_choice: None,
-        stream: false,
-        max_tokens: Some(8),
-        min_tokens: None,
-        ignore_eos: None,
-        temperature: Some(0.0),
-        top_p: Some(1.0),
-        top_k: Some(0),
-        repetition_penalty: Some(1.0),
-        seed: Some(7),
-    };
+    let request = request();
     let output = model.generate(&request, &mut |_event| {}, &mut |_token| {})?;
 
     assert_eq!(output.token_ids.len(), 8);
@@ -53,8 +33,8 @@ fn batches_concurrent_public_sessions() -> Result<()> {
     let model =
         Library::new(config).load(path, GenerationOverrides::default(), &mut |_event| {})?;
     let expected_trace = batch_trace(&model);
-    let request = request(&model);
-    let prompt = model.prepare(&request)?.tokens.token_ids;
+    let request = request();
+    let prompt = model.prepare(&request.conversation)?.tokens.token_ids;
     let longer_prompt = prompt.iter().copied().cycle().take(prompt.len() + 17).collect::<Vec<_>>();
     let mut first = model.session();
     let mut second = model.session();
@@ -117,7 +97,7 @@ fn decode_preempts_chunked_prefill() -> Result<()> {
     config.scheduler.decode_priority_burst = 2;
     let model =
         Library::new(config).load(path, GenerationOverrides::default(), &mut |_event| {})?;
-    let prompt = model.prepare(&request(&model))?.tokens.token_ids;
+    let prompt = model.prepare(&request().conversation)?.tokens.token_ids;
     let mut decoding = model.session();
     let next = decoding
         .prefill(&prompt, SamplingLogits::None, &mut |_event| {})?
@@ -149,26 +129,27 @@ fn decode_preempts_chunked_prefill() -> Result<()> {
     Ok(())
 }
 
-fn request(model: &libmir::Model) -> ChatCompletionRequest {
-    ChatCompletionRequest {
-        model: model.handle().id.clone(),
-        messages: vec![ChatMessage {
-            role: "user".into(),
-            content: "Hi".into(),
-            reasoning_content: None,
-            tool_calls: None,
-            tool_call_id: None,
-        }],
-        tools: Vec::new(),
-        tool_choice: None,
-        stream: false,
-        max_tokens: Some(8),
-        min_tokens: None,
-        ignore_eos: None,
-        temperature: Some(0.0),
-        top_p: Some(1.0),
-        top_k: Some(0),
-        repetition_penalty: Some(1.0),
+fn request() -> GenerationRequest {
+    GenerationRequest {
+        conversation: Conversation {
+            messages: vec![Message {
+                role: "user".into(),
+                content: "Hi".into(),
+                reasoning_content: None,
+                tool_calls: None,
+                tool_call_id: None,
+            }],
+            tools: Vec::new(),
+            tool_choice: libmir::ToolChoice::default(),
+        },
+        options: GenerationOverrides {
+            max_tokens: Some(8),
+            temperature: Some(0.0),
+            top_p: Some(1.0),
+            top_k: Some(0),
+            repetition_penalty: Some(1.0),
+            ..GenerationOverrides::default()
+        },
         seed: Some(7),
     }
 }

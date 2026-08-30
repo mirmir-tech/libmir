@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use libmir::foundation::model::BackendTarget;
+use libmir::BackendTarget;
 
 use super::{Family, LogitsReference, Reference, ResourceGate, TestResult, active_target, require};
 

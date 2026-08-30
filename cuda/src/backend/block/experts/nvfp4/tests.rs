@@ -1,6 +1,6 @@
 use mircuda::{DeviceBuffer, DeviceElement};
 
-use super::AutoNvFp4Experts;
+use super::{AutoNvFp4Experts, fallback_execution};
 use crate::{
     CudaBackend, CudaConfig, ExecutionPhase, GatedActivation, MoePlanRequest, NvFp4ExpertBank,
     NvFp4ExpertBankConfig, PlanSource, Result,
@@ -12,6 +12,18 @@ const EXPERTS: usize = 8;
 const SELECTED: usize = 4;
 const HIDDEN: usize = 2_816;
 const INTERMEDIATE: usize = 704;
+
+#[test]
+fn untuned_weight_only_prefill_uses_the_planned_execution() {
+    assert_eq!(
+        fallback_execution(ExecutionPhase::Prefill, true, crate::MoeExecution::Bucketed),
+        crate::MoeExecution::Bucketed
+    );
+    assert_eq!(
+        fallback_execution(ExecutionPhase::Decode, true, crate::MoeExecution::Bucketed),
+        crate::MoeExecution::SelectedWeightOnly
+    );
+}
 
 #[test]
 fn synthetic_nvfp4_autotunes_decode_and_prefill() -> Result<()> {

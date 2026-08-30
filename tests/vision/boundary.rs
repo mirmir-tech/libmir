@@ -2,8 +2,8 @@ use std::{io::Cursor, path::PathBuf};
 
 use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
 use libmir::{
-    ChatCompletionRequest, ChatMessage, GenerationOverrides, IMAGE_PLACEHOLDER, Library,
-    PreparedVisionPrompt, Result, RuntimeConfig, SamplingLogits,
+    Conversation, GenerationOverrides, IMAGE_PLACEHOLDER, Library, Message, PreparedVisionPrompt,
+    Result, RuntimeConfig, SamplingLogits,
 };
 use models::layout::{ImageProcessorConfig, VisionConfig};
 
@@ -124,10 +124,9 @@ fn solid_png(side: usize) -> Result<Vec<u8>> {
     Ok(encoded.into_inner())
 }
 
-fn request(model: &libmir::Model) -> ChatCompletionRequest {
-    ChatCompletionRequest {
-        model: model.handle().id.clone(),
-        messages: vec![ChatMessage {
+fn request(_model: &libmir::Model) -> Conversation {
+    Conversation {
+        messages: vec![Message {
             role: "user".into(),
             content: format!("{IMAGE_PLACEHOLDER}Describe the image."),
             reasoning_content: None,
@@ -135,16 +134,7 @@ fn request(model: &libmir::Model) -> ChatCompletionRequest {
             tool_call_id: None,
         }],
         tools: Vec::new(),
-        tool_choice: None,
-        stream: false,
-        max_tokens: Some(1),
-        min_tokens: None,
-        ignore_eos: None,
-        temperature: Some(0.0),
-        top_p: Some(1.0),
-        top_k: Some(0),
-        repetition_penalty: Some(1.0),
-        seed: Some(7),
+        tool_choice: libmir::ToolChoice::default(),
     }
 }
 

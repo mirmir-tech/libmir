@@ -1,9 +1,7 @@
 use std::collections::BTreeSet;
 
-use libmir::{
-    AdmissionStatus, ModelDescriptor, WeightEncoding,
-    models::weights::{BlockQuantization, Float8ActivationScale},
-};
+use libmir::{AdmissionStatus, ModelDescriptor, WeightEncoding};
+use models::weights::{BlockQuantization, Float8ActivationScale};
 
 use super::{Family, Reference, TestResult, active_target, require, validation_error};
 

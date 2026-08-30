@@ -45,7 +45,7 @@ submit a chat request, and consume generated tokens as they arrive.
 
 ```rust,no_run
 use libmir::{
-    ChatCompletionRequest, ChatMessage, GenerationOverrides, Library,
+    Conversation, GenerationOverrides, GenerationRequest, Library, Message,
     RuntimeConfig,
 };
 
@@ -61,25 +61,24 @@ fn main() -> libmir::Result<()> {
         &mut |_| {},
     )?;
 
-    let request = ChatCompletionRequest {
-        model: model.handle().id.clone(),
-        messages: vec![ChatMessage {
-            role: "user".into(),
-            content: "Explain paged K/V caching in one paragraph.".into(),
-            reasoning_content: None,
-            tool_calls: None,
-            tool_call_id: None,
-        }],
-        tools: Vec::new(),
-        tool_choice: None,
-        stream: true,
-        max_tokens: Some(256),
-        min_tokens: None,
-        ignore_eos: None,
-        temperature: Some(0.2),
-        top_p: Some(0.9),
-        top_k: None,
-        repetition_penalty: None,
+    let request = GenerationRequest {
+        conversation: Conversation {
+            messages: vec![Message {
+                role: "user".into(),
+                content: "Explain paged K/V caching in one paragraph.".into(),
+                reasoning_content: None,
+                tool_calls: None,
+                tool_call_id: None,
+            }],
+            tools: Vec::new(),
+            tool_choice: Default::default(),
+        },
+        options: GenerationOverrides {
+            max_tokens: Some(256),
+            temperature: Some(0.2),
+            top_p: Some(0.9),
+            ..GenerationOverrides::default()
+        },
         seed: None,
     };
 
