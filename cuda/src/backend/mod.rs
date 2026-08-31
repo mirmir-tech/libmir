@@ -63,7 +63,7 @@ pub use hybrid_layer::{
 };
 pub use kv::{
     AttentionSplitMeasurement, BatchedPagedAttentionBf16, BatchedPrefillPagedAttentionBf16,
-    PagedAttentionBf16, PagedDecodeBatch, PagedKvCache, PagedPrefillBatch,
+    PagedAttentionBf16, PagedDecodeBatch, PagedKvCache, PagedPrefillBatch, WindowedPrefillStaging,
     attention_execution_average, candidate_partitions, sample_contexts, select_attention_execution,
 };
 pub use linear::{

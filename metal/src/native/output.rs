@@ -43,7 +43,8 @@ pub(super) fn materialize(
                 top_p,
                 top_k,
                 draw,
-            } = sampling =>
+            } = sampling
+                && top_k > 0 =>
         {
             sampled(model, &logits, vocab_size, top_k, top_p, temperature, draw)
         },

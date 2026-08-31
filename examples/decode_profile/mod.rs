@@ -5,7 +5,18 @@ use cuda::{
     CudaAttentionPolicy, CudaDenseVectorPolicy, CudaDenseVendorPolicy, CudaDenseWeightPolicy,
     CudaKernelAdmission, CudaNumericalPolicy, DenseRole,
 };
-use libmir::{Error, KvCacheDType, RuntimeConfig};
+use libmir::{Error, KvCacheDType, RuntimeConfig, SamplingLogits};
+
+mod environment;
+#[cfg(feature = "cuda")]
+mod output;
+#[cfg(feature = "metal")]
+use environment::disabled;
+#[cfg(feature = "cuda")]
+use environment::environment_optional_usize;
+use environment::{argument, enabled, environment_u64, environment_usize};
+#[cfg(feature = "cuda")]
+use output::OutputMode;
 
 pub struct Config {
     pub model: PathBuf,
@@ -16,10 +27,13 @@ pub struct Config {
     pub prefix_fill_cooldown_seconds: u64,
     pub clear_allocator_after_fill: bool,
     pub kv_cache_dtype: Option<KvCacheDType>,
+    pub full_sampling: bool,
     #[cfg(feature = "cuda")]
     dense: DenseMode,
     #[cfg(feature = "cuda")]
     attention_partition_tokens: Option<usize>,
+    #[cfg(feature = "cuda")]
+    output: OutputMode,
 }
 
 #[cfg(feature = "cuda")]
@@ -69,12 +83,15 @@ impl Config {
             prefix_fill_cooldown_seconds,
             clear_allocator_after_fill,
             kv_cache_dtype,
+            full_sampling: enabled("MIRMIR_DECODE_PROFILE_FULL_SAMPLE"),
             #[cfg(feature = "cuda")]
             dense: DenseMode::parse(5)?,
             #[cfg(feature = "cuda")]
             attention_partition_tokens: environment_optional_usize(
                 "MIRMIR_CUDA_ATTENTION_PARTITION_TOKENS",
             )?,
+            #[cfg(feature = "cuda")]
+            output: OutputMode::parse()?,
         })
     }
 
@@ -92,6 +109,7 @@ impl Config {
 
     #[cfg(feature = "cuda")]
     fn configure_cuda(&self, runtime: &mut RuntimeConfig) {
+        self.output.configure(&mut runtime.cuda.planning);
         runtime.cuda.tuning.cache_directory =
             env::var_os("MIRMIR_CUDA_TUNING_CACHE").map(PathBuf::from);
         if enabled("MIRMIR_CUDA_ATTENTION_DIRECT") {
@@ -175,6 +193,30 @@ impl Config {
         }
     }
 
+    #[cfg(feature = "cuda")]
+    pub const fn output_label(&self) -> &'static str {
+        self.output.label()
+    }
+
+    pub const fn sampling(&self, vocab_size: usize) -> SamplingLogits {
+        if self.full_sampling {
+            SamplingLogits::Sample {
+                vocab_size,
+                temperature: 1.0,
+                top_p: 1.0,
+                top_k: 0,
+                draw: 0.5,
+            }
+        } else {
+            SamplingLogits::None
+        }
+    }
+
+    #[cfg(not(feature = "cuda"))]
+    pub const fn output_label(&self) -> &'static str {
+        ""
+    }
+
     #[cfg(not(feature = "cuda"))]
     #[allow(clippy::unused_self)]
     pub const fn dense_label(&self) -> &'static str {
@@ -199,30 +241,4 @@ impl DenseMode {
             _ => Err("unsupported CUDA dense policy".into()),
         }
     }
-}
-
-fn argument(index: usize, default: usize) -> Result<usize, Box<dyn std::error::Error>> {
-    env::args().nth(index).map_or(Ok(default), |value| Ok(value.parse()?))
-}
-
-fn environment_usize(name: &str, default: usize) -> Result<usize, Box<dyn std::error::Error>> {
-    env::var(name).map_or(Ok(default), |value| Ok(value.parse()?))
-}
-
-fn environment_u64(name: &str, default: u64) -> Result<u64, Box<dyn std::error::Error>> {
-    env::var(name).map_or(Ok(default), |value| Ok(value.parse()?))
-}
-
-#[cfg(feature = "cuda")]
-fn environment_optional_usize(name: &str) -> Result<Option<usize>, Box<dyn std::error::Error>> {
-    env::var(name).map_or(Ok(None), |value| Ok(Some(value.parse()?)))
-}
-
-fn enabled(name: &str) -> bool {
-    matches!(env::var(name).as_deref(), Ok("1" | "true" | "TRUE" | "yes" | "YES"))
-}
-
-#[cfg(feature = "metal")]
-fn disabled(name: &str) -> bool {
-    matches!(env::var(name).as_deref(), Ok("0" | "false" | "FALSE" | "no" | "NO"))
 }

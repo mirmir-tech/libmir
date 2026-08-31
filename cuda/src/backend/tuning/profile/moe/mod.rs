@@ -3,6 +3,7 @@ use std::time::Duration;
 use super::{CudaAutoTuner, MoeRuntimeEntry};
 use crate::{ExecutionPhase, GatedActivation, MoeExecution, PlanSource};
 
+mod execution;
 mod request;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -15,6 +16,12 @@ pub(in crate::backend) enum AffineMoeExecution {
 pub(in crate::backend) enum ClampedMoeExecution {
     FusedReduce,
     RouteParallel,
+    MarlinN128K128,
+    MarlinN128K64,
+    MarlinN64K128,
+    MarlinM64N256K64,
+    MarlinM64N128K64,
+    MarlinM64N64K128,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -142,6 +149,38 @@ impl CudaAutoTuner {
             .map(|entry| (entry.execution, entry.source))
     }
 
+    pub(in crate::backend) fn lookup_clamped_moe(
+        &self,
+        request: MoeProfileRequest,
+    ) -> Option<(MoeProfileExecution, PlanSource)> {
+        if self.inner.config.mode == super::CudaTuningMode::Disabled {
+            return None;
+        }
+        let state = self.inner.state.lock().ok()?;
+        if let Some(entry) = state.moe.get(&request) {
+            return Some((entry.execution, entry.source));
+        }
+        state
+            .moe
+            .iter()
+            .filter(|(candidate, entry)| {
+                request.same_clamped_geometry(**candidate)
+                    && matches!(
+                        entry.execution,
+                        MoeProfileExecution::Clamped(
+                            ClampedMoeExecution::MarlinN128K128
+                                | ClampedMoeExecution::MarlinN128K64
+                                | ClampedMoeExecution::MarlinN64K128
+                                | ClampedMoeExecution::MarlinM64N256K64
+                                | ClampedMoeExecution::MarlinM64N128K64
+                                | ClampedMoeExecution::MarlinM64N64K128
+                        )
+                    )
+            })
+            .min_by_key(|(candidate, _)| candidate.tokens.abs_diff(request.tokens))
+            .map(|(_, entry)| (entry.execution, entry.source))
+    }
+
     pub(in crate::backend) fn claim_moe(&self, request: MoeProfileRequest) -> bool {
         let Ok(mut state) = self.inner.state.lock() else {
             return false;
@@ -190,5 +229,19 @@ impl MoeProfileRequest {
     pub(super) const fn late_decode_allowed(self) -> bool {
         matches!(self.phase, ExecutionPhase::Decode)
             && matches!(self.format, MoeProfileFormat::NvFp4 { weight_only: true, .. })
+    }
+
+    fn same_clamped_geometry(self, other: Self) -> bool {
+        self.experts == other.experts
+            && self.top_k == other.top_k
+            && self.hidden_features == other.hidden_features
+            && self.intermediate_features == other.intermediate_features
+            && matches!(
+                (self.format, other.format),
+                (
+                    MoeProfileFormat::Clamped { storage: left },
+                    MoeProfileFormat::Clamped { storage: right }
+                ) if left == right
+            )
     }
 }

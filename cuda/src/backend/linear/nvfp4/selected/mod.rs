@@ -27,7 +27,7 @@ pub use direct_down_moe::DirectDownNvFp4MoeBf16;
 pub use grouped::GroupedNvFp4MoeBf16;
 pub use hybrid_gate_moe::HybridNvFp4MoeBf16;
 pub(in crate::backend) use marlin::{
-    MarlinNvFp4MoeBf16, MarlinNvFp4Scratch, MarlinNvFp4ScratchConfig,
+    MarlinNvFp4MoeBf16, MarlinNvFp4Scratch, MarlinNvFp4ScratchConfig, MarlinRouteBlock,
 };
 pub use micro_moe::DirectNvFp4MoeBf16;
 pub use tensor_core::{SelectedNvFp4LinearBf16, SelectedNvFp4TensorCoreMoeBf16};

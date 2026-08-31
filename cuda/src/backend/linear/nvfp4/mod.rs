@@ -17,7 +17,8 @@ pub use selected::{
 };
 pub(in crate::backend) use selected::{
     BucketedNvFp4Scratch, BucketedNvFp4ScratchConfig, MarlinNvFp4MoeBf16, MarlinNvFp4Scratch,
-    MarlinNvFp4ScratchConfig, SelectedNvFp4WeightOnlyTensorCoreMoeBf16, TiledSelectedNvFp4MoeBf16,
+    MarlinNvFp4ScratchConfig, MarlinRouteBlock, SelectedNvFp4WeightOnlyTensorCoreMoeBf16,
+    TiledSelectedNvFp4MoeBf16,
 };
 pub(in crate::backend) use weight_only::MarlinNvFp4Bf16Linear;
 pub use weight_only::{NvFp4WeightOnlyBf16Linear, NvFp4WeightOnlyWeight};

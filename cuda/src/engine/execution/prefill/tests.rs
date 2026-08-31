@@ -1,6 +1,6 @@
 use super::plan::{
-    context_chunk_budget, fair_chunk_budget, reusable_prefix_tokens, round_rows_from_pending,
-    row_chunk_budget, valid_chunk,
+    checkpoint_distance, context_chunk_budget, fair_chunk_budget, reusable_prefix_tokens,
+    round_rows_from_pending, row_chunk_budget, valid_chunk,
 };
 
 #[test]
@@ -70,4 +70,11 @@ fn checkpoint_tails_consume_the_interleaved_budget_completion_first() {
     assert_eq!(row_chunk_budget(4_060, 2, true), 4_060);
     assert_eq!(row_chunk_budget(1_996, 1, true), 1_996);
     assert_eq!(row_chunk_budget(8_188, 4, false), 2_047);
+}
+
+#[test]
+fn skips_declared_checkpoints_that_the_backend_cannot_store() {
+    assert_eq!(checkpoint_distance(64, &[8_188], Some(8_176), Some(16)), 8_112);
+    assert_eq!(checkpoint_distance(8_176, &[8_188], Some(10_224), Some(16)), 2_048);
+    assert_eq!(checkpoint_distance(64, &[8_188], None, None), 8_124);
 }

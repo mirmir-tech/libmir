@@ -1,4 +1,4 @@
-use crate::tokenizer::TextTokenizer;
+use crate::tokenizer::{TextTokenizer, protocol::OutputMarkerIds};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GenerationChannel {
@@ -9,48 +9,47 @@ pub enum GenerationChannel {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenerationToken {
+    pub preceding_ids: Vec<u32>,
     pub id: u32,
     pub text: String,
     pub channel: GenerationChannel,
 }
 
 pub struct OutputNormalizer {
-    markers: Markers,
+    markers: OutputMarkerIds,
     state: State,
+    pending_ids: Vec<u32>,
 }
 
 enum State {
     Content,
     Reasoning,
     ToolCalls,
+    RoleName,
     ChannelName(String),
-}
-
-#[derive(Default)]
-struct Markers {
-    reasoning: Vec<u32>,
-    content: Vec<u32>,
-    channel: Vec<u32>,
-    channel_body: Vec<u32>,
-    channel_end: Vec<u32>,
-    tool_calls: Vec<u32>,
 }
 
 impl OutputNormalizer {
     #[must_use]
     pub fn new(tokenizer: &TextTokenizer, prompt: &str) -> Self {
         Self {
-            markers: Markers::new(tokenizer),
+            markers: tokenizer.output_markers().clone(),
             state: if prompt_requests_reasoning(prompt) {
                 State::Reasoning
             } else {
                 State::Content
             },
+            pending_ids: Vec::new(),
         }
     }
 
     #[must_use]
     pub fn push(&mut self, id: u32, text: String) -> Option<GenerationToken> {
+        self.pending_ids.push(id);
+        if self.markers.turn_start.contains(&id) {
+            self.state = State::RoleName;
+            return None;
+        }
         if self.markers.reasoning.contains(&id) {
             self.state = State::Reasoning;
             return None;
@@ -71,19 +70,22 @@ impl OutputNormalizer {
             self.finish_channel_name();
             return None;
         }
-        self.push_text(id, text)
+        self.push_text(text)
     }
 
-    fn push_text(&mut self, id: u32, text: String) -> Option<GenerationToken> {
+    fn push_text(&mut self, text: String) -> Option<GenerationToken> {
+        if matches!(&self.state, State::RoleName) {
+            return None;
+        }
         let State::ChannelName(name) = &mut self.state else {
-            return nonempty(id, text, channel(&self.state));
+            return self.nonempty(text, channel(&self.state));
         };
         name.push_str(&text);
         let newline = name.find('\n')?;
         let remainder = name[newline + 1..].to_owned();
         let channel = named_channel(&name[..newline]);
         self.state = state(channel);
-        nonempty(id, remainder, channel)
+        self.nonempty(remainder, channel)
     }
 
     fn finish_channel_name(&mut self) {
@@ -92,29 +94,19 @@ impl OutputNormalizer {
         };
         self.state = state(named_channel(name));
     }
-}
 
-impl Markers {
-    fn new(tokenizer: &TextTokenizer) -> Self {
-        Self {
-            reasoning: token_ids(
-                tokenizer,
-                &["<think>", "<|think|>", "<|analysis|>", "<|reasoning|>"],
-            ),
-            content: token_ids(tokenizer, &["</think>", "<|final|>", "<|content|>"]),
-            channel: token_ids(tokenizer, &["<|channel>", "<|channel|>"]),
-            channel_body: token_ids(tokenizer, &["<|message|>"]),
-            channel_end: token_ids(tokenizer, &["<channel|>", "<|end|>", "<|return|>"]),
-            tool_calls: token_ids(tokenizer, &["[TOOL_CALLS]"]),
+    fn nonempty(&mut self, text: String, channel: GenerationChannel) -> Option<GenerationToken> {
+        if text.is_empty() {
+            return None;
         }
+        let id = self.pending_ids.pop()?;
+        Some(GenerationToken {
+            preceding_ids: std::mem::take(&mut self.pending_ids),
+            id,
+            text,
+            channel,
+        })
     }
-}
-
-fn token_ids(tokenizer: &TextTokenizer, tokens: &[&str]) -> Vec<u32> {
-    tokens
-        .iter()
-        .filter_map(|token| tokenizer.added_token_id(token).or_else(|| tokenizer.token_id(token)))
-        .collect()
 }
 
 fn prompt_requests_reasoning(prompt: &str) -> bool {
@@ -133,7 +125,7 @@ const fn channel(state: &State) -> GenerationChannel {
     match state {
         State::Reasoning => GenerationChannel::Reasoning,
         State::ToolCalls => GenerationChannel::ToolCalls,
-        State::Content | State::ChannelName(_) => GenerationChannel::Content,
+        State::Content | State::RoleName | State::ChannelName(_) => GenerationChannel::Content,
     }
 }
 
@@ -153,9 +145,8 @@ const fn state(channel: GenerationChannel) -> State {
     }
 }
 
-fn nonempty(id: u32, text: String, channel: GenerationChannel) -> Option<GenerationToken> {
-    (!text.is_empty()).then_some(GenerationToken { id, text, channel })
-}
-
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+type Markers = OutputMarkerIds;

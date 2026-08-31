@@ -1,6 +1,9 @@
+use std::time::Instant;
+
 use models::generation::GenerationSettings;
 use runtime::{
     backend::{CandidateLogitsTrace, LogitsTrace, SamplingLogits},
+    metrics::GenerationMetricsRecorder,
     sampling::{Sampler, SamplerConfig},
 };
 
@@ -42,8 +45,17 @@ pub(super) fn sampling(settings: GenerationSettings, vocab_size: usize) -> Sampl
     if greedy {
         return SamplingLogits::None;
     }
-    if settings.repetition_penalty <= 1.0 && settings.top_k > 0 && settings.top_k < vocab_size {
-        if settings.top_p < 1.0 {
+    if settings.repetition_penalty <= 1.0 {
+        if settings.top_k == 0 && settings.top_p >= 1.0 {
+            return SamplingLogits::Sample {
+                vocab_size,
+                temperature: settings.temperature,
+                top_p: settings.top_p,
+                top_k: 0,
+                draw: 0.0,
+            };
+        }
+        if settings.top_k > 0 && settings.top_k < vocab_size && settings.top_p < 1.0 {
             return SamplingLogits::Sample {
                 vocab_size,
                 temperature: settings.temperature,
@@ -52,12 +64,14 @@ pub(super) fn sampling(settings: GenerationSettings, vocab_size: usize) -> Sampl
                 draw: 0.0,
             };
         }
-        return SamplingLogits::SampleTopK {
-            k: settings.top_k,
-            vocab_size,
-            temperature: settings.temperature,
-            draw: 0.0,
-        };
+        if settings.top_k > 0 && settings.top_k < vocab_size {
+            return SamplingLogits::SampleTopK {
+                k: settings.top_k,
+                vocab_size,
+                temperature: settings.temperature,
+                draw: 0.0,
+            };
+        }
     }
     SamplingLogits::Full
 }
@@ -79,4 +93,18 @@ pub(super) fn choose(
         runtime::RuntimeError::Backend("backend returned neither a token nor logits".into())
     })?;
     Ok(sampler.sample_with_history(logits, history)?)
+}
+
+pub(super) fn choose_timed(
+    metrics: &mut GenerationMetricsRecorder,
+    token: Option<u32>,
+    logits: Option<&LogitsTrace>,
+    candidates: Option<&CandidateLogitsTrace>,
+    history: &[u32],
+    sampler: &mut Sampler,
+) -> Result<u32> {
+    let started = Instant::now();
+    let result = choose(token, logits, candidates, history, sampler);
+    metrics.record_sampling(started.elapsed());
+    result
 }

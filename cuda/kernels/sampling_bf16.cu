@@ -1,6 +1,7 @@
 #include <cuda_bf16.h>
 #include <cub/block/block_radix_sort.cuh>
 #include <cub/block/block_reduce.cuh>
+#include <cub/block/block_scan.cuh>
 
 namespace {
 constexpr unsigned int kThreads = 256;
@@ -129,4 +130,85 @@ extern "C" __global__ void libmir_cuda_sampling_finalize_bf16(
     }
   }
   output[row] = selected;
+}
+
+extern "C" __global__ void libmir_cuda_sampling_full_mass_bf16(
+    const __nv_bfloat16* logits, const unsigned long long* candidates,
+    float* block_mass, unsigned int vocab, float temperature,
+    unsigned int logits_stride, unsigned int row, unsigned int workspace_stride) {
+  using Reduce = cub::BlockReduce<float, kThreads>;
+  __shared__ typename Reduce::TempStorage storage;
+  logits += static_cast<unsigned long long>(row) * logits_stride;
+  candidates += static_cast<unsigned long long>(row) * workspace_stride;
+  block_mass += static_cast<unsigned long long>(row) * gridDim.x;
+  const float maximum = __bfloat162float(logits[token(candidates[0])]);
+  const unsigned int base = blockIdx.x * kChunk;
+  float local = 0.0f;
+  #pragma unroll
+  for (unsigned int item = 0; item < kItems; ++item) {
+    const unsigned int index = base + threadIdx.x + item * kThreads;
+    if (index < vocab) {
+      const float score = __bfloat162float(logits[index]);
+      if (finite(score)) local += expf((score - maximum) / temperature);
+    }
+  }
+  const float total = Reduce(storage).Sum(local);
+  if (threadIdx.x == 0) block_mass[blockIdx.x] = total;
+}
+
+extern "C" __global__ void libmir_cuda_sampling_full_finalize_bf16(
+    const __nv_bfloat16* logits, const unsigned long long* candidates,
+    const float* block_mass, unsigned int* output, float temperature, float draw,
+    unsigned int vocab, unsigned int logits_stride, unsigned int row,
+    unsigned int workspace_stride, unsigned int block_count) {
+  using Scan = cub::BlockScan<float, kThreads>;
+  __shared__ typename Scan::TempStorage scan_storage;
+  __shared__ unsigned int selected_block;
+  __shared__ float selected_threshold;
+  logits += static_cast<unsigned long long>(row) * logits_stride;
+  candidates += static_cast<unsigned long long>(row) * workspace_stride;
+  block_mass += static_cast<unsigned long long>(row) * block_count;
+  const float maximum = __bfloat162float(logits[token(candidates[0])]);
+  if (threadIdx.x == 0) {
+    float total = 0.0f;
+    for (unsigned int block = 0; block < block_count; ++block) total += block_mass[block];
+    selected_threshold = total * draw;
+    selected_block = 0;
+    while (selected_block + 1 < block_count &&
+           (block_mass[selected_block] <= 0.0f ||
+            selected_threshold > block_mass[selected_block])) {
+      selected_threshold -= block_mass[selected_block];
+      selected_block++;
+    }
+    output[row] = token(candidates[0]);
+  }
+  __syncthreads();
+  const unsigned int begin = selected_block * kChunk + threadIdx.x * kItems;
+  float weights[kItems];
+  float local = 0.0f;
+  #pragma unroll
+  for (unsigned int item = 0; item < kItems; ++item) {
+    const unsigned int index = begin + item;
+    const float score = index < vocab ? __bfloat162float(logits[index]) : 0.0f;
+    weights[item] = index < vocab && finite(score)
+                           ? expf((score - maximum) / temperature)
+                           : 0.0f;
+    local += weights[item];
+  }
+  float prefix = 0.0f;
+  Scan(scan_storage).ExclusiveSum(local, prefix);
+  const bool starts_distribution =
+      selected_threshold == 0.0f && prefix == 0.0f && local > 0.0f;
+  if (selected_threshold <= prefix + local &&
+      (selected_threshold > prefix || starts_distribution)) {
+    float cumulative = prefix;
+    #pragma unroll
+    for (unsigned int item = 0; item < kItems; ++item) {
+      cumulative += weights[item];
+      if (weights[item] > 0.0f && selected_threshold <= cumulative) {
+        output[row] = begin + item;
+        break;
+      }
+    }
+  }
 }

@@ -11,9 +11,32 @@ use mircuda::{
     Compiler, Context, DenseVectorPlan, DenseVectorSpec, Driver, MemoryPool, Stream, bf16,
 };
 
-const INPUT: usize = 2_880;
-const OUTPUT: usize = 201_088;
 const ITERATIONS: u16 = 32;
+
+const PROFILES: [Profile; 3] = [
+    Profile {
+        name: "GPT-OSS 20B",
+        input: 2_880,
+        output: 201_088,
+    },
+    Profile {
+        name: "Qwen 3.6 35B-A3B geometry control",
+        input: 2_048,
+        output: 248_320,
+    },
+    Profile {
+        name: "Qwen 3.8 27B",
+        input: 5_120,
+        output: 248_320,
+    },
+];
+
+#[derive(Clone, Copy)]
+struct Profile {
+    name: &'static str,
+    input: usize,
+    output: usize,
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let driver = Driver::initialize()?;
@@ -23,19 +46,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let stream = context.create_stream()?;
     let pool = context.default_memory_pool()?;
     pool.set_release_threshold(2 * 1_024 * 1_024 * 1_024)?;
-    let report = profile(&context, &stream, &pool)?;
     let mut output = io::stdout().lock();
     writeln!(
         output,
         "device: {} (compute {}.{})",
         info.name, info.compute_capability.0, info.compute_capability.1
     )?;
-    writeln!(output, "GPT-OSS output head: {INPUT} -> {OUTPUT}")?;
-    writeln!(output, "  exact BF16:       {:.3} us/token", report.exact)?;
-    writeln!(output, "  block FP8:        {:.3} us/token", report.fp8)?;
-    writeln!(output, "  refinement only:  {:.3} us/token", report.refine)?;
-    writeln!(output, "  FP8 + refinement: {:.3} us/token", report.full)?;
-    writeln!(output, "  exact/full speedup: {:.3}x", report.exact / report.full)?;
+    for shape in PROFILES {
+        let report = profile(&context, &stream, &pool, shape)?;
+        writeln!(
+            output,
+            "{} synthetic output-head geometry: {} -> {}",
+            shape.name, shape.input, shape.output
+        )?;
+        writeln!(output, "  BF16 baseline:      {:.3} us/token", report.exact)?;
+        writeln!(output, "  block FP8:          {:.3} us/token", report.fp8)?;
+        writeln!(output, "  refinement only:    {:.3} us/token", report.refine)?;
+        writeln!(output, "  FP8 + refinement:   {:.3} us/token", report.full)?;
+        writeln!(output, "  baseline/full speedup: {:.3}x", report.exact / report.full)?;
+    }
     Ok(())
 }
 
@@ -46,26 +75,34 @@ struct Report {
     full: f64,
 }
 
-fn profile(context: &Context, stream: &Stream, pool: &MemoryPool) -> libmir_cuda::Result<Report> {
-    let input = pool.allocate_zeroed::<bf16>(stream, INPUT)?;
-    let exact_weight = pool.allocate_zeroed::<bf16>(stream, INPUT * OUTPUT)?;
-    let mut logits = pool.allocate_zeroed::<bf16>(stream, OUTPUT)?;
+fn profile(
+    context: &Context,
+    stream: &Stream,
+    pool: &MemoryPool,
+    shape: Profile,
+) -> libmir_cuda::Result<Report> {
+    let input = pool.allocate_zeroed::<bf16>(stream, shape.input)?;
+    let exact_weight = pool.allocate_zeroed::<bf16>(stream, shape.input * shape.output)?;
+    let mut logits = pool.allocate_zeroed::<bf16>(stream, shape.output)?;
     let cuda_home =
         env::var_os("CUDA_HOME").map_or_else(|| PathBuf::from("/usr/local/cuda"), PathBuf::from);
     let include = cuda_home.join("include");
     let compiler =
         Compiler::with_include_paths(context.clone(), [include.clone(), include.join("cccl")])?;
-    let spec = BlockFp8LinearSpec::new(INPUT, OUTPUT)?;
+    let spec = BlockFp8LinearSpec::new(shape.input, shape.output)?;
     let kernels = BlockFp8LinearKernels::compile(&compiler, spec)?;
     let mut weight = pool.allocate::<u8>(stream, spec.weight_elements()?)?;
     let mut scales = pool.allocate::<f32>(stream, spec.scale_elements()?)?;
     kernels.quantize(stream, &exact_weight, &mut weight, &mut scales)?;
-    let refinement =
-        Fp8RefinementKernels::compile(&compiler, Fp8OutputSpec::new_refinement(INPUT, OUTPUT)?)?;
-    let workspace = Fp8RefinementKernels::workspace_elements(OUTPUT)?;
+    let refinement = Fp8RefinementKernels::compile(
+        &compiler,
+        Fp8OutputSpec::new_refinement(shape.input, shape.output)?,
+    )?;
+    let workspace = Fp8RefinementKernels::workspace_elements(shape.output)?;
     let mut first = pool.allocate::<u64>(stream, workspace)?;
     let mut second = pool.allocate::<u64>(stream, workspace)?;
-    let mut exact = DenseVectorPlan::new(context, stream, DenseVectorSpec::new(OUTPUT, INPUT)?)?;
+    let mut exact =
+        DenseVectorPlan::new(context, stream, DenseVectorSpec::new(shape.output, shape.input)?)?;
     for _ in 0..4 {
         kernels.project(stream, &input, &weight, &scales, &mut logits)?;
         refinement.execute(stream, &input, &exact_weight, &mut logits, &mut first, &mut second)?;

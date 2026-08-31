@@ -6,6 +6,7 @@ mod profile;
 mod storage;
 #[cfg(test)]
 mod tests;
+mod windowed_prefill;
 
 pub use attention::{
     BatchedPagedAttentionBf16, BatchedPrefillPagedAttentionBf16, PagedAttentionBf16,
@@ -21,3 +22,4 @@ pub(in crate::backend) use attention::{
 pub use batch::PagedDecodeBatch;
 pub use prefill_batch::PagedPrefillBatch;
 pub use storage::PagedKvCache;
+pub use windowed_prefill::WindowedPrefillStaging;

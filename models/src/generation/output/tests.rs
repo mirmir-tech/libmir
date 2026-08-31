@@ -48,6 +48,24 @@ fn parses_harmony_channel_header() {
 }
 
 #[test]
+fn suppresses_harmony_role_before_final_channel() {
+    let mut normalizer = normalizer(Markers {
+        turn_start: vec![2],
+        channel: vec![3],
+        channel_body: vec![4],
+        ..Markers::default()
+    });
+    assert!(normalizer.push(2, String::new()).is_none());
+    assert!(normalizer.push(11, "assistant".into()).is_none());
+    assert!(normalizer.push(3, String::new()).is_none());
+    assert!(normalizer.push(12, "final".into()).is_none());
+    assert!(normalizer.push(4, String::new()).is_none());
+    let token = normalizer.push(13, "answer".into());
+    assert_eq!(token.as_ref().map(|token| token.channel), Some(GenerationChannel::Content));
+    assert_eq!(token.map(|token| token.text), Some("answer".to_owned()));
+}
+
+#[test]
 fn parses_newline_terminated_thought_channel() {
     let mut normalizer = normalizer(Markers { channel: vec![3], ..Markers::default() });
     assert!(normalizer.push(3, String::new()).is_none());
@@ -65,5 +83,18 @@ fn detects_reasoning_opened_by_prompt() {
 }
 
 fn normalizer(markers: Markers) -> OutputNormalizer {
-    OutputNormalizer { markers, state: State::Content }
+    OutputNormalizer {
+        markers,
+        state: State::Content,
+        pending_ids: Vec::new(),
+    }
+}
+
+#[test]
+fn retains_ids_buffered_before_visible_text() {
+    let mut normalizer = normalizer(Markers::default());
+    assert!(normalizer.push(7, String::new()).is_none());
+    let token = normalizer.push(8, "x".into());
+    assert_eq!(token.as_ref().map(|token| token.preceding_ids.as_slice()), Some([7].as_slice()));
+    assert_eq!(token.map(|token| token.id), Some(8));
 }

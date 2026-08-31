@@ -9,6 +9,7 @@ use runtime::backend::SamplingLogits;
 use uuid::Uuid;
 
 mod metrics;
+mod output;
 
 use metrics::{Metrics, RANK, ratio};
 

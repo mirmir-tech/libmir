@@ -13,6 +13,7 @@ pub struct ScheduledRequest {
 pub struct SchedulerConfig {
     pub max_batch_requests: usize,
     pub max_batch_tokens: usize,
+    pub prefill_batch_wait_us: u64,
     pub decode_batch_wait_us: u64,
     pub decode_priority_burst: usize,
 }
@@ -88,6 +89,7 @@ impl Default for SchedulerConfig {
         Self {
             max_batch_requests: 16,
             max_batch_tokens: 8192,
+            prefill_batch_wait_us: 200,
             decode_batch_wait_us: 200,
             decode_priority_burst: 8,
         }

@@ -64,5 +64,6 @@ pub(super) fn materialize_prefill_parts(
         trace: Some(trace),
         logits: output.logits,
         candidates: output.candidates,
+        timings: None,
     })
 }

@@ -105,6 +105,7 @@ impl CudaEngine {
             )),
             logits: completed.logits,
             candidates: None,
+            timings: None,
         })
     }
 
@@ -194,6 +195,7 @@ impl CudaEngine {
             )),
             logits: completed.logits,
             candidates: None,
+            timings: None,
         })
     }
 }

@@ -8,17 +8,13 @@ use super::{
 };
 use crate::{
     ExecutionPhase, PlanSource, Result,
-    backend::{
-        clamped_routed::experts::candidate::Candidate,
-        tuning::{ClampedMoeExecution, MoeProfileExecution},
-    },
+    backend::tuning::{ClampedMoeExecution, MoeProfileExecution},
 };
 
 mod measure;
 
 const ABSOLUTE_TOLERANCE: f32 = 0.125;
 const RELATIVE_TOLERANCE: f32 = 0.01;
-
 impl AutoClampedExperts {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn tune(
@@ -32,7 +28,7 @@ impl AutoClampedExperts {
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
         let started = Instant::now();
-        self.prepare_candidates();
+        self.prepare_candidates(weights);
         self.retain_compatible(weights, input, selected, routing, activated, partial, output)?;
         let (winner, average, measured_elapsed) =
             self.measure(weights, input, selected, routing, activated, partial, output)?;
@@ -55,12 +51,32 @@ impl AutoClampedExperts {
         Ok(())
     }
 
-    fn prepare_candidates(&mut self) {
-        for execution in [ClampedMoeExecution::FusedReduce, ClampedMoeExecution::RouteParallel] {
+    fn prepare_candidates(&mut self, weights: &ClampedRoutedExpertWeights) {
+        for execution in [
+            ClampedMoeExecution::FusedReduce,
+            ClampedMoeExecution::RouteParallel,
+            ClampedMoeExecution::MarlinN128K128,
+            ClampedMoeExecution::MarlinN128K64,
+            ClampedMoeExecution::MarlinN64K128,
+            ClampedMoeExecution::MarlinM64N256K64,
+            ClampedMoeExecution::MarlinM64N128K64,
+            ClampedMoeExecution::MarlinM64N64K128,
+        ]
+        .map(|execution| execution.for_batch(self.tokens, self.config.experts, self.config.top_k))
+        {
             if self.candidates.iter().any(|candidate| candidate.execution == execution) {
                 continue;
             }
-            self.candidates.push(Candidate::new(self.kernels.clone(), execution));
+            match super::candidate(
+                &self.backend, self.config, self.tokens, weights, &self.kernels, execution,
+            ) {
+                Ok(candidate) => self.candidates.push(candidate),
+                Err(error) => tracing::debug!(
+                    ?execution,
+                    %error,
+                    "clamped CUDA MoE candidate is unavailable for this geometry"
+                ),
+            }
         }
     }
 
@@ -101,7 +117,31 @@ impl AutoClampedExperts {
                     partial,
                     output,
                 )?;
-                equivalent(&reference, &read(&self.backend, output)?)
+                let comparison = compare(&reference, &read(&self.backend, output)?);
+                tracing::debug!(
+                    target: "libmir::cuda::tuning",
+                    execution = ?candidate.execution,
+                    max_abs = comparison.max_abs,
+                    max_rel = comparison.max_rel,
+                    index = comparison.index,
+                    reference = comparison.reference,
+                    candidate = comparison.candidate,
+                    equivalent = comparison.equivalent,
+                    "compared clamped CUDA MoE candidate output"
+                );
+                if !comparison.equivalent {
+                    tracing::warn!(
+                        execution = ?candidate.execution,
+                        stage = "output",
+                        max_abs = comparison.max_abs,
+                        max_rel = comparison.max_rel,
+                        index = comparison.index,
+                        reference = comparison.reference,
+                        candidate = comparison.candidate,
+                        "clamped CUDA MoE candidate stage differs"
+                    );
+                }
+                comparison.equivalent
             };
             if !compatible {
                 tracing::warn!(
@@ -134,16 +174,41 @@ fn read(backend: &crate::CudaBackend, output: &DeviceBuffer<bf16>) -> Result<Vec
     Ok(host.to_vec()?)
 }
 
-fn equivalent(reference: &[bf16], candidate: &[bf16]) -> bool {
-    reference.len() == candidate.len()
-        && reference.iter().zip(candidate).all(|(reference, candidate)| {
-            let reference = reference.to_f32();
-            let candidate = candidate.to_f32();
-            reference.is_finite()
-                && candidate.is_finite()
-                && (reference - candidate).abs()
-                    <= ABSOLUTE_TOLERANCE.max(reference.abs() * RELATIVE_TOLERANCE)
-        })
+struct Comparison {
+    equivalent: bool,
+    max_abs: f32,
+    max_rel: f32,
+    index: usize,
+    reference: f32,
+    candidate: f32,
+}
+
+fn compare(reference: &[bf16], candidate: &[bf16]) -> Comparison {
+    let mut result = Comparison {
+        equivalent: reference.len() == candidate.len(),
+        max_abs: 0.0,
+        max_rel: 0.0,
+        index: 0,
+        reference: 0.0,
+        candidate: 0.0,
+    };
+    for (index, (reference, candidate)) in reference.iter().zip(candidate).enumerate() {
+        let reference = reference.to_f32();
+        let candidate = candidate.to_f32();
+        let absolute = (reference - candidate).abs();
+        let relative = absolute / reference.abs().max(f32::MIN_POSITIVE);
+        if !reference.is_finite() || !candidate.is_finite() || absolute > result.max_abs {
+            result.max_abs = absolute;
+            result.max_rel = relative;
+            result.index = index;
+            result.reference = reference;
+            result.candidate = candidate;
+        }
+        result.equivalent &= reference.is_finite()
+            && candidate.is_finite()
+            && absolute <= ABSOLUTE_TOLERANCE.max(reference.abs() * RELATIVE_TOLERANCE);
+    }
+    result
 }
 
 pub(super) fn trace_selection(
@@ -178,7 +243,7 @@ mod tests {
         let reference = [1.0, -20.0, 0.0].map(bf16::from_f32);
         let close = [1.125, -20.125, 0.125].map(bf16::from_f32);
         let drift = [1.5, -20.0, 0.0].map(bf16::from_f32);
-        assert!(equivalent(&reference, &close));
-        assert!(!equivalent(&reference, &drift));
+        assert!(compare(&reference, &close).equivalent);
+        assert!(!compare(&reference, &drift).equivalent);
     }
 }

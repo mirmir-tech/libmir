@@ -16,6 +16,7 @@ pub struct DeviceBatchSamplerBf16 {
     first: DeviceBuffer<u64>,
     second: DeviceBuffer<u64>,
     denominator: DeviceBuffer<f32>,
+    block_mass: DeviceBuffer<f32>,
     vocab: usize,
     rows: usize,
 }
@@ -33,6 +34,9 @@ impl CudaBackend {
         let workspace = per_row
             .checked_mul(rows)
             .ok_or_else(|| Error::InvalidSampling("sampling batch workspace overflow".into()))?;
+        let block_mass = Sampling::block_mass_elements(vocab)?
+            .checked_mul(rows)
+            .ok_or_else(|| Error::InvalidSampling("sampling mass workspace overflow".into()))?;
         Ok(DeviceBatchSamplerBf16 {
             operation: Sampling::compile(&self.inner.compiler, vocab)?,
             stream: self.inner.stream.clone(),
@@ -40,6 +44,7 @@ impl CudaBackend {
             first: self.inner.pool.allocate(&self.inner.stream, workspace)?,
             second: self.inner.pool.allocate(&self.inner.stream, workspace)?,
             denominator: self.inner.pool.allocate(&self.inner.stream, rows)?,
+            block_mass: self.inner.pool.allocate(&self.inner.stream, block_mass)?,
             vocab,
             rows,
         })
@@ -64,6 +69,7 @@ impl DeviceBatchSamplerBf16 {
                     first: &mut self.first,
                     second: &mut self.second,
                     denominator: &mut self.denominator,
+                    block_mass: &mut self.block_mass,
                 },
                 spec(self.vocab, policy)?,
                 row,

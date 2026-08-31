@@ -52,8 +52,11 @@ impl Worker {
         {
             return;
         }
-        let quiet = Duration::from_micros(
-            self.config.decode_batch_wait_us.saturating_mul(PREFILL_QUIET_WAIT_MULTIPLIER),
+        let quiet = prefill_quiet_wait(
+            self.config.prefill_batch_wait_us,
+            self.active_decode.len(),
+            self.prefill.len(),
+            self.prefill_admission_limit(),
         );
         let started = Instant::now();
         let hard_deadline = started + quiet.saturating_mul(PREFILL_HARD_WAIT_MULTIPLIER);
@@ -116,6 +119,14 @@ impl Worker {
             self.prefill.iter().take(available).map(|pending| &pending.request.block_table),
             capacity_blocks,
         )
+    }
+}
+
+fn prefill_quiet_wait(base_us: u64, decode_rows: usize, waiting: usize, target: usize) -> Duration {
+    if decode_rows == 0 || waiting >= target {
+        Duration::ZERO
+    } else {
+        Duration::from_micros(base_us.saturating_mul(PREFILL_QUIET_WAIT_MULTIPLIER))
     }
 }
 

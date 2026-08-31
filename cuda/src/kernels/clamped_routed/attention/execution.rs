@@ -21,9 +21,12 @@ impl ClampedRoutedAttention {
         window: Option<usize>,
         scale: f32,
     ) -> Result<()> {
-        if self.execute_fmha(
-            stream, query, key_pages, value_pages, batch, tables, sinks, softmax_lse, output, scale,
-        )? {
+        if window.is_none()
+            && self.execute_fmha(
+                stream, query, key_pages, value_pages, batch, tables, sinks, softmax_lse, output,
+                scale,
+            )?
+        {
             return Ok(());
         }
         Ok(self.batch_prefill.launch(

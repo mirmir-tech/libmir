@@ -165,10 +165,10 @@ impl CudaClampedRoutedModelSession {
 }
 
 fn checkpoint_tokens(end: usize, block_size: usize) -> usize {
-    if block_size == 0 {
+    if block_size == 0 || !end.is_multiple_of(block_size) {
         return 0;
     }
-    end.saturating_sub(block_size) / block_size * block_size
+    end
 }
 
 fn key(model: &str, prompt: &[u32], tokens: usize) -> CheckpointKey {
@@ -183,10 +183,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn aligns_retained_prefixes_to_complete_cache_blocks() {
-        assert_eq!(checkpoint_tokens(2_048, 16), 2_032);
-        assert_eq!(checkpoint_tokens(4_097, 16), 4_080);
-        assert_eq!(checkpoint_tokens(8_193, 16), 8_176);
+    fn retains_only_the_exact_aligned_session_position() {
+        assert_eq!(checkpoint_tokens(2_048, 16), 2_048);
+        assert_eq!(checkpoint_tokens(4_097, 16), 0);
+        assert_eq!(checkpoint_tokens(8_193, 16), 0);
         assert_eq!(checkpoint_tokens(15, 16), 0);
         assert_eq!(checkpoint_tokens(64, 0), 0);
     }

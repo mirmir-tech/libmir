@@ -112,10 +112,14 @@ impl PrefillCoordinator {
         let Ok(state) = self.state.lock() else {
             return Err(scheduler_error("prefill admission lock is poisoned"));
         };
-        let wait = Duration::from_micros(
-            self.config.decode_batch_wait_us.saturating_mul(COHORT_WAIT_MULTIPLIER),
-        );
         let target = self.config.max_batch_requests.max(1);
+        let step = self.step.plan();
+        let wait = prefill_cohort_wait(
+            self.config.prefill_batch_wait_us,
+            step.decode_tokens,
+            state.waiting.len(),
+            target,
+        );
         let Ok((mut state, _timeout)) = self
             .arrived
             .wait_timeout_while(state, wait, |state| state.waiting.len() < target)
@@ -139,6 +143,7 @@ impl PrefillCoordinator {
             .map(|pending| pending.enqueued.elapsed())
             .max()
             .unwrap_or_default();
+        let queue = cohort.iter().map(|pending| pending.enqueued.elapsed()).collect::<Vec<_>>();
         let requests = cohort.iter().map(|pending| pending.request.clone()).collect::<Vec<_>>();
         let mut report = |row: usize, event| {
             let pending = &cohort[row];
@@ -154,7 +159,10 @@ impl PrefillCoordinator {
             &mut report,
         ) {
             Ok(outputs) if outputs.len() == rows => {
-                for (pending, output) in cohort.into_iter().zip(outputs) {
+                for ((pending, mut output), scheduler_queue) in
+                    cohort.into_iter().zip(outputs).zip(queue)
+                {
+                    output.timings.get_or_insert_default().scheduler_queue = scheduler_queue;
                     pending.response.complete(Ok(output));
                 }
             },
@@ -184,6 +192,19 @@ impl PrefillCoordinator {
     }
 }
 
+fn prefill_cohort_wait(
+    base_us: u64,
+    decode_rows: usize,
+    waiting: usize,
+    target: usize,
+) -> Duration {
+    if decode_rows == 0 || waiting >= target {
+        Duration::ZERO
+    } else {
+        Duration::from_micros(base_us.saturating_mul(COHORT_WAIT_MULTIPLIER))
+    }
+}
+
 fn scheduler_error(message: &str) -> crate::Error {
     runtime::RuntimeError::Scheduler(message.into()).into()
 }
@@ -196,10 +217,19 @@ fn complete_errors(cohort: Vec<Pending>, message: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::COHORT_WAIT_MULTIPLIER;
+    use std::time::Duration;
+
+    use super::{COHORT_WAIT_MULTIPLIER, prefill_cohort_wait};
 
     #[test]
     fn prefill_cohort_uses_a_stable_collection_window() {
         assert_eq!(COHORT_WAIT_MULTIPLIER, 25);
+    }
+
+    #[test]
+    fn idle_prefill_does_not_wait_for_a_cohort() {
+        assert_eq!(prefill_cohort_wait(200, 0, 1, 16), Duration::ZERO);
+        assert_eq!(prefill_cohort_wait(200, 1, 16, 16), Duration::ZERO);
+        assert_eq!(prefill_cohort_wait(200, 1, 1, 16), Duration::from_millis(5));
     }
 }

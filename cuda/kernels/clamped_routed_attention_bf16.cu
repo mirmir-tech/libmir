@@ -205,6 +205,7 @@ extern "C" __global__ void libmir_cuda_clamped_routed_paged_attention_bf16(
           clamped_routed_load_kv(
               value_pages, current_values, page_base + second_dim,
               current_base + second_dim, from_current) * warp_beta);
+      __syncwarp();
     }
     output[query_base + first_dim] =
         __float2bfloat16_rn(first_accumulator / warp_denominator);
@@ -257,6 +258,7 @@ extern "C" __global__ void libmir_cuda_clamped_routed_paged_attention_bf16(
               value_pages, current_values, value_index, current_index,
               from_current) * beta);
     }
+    __syncthreads();
   }
   if (lane < head_dim) output[query_head * head_dim + lane] =
       __float2bfloat16_rn(accumulator / denominator);
@@ -332,6 +334,7 @@ extern "C" __global__ void libmir_cuda_clamped_routed_paged_prefill_attention_bf
           clamped_routed_load_kv(
               value_pages, current_values, page_base + second_dim,
               current_base + second_dim, from_current) * warp_beta);
+      __syncwarp();
     }
     output[query_base + first_dim] =
         __float2bfloat16_rn(first_accumulator / warp_denominator);
@@ -388,6 +391,7 @@ extern "C" __global__ void libmir_cuda_clamped_routed_paged_prefill_attention_bf
               value_pages, current_values, value_index, current_index,
               from_current) * beta);
     }
+    __syncthreads();
   }
   if (lane < head_dim) {
     const unsigned int out = (query_token * query_heads + query_head) * head_dim + lane;
@@ -469,6 +473,7 @@ extern "C" __global__ void libmir_cuda_clamped_routed_paged_batch_prefill_attent
           clamped_routed_load_kv(
               value_pages, current_values, page_base + second_dim,
               current_base + second_dim, from_current) * warp_beta);
+      __syncwarp();
     }
     output[query_base + first_dim] =
         __float2bfloat16_rn(first_accumulator / warp_denominator);
@@ -531,6 +536,7 @@ extern "C" __global__ void libmir_cuda_clamped_routed_paged_batch_prefill_attent
               value_pages, current_values, value_index, current_index,
               from_current) * beta);
     }
+    __syncthreads();
   }
   if (lane < head_dim) {
     const unsigned int out =

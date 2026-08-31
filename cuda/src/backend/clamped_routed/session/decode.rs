@@ -91,6 +91,8 @@ impl ClampedRoutedDecodeBatch {
                 }
             },
         });
+        #[cfg(feature = "diagnostics")]
+        self.publish_fingerprints()?;
         Ok(())
     }
 
@@ -128,6 +130,11 @@ impl ClampedRoutedDecodeBatch {
             DecodeState::Direct(resources) => operation(resources),
             DecodeState::Captured { graph, .. } => graph.with_resources_mut(operation),
         }
+    }
+
+    #[cfg(feature = "diagnostics")]
+    fn publish_fingerprints(&mut self) -> Result<()> {
+        self.with_resources_mut(|resources| resources.plan.publish_fingerprints())
     }
 }
 

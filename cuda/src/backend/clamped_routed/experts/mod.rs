@@ -10,6 +10,7 @@ use crate::{
 };
 
 mod candidate;
+mod marlin;
 #[cfg(all(test, target_os = "linux"))]
 mod tests;
 mod tuning;
@@ -52,22 +53,32 @@ impl AutoClampedExperts {
             storage,
         );
         let cached =
-            backend.auto_tuner().lookup_moe(profile).and_then(
-                |(execution, source)| match execution {
+            backend
+                .auto_tuner()
+                .lookup_clamped_moe(profile)
+                .and_then(|(execution, source)| match execution {
                     MoeProfileExecution::Clamped(execution) => Some((execution, source)),
                     MoeProfileExecution::NvFp4(_)
                     | MoeProfileExecution::Affine(_)
                     | MoeProfileExecution::MxFp4(_)
                     | MoeProfileExecution::MxFp8(_) => None,
-                },
-            );
-        let selected = cached.map_or(ClampedMoeExecution::FusedReduce, |value| value.0);
-        let candidate = Candidate::new(kernels.clone(), selected);
+                });
+        let mut selected = cached.map_or(ClampedMoeExecution::FusedReduce, |value| {
+            value.0.for_batch(tokens, config.experts, config.top_k)
+        });
+        let candidate = match candidate(backend, config, tokens, weights, &kernels, selected) {
+            Ok(candidate) => candidate,
+            Err(error) => {
+                tracing::warn!(%error, ?selected, "cached clamped CUDA MoE plan is unavailable");
+                selected = ClampedMoeExecution::FusedReduce;
+                Candidate::portable(kernels.clone(), selected)
+            },
+        };
         let tunable = cached.is_none()
             && backend.auto_tuner().prepares_candidates(PlanSource::Heuristic)
             && (phase == ExecutionPhase::Prefill || tokens == 1);
-        if let Some((execution, source)) = cached {
-            tuning::trace_selection(config, tokens, phase, execution, source, None);
+        if let Some((_, source)) = cached {
+            tuning::trace_selection(config, tokens, phase, selected, source, None);
         }
         Some(Self {
             backend: backend.clone(),
@@ -120,19 +131,21 @@ impl AutoClampedExperts {
         output: &mut DeviceBuffer<bf16>,
     ) {
         self.tunable = false;
-        let cached =
-            self.backend
-                .auto_tuner()
-                .lookup_moe(self.profile)
-                .and_then(|(execution, source)| match execution {
-                    MoeProfileExecution::Clamped(execution) => Some((execution, source)),
-                    MoeProfileExecution::NvFp4(_)
-                    | MoeProfileExecution::Affine(_)
-                    | MoeProfileExecution::MxFp4(_)
-                    | MoeProfileExecution::MxFp8(_) => None,
-                });
+        let cached = self.backend.auto_tuner().lookup_clamped_moe(self.profile).and_then(
+            |(execution, source)| match execution {
+                MoeProfileExecution::Clamped(execution) => Some((execution, source)),
+                MoeProfileExecution::NvFp4(_)
+                | MoeProfileExecution::Affine(_)
+                | MoeProfileExecution::MxFp4(_)
+                | MoeProfileExecution::MxFp8(_) => None,
+            },
+        );
         if let Some((execution, source)) = cached {
-            self.retain_execution(execution);
+            let execution =
+                execution.for_batch(self.tokens, self.config.experts, self.config.top_k);
+            if let Err(error) = self.retain_execution(weights, execution) {
+                tracing::warn!(%error, ?execution, "cached clamped CUDA MoE plan is unavailable");
+            }
             tuning::trace_selection(self.config, self.tokens, self.phase, execution, source, None);
             return;
         }
@@ -147,15 +160,22 @@ impl AutoClampedExperts {
         }
     }
 
-    fn retain_execution(&mut self, execution: ClampedMoeExecution) {
+    fn retain_execution(
+        &mut self,
+        weights: &ClampedRoutedExpertWeights,
+        execution: ClampedMoeExecution,
+    ) -> Result<()> {
         let index = self.candidates.iter().position(|candidate| candidate.execution == execution);
         let index = if let Some(index) = index {
             index
         } else {
-            self.candidates.push(Candidate::new(self.kernels.clone(), execution));
+            self.candidates.push(candidate(
+                &self.backend, self.config, self.tokens, weights, &self.kernels, execution,
+            )?);
             self.candidates.len() - 1
         };
         self.retain(index);
+        Ok(())
     }
 
     fn retain(&mut self, selected: usize) {
@@ -163,5 +183,33 @@ impl AutoClampedExperts {
         self.candidates.clear();
         self.candidates.push(selected);
         self.fallback = 0;
+    }
+}
+
+fn candidate(
+    backend: &CudaBackend,
+    config: ClampedRoutedConfig,
+    tokens: usize,
+    weights: &ClampedRoutedExpertWeights,
+    kernels: &ClampedRoutedKernels,
+    execution: ClampedMoeExecution,
+) -> Result<Candidate> {
+    match execution {
+        ClampedMoeExecution::FusedReduce | ClampedMoeExecution::RouteParallel => {
+            Ok(Candidate::portable(kernels.clone(), execution))
+        },
+        ClampedMoeExecution::MarlinN128K128
+        | ClampedMoeExecution::MarlinN128K64
+        | ClampedMoeExecution::MarlinN64K128
+        | ClampedMoeExecution::MarlinM64N256K64
+        | ClampedMoeExecution::MarlinM64N128K64
+        | ClampedMoeExecution::MarlinM64N64K128 => {
+            let ClampedRoutedExpertWeights::Native(weights) = weights else {
+                return Err(crate::Error::InvalidExecutionPlan(
+                    "MXFP4 Marlin requires native clamped expert weights",
+                ));
+            };
+            Candidate::marlin(backend, config, tokens, weights, execution)
+        },
     }
 }

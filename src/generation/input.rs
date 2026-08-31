@@ -4,7 +4,7 @@ use runtime::backend::{PrefillOutput, SamplingLogits};
 
 #[cfg(any(feature = "cuda", feature = "metal"))]
 use crate::PreparedVisionPrompt;
-use crate::{Model, PreparedPrompt, ProgressEvent, Result, Session};
+use crate::{Model, PreparedPrompt, ProgressEvent, PromptPreparationTimings, Result, Session};
 
 pub(super) enum PreparedGeneration {
     Text(PreparedPrompt),
@@ -58,6 +58,14 @@ impl PreparedGeneration {
                 PreparedVisionPrompt::Pooled { prompt, .. }
                 | PreparedVisionPrompt::SpatialMerge { prompt, .. },
             ) => &prompt.text,
+        }
+    }
+
+    pub(super) fn preparation_timings(&self) -> PromptPreparationTimings {
+        match self {
+            Self::Text(prepared) => prepared.timings,
+            #[cfg(any(feature = "cuda", feature = "metal"))]
+            Self::Vision(_) => PromptPreparationTimings::default(),
         }
     }
 

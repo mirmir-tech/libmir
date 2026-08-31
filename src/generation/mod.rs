@@ -1,21 +1,24 @@
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-use models::generation::{
-    GenerationChannel, GenerationSettings, GenerationToken, OutputNormalizer,
-};
+use models::generation::{GenerationToken, OutputNormalizer};
 use runtime::{metrics::GenerationMetricsRecorder, sampling::Sampler};
 
-use crate::{CancellationToken, Error, Model, ProgressEvent, Result};
+use crate::{CancellationToken, Model, ProgressEvent, Result};
 
+mod cycle;
 mod input;
 mod output;
 mod request;
 mod sampling;
+mod telemetry;
 
+use cycle::CycleRecovery;
 use input::PreparedGeneration;
 pub use output::GenerationOutput;
-pub use request::GenerationRequest;
-use sampling::{choose, request_sampling, sampler_config};
+use output::{append_delta, finalize_output, finish_metrics, missing_decoder, should_stop};
+pub use request::{GenerationRequest, ReasoningCyclePolicy};
+use sampling::{choose_timed, request_sampling, sampler_config};
+use telemetry::{record_prefill_metrics, record_publish};
 
 impl Model {
     /// Generates and streams a complete normalized response.
@@ -62,28 +65,43 @@ impl Model {
         cancellation: &CancellationToken,
     ) -> Result<GenerationOutput> {
         cancellation.check()?;
+        let mut metrics = GenerationMetricsRecorder::new();
         let descriptor = self.descriptor();
         let settings = descriptor.resolve_generation(request.options)?;
+        let prompt_started = Instant::now();
         let prepared =
             PreparedGeneration::new(self, &request.conversation, settings, encoded_image)?;
         let prompt_tokens = prepared.token_ids().len();
-        let mut metrics = GenerationMetricsRecorder::new();
-        metrics.record_prompt(Duration::ZERO, prompt_tokens);
+        metrics.record_prompt(prompt_started.elapsed(), prompt_tokens);
+        let prompt_stages = prepared.preparation_timings();
+        metrics.record_prompt_stages(prompt_stages.render, prompt_stages.tokenize);
+        let output_setup_started = Instant::now();
         let tokenizer = descriptor.tokenizer();
         let stop_token_ids = tokenizer.stop_token_ids();
         let mut normalizer = OutputNormalizer::new(tokenizer, prepared.prompt_text());
         let mut text_decoder = tokenizer.decoder();
         let decoder = descriptor.decoder().ok_or_else(missing_decoder)?;
         let vocab_size = tokenizer.vocab_size().min(decoder.vocab_size);
+        let output_setup = output_setup_started.elapsed();
+        let sampler_started = Instant::now();
         let mut sampler = Sampler::new(sampler_config(settings, request.seed, vocab_size))?;
+        let sampler_setup = sampler_started.elapsed();
+        let session_started = Instant::now();
         let mut session = self.session();
         let sampling = request_sampling(settings, vocab_size, &mut sampler);
+        let harmony_exit = harmony_exit(request, descriptor)?;
+        let mut cycle_recovery =
+            CycleRecovery::new(settings, request.seed, vocab_size, sampling, harmony_exit)?;
+        metrics.record_setup_stages(output_setup, sampler_setup, session_started.elapsed());
         let prefill_started = Instant::now();
         let prefill = prepared.prefill(&mut session, settings.max_tokens, sampling, progress)?;
         cancellation.check()?;
-        metrics.record_prefill(prefill_started.elapsed(), prompt_tokens);
+        record_prefill_metrics(&mut metrics, prefill_started, prompt_tokens, &prefill);
+        let first_started = Instant::now();
+        let mut published = false;
         let mut history = sampling.requires_history().then(|| prepared.token_ids().to_vec());
-        let mut next = choose(
+        let mut next = choose_timed(
+            &mut metrics,
             prefill.next_token,
             prefill.logits.as_ref(),
             prefill.candidates.as_ref(),
@@ -91,9 +109,8 @@ impl Model {
             &mut sampler,
         )?;
         let mut token_ids = Vec::with_capacity(settings.max_tokens);
-        let mut text = String::new();
-        let mut reasoning = String::new();
-        let mut tool_calls = String::new();
+        let (mut text, mut reasoning, mut tool_calls) =
+            (String::new(), String::new(), String::new());
         let mut finish_reason = "max_tokens";
         while token_ids.len() < settings.max_tokens {
             cancellation.check()?;
@@ -104,11 +121,7 @@ impl Model {
             let piece = text_decoder.step(next)?.unwrap_or_default();
             let delta = normalizer.push(next, piece);
             if let Some(delta) = delta.as_ref() {
-                match delta.channel {
-                    GenerationChannel::Content => text.push_str(&delta.text),
-                    GenerationChannel::Reasoning => reasoning.push_str(&delta.text),
-                    GenerationChannel::ToolCalls => tool_calls.push_str(&delta.text),
-                }
+                append_delta(delta, &mut text, &mut reasoning, &mut tool_calls);
             }
             let stopped = should_stop(settings, token_ids.len(), next, &stop_token_ids);
             if stopped {
@@ -118,8 +131,10 @@ impl Model {
             let pending = if finished {
                 None
             } else {
+                cycle_recovery.observe(prepared.token_ids(), &token_ids);
                 let started = Instant::now();
                 let sampling = request_sampling(settings, vocab_size, &mut sampler);
+                let sampling = cycle_recovery.sampling(sampling);
                 Some((started, session.start_decode(next, sampling)?))
             };
             if token_ids.len() == 1 {
@@ -128,6 +143,7 @@ impl Model {
             progress(ProgressEvent::decode_tokens(token_ids.len(), settings.max_tokens));
             if let Some(delta) = delta {
                 token(delta);
+                record_publish(&mut metrics, first_started, token_ids.len(), &mut published);
             }
             if finished {
                 break;
@@ -137,45 +153,34 @@ impl Model {
             };
             let output = session.finish_decode(pending)?;
             metrics.record_decode(decode_started.elapsed());
-            next = choose(
-                output.event.token_id,
-                output.logits.as_ref(),
-                output.candidates.as_ref(),
+            next = cycle_recovery.choose(
+                &mut metrics,
+                &output,
                 history.as_deref().unwrap_or_default(),
                 &mut sampler,
             )?;
         }
-        metrics.record_generated(token_ids.len());
-        let metrics = metrics.snapshot(session.cache_stats());
-        if !tool_calls.is_empty() {
-            finish_reason = "tool_calls";
-        }
-        Ok(GenerationOutput {
-            text,
-            reasoning,
-            tool_calls,
-            token_ids,
-            prompt_tokens,
-            finish_reason,
-            metrics,
-        })
+        let metrics = finish_metrics(&mut metrics, token_ids.len(), &session);
+        Ok(finalize_output(
+            text, reasoning, tool_calls, token_ids, prompt_tokens, finish_reason, metrics,
+        ))
     }
 }
 
-fn missing_decoder() -> Error {
-    Error::TaskMismatch {
-        requested: "generation",
-        actual: "sequence scoring",
+fn harmony_exit(
+    request: &GenerationRequest,
+    descriptor: &crate::ModelDescriptor,
+) -> Result<Option<(usize, Vec<u32>)>> {
+    let ReasoningCyclePolicy::ExitReasoning { min_tokens } = request.reasoning_cycle else {
+        return Ok(None);
+    };
+    if descriptor.metadata().model_type.as_deref() != Some("gpt_oss") {
+        return Ok(None);
     }
-}
-
-fn should_stop(
-    settings: GenerationSettings,
-    generated_tokens: usize,
-    token: u32,
-    stop_tokens: &[u32],
-) -> bool {
-    !settings.ignore_eos && generated_tokens >= settings.min_tokens && stop_tokens.contains(&token)
+    Ok(descriptor
+        .tokenizer()
+        .harmony_reasoning_exit_tokens()?
+        .map(|tokens| (min_tokens, tokens)))
 }
 
 #[cfg(test)]

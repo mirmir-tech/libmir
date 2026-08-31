@@ -1,3 +1,5 @@
+use std::sync::{Arc, Mutex};
+
 use mircuda::{DeviceBuffer, DeviceElement, bf16};
 
 use super::AutoClampedExperts;
@@ -78,6 +80,7 @@ fn native_weights(backend: &CudaBackend) -> Result<ClampedRoutedExpertWeights> {
         down_blocks: u8_tensor(backend, "down-blocks", vec![EXPERTS, WIDTH, 1, 16], 0x11)?,
         down_scales: u8_tensor(backend, "down-scales", vec![EXPERTS, WIDTH, 1], 127)?,
         down_bias: bf16_tensor(backend, "down-bias", EXPERTS * WIDTH)?,
+        marlin: Arc::new(Mutex::new(None)),
     })))
 }
 

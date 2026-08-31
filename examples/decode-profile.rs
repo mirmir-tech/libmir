@@ -29,6 +29,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     config.configure(&mut runtime);
     let model =
         Library::new(runtime).load(&config.model, GenerationOverrides::default(), &mut |_| {})?;
+    let vocab_size = model
+        .descriptor()
+        .decoder()
+        .ok_or("decode profile requires a generation decoder")?
+        .vocab_size;
+    let sampling = config.sampling(vocab_size);
     let base = model.prepare(&request(&model))?.tokens.token_ids;
     let prompt = base.iter().copied().cycle().take(config.prompt_tokens).collect::<Vec<_>>();
     fill_prefix_cache(&model, &prompt, config.prefix_fill_sessions)?;
@@ -37,16 +43,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     std::thread::sleep(Duration::from_secs(config.prefix_fill_cooldown_seconds));
     let mut session = model.session();
-    let output = session.prefill(&prompt, SamplingLogits::None, &mut |_| {})?;
+    let output = session.prefill(&prompt, sampling, &mut |_| {})?;
     let mut token = required_token(output.next_token)?;
     for _ in 0..config.warmup_steps {
-        token = required_token(session.decode(token, SamplingLogits::None)?.event.token_id)?;
+        token = required_token(session.decode(token, sampling)?.event.token_id)?;
     }
     model.engine().set_profile_decode(true)?;
     let mut samples = Vec::with_capacity(config.measured_steps);
     for _ in 0..config.measured_steps {
         let started = Instant::now();
-        let output = session.decode(token, SamplingLogits::None)?;
+        let output = session.decode(token, sampling)?;
         let end_to_end = started.elapsed();
         token = required_token(output.event.token_id)?;
         let timings = output
@@ -82,7 +88,7 @@ fn report(backend: &str, config: &Config, samples: &[Sample]) {
     println!(
         "prompt_tokens={} warmup_steps={} measured_steps={} batch_rows=1 batch_wait_us=0 \
          prefix_fill_sessions={} prefix_fill_cooldown_seconds={} clear_allocator_after_fill={} \
-         kv_cache_dtype={}{}",
+         kv_cache_dtype={} sampling={}{}{}",
         config.prompt_tokens,
         config.warmup_steps,
         config.measured_steps,
@@ -90,7 +96,13 @@ fn report(backend: &str, config: &Config, samples: &[Sample]) {
         config.prefix_fill_cooldown_seconds,
         config.clear_allocator_after_fill,
         config.kv_cache_dtype.unwrap_or_default(),
+        if config.full_sampling {
+            "full"
+        } else {
+            "greedy"
+        },
         config.dense_label(),
+        config.output_label(),
     );
     println!(
         "decode_tokens_per_second={:.3} end_to_end_mean_ms={:.3} \

@@ -5,7 +5,8 @@ use crate::{
 
 mod candidate;
 use candidate::{
-    Candidate, WeightedCandidate, candidates, compact_candidates, top_k_limit, truncate_top_p,
+    Candidate, WeightedCandidate, candidates, compact_candidates, penalized_score, top_k_limit,
+    truncate_top_p,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -44,6 +45,12 @@ impl Sampler {
 
     pub fn sample_with_history(&mut self, logits: &LogitsTrace, history: &[u32]) -> Result<u32> {
         let logits = self.logits(logits)?;
+        if self.config.temperature > f32::EPSILON
+            && self.config.top_p >= 1.0
+            && self.config.top_k == 0
+        {
+            return self.sample_full(logits, history);
+        }
         let mut candidates = candidates(logits, history, self.config.repetition_penalty)?;
         self.sample_ranked(&mut candidates)
     }
@@ -68,6 +75,39 @@ impl Sampler {
         }
         let weights = self.filtered_weights(candidates);
         draw(&mut self.rng, &weights)
+    }
+
+    fn sample_full(&mut self, logits: &[f32], history: &[u32]) -> Result<u32> {
+        let scores = logits.iter().copied().enumerate().filter_map(|(index, score)| {
+            score.is_finite().then(|| {
+                let token_id = u32::try_from(index).ok()?;
+                Some((
+                    token_id,
+                    penalized_score(score, token_id, history, self.config.repetition_penalty),
+                ))
+            })?
+        });
+        let maximum = scores
+            .clone()
+            .map(|(_, score)| score)
+            .reduce(f32::max)
+            .ok_or_else(|| RuntimeError::Backend("logits contain no finite values".into()))?;
+        let temperature = f64::from(self.config.temperature);
+        let weight = |score: f32| (f64::from(score - maximum) / temperature).exp();
+        let total = scores.clone().map(|(_, score)| weight(score)).sum::<f64>();
+        if total <= 0.0 {
+            return Err(RuntimeError::Backend("sample weights sum to zero".into()));
+        }
+        let mut threshold = self.rng.next_unit() * total;
+        let mut last = None;
+        for (token_id, score) in scores {
+            last = Some(token_id);
+            threshold -= weight(score);
+            if threshold <= 0.0 {
+                return Ok(token_id);
+            }
+        }
+        last.ok_or_else(|| RuntimeError::Backend("no sample candidates".into()))
     }
 
     fn filtered_weights(&self, candidates: &[Candidate]) -> Vec<WeightedCandidate> {

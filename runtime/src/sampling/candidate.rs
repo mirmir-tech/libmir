@@ -90,7 +90,12 @@ pub(super) fn truncate_top_p(
     kept
 }
 
-fn penalized_score(score: f32, token_id: u32, history: &[u32], repetition_penalty: f32) -> f32 {
+pub(super) fn penalized_score(
+    score: f32,
+    token_id: u32,
+    history: &[u32],
+    repetition_penalty: f32,
+) -> f32 {
     if repetition_penalty <= 1.0 || !history.contains(&token_id) {
         return score;
     }

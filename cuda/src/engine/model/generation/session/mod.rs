@@ -38,6 +38,21 @@ impl GenerationExecution for SinkAttentionExecution {
             .map(|fallback| (fallback, 0, self.prefix_checkpoint_block_tokens))
     }
 
+    fn terminal_cache_checkpoint(
+        &self,
+        request: &runtime::backend::PrefillRequest,
+    ) -> Option<usize> {
+        let minimum = self.prefix_replay_tokens.unwrap_or_default().saturating_mul(2);
+        if request.cache_checkpoints.is_empty() && request.prompt_tokens.len() < minimum {
+            return None;
+        }
+        request.terminal_cache_checkpoint()
+    }
+
+    fn cache_checkpoint_alignment(&self) -> Option<usize> {
+        Some(self.prefix_checkpoint_block_tokens)
+    }
+
     fn restore_prefix(
         &mut self,
         request: &runtime::backend::PrefillRequest,

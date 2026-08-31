@@ -123,6 +123,15 @@ pub struct PrefillOutput {
     pub trace: Option<String>,
     pub logits: Option<LogitsTrace>,
     pub candidates: Option<CandidateLogitsTrace>,
+    pub timings: Option<PrefillTimings>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+pub struct PrefillTimings {
+    pub cache_prepare: Duration,
+    pub scheduler_queue: Duration,
+    pub backend_wait: Duration,
+    pub backend_execution: Duration,
 }
 
 #[derive(Debug, Clone)]

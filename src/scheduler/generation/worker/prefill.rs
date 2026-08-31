@@ -41,7 +41,10 @@ impl Worker {
             return;
         }
         let count = completion_wave_rows(available, wave_limit);
-        let requests = self.prefill.drain(..count).collect::<Vec<_>>();
+        let mut requests = self.prefill.drain(..count).collect::<Vec<_>>();
+        for pending in &mut requests {
+            pending.scheduler_queue = pending.enqueued.elapsed();
+        }
         let oldest_queue = requests.iter().map(|pending| pending.enqueued.elapsed()).max();
         let backend_requests =
             requests.iter().map(|pending| pending.request.clone()).collect::<Vec<_>>();

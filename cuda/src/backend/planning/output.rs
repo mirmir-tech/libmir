@@ -52,10 +52,20 @@ impl CudaExecutionPlanner {
             && policy.admission == CudaKernelAdmission::Experimental;
         if policy.output_head == CudaOutputHeadPolicy::Auto
             && self.hardware().compute_capability().0 == 12
-            && (tuned_refinement(request) || (experimental && tuned_throughput_refinement(request)))
+            && tuned_refinement(request)
         {
             return Ok(OutputHeadPlan {
                 execution: OutputHeadExecution::AutoRefined,
+                source: PlanSource::Heuristic,
+            });
+        }
+        if policy.output_head == CudaOutputHeadPolicy::Auto
+            && self.hardware().compute_capability().0 == 12
+            && experimental
+            && tuned_throughput_refinement(request)
+        {
+            return Ok(OutputHeadPlan {
+                execution: OutputHeadExecution::Fp8BlockRefined,
                 source: PlanSource::Heuristic,
             });
         }
@@ -99,5 +109,8 @@ const fn tuned_refinement(request: OutputHeadPlanRequest) -> bool {
 }
 
 const fn tuned_throughput_refinement(request: OutputHeadPlanRequest) -> bool {
-    request.input_features == 2_880 && request.output_features == 201_088
+    request.input_features >= 2_048
+        && request.output_features >= 131_072
+        && request.input_features.is_multiple_of(64)
+        && request.output_features.is_multiple_of(128)
 }

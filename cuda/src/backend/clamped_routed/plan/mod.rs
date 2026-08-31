@@ -8,13 +8,20 @@ use super::{
     weights::ClampedRoutedExpertWeights,
 };
 use crate::{
-    Error, ExecutionPhase, PagedPrefillBatch, Result,
-    backend::{clamped_routed::projection::ClampedRoutedEmbedding, linear::SelectedDenseMoeBf16},
+    Error, ExecutionPhase, Result,
+    backend::{
+        WindowedPrefillStaging, clamped_routed::projection::ClampedRoutedEmbedding,
+        linear::SelectedDenseMoeBf16,
+    },
     kernels::{ClampedRoutedBatchSplitDecode, ClampedRoutedSplitDecode, DenseGatedActivation},
 };
 
+mod batch;
 mod decode;
+#[cfg(feature = "diagnostics")]
+mod fingerprint;
 mod upload;
+mod windowed;
 
 pub(super) use decode::ClampedRoutedDecodeSignature;
 
@@ -37,6 +44,9 @@ pub(super) struct ClampedRoutedExecutionPlan {
     dense_experts: Option<SelectedDenseMoeBf16>,
     split_decode: Option<ClampedRoutedSplitDecode>,
     batch_split_decode: Option<ClampedRoutedBatchSplitDecode>,
+    windowed_prefill: Option<WindowedPrefillStaging>,
+    #[cfg(feature = "diagnostics")]
+    fingerprints: fingerprint::LayerFingerprintTrace,
 }
 
 impl ClampedRoutedExecutionPlan {
@@ -124,6 +134,15 @@ impl ClampedRoutedExecutionPlan {
             dense_experts,
             split_decode,
             batch_split_decode: None,
+            windowed_prefill: None,
+            #[cfg(feature = "diagnostics")]
+            fingerprints: fingerprint::LayerFingerprintTrace::new(
+                backend,
+                template.layers.len(),
+                elements,
+                phase,
+                tokens,
+            )?,
         })
     }
 
@@ -182,66 +201,18 @@ impl ClampedRoutedExecutionPlan {
                 split_decode,
                 output,
             )?;
+            #[cfg(feature = "diagnostics")]
+            {
+                self.fingerprints.record(&scratch.residual, index * 2)?;
+                self.fingerprints.record(output, index * 2 + 1)?;
+            }
         }
         Ok(self.hidden())
     }
 
-    pub(super) fn execute_batch(
-        &mut self,
-        template: &CudaClampedRoutedModelTemplate,
-        state: &mut ClampedRoutedSessionState,
-        embedding: &ClampedRoutedEmbedding,
-        batch: &PagedPrefillBatch,
-    ) -> Result<&DeviceBuffer<bf16>> {
-        embedding.execute_batch(
-            &self.token_ids,
-            self.tokens,
-            &template.embedding,
-            &mut self.first,
-        )?;
-        if self.layers.len() != state.caches.len() || batch.tokens() != self.tokens {
-            return Err(Error::InvalidPagedKv(
-                "packed clamped-routed cache or token geometry differs",
-            ));
-        }
-        if batch.max_query_tokens() == 1 && self.batch_split_decode.is_none() {
-            self.batch_split_decode = ClampedRoutedBatchSplitDecode::compile(
-                &template.backend,
-                template.config.storage(template.cache),
-                template.config.query_heads,
-                template.max_sequence_blocks,
-                batch.active(),
-            )?;
-        }
-        let first = self
-            .layers
-            .first()
-            .ok_or(Error::InvalidExecutionPlan("decoder has no layers"))?;
-        first.prepare_rope(batch.positions(), &mut self.scratch)?;
-        let (layers, scratch, dense_experts, batch_split_decode) = (
-            &mut self.layers,
-            &mut self.scratch,
-            &mut self.dense_experts,
-            &mut self.batch_split_decode,
-        );
-        for (index, (layer, cache)) in layers.iter_mut().zip(&mut state.caches).enumerate() {
-            let (input, output) = if index.is_multiple_of(2) {
-                (&self.first, &mut self.second)
-            } else {
-                (&self.second, &mut self.first)
-            };
-            layer.execute_batch(
-                &template.layers[index],
-                input,
-                cache,
-                batch,
-                scratch,
-                dense_experts,
-                batch_split_decode,
-                output,
-            )?;
-        }
-        Ok(self.hidden())
+    #[cfg(feature = "diagnostics")]
+    pub(super) fn publish_fingerprints(&mut self) -> Result<()> {
+        self.fingerprints.publish()
     }
 
     pub(super) fn hidden(&self) -> &DeviceBuffer<bf16> {

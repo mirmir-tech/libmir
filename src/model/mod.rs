@@ -18,6 +18,7 @@ mod warmup;
 use std::{
     path::Path,
     sync::{Arc, Mutex},
+    time::Instant,
 };
 
 pub use admission::{
@@ -29,11 +30,11 @@ use foundation::{
     model::{BackendTarget, ModelManifest},
 };
 use models::{
-    chat::{ChatPrompt, ChatTemplate},
+    chat::ChatTemplate,
     execution::{DecoderExecutionContract, ModelTask, TaskExecutionPlan},
     generation::{GenerationConfig, GenerationOverrides, GenerationSettings},
     layout::{DecoderConfig, ImageProcessorConfig, ModelLayout, ModelMetadata, VisionConfig},
-    tokenizer::{TextTokenizer, TokenizedPrompt, TokenizerValidation},
+    tokenizer::{TextTokenizer, TokenizerValidation},
     weights::{TensorCatalog, TensorReadiness, VisionTensorSchema},
 };
 pub use remote::{RemoteModelContract, RemoteTaskMetadata, RemoteVisionContract};
@@ -41,7 +42,10 @@ use runtime::backend::ModelHandle;
 pub use vision::{IMAGE_PLACEHOLDER, PreparedVisionPrompt};
 
 use self::helpers::{model_id, validate_context};
-pub use self::library::ModelLoadOptions;
+pub use self::{
+    descriptor::{PreparedPrompt, PromptPreparationTimings},
+    library::ModelLoadOptions,
+};
 use crate::{Engine, Error, Result, RuntimeConfig, Session, scheduler::ModelCoordinator};
 
 /// Parsed model metadata and assets, ready for prompt preparation or backend
@@ -59,17 +63,6 @@ pub struct ModelDescriptor {
     template: ChatTemplate,
     tokenizer: TextTokenizer,
     tokenizer_validation: TokenizerValidation,
-}
-
-#[derive(Debug, Clone)]
-/// Rendered prompt and tokenization produced before backend execution.
-pub struct PreparedPrompt {
-    /// Rendered chat prompt, including the selected template behavior.
-    pub prompt: ChatPrompt,
-    /// Tokenized prompt passed to the inference backend.
-    pub tokens: TokenizedPrompt,
-    /// Stable chat-message boundaries worth retaining as reusable cache states.
-    pub cache_checkpoints: Vec<usize>,
 }
 
 /// Lazily initialized inference library configured for one accelerator backend.
@@ -158,16 +151,25 @@ impl ModelDescriptor {
         conversation: &Conversation,
         generation: GenerationSettings,
     ) -> Result<PreparedPrompt> {
+        let render_started = Instant::now();
         let prompt = self.template.render(conversation)?;
+        let render = render_started.elapsed();
+        let tokenize_started = Instant::now();
         let tokens = self
             .tokenizer
             .encode_with_special_tokens(&prompt.text, prompt.add_special_tokens)?;
+        let tokenize = tokenize_started.elapsed();
         if tokens.token_ids.is_empty() {
             return Err(Error::EmptyPrompt);
         }
         validate_context(tokens.token_ids.len(), generation.max_tokens, self.metadata.context_len)?;
         let cache_checkpoints = self.cache_checkpoints(conversation, &tokens.token_ids)?;
-        Ok(PreparedPrompt { prompt, tokens, cache_checkpoints })
+        Ok(PreparedPrompt {
+            prompt,
+            tokens,
+            cache_checkpoints,
+            timings: PromptPreparationTimings { render, tokenize },
+        })
     }
 
     /// Builds the backend-neutral manifest used to identify and load this

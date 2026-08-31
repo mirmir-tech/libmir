@@ -20,7 +20,7 @@ impl ClampedRoutedExecutionPlan {
             ClampedRoutedDecodeSignature::Split { partitions }
         } else {
             ClampedRoutedDecodeSignature::Direct {
-                context_bucket: batch.max_context_tokens().div_ceil(128),
+                context_bucket: batch.fmha_max_context_tokens(),
             }
         }
     }
