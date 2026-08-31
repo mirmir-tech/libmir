@@ -80,7 +80,9 @@ impl LoadedModel {
                 &remaining[..count],
                 position,
             )?;
-            state_root.async_eval(&self.stream)?;
+            let mut roots = vec![&state_root];
+            state.cache.extend_graph_roots(&mut roots);
+            self.stream.eval_many(&roots)?;
             self.settle_prefill_graph()?;
             state.cache.detach_evaluated_graphs(&self.stream)?;
             position += count;

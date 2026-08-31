@@ -104,7 +104,11 @@ fn decode_states(
     states: &mut [(Uuid, SessionState)],
 ) -> Result<Vec<NativeOutput>> {
     let token_ids = sample_batch(inputs, states, stream)?;
-    token_ids.async_eval(stream)?;
+    let mut roots = vec![&token_ids];
+    for (_, state) in states.iter() {
+        state.cache.extend_graph_roots(&mut roots);
+    }
+    stream.eval_many(&roots)?;
     let tokens = token_ids.to_vec_u32(stream)?;
     if tokens.len() != states.len() {
         return Err(Error::InvalidDecodeBatch("sampled token count does not match rows".into()));

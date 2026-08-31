@@ -64,3 +64,26 @@
 | 16,384 | reuse | 2,473.9 | 1,218.4 | 203.0% | 49.24 | 56.59 | 87.0% | 1,823 | 3,447 | 0.529× |
 | 32,768 | load | 3,190.1 | 4,393.7 | 72.6% | 16.89 | 26.41 | 64.0% | 22,644 | 16,244 | 1.394× |
 | 32,768 | reuse | 2,077.5 | 1,096.1 | 189.5% | 40.01 | 53.05 | 75.4% | 2,177 | 3,837 | 0.567× |
+
+## Metal single-request diagnostic — Apple M3 Max
+
+This focused comparison uses the corresponding
+`Qwen3.5-35B-A3B-MLX-MXFP4` checkpoint, device-token greedy sampling, 64 decode
+tokens, and isolated prompts without prefix retention. Mirmir reports sample
+medians; MLX-LM 0.31.3 reports trial averages. It is a four-context kernel and
+scheduler diagnostic, not the 36-cell API matrix above.
+
+| Context | PP mirmir | PP MLX-LM | PP % | TG mirmir | TG MLX-LM | TG % |
+|---:|---:|---:|---:|---:|---:|---:|
+| 128 | 685.30 | 632.97 | 108.3% | 111.54 | 104.72 | 106.5% |
+| 512 | 1,243.35 | 1,219.34 | 102.0% | 110.50 | 104.22 | 106.0% |
+| 2,048 | 1,497.15 | 1,379.12 | 108.6% | 106.31 | 101.30 | 104.9% |
+| 8,192 | 1,165.46 | 1,227.90 | 94.9% | 101.24 | 91.20 | 111.0% |
+| Geometric mean | 1,104.23 | 1,069.22 | 103.3% | 107.32 | 100.21 | 107.1% |
+
+The device-token pipeline evaluates logits, recurrent state and paged K/V
+arenas as one explicit root generation before the next step. Three distinct
+128-token prompts preserve the full 128-token reference sequence. Native U32
+MXFP4 matmul/gather and compiled MXFP4 Gated Delta decode remain enabled.
+Generation leads MLX-LM in all four contexts; aggregate prefill also leads,
+while the 8,192-token prefill cell remains 5.1% below the reference.

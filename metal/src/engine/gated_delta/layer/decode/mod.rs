@@ -1,6 +1,6 @@
 use mirtal::{
-    Array, CompileOptions, Compiled, DType, Dispatch, Graph, MetalKernel, OutputSpec,
-    QuantizedArrays, Shape, TemplateArg,
+    Array, CompileOptions, Compiled, DType, Dispatch, Graph, MetalKernel, OutputSpec, Shape,
+    TemplateArg,
 };
 
 use super::{GatedDeltaLayer, GatedDeltaLayerConfig};
@@ -9,63 +9,28 @@ use crate::engine::{
 };
 
 mod batch;
+mod weights;
+use weights::Weights;
 
 #[derive(Debug)]
 pub(super) struct CompiledDecode {
     graph: Compiled<3, 3>,
 }
 
-struct Weights {
-    qkv: Linear,
-    gate: Linear,
-    beta: Linear,
-    alpha: Linear,
-    output: Linear,
-    convolution: Array,
-    norm: Array,
-    a_log: Array,
-    dt_bias: Array,
-}
-
-struct Linear {
-    quantized: QuantizedArrays,
-    bias: Option<Array>,
-}
-
 impl CompiledDecode {
     pub(super) fn new(layer: &GatedDeltaLayer, stream: &Stream) -> Result<Option<Self>> {
-        let Some(qkv) = layer.in_proj_qkv.as_affine() else {
+        let Some(weights) = Weights::new(layer)? else {
             return Ok(None);
         };
-        let Some(gate) = layer.in_proj_z.as_affine() else {
-            return Ok(None);
-        };
-        let Some(beta) = layer.in_proj_b.as_affine() else {
-            return Ok(None);
-        };
-        let Some(alpha) = layer.in_proj_a.as_affine() else {
-            return Ok(None);
-        };
-        let Some(output) = layer.out_proj.as_affine() else {
-            return Ok(None);
-        };
-        let weights = Weights {
-            qkv: Linear::new(qkv)?,
-            gate: Linear::new(gate)?,
-            beta: Linear::new(beta)?,
-            alpha: Linear::new(alpha)?,
-            output: Linear::new(output)?,
-            convolution: layer.conv_weight.native().clone(),
-            norm: layer.norm_weight.native_clone(),
-            a_log: layer.a_log.native().clone(),
-            dt_bias: layer.dt_bias.native().clone(),
-        };
-        let config = layer.config;
+        Self::compile(weights, layer.config, stream).map(Some)
+    }
+
+    fn compile(weights: Weights, config: GatedDeltaLayerConfig, stream: &Stream) -> Result<Self> {
         let kernel = new_gated_delta_decode_kernel()?;
         let graph = stream.native().compile(CompileOptions::default(), move |graph, inputs| {
             build(graph, inputs, &weights, config, &kernel)
         })?;
-        Ok(Some(Self { graph }))
+        Ok(Self { graph })
     }
 
     pub(super) fn forward(
@@ -85,19 +50,6 @@ impl CompiledDecode {
             crate::engine::Array::from_native(next_convolution)?,
         );
         Ok(Some(crate::engine::Array::from_native(output)?))
-    }
-}
-
-impl Linear {
-    fn new(linear: &crate::engine::QuantizedLinear) -> Result<Self> {
-        let (quantized, bias) = linear.graph_parts()?;
-        Ok(Self { quantized, bias })
-    }
-
-    fn forward(&self, graph: Graph<'_>, input: &Array) -> mirtal::Result<Array> {
-        let output = graph.quantized_matmul(input, self.quantized.as_ref(), true)?;
-        let output = graph.astype(&output, input.dtype()?)?;
-        self.bias.as_ref().map_or(Ok(output.clone()), |bias| graph.add(&output, bias))
     }
 }
 

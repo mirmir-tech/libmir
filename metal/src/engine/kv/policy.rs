@@ -66,6 +66,11 @@ fn fragmented_native_paged_attention(
         && head_dim % 32 == 0
         && kv_heads > 0
         && (1..=32).contains(&group_factor)
+        && !fragmented_view_preferred(head_dim, kv_heads, group_factor)
+}
+
+const fn fragmented_view_preferred(head_dim: i32, kv_heads: i32, group_factor: i32) -> bool {
+    head_dim == 256 && kv_heads == 2 && group_factor == 8
 }
 
 #[cfg(test)]
@@ -91,6 +96,7 @@ mod tests {
             native_paged_attention_mode(512, 16, 2, 1_024, false),
             PagedContextMode::NativeIfFragmented
         );
+        assert_eq!(native_paged_attention_mode(256, 16, 2, 1_024, false), PagedContextMode::View);
         assert_eq!(native_paged_attention_mode(128, 32, 8, 512, false), PagedContextMode::View);
         assert_eq!(native_paged_attention_mode(768, 16, 2, 128, false), PagedContextMode::View);
     }

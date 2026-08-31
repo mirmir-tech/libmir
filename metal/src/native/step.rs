@@ -11,10 +11,6 @@ pub(super) struct DeferredToken {
 }
 
 impl DeferredToken {
-    pub(super) fn enqueue(&self, stream: &Stream) -> Result<()> {
-        Ok(self.next_logits.async_eval(stream)?)
-    }
-
     pub(super) fn complete(self, state: &mut SessionState) -> NativeOutput {
         state.pending = Some(PendingDecode {
             token_id: self.token_id,
@@ -95,7 +91,6 @@ pub(super) fn output(
         return Ok(NativeOutput::Logits(logits));
     }
     let deferred = deferred_token(model, stream, state, &logits, sampling)?;
-    deferred.enqueue(stream)?;
     Ok(deferred.complete(state))
 }
 
@@ -110,14 +105,6 @@ fn deferred_token(
         Error::InvalidDecodeBatch("batch row does not use device token sampling".into())
     })?;
     sampled.async_eval(stream)?;
-    let token_id = sampled
-        .to_vec_u32(stream)?
-        .into_iter()
-        .next()
-        .ok_or_else(|| Error::InvalidDecodeBatch("sampled token is empty".into()))?;
-    sampled.detach_graph(stream)?;
-    stream.detach_paged_arena_graphs()?;
-    state.cache.detach_evaluated_graphs(stream)?;
     let next_logits = forward_ids(
         model,
         stream,
@@ -126,6 +113,10 @@ fn deferred_token(
         state.model_position()?,
         sampling == SamplingLogits::None,
     )?;
+    let mut roots = vec![&next_logits];
+    state.cache.extend_graph_roots(&mut roots);
+    stream.eval_many_with_paged_arenas(&roots)?;
+    let token_id = sampled.item_u32(stream)?;
     Ok(DeferredToken { next_logits, token_id })
 }
 

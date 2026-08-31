@@ -116,10 +116,11 @@ The target shape is:
   pipeline. The pipeline keeps the next token on MLX for the following
   decode step and is the preferred fast path when top-p and repetition penalty
   are inactive.
-- Metal decode materializes the sampled token before building the following
-  forward graph, then detaches the now-evaluated K/V roots without a second
-  stream synchronization. Session release synchronizes before pages are
-  recycled.
+- Metal decode schedules the sampled token before building the following
+  forward graph, then evaluates that graph's logits, recurrent state and paged
+  K/V arenas together as explicit roots before reading the token on the host.
+  MLX therefore detaches each new state generation without invalidating a
+  descendant graph. Session release synchronizes before pages are recycled.
 - Metal prefill scheduling is architecture-aware: routed models finish queued,
   completion-balanced waves before streaming, while dense models retain
   completion-first interleaving. Derive routed wave width from the scheduler
@@ -257,6 +258,19 @@ The target shape is:
   cast, gather, squeeze and multiply added 160 nodes across 40 Qwen3.6 layers.
   Removing them reduced decode from 2,579 to 2,419 nodes, preserved the full
   digest and measured `90.15 tok/s` versus `89.45 tok/s` in a matched run.
+- U32 OCP MXFP4 projections must use mirtal's native MLX `quantized_matmul`
+  and `gather_qmm` primitives. Retain the checked Metal fallback only for the
+  U8 container and gathered checkpoint biases that native MXFP4 does not
+  represent. On Qwen3.6-35B-A3B MXFP4 this change preserved the 128-token
+  greedy digest and moved the controlled 128/64 benchmark from roughly
+  `71`/`36` to `622.81`/`93.62` PP/TG tok/s; the same-machine `mlx_lm`
+  reference measured `632.97`/`104.72` tok/s.
+- The compiled single-token Gated Delta graph must admit ordinary U32 MXFP4
+  projections, not only affine QMM projections. Qwen3.6 otherwise silently
+  falls back to direct graph composition. The retained graph preserves the
+  exact 128-token digest and improves geometric-mean 128–8192 decode by 2.3%
+  in the final matrix; compiling the router, outer residual, or shared-output
+  gate separately did not improve end-to-end throughput.
 - The equivalent Homebrew `mlx_lm` Qwen3.6 single-token graph has 2,670 nodes
   versus Mirmir's 2,419. Both contain 391 ordinary quantized matmuls, but
   `mlx_lm` retains 120 routed `GatherQMM` operations while Mirmir's fused

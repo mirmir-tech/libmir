@@ -6,17 +6,17 @@ use crate::engine::{Array, Dtype, Error, ModelTensors, Result, Stream};
 
 #[derive(Debug)]
 pub(in crate::engine) struct MxFp4Linear {
-    weight: Array,
-    scales: Array,
-    bias: Array,
+    pub(in crate::engine) weight: Array,
+    pub(in crate::engine) scales: Array,
+    pub(in crate::engine) bias: Array,
     input_features: usize,
     output_features: usize,
-    has_bias: bool,
-    layout: MxFp4LinearLayout,
+    pub(in crate::engine) has_bias: bool,
+    pub(in crate::engine) layout: MxFp4LinearLayout,
 }
 
 #[derive(Debug, Clone, Copy)]
-enum MxFp4LinearLayout {
+pub(in crate::engine) enum MxFp4LinearLayout {
     Matrix,
     Gathered { matrices: usize },
 }
@@ -111,15 +111,37 @@ impl MxFp4Linear {
         if input.dtype()? != Dtype::Bfloat16 {
             return Err(Error::InvalidQuantization("MXFP4 input must be BF16".into()));
         }
-        stream.kernels().mxfp4_linear(
-            [input, &self.weight, &self.scales, &self.bias],
-            self.input_features,
-            self.output_features,
-            stream,
-        )
+        let output = if self.weight.dtype()? == Dtype::Uint32 {
+            Array::from_native(stream.native().graph().mxfp4_matmul(
+                input.native(),
+                mirtal::MxFp4 {
+                    weight: self.weight.native(),
+                    scales: self.scales.native(),
+                },
+                true,
+            )?)?
+        } else {
+            return stream.kernels().mxfp4_linear(
+                [input, &self.weight, &self.scales, &self.bias],
+                self.input_features,
+                self.output_features,
+                stream,
+            );
+        };
+        if self.has_bias {
+            output.add(&self.bias, stream)
+        } else {
+            Ok(output)
+        }
     }
 
-    pub(super) fn gather(&self, input: &Array, indices: &Array, stream: &Stream) -> Result<Array> {
+    pub(super) fn gather(
+        &self,
+        input: &Array,
+        indices: &Array,
+        sorted: bool,
+        stream: &Stream,
+    ) -> Result<Array> {
         let MxFp4LinearLayout::Gathered { matrices } = self.layout else {
             return Err(Error::InvalidQuantization(
                 "ordinary MXFP4 matrix does not support gathered execution".into(),
@@ -129,6 +151,17 @@ impl MxFp4Linear {
             return Err(Error::InvalidQuantization(
                 "gathered MXFP4 requires BF16 input and U32 indices".into(),
             ));
+        }
+        if self.weight.dtype()? == Dtype::Uint32 && !self.has_bias {
+            return Array::from_native(stream.native().graph().gather_mxfp4(
+                input.native(),
+                mirtal::MxFp4 {
+                    weight: self.weight.native(),
+                    scales: self.scales.native(),
+                },
+                indices.native(),
+                mirtal::GatherQmmOptions { transpose: true, sorted_indices: sorted },
+            )?);
         }
         stream.kernels().mxfp4_gathered_linear(
             [input, &self.weight, &self.scales, &self.bias, indices],

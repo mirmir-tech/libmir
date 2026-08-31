@@ -35,6 +35,11 @@ impl LoadedModel {
     }
 
     pub(crate) fn flush_decode_graphs(&self) -> Result<()> {
+        let mut roots = Vec::new();
+        for state in self.sessions.values() {
+            state.cache.extend_graph_roots(&mut roots);
+        }
+        self.stream.eval_many(&roots)?;
         self.stream.synchronize()?;
         self.stream.detach_paged_arena_graphs()?;
         for state in self.sessions.values() {

@@ -7,6 +7,7 @@ use crate::engine::{
 };
 
 mod hybrid;
+mod lifecycle;
 #[cfg(test)]
 mod tests;
 
@@ -195,15 +196,6 @@ impl DecoderCache {
                 }
             },
             CacheStorage::HybridLinear(layers) => hybrid::plan_contiguous(layers, tokens),
-        }
-    }
-
-    pub(crate) fn detach_evaluated_graphs(&self, stream: &Stream) -> Result<()> {
-        match &self.storage {
-            CacheStorage::Attention(caches) => {
-                caches.iter().try_for_each(|cache| cache.detach_evaluated_graphs(stream))
-            },
-            CacheStorage::HybridLinear(layers) => hybrid::detach_evaluated_graphs(layers, stream),
         }
     }
 

@@ -164,6 +164,32 @@ impl PagedArenaPool {
         Ok(())
     }
 
+    pub(crate) fn eval_with_graph_roots(&self, roots: &[&Array], stream: &Stream) -> Result<()> {
+        let arenas = {
+            let arenas = self
+                .arenas
+                .lock()
+                .map_err(|_| Error::InvalidModel("paged arena pool lock was poisoned".into()))?;
+            arenas.values().filter_map(Weak::upgrade).collect::<Vec<_>>()
+        };
+        let mut paged = Vec::with_capacity(arenas.len() * 4);
+        for arena in arenas {
+            let arena = arena
+                .lock()
+                .map_err(|_| Error::InvalidModel("paged arena lock was poisoned".into()))?;
+            for array in [&arena.keys, &arena.values]
+                .into_iter()
+                .chain([&arena.key_scales, &arena.value_scales].into_iter().flatten())
+            {
+                paged.push(Array::from_native(array.native().clone())?);
+            }
+        }
+        let mut all = Vec::with_capacity(roots.len() + paged.len());
+        all.extend_from_slice(roots);
+        all.extend(paged.iter());
+        stream.eval_many(&all)
+    }
+
     #[cfg(test)]
     pub(crate) fn resident_arenas(&self) -> Result<usize> {
         let mut arenas = self

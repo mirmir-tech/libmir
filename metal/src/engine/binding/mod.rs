@@ -4,7 +4,7 @@ use super::{ModelTensors, NormWeight, Result, Stream};
 
 mod projection;
 
-pub(super) use projection::{BoundEmbedding, BoundLinear};
+pub(super) use projection::{BoundEmbedding, BoundLinear, GraphLinear};
 
 pub(super) fn adjusted_norm(
     tensors: &ModelTensors,

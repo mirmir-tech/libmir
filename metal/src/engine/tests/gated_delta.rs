@@ -61,6 +61,26 @@ fn fused_decode_matches_the_general_recurrence_step() -> Result<()> {
 }
 
 #[test]
+fn keeps_fused_decode_state_after_graph_detachment() -> Result<()> {
+    let stream = Stream::new_gpu()?;
+    let mut state = GatedDeltaState::new()?;
+    let first = decode_inputs(0)?;
+    let output = state.update_fused(first.as_borrowed(), &stream)?;
+    output.async_eval(&stream)?;
+    stream.synchronize()?;
+    state.detach_evaluated_graphs(&stream)?;
+
+    let second = decode_inputs(1)?;
+    let output = state.update_fused(second.as_borrowed(), &stream)?;
+    output.async_eval(&stream)?;
+    stream.synchronize()?;
+
+    assert_eq!(output.to_vec_f32(&stream)?.len(), 4);
+    assert_eq!(state.offset()?, 2);
+    Ok(())
+}
+
+#[test]
 fn snapshots_recurrent_state_without_a_host_round_trip() -> Result<()> {
     let stream = Stream::new_gpu()?;
     let mut original = GatedDeltaState::new()?;

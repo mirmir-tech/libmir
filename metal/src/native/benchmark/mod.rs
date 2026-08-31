@@ -2,6 +2,7 @@ mod bielik;
 mod diagnostics;
 mod llama;
 mod matrix;
+mod pipeline;
 mod qwen;
 
 use std::{
@@ -33,7 +34,7 @@ fn measures_native_hybrid_moe_decode_pipeline() -> Result<()> {
     let mut ignored = |_event| {};
     let mut model = LoadedModel::load_with_config(
         &config.manifest(),
-        diagnostics::metal_config(),
+        diagnostics::isolated_config(),
         &mut ignored,
     )?;
     let prompt = prompt_tokens(config.prompt_tokens)?;
@@ -66,9 +67,13 @@ fn measures_native_hybrid_moe_decode_pipeline() -> Result<()> {
 }
 
 fn init_profile_tracing() {
-    let enabled = ["MIRMIR_METAL_PROFILE_COMPONENTS", "MIRMIR_METAL_PROFILE_GRAPH_BUILD"]
-        .into_iter()
-        .any(|name| matches!(env::var(name).as_deref(), Ok("1" | "true" | "TRUE" | "yes" | "YES")));
+    let enabled = [
+        "MIRMIR_METAL_PROFILE_COMPONENTS",
+        "MIRMIR_METAL_PROFILE_GRAPH_BUILD",
+        "MIRMIR_METAL_PROFILE_TUNING",
+    ]
+    .into_iter()
+    .any(|name| matches!(env::var(name).as_deref(), Ok("1" | "true" | "TRUE" | "yes" | "YES")));
     if enabled {
         drop(
             tracing_subscriber::fmt()

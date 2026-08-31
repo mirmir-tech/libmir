@@ -72,10 +72,6 @@ impl Sequence {
         })
     }
 
-    pub fn pending(&self) -> bool {
-        self.output.is_none()
-    }
-
     pub fn prefill_count(&self, loaded: &LoadedModel, budget: usize) -> Option<usize> {
         let prefix_len = self.request.prompt_tokens.len().saturating_sub(1);
         (self.position < prefix_len).then(|| {
@@ -122,7 +118,11 @@ impl Sequence {
         let state_root = step::forward_packed_prefill_state(
             model, &loaded.stream, &mut states, &positions, &tokens, count,
         )?;
-        state_root.async_eval(&loaded.stream)?;
+        let mut roots = vec![&state_root];
+        for state in &states {
+            state.cache.extend_graph_roots(&mut roots);
+        }
+        loaded.stream.eval_many(&roots)?;
         loaded.settle_prefill_graph()?;
         for state in &states {
             state.cache.detach_evaluated_graphs(&loaded.stream)?;
@@ -157,7 +157,9 @@ impl Sequence {
             })?;
             let state_root =
                 step::forward_prefill_state(model, &loaded.stream, state, tokens, self.position)?;
-            state_root.async_eval(&loaded.stream)?;
+            let mut roots = vec![&state_root];
+            state.cache.extend_graph_roots(&mut roots);
+            loaded.stream.eval_many(&roots)?;
             loaded.settle_prefill_graph()?;
             state.cache.detach_evaluated_graphs(&loaded.stream)?;
             self.page_reservation_pending = false;

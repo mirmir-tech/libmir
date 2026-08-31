@@ -61,7 +61,9 @@ impl LoadedModel {
         let hidden = tower.forward_multimodal_prefill(
             model, &prefix_prompt, image, &mut state.cache, &self.stream,
         )?;
-        hidden.async_eval(&self.stream)?;
+        let mut roots = vec![&hidden];
+        state.cache.extend_graph_roots(&mut roots);
+        self.stream.eval_many(&roots)?;
         self.settle_prefill_graph()?;
         state.cache.detach_evaluated_graphs(&self.stream)?;
         progress(MetalProgressEvent::prefill_tokens(prefix.len(), prompt.token_ids.len()));
@@ -125,7 +127,9 @@ impl LoadedModel {
         let hidden = tower.forward_multimodal_prefill(
             model, &prefix_prompt, image, &mut state.cache, &self.stream,
         )?;
-        hidden.async_eval(&self.stream)?;
+        let mut roots = vec![&hidden];
+        state.cache.extend_graph_roots(&mut roots);
+        self.stream.eval_many(&roots)?;
         self.settle_prefill_graph()?;
         state.cache.detach_evaluated_graphs(&self.stream)?;
         progress(MetalProgressEvent::prefill_tokens(prefix.len(), prompt.token_ids.len()));

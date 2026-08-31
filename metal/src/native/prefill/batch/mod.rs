@@ -122,7 +122,7 @@ impl MetalPrefillBatch {
 impl Batch {
     fn execute_step(&mut self, loaded: &mut LoadedModel, mut budget: usize) -> Result<PrefillStep> {
         let mut events = Vec::new();
-        while budget > 0 && self.sequences.iter().any(Sequence::pending) {
+        while budget > 0 && self.sequences.iter().any(|sequence| sequence.output.is_none()) {
             if let Some((used, packed_events)) = self.execute_packed(loaded, budget)? {
                 budget -= used;
                 events.extend(packed_events);
@@ -131,7 +131,7 @@ impl Batch {
             let row = self.cursor % self.sequences.len();
             self.cursor = (self.cursor + 1) % self.sequences.len();
             let sequence = &mut self.sequences[row];
-            if !sequence.pending() {
+            if sequence.output.is_some() {
                 continue;
             }
             let used = sequence.advance(loaded, budget)?;
@@ -146,7 +146,7 @@ impl Batch {
         }
         Ok(PrefillStep {
             events,
-            complete: self.sequences.iter().all(|sequence| !sequence.pending()),
+            complete: self.sequences.iter().all(|sequence| sequence.output.is_some()),
         })
     }
 

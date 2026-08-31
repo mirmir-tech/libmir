@@ -81,6 +81,17 @@ pub(super) fn detach_evaluated_graphs(
     Ok(())
 }
 
+pub(super) fn graph_roots(layers: &[HybridLinearLayerCache]) -> Vec<&crate::engine::Array> {
+    layers
+        .iter()
+        .filter_map(|layer| match layer {
+            HybridLinearLayerCache::Linear(state) => Some(state),
+            HybridLinearLayerCache::Full(_) => None,
+        })
+        .flat_map(GatedDeltaState::graph_roots)
+        .collect()
+}
+
 pub(super) fn gated_delta_state(
     layers: &mut [HybridLinearLayerCache],
     index: usize,

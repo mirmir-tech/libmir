@@ -32,11 +32,14 @@ fn executes_a_complete_gated_delta_layer_on_the_gpu_stream() -> Result<()> {
     let mut state = GatedDeltaState::new()?;
     let output = layer.forward(&input, &mut state, &stream)?;
 
-    output.async_eval(&stream)?;
+    let mut roots = vec![&output];
+    roots.extend(state.graph_roots());
+    stream.eval_many(&roots)?;
     stream.synchronize()?;
     assert_eq!(output.shape()?, vec![1, 2, 64]);
     assert!(output.to_vec_f32(&stream)?.iter().all(|value| *value == 0.0));
     assert_eq!(state.offset()?, 2);
+    state.detach_evaluated_graphs(&stream)?;
     let decode = Array::from_f32(&vec![0.0; 64], &[1, 1, 64])?;
     let output = layer.forward(&decode, &mut state, &stream)?;
 

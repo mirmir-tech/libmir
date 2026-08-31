@@ -35,10 +35,20 @@ struct Sample {
 #[test]
 #[ignore = "loads a real model; set MIRMIR_BENCH_MODEL or MODEL"]
 fn measures_native_hybrid_moe_context_matrix() -> Result<()> {
+    super::init_profile_tracing();
     let config = BenchmarkConfig::from_env()?;
     let contexts = contexts()?;
     let mut ignored = |_event| {};
-    let mut model = LoadedModel::load(&config.manifest(), &mut ignored)?;
+    let mut model = LoadedModel::load_with_config(
+        &config.manifest(),
+        super::diagnostics::isolated_config(),
+        &mut ignored,
+    )?;
+    tracing::info!(
+        target: "libmir::metal::tuning",
+        summary = %model.expert_fusion_summary(),
+        "loaded Metal benchmark fusion profile"
+    );
     let mut report = std::io::stderr().lock();
 
     for (index, context) in contexts.into_iter().enumerate() {

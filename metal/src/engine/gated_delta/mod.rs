@@ -48,6 +48,10 @@ impl GatedDeltaState {
         Ok(())
     }
 
+    pub(crate) fn graph_roots(&self) -> impl Iterator<Item = &Array> {
+        [self.value.as_ref(), self.convolution.as_ref()].into_iter().flatten()
+    }
+
     pub fn snapshot(&self) -> Result<Self> {
         Ok(Self {
             value: clone_array(self.value.as_ref())?,

@@ -9,6 +9,7 @@ mod embedding;
 mod float8;
 mod fusion;
 mod gptq;
+mod graph;
 mod mxfp4;
 mod mxfp8;
 mod nvfp4;
@@ -16,7 +17,9 @@ mod packed_integer;
 use bitsandbytes::BitsAndBytes4BitLinear;
 pub(in crate::engine) use embedding::BoundEmbedding;
 use float8::Float8Linear;
+pub(in crate::engine) use graph::GraphLinear;
 use mxfp4::MxFp4Linear;
+pub(in crate::engine) use mxfp4::MxFp4LinearLayout;
 use mxfp8::MxFp8Linear;
 use nvfp4::NvFp4Linear;
 
@@ -134,7 +137,7 @@ impl BoundLinear {
             Self::Dense(linear) => linear.gather(input, indices, stream),
             Self::Affine(linear) => linear.gather(input, indices, sorted, stream),
             Self::Float8(linear) => linear.gather(input, indices, stream),
-            Self::MxFp4(linear) => linear.gather(input, indices, stream),
+            Self::MxFp4(linear) => linear.gather(input, indices, sorted, stream),
             Self::MxFp8(linear) => linear.gather(input, indices, stream),
             Self::NvFp4(linear) => linear.gather(input, indices, stream),
             Self::BitsAndBytes4Bit(_) => Err(Error::InvalidQuantization(
@@ -230,6 +233,7 @@ impl BoundLinear {
         match self {
             Self::Gptq(linear) => (i32::try_from(linear.group_size()).unwrap_or_default(), 4),
             Self::BitsAndBytes4Bit(_) => (64, 4),
+            Self::MxFp4(_) => (32, 4),
             _ => self.as_affine().map_or((0, 0), |linear| (linear.group_size(), linear.bits())),
         }
     }

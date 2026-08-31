@@ -31,6 +31,15 @@ impl Stream {
         Ok(self.native.synchronize()?)
     }
 
+    pub(crate) fn eval_many(&self, arrays: &[&super::Array]) -> Result<()> {
+        let arrays = arrays.iter().map(|array| array.native()).collect::<Vec<_>>();
+        Ok(self.native.eval_many(&arrays)?)
+    }
+
+    pub(crate) fn eval_many_with_paged_arenas(&self, arrays: &[&super::Array]) -> Result<()> {
+        self.paged_arenas.eval_with_graph_roots(arrays, self)
+    }
+
     pub(super) const fn native(&self) -> &mirtal::Stream {
         &self.native
     }
