@@ -28,8 +28,6 @@ use metal::MetalBackend;
 use runtime::RuntimeError;
 #[cfg(feature = "cuda")]
 use runtime::backend::DecodeRequest;
-#[cfg(feature = "metal")]
-use runtime::progress::ProgressEvent;
 use runtime::{
     Result as RuntimeResult,
     backend::{DecodeOutput, ModelHandle, SamplingLogits},

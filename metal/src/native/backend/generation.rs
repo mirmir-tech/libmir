@@ -17,8 +17,6 @@ use crate::{
     },
 };
 
-const ROUTED_MAX_PREFILL_WAVE_ROWS: usize = 2;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MetalPrefillSchedule {
     pub max_wave_rows: usize,
@@ -173,7 +171,7 @@ fn validate_prefill_requests(requests: &[PrefillRequest]) -> Result<&PrefillRequ
 const fn prefill_schedule(routed: bool) -> MetalPrefillSchedule {
     if routed {
         MetalPrefillSchedule {
-            max_wave_rows: ROUTED_MAX_PREFILL_WAVE_ROWS,
+            max_wave_rows: usize::MAX,
             interleave_decode: false,
         }
     } else {
@@ -209,9 +207,9 @@ mod tests {
     }
 
     #[test]
-    fn routed_prefill_finishes_physical_waves_before_streaming() {
+    fn routed_prefill_uses_the_scheduler_capacity_before_streaming() {
         let routed = prefill_schedule(true);
-        assert_eq!(routed.max_wave_rows, 2);
+        assert_eq!(routed.max_wave_rows, usize::MAX);
         assert!(!routed.interleave_decode);
 
         let dense = prefill_schedule(false);

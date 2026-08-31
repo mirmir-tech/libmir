@@ -17,10 +17,11 @@ All systems are exercised through their OpenAI-compatible API with
 | Concurrency | 1 / 2 / 5 / 10 |
 | Qwen3-4B context depth | 0 / 4,096 / 8,192 / 16,384 / 32,768 |
 | Qwen3.6-35B-A3B context depth | 0 / 4,096 / 8,192 / 16,384 / 32,768 |
+| Gemma 4 26B-A4B context depth | 0 / 4,096 / 8,192 / 16,384 / 32,768 |
 | GPT-OSS-20B context depth | 0 / 4,096 / 8,192 / 16,384 / 32,768 / 65,535 / 100,000 |
 | Cache | Prefix caching enabled |
 | Latency | API mode |
-| Repetitions | 1 warm-up + 3 measured runs per cell |
+| Repetitions | 1 warm-up + 3 measured runs per cell; Gemma mirmir uses 2 warm-ups |
 | Aggregation | Geometric mean over common positive cells |
 
 Only cells shared by mirmir and the reference implementation are included in
@@ -41,3 +42,13 @@ matrix coverage, and per-depth results.
 | Model | Device | PP tok/s ↑<br>mirmir / MLX-LM | TG tok/s ↑<br>mirmir / MLX-LM | TTFT ms ↓<br>mirmir / MLX-LM |
 |:---|:---|---:|---:|---:|
 | [Qwen3-4B BF16](qwen3-4b.md) | Apple M3 Max<br>40-core GPU · 64 GiB | 545.0 / 593.4<br>91.8% · 5/26 wins | 22.10 / 27.34<br>80.8% · 6/26 wins | 19,149 / 17,405<br>1.100× · 5/26 wins |
+
+## Partial Metal reference diagnostics
+
+These rows are excluded from the canonical table because the reference process
+did not finish. They retain only common positive cells and document the exact
+coverage and failure on the linked model page.
+
+| Model | Device | PP tok/s ↑<br>mirmir / MLX-LM | TG tok/s ↑<br>mirmir / MLX-LM | TTFT ms ↓<br>mirmir / MLX-LM |
+|:---|:---|---:|---:|---:|
+| [Gemma 4 26B-A4B IT 8-bit](gemma4-26b-a4b-it-8bit.md) | Apple M3 Max<br>40-core GPU · 64 GiB | 569.0 / 362.2<br>157.1% · 25/26 wins | 40.04 / 35.14<br>113.9% · 21/26 wins | 18,017 / 28,815<br>0.625× · 25/26 wins |

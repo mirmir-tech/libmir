@@ -31,10 +31,12 @@ fn prefill_quiet_window_extends_without_crossing_hard_deadline() {
 }
 
 #[test]
-fn completion_wave_keeps_a_short_tail_in_one_cohort() {
+fn completion_wave_avoids_a_single_row_tail() {
     assert_eq!(completion_wave_rows(5, 8), 5);
     assert_eq!(completion_wave_rows(8, 8), 8);
     assert_eq!(completion_wave_rows(10, 8), 8);
+    assert_eq!(completion_wave_rows(5, 4), 3);
+    assert_eq!(completion_wave_rows(9, 4), 3);
 }
 
 #[test]

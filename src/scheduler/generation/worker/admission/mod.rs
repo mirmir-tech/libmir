@@ -155,10 +155,15 @@ fn prefill_admission_deadline(
 }
 
 pub(super) fn completion_wave_rows(available: usize, wave_limit: usize) -> usize {
-    if available > wave_limit {
-        wave_limit
+    let limit = wave_limit.max(1);
+    if available <= limit {
+        return available;
+    }
+    let tail = available % limit;
+    if tail == 1 && limit > 2 {
+        limit - 1
     } else {
-        available
+        limit
     }
 }
 

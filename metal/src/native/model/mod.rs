@@ -24,13 +24,13 @@ mod batch;
 #[allow(clippy::self_named_module_files)]
 mod load;
 mod memory;
+mod prefill;
 
 pub(super) use batch::DecodeInput;
 pub(super) use memory::{cache_prefix_checkpoint, cache_prefix_snapshot};
+use prefill::prefill_step;
 
 pub(super) const KV_CACHE_STEP: usize = 256;
-const PREFILL_STEP: usize = 512;
-const HYBRID_LINEAR_PREFILL_STEP: usize = 2_048;
 
 #[derive(Debug)]
 pub(super) struct ModelInfo {
@@ -193,37 +193,5 @@ impl LoadedModel {
 
     pub(super) fn prefill_chunk_len(&self, _position: usize, remaining: usize) -> usize {
         remaining.min(self.info.prefill_step)
-    }
-}
-
-fn prefill_step(spec: &models::semantic::SemanticModelSpec, configured: Option<usize>) -> usize {
-    configured
-        .filter(|step| *step > 0)
-        .unwrap_or_else(|| default_prefill_step(has_linear_attention(spec)))
-}
-
-const fn default_prefill_step(has_linear_attention: bool) -> usize {
-    if has_linear_attention {
-        HYBRID_LINEAR_PREFILL_STEP
-    } else {
-        PREFILL_STEP
-    }
-}
-
-fn has_linear_attention(spec: &models::semantic::SemanticModelSpec) -> bool {
-    spec.decoder
-        .layers
-        .iter()
-        .any(|layer| matches!(layer.mixer, models::semantic::MixerSpec::LinearAttention(_)))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn gives_hybrid_linear_moe_a_larger_default_prefill_graph() {
-        assert_eq!(default_prefill_step(true), 2_048);
-        assert_eq!(default_prefill_step(false), 512);
     }
 }

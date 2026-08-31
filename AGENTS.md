@@ -120,10 +120,11 @@ The target shape is:
   forward graph, then detaches the now-evaluated K/V roots without a second
   stream synchronization. Session release synchronizes before pages are
   recycled.
-- Metal prefill scheduling is architecture-aware: routed models use physical
-  waves of at most two rows and finish queued waves before streaming, while
-  dense models retain completion-first interleaving. Keep this as a backend
-  capability in the shared scheduler profile, not a model-name special case.
+- Metal prefill scheduling is architecture-aware: routed models finish queued,
+  completion-balanced waves before streaming, while dense models retain
+  completion-first interleaving. Derive routed wave width from the scheduler
+  token budget and resident cache capacity; do not impose a model-name rule or
+  a fixed row limit.
 - Decode cohort admission uses exactly `decode_batch_wait_us`. Never multiply
   that window after a multi-row step or retain a hidden refill horizon; a
   latency/occupancy tradeoff must be explicit or backend-measured.
@@ -181,8 +182,8 @@ The target shape is:
   long-context digest regression.
 - `MIRMIR_METAL_PREFILL_STEP=<positive integer>` limits the number of prompt
   tokens in a causal MLX prefill graph. The default is 2048 for hybrid linear
-  MoE and 512 for other decoder archetypes; set it to `1` only when comparing
-  against scalar-prefill behavior.
+  or routed-expert decoders and 512 for dense softmax-only decoders; set it to
+  `1` only when comparing against scalar-prefill behavior.
 - `MIRMIR_METAL_PREFILL_EVAL_LAYERS=<positive integer>` materializes a causal
   prefill graph after each specified number of layers, without moving tensors
   out of MLX. It is an experimental graph-size control for benchmark tuning;
