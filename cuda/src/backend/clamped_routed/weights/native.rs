@@ -1,3 +1,5 @@
+use std::sync::{Arc, Mutex};
+
 use models::weights::{
     BlockProjectionLayout, BlockQuantization, RoutedDecoderLayerBindings, RoutedExpertBindings,
     TensorBinding, TensorStorage,
@@ -47,6 +49,7 @@ pub(super) fn load(
         down_blocks: tensor(tensors, &down.source)?,
         down_scales: tensor(tensors, down_scales)?,
         down_bias: tensor(tensors, down_bias)?,
+        marlin: Arc::new(Mutex::new(None)),
     }));
     validate_native_experts(config, &experts)?;
     Ok((

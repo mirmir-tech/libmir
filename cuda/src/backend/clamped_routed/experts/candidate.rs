@@ -1,18 +1,46 @@
 use mircuda::{DeviceBuffer, bf16};
 
-use super::super::weights::ClampedRoutedExpertWeights;
+use super::{
+    super::weights::{ClampedRoutedExpertWeights, NativeExpertWeights},
+    ClampedRoutedConfig,
+    marlin::MarlinMxFp4Candidate,
+};
 use crate::{
-    CudaTensor, Error, Result, backend::tuning::ClampedMoeExecution, kernels::ClampedRoutedKernels,
+    CudaBackend, CudaTensor, Error, Result, backend::tuning::ClampedMoeExecution,
+    kernels::ClampedRoutedKernels,
 };
 
 pub(super) struct Candidate {
     pub(super) execution: ClampedMoeExecution,
-    kernels: ClampedRoutedKernels,
+    plan: Plan,
+}
+
+enum Plan {
+    Portable(ClampedRoutedKernels),
+    Marlin(MarlinMxFp4Candidate),
 }
 
 impl Candidate {
-    pub(super) const fn new(kernels: ClampedRoutedKernels, execution: ClampedMoeExecution) -> Self {
-        Self { execution, kernels }
+    pub(super) const fn portable(
+        kernels: ClampedRoutedKernels,
+        execution: ClampedMoeExecution,
+    ) -> Self {
+        Self { execution, plan: Plan::Portable(kernels) }
+    }
+
+    pub(super) fn marlin(
+        backend: &CudaBackend,
+        config: ClampedRoutedConfig,
+        tokens: usize,
+        weights: &NativeExpertWeights,
+        execution: ClampedMoeExecution,
+    ) -> Result<Self> {
+        Ok(Self {
+            execution,
+            plan: Plan::Marlin(MarlinMxFp4Candidate::new(
+                backend, config, tokens, weights, execution,
+            )?),
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -27,43 +55,21 @@ impl Candidate {
         partial: &mut DeviceBuffer<f32>,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
-        match weights {
-            ClampedRoutedExpertWeights::Native(weights) => {
-                self.kernels.gate_up_native(
-                    stream,
-                    input,
-                    u8s(&weights.gate_up_blocks)?,
-                    u8s(&weights.gate_up_scales)?,
-                    bf16s(&weights.gate_up_bias)?,
-                    selected,
-                    activated,
-                )?;
-                match self.execution {
-                    ClampedMoeExecution::RouteParallel => self.kernels.down_routes_native(
-                        stream,
-                        activated,
-                        u8s(&weights.down_blocks)?,
-                        u8s(&weights.down_scales)?,
-                        bf16s(&weights.down_bias)?,
-                        selected,
-                        routing,
-                        partial,
-                        output,
-                    ),
-                    ClampedMoeExecution::FusedReduce => self.kernels.down_native(
-                        stream,
-                        activated,
-                        u8s(&weights.down_blocks)?,
-                        u8s(&weights.down_scales)?,
-                        bf16s(&weights.down_bias)?,
-                        selected,
-                        routing,
-                        output,
-                    ),
-                }
+        match (&self.plan, weights) {
+            (Plan::Marlin(plan), ClampedRoutedExpertWeights::Native(weights)) => {
+                plan.execute(weights, input, selected, routing, output)
             },
-            ClampedRoutedExpertWeights::Mlx(weights) => {
-                self.kernels.gate_up_mlx(
+            (Plan::Marlin(_), _) => Err(Error::InvalidExecutionPlan(
+                "MXFP4 Marlin requires native clamped expert weights",
+            )),
+            (Plan::Portable(kernels), ClampedRoutedExpertWeights::Native(weights)) => {
+                execute_native(
+                    kernels, self.execution, stream, weights, input, selected, routing, activated,
+                    partial, output,
+                )
+            },
+            (Plan::Portable(kernels), ClampedRoutedExpertWeights::Mlx(weights)) => {
+                kernels.gate_up_mlx(
                     stream,
                     input,
                     u32s(&weights.gate_blocks)?,
@@ -76,7 +82,7 @@ impl Candidate {
                     activated,
                 )?;
                 match self.execution {
-                    ClampedMoeExecution::RouteParallel => self.kernels.down_routes_mlx(
+                    ClampedMoeExecution::RouteParallel => kernels.down_routes_mlx(
                         stream,
                         activated,
                         u32s(&weights.down_blocks)?,
@@ -87,7 +93,7 @@ impl Candidate {
                         partial,
                         output,
                     ),
-                    ClampedMoeExecution::FusedReduce => self.kernels.down_mlx(
+                    ClampedMoeExecution::FusedReduce => kernels.down_mlx(
                         stream,
                         activated,
                         u32s(&weights.down_blocks)?,
@@ -97,13 +103,68 @@ impl Candidate {
                         routing,
                         output,
                     ),
+                    _ => invalid_portable(),
                 }
             },
-            ClampedRoutedExpertWeights::Dense(_) => {
+            (Plan::Portable(_), ClampedRoutedExpertWeights::Dense(_)) => {
                 Err(Error::InvalidExecutionPlan("dense experts cannot use clamped MXFP4 execution"))
             },
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_native(
+    kernels: &ClampedRoutedKernels,
+    execution: ClampedMoeExecution,
+    stream: &mircuda::Stream,
+    weights: &NativeExpertWeights,
+    input: &DeviceBuffer<bf16>,
+    selected: &DeviceBuffer<u32>,
+    routing: &DeviceBuffer<bf16>,
+    activated: &mut DeviceBuffer<bf16>,
+    partial: &mut DeviceBuffer<f32>,
+    output: &mut DeviceBuffer<bf16>,
+) -> Result<()> {
+    kernels.gate_up_native(
+        stream,
+        input,
+        u8s(&weights.gate_up_blocks)?,
+        u8s(&weights.gate_up_scales)?,
+        bf16s(&weights.gate_up_bias)?,
+        selected,
+        activated,
+    )?;
+    match execution {
+        ClampedMoeExecution::RouteParallel => kernels.down_routes_native(
+            stream,
+            activated,
+            u8s(&weights.down_blocks)?,
+            u8s(&weights.down_scales)?,
+            bf16s(&weights.down_bias)?,
+            selected,
+            routing,
+            partial,
+            output,
+        ),
+        ClampedMoeExecution::FusedReduce => kernels.down_native(
+            stream,
+            activated,
+            u8s(&weights.down_blocks)?,
+            u8s(&weights.down_scales)?,
+            bf16s(&weights.down_bias)?,
+            selected,
+            routing,
+            output,
+        ),
+        _ => invalid_portable(),
+    }
+}
+
+fn invalid_portable() -> Result<()> {
+    Err(Error::InvalidExecutionPlan(
+        "Marlin execution cannot use a portable clamped plan",
+    ))
 }
 
 fn bf16s(tensor: &CudaTensor) -> Result<&DeviceBuffer<bf16>> {

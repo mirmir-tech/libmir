@@ -43,7 +43,9 @@ impl Worker {
                     .map(|(pending, _)| pending.request.session_id)
                     .collect::<Vec<_>>();
                 self.begin_prefill_handoff(continuations);
-                for (pending, output) in completed {
+                for (pending, mut output) in completed {
+                    output.timings.get_or_insert_default().scheduler_queue =
+                        pending.scheduler_queue;
                     pending.response.complete(Ok(output));
                 }
             },

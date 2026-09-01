@@ -99,6 +99,13 @@ impl GenerationExecution for MixedMixerExecution {
         Ok(Some(position))
     }
 
+    fn terminal_cache_checkpoint(
+        &self,
+        request: &runtime::backend::PrefillRequest,
+    ) -> Option<usize> {
+        request.terminal_cache_checkpoint()
+    }
+
     fn prefill_chunk_len(&self, remaining: usize) -> usize {
         remaining.min(self.prefill_chunk_tokens)
     }

@@ -3,6 +3,8 @@ use super::{
 };
 use crate::{ExecutionPhase, GatedActivation, MoePlanRequest};
 
+const CLAMPED_PREFILL_TOKEN_QUANTUM: usize = 256;
+
 impl MoeProfileRequest {
     pub(in crate::backend) const fn nvfp4(
         plan: MoePlanRequest,
@@ -55,7 +57,7 @@ impl MoeProfileRequest {
     ) -> Self {
         Self {
             phase,
-            tokens,
+            tokens: clamped_profile_tokens(phase, tokens),
             experts,
             top_k,
             hidden_features,
@@ -128,5 +130,60 @@ impl MoeProfileRequest {
             intermediate_features,
             format,
         }
+    }
+}
+
+const fn clamped_profile_tokens(phase: ExecutionPhase, tokens: usize) -> usize {
+    if matches!(phase, ExecutionPhase::Prefill) {
+        tokens.saturating_add(CLAMPED_PREFILL_TOKEN_QUANTUM - 1) / CLAMPED_PREFILL_TOKEN_QUANTUM
+            * CLAMPED_PREFILL_TOKEN_QUANTUM
+    } else {
+        tokens
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clamped_prefill_profiles_share_nearby_token_geometry() {
+        assert_eq!(
+            clamped_profile_tokens(ExecutionPhase::Prefill, 1_968),
+            clamped_profile_tokens(ExecutionPhase::Prefill, 2_032)
+        );
+        assert_ne!(
+            clamped_profile_tokens(ExecutionPhase::Prefill, 1_792),
+            clamped_profile_tokens(ExecutionPhase::Prefill, 2_032)
+        );
+        assert_eq!(clamped_profile_tokens(ExecutionPhase::Decode, 31), 31);
+    }
+
+    #[test]
+    fn clamped_geometry_ignores_phase_and_tokens_but_not_storage() {
+        let native = MoeProfileRequest::clamped(
+            ExecutionPhase::Prefill,
+            2_032,
+            32,
+            4,
+            2_880,
+            2_880,
+            ClampedMoeStorage::Native,
+        );
+        let decode = MoeProfileRequest::clamped(
+            ExecutionPhase::Decode,
+            1,
+            32,
+            4,
+            2_880,
+            2_880,
+            ClampedMoeStorage::Native,
+        );
+        let mlx = MoeProfileRequest {
+            format: MoeProfileFormat::Clamped { storage: ClampedMoeStorage::Mlx },
+            ..decode
+        };
+        assert!(native.same_clamped_geometry(decode));
+        assert!(!native.same_clamped_geometry(mlx));
     }
 }

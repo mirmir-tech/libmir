@@ -52,6 +52,7 @@ fn request() -> GenerationRequest {
             ..GenerationOverrides::default()
         },
         seed: None,
+        reasoning_cycle: libmir::ReasoningCyclePolicy::default(),
     }
 }
 

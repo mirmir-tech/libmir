@@ -151,6 +151,7 @@ fn request() -> GenerationRequest {
             ..GenerationOverrides::default()
         },
         seed: Some(7),
+        reasoning_cycle: libmir::ReasoningCyclePolicy::default(),
     }
 }
 

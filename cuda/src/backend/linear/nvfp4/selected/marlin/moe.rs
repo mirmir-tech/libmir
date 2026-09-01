@@ -5,7 +5,7 @@ use mircuda::{
     Stream, bf16,
 };
 
-use super::scratch::{MarlinNvFp4Scratch, MarlinNvFp4ScratchConfig};
+use super::scratch::{MarlinNvFp4Scratch, MarlinNvFp4ScratchConfig, MarlinRouteBlock};
 use crate::{
     CudaBackend, Error, GatedActivation, NvFp4ExpertBank, Result,
     backend::linear::nvfp4::bank::MarlinNvFp4Bank, kernels::ElementwiseBf16,
@@ -70,8 +70,11 @@ impl MarlinNvFp4MoeBf16 {
                 tokens,
                 top_k,
                 experts,
+                route_block: MarlinRouteBlock::from(thread_config),
                 hidden,
                 intermediate,
+                padded_hidden: hidden,
+                padded_intermediate: intermediate,
             })?,
             gated: ElementwiseBf16::compile(
                 &backend.inner.compiler,

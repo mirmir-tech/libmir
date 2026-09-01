@@ -1,3 +1,5 @@
+use std::sync::{Arc, Mutex};
+
 use models::weights::{
     DecoderBoundaryBindings, RoutedDecoderLayerBindings, TensorBinding, TensorStorage,
 };
@@ -17,8 +19,11 @@ use crate::{
 };
 
 mod dense;
+pub(super) mod marlin;
 mod mlx;
 mod native;
+
+pub(super) use marlin::MarlinMxFp4Banks;
 
 #[derive(Clone)]
 pub(super) struct ClampedRoutedLayerWeights {
@@ -48,6 +53,7 @@ pub(super) struct NativeExpertWeights {
     pub down_blocks: CudaTensor,
     pub down_scales: CudaTensor,
     pub down_bias: CudaTensor,
+    pub marlin: Arc<Mutex<Option<Arc<MarlinMxFp4Banks>>>>,
 }
 
 #[derive(Clone)]

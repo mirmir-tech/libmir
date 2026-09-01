@@ -33,6 +33,14 @@ pub(in crate::engine) trait GenerationExecution: Send {
         Ok(None)
     }
 
+    fn terminal_cache_checkpoint(&self, _request: &PrefillRequest) -> Option<usize> {
+        None
+    }
+
+    fn cache_checkpoint_alignment(&self) -> Option<usize> {
+        None
+    }
+
     fn prefill_chunk_len(&self, remaining: usize) -> usize;
 
     fn prefill_chunk(

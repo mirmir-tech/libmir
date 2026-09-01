@@ -25,6 +25,7 @@ use self::{
 use crate::{CudaBackend, CudaTensor, PagedKvCache, Result};
 
 const PREFIX_CHECKPOINTS_PER_SESSION: usize = 3;
+const WINDOWED_FMHA_MIN_QUERY_TOKENS: usize = 128;
 
 #[derive(Clone)]
 pub struct CudaClampedRoutedModelTemplate {

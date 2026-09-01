@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use runtime::backend::{PrefillOutput, PrefillRequest};
+use runtime::backend::{PrefillOutput, PrefillRequest, PrefillTimings};
 
 use super::{Sequence, prefix::PrefixReuse};
 use crate::{Error, Result};
@@ -15,6 +15,7 @@ impl Sequence {
             prefix_tokens: prefix.tokens,
             checkpoint_restored: prefix.checkpoint_restored,
             runner_wait,
+            execution: Duration::ZERO,
             completed_at: None,
             step_table,
             output: None,
@@ -25,20 +26,17 @@ impl Sequence {
         self.consumed < self.request.prompt_tokens.len()
     }
 
-    pub(super) fn checkpoint_distance(&self) -> usize {
-        let declared = self
-            .request
-            .cache_checkpoints
-            .iter()
-            .copied()
-            .find(|checkpoint| *checkpoint > self.consumed)
-            .map(|checkpoint| checkpoint - self.consumed);
-        let terminal = self
-            .request
-            .terminal_cache_checkpoint()
-            .filter(|checkpoint| *checkpoint > self.consumed)
-            .map(|checkpoint| checkpoint - self.consumed);
-        declared.into_iter().chain(terminal).min().unwrap_or(usize::MAX)
+    pub(super) fn checkpoint_distance(
+        &self,
+        terminal: Option<usize>,
+        alignment: Option<usize>,
+    ) -> usize {
+        super::plan::checkpoint_distance(
+            self.consumed,
+            &self.request.cache_checkpoints,
+            terminal,
+            alignment,
+        )
     }
 
     pub(super) fn finish(
@@ -82,6 +80,11 @@ impl Sequence {
             )),
             logits: output.logits,
             candidates: None,
+            timings: Some(PrefillTimings {
+                backend_wait: self.runner_wait,
+                backend_execution: self.execution,
+                ..PrefillTimings::default()
+            }),
         })
     }
 }

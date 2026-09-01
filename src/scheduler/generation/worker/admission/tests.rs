@@ -7,7 +7,8 @@ use runtime::kv::{BlockId, BlockTable};
 
 use super::{
     completion_wave_rows, next_prefill_deadline, pending_prefill_tokens,
-    prefill_admission_deadline, prefill_wave_limit, resident_wave_rows, take_ready,
+    prefill_admission_deadline, prefill_quiet_wait, prefill_wave_limit, resident_wave_rows,
+    take_ready,
 };
 use crate::engine::PrefillExecutionProfile;
 
@@ -31,7 +32,14 @@ fn prefill_quiet_window_extends_without_crossing_hard_deadline() {
 }
 
 #[test]
-fn completion_wave_avoids_a_single_row_tail() {
+fn idle_prefill_skips_the_worker_collection_window() {
+    assert_eq!(prefill_quiet_wait(200, 0, 1, 16), Duration::ZERO);
+    assert_eq!(prefill_quiet_wait(200, 1, 16, 16), Duration::ZERO);
+    assert_eq!(prefill_quiet_wait(200, 1, 1, 16), Duration::from_millis(30));
+}
+
+#[test]
+fn completion_wave_keeps_a_short_tail_in_one_cohort() {
     assert_eq!(completion_wave_rows(5, 8), 5);
     assert_eq!(completion_wave_rows(8, 8), 8);
     assert_eq!(completion_wave_rows(10, 8), 8);
@@ -187,6 +195,7 @@ fn pending(
         },
         response: Arc::new(crate::scheduler::prefill::PrefillResponse::new()),
         enqueued,
+        scheduler_queue: Duration::ZERO,
         expects_decode: true,
     }
 }

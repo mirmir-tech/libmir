@@ -144,10 +144,11 @@ pub(super) fn take_pending(state: &mut SessionState, token: u32) -> Result<Array
 }
 
 pub(super) const fn supports_device_token(sampling: SamplingLogits) -> bool {
-    matches!(
-        sampling,
-        SamplingLogits::None | SamplingLogits::SampleTopK { .. } | SamplingLogits::Sample { .. }
-    )
+    match sampling {
+        SamplingLogits::None | SamplingLogits::SampleTopK { .. } => true,
+        SamplingLogits::Sample { top_k, .. } => top_k > 0,
+        SamplingLogits::Full | SamplingLogits::TopK { .. } => false,
+    }
 }
 
 pub(super) fn device_token(

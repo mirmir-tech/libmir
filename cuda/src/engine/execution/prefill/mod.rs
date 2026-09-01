@@ -34,6 +34,7 @@ struct Sequence {
     prefix_tokens: usize,
     checkpoint_restored: bool,
     runner_wait: Duration,
+    execution: Duration,
     completed_at: Option<Instant>,
     step_table: BlockTable,
     output: Option<Output>,

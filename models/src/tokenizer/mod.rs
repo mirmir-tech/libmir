@@ -4,8 +4,10 @@ mod bpe;
 mod decoder;
 mod encoding;
 mod engine;
+mod harmony;
 mod metadata;
 mod policy;
+pub(crate) mod protocol;
 mod sentencepiece;
 mod validation;
 

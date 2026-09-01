@@ -56,6 +56,7 @@ sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 [features]
 default = []
 cuda = ["dep:cuda", "dep:nvml-wrapper", "dep:sysinfo"]
+cuda-diagnostics = ["cuda", "cuda/diagnostics"]
 metal = ["dep:macmon", "dep:metal"]
 
 [dependencies]

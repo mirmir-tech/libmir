@@ -22,19 +22,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Compiler::with_include_paths(context.clone(), [include.clone(), include.join("cccl")])?;
     let logits = pool.allocate_zeroed::<bf16>(&stream, VOCAB)?;
     let workspace = Sampling::workspace_elements(VOCAB)?;
+    let block_mass = Sampling::block_mass_elements(VOCAB)?;
     let mut buffers = Buffers {
         output: pool.allocate::<u32>(&stream, 1)?,
         first: pool.allocate::<u64>(&stream, workspace)?,
         second: pool.allocate::<u64>(&stream, workspace)?,
         denominator: pool.allocate::<f32>(&stream, 1)?,
+        block_mass: pool.allocate::<f32>(&stream, block_mass)?,
     };
     let operation = Sampling::compile(&compiler, VOCAB)?;
     let mut stdout = io::stdout().lock();
-    for (name, top_k) in [("greedy", 1), ("top-k-64", 64)] {
+    for (name, top_k) in [("greedy", 1), ("top-k-64", 64), ("full", 0)] {
         let spec = SamplingSpec {
             vocab: VOCAB,
             top_k,
-            top_p: 0.95,
+            top_p: if top_k == 0 {
+                1.0
+            } else {
+                0.95
+            },
             temperature: 1.0,
             draw: 0.5,
         };
@@ -49,6 +55,7 @@ struct Buffers {
     first: mircuda::DeviceBuffer<u64>,
     second: mircuda::DeviceBuffer<u64>,
     denominator: mircuda::DeviceBuffer<f32>,
+    block_mass: mircuda::DeviceBuffer<f32>,
 }
 
 fn profile(
@@ -89,6 +96,7 @@ fn execute(
             first: &mut buffers.first,
             second: &mut buffers.second,
             denominator: &mut buffers.denominator,
+            block_mass: &mut buffers.block_mass,
         },
         spec,
     )

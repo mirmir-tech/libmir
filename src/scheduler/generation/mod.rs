@@ -44,6 +44,7 @@ pub(super) struct PendingPrefill {
     pub(super) request: PrefillRequest,
     pub(super) response: Arc<PrefillResponse>,
     pub(super) enqueued: Instant,
+    pub(super) scheduler_queue: Duration,
     pub(super) expects_decode: bool,
 }
 
@@ -104,6 +105,7 @@ impl GenerationCoordinator {
             request,
             response: response.clone(),
             enqueued: Instant::now(),
+            scheduler_queue: Duration::ZERO,
             expects_decode,
         }))?;
         response.wait(progress)

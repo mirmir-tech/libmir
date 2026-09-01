@@ -66,6 +66,7 @@ impl CudaEngine {
         for (chunk, output) in scheduled.iter().zip(outputs) {
             let sequence = &mut sequences[chunk.row];
             sequence.runner_wait += runner_wait;
+            sequence.execution += execution;
             sequence.consumed += chunk.count;
             sequence.chunks += 1;
             if let Some(output) = output {
@@ -119,11 +120,13 @@ fn schedule(
             sequence.prefix_tokens > 0,
             completion_first,
         );
+        let terminal = generation.terminal_cache_checkpoint(&sequence.request);
+        let alignment = generation.cache_checkpoint_alignment();
         let count = generation.prefill_chunk_len(
             remaining
                 .min(row_budget)
                 .min(context_budget)
-                .min(sequence.checkpoint_distance()),
+                .min(sequence.checkpoint_distance(terminal, alignment)),
         );
         if !plan::valid_chunk(count, remaining, remaining_budget) {
             return Err(Error::InvalidDecoderKernel(

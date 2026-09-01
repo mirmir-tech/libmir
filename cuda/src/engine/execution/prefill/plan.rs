@@ -9,6 +9,27 @@ pub(super) const fn valid_chunk(count: usize, remaining: usize, budget: usize) -
     count > 0 && count <= remaining && count <= budget
 }
 
+pub(super) fn checkpoint_distance(
+    consumed: usize,
+    declared: &[usize],
+    terminal: Option<usize>,
+    alignment: Option<usize>,
+) -> usize {
+    let aligned = |checkpoint: &usize| {
+        alignment.is_none_or(|alignment| alignment > 0 && checkpoint.is_multiple_of(alignment))
+    };
+    declared
+        .iter()
+        .filter(|checkpoint| **checkpoint > consumed)
+        .find(|checkpoint| aligned(checkpoint))
+        .copied()
+        .into_iter()
+        .chain(terminal.filter(|checkpoint| *checkpoint > consumed))
+        .map(|checkpoint| checkpoint - consumed)
+        .min()
+        .unwrap_or(usize::MAX)
+}
+
 pub(super) const fn fair_chunk_budget(remaining_budget: usize, rows_left: usize) -> usize {
     remaining_budget.div_ceil(if rows_left == 0 {
         1

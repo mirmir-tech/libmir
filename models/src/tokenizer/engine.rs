@@ -5,7 +5,9 @@ use std::{
 
 use tokenizers::{Tokenizer, TruncationParams, TruncationStrategy};
 
-use super::{TokenizerAssets, bpe, metadata, policy::TokenizerPolicy, tokenized};
+use super::{
+    TokenizerAssets, bpe, metadata, policy::TokenizerPolicy, protocol::ProtocolTokenIds, tokenized,
+};
 use crate::{
     error::{ModelsError, Result},
     generation::GenerationConfig,
@@ -49,9 +51,9 @@ pub struct TextTokenizer {
     pub(super) inner: Tokenizer,
     path: PathBuf,
     kind: TokenizerKind,
+    vocab_size: usize,
     pub(super) added_tokens: BTreeMap<String, u32>,
-    pub(super) configured_stop_token_ids: Vec<u32>,
-    pub(super) eos_token_ids: Vec<u32>,
+    protocol: ProtocolTokenIds,
     pub(super) pad_token_id: Option<u32>,
     policy: TokenizerPolicy,
 }
@@ -89,14 +91,21 @@ impl TextTokenizer {
         )?;
         let policy = TokenizerPolicy::read(layout.tokenizer_config_path.as_deref())?;
         let added_tokens = metadata::inventory(&inner);
+        let vocab_size = inner.get_vocab_size(true);
         let pad_token_id = policy.pad_token.as_deref().and_then(|token| inner.token_to_id(token));
+        let protocol = ProtocolTokenIds::resolve(
+            &inner,
+            &added_tokens,
+            &configured_stop_token_ids,
+            &metadata.eos_token_ids,
+        );
         Ok(Self {
             inner,
             path,
             kind,
+            vocab_size,
             added_tokens,
-            configured_stop_token_ids,
-            eos_token_ids: metadata.eos_token_ids,
+            protocol,
             pad_token_id,
             policy,
         })
@@ -105,13 +114,16 @@ impl TextTokenizer {
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         let inner = Tokenizer::from_file(&path)?;
+        let added_tokens = metadata::inventory(&inner);
+        let vocab_size = inner.get_vocab_size(true);
+        let protocol = ProtocolTokenIds::resolve(&inner, &added_tokens, &[], &[]);
         Ok(Self {
-            added_tokens: metadata::inventory(&inner),
+            added_tokens,
             inner,
             path,
             kind: TokenizerKind::TokenizerJson,
-            configured_stop_token_ids: Vec::new(),
-            eos_token_ids: Vec::new(),
+            vocab_size,
+            protocol,
             pad_token_id: None,
             policy: TokenizerPolicy::read(None)?,
         })
@@ -180,34 +192,16 @@ impl TextTokenizer {
 
     #[must_use]
     pub fn stop_token_ids(&self) -> Vec<u32> {
-        let mut ids = self.configured_stop_token_ids.clone();
-        for id in &self.eos_token_ids {
-            if !ids.contains(id) {
-                ids.push(*id);
-            }
-        }
-        for token in [
-            "<eos>",
-            "</s>",
-            "<|endoftext|>",
-            "<|im_end|>",
-            "<end_of_turn>",
-            "<turn|>",
-            "<|eot_id|>",
-            "<|tool_response>",
-        ] {
-            if let Some(id) = self.inner.token_to_id(token)
-                && !ids.contains(&id)
-            {
-                ids.push(id);
-            }
-        }
-        ids
+        self.protocol.stop.clone()
+    }
+
+    pub(crate) const fn output_markers(&self) -> &super::protocol::OutputMarkerIds {
+        &self.protocol.output
     }
 
     #[must_use]
     pub fn vocab_size(&self) -> usize {
-        self.inner.get_vocab_size(true)
+        self.vocab_size
     }
 
     #[must_use]

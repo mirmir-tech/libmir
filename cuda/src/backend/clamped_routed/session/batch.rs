@@ -67,6 +67,8 @@ impl CudaClampedRoutedModelSession {
             self.packed_batches.insert(key, batch);
         }
         result?;
+        #[cfg(feature = "diagnostics")]
+        plan.publish_fingerprints()?;
         for ((session, start), count) in sessions.iter().zip(starts).zip(counts) {
             self.positions.insert(*session, start + count);
         }

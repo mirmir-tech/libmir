@@ -13,6 +13,8 @@ mod direct_fp8;
 mod elementwise;
 mod embedding;
 mod encoder;
+#[cfg(feature = "diagnostics")]
+mod fingerprint;
 mod gated_attention;
 mod gated_delta;
 mod geometry;
@@ -40,6 +42,7 @@ mod tests;
 mod text;
 mod tuning;
 mod vision;
+mod windowed_prefill;
 
 pub use affine::{
     AffineEmbedding, AffineEmbeddingSpec, AffineGemvLaunch, AffineGemvSpec, AffineQuantizedGemv,
@@ -47,7 +50,8 @@ pub use affine::{
 pub use awq::{AwqLaunch, AwqLinear, AwqSpec};
 pub use bitsandbytes::{BitsAndBytes4BitLaunch, BitsAndBytes4BitLinear, BitsAndBytes4BitSpec};
 pub(crate) use clamped_routed::{
-    ClampedRoutedAttention, ClampedRoutedBatchSplitDecode, ClampedRoutedKernels, ClampedRoutedSpec,
+    ClampedRoutedAttention, ClampedRoutedBatchSplitDecode, ClampedRoutedKernels,
+    ClampedRoutedMarlinEpilogue, ClampedRoutedMarlinGeometry, ClampedRoutedSpec,
     ClampedRoutedSplitDecode,
 };
 pub use decoder::{RmsNorm, RmsNormUnit, Rope, RopeSpec};
@@ -66,6 +70,8 @@ pub use embedding::Embedding;
 pub use encoder::{
     EncoderAttentionF16, EncoderAttentionSpec, EncoderElementwiseF16, EncoderElementwiseSpec,
 };
+#[cfg(feature = "diagnostics")]
+pub(crate) use fingerprint::ActivationFingerprint;
 pub use gated_attention::GatedAttentionSplit;
 pub use gated_delta::{
     GatedDeltaAlphaBeta, GatedDeltaAlphaBetaSplit, GatedDeltaBatchConvolution,
@@ -138,3 +144,4 @@ pub use vision::{
     VisionElementwise, VisionElementwiseSpec, VisionPatchLayout, VisionPool, VisionPoolSpec,
     VisionSpatialRope,
 };
+pub(crate) use windowed_prefill::{WindowedPrefillStage, WindowedPrefillStageArgs};

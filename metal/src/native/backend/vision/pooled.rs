@@ -92,5 +92,6 @@ fn execute(
         trace: Some(trace),
         logits: output.logits,
         candidates: output.candidates,
+        timings: None,
     })
 }

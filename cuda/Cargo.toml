@@ -6,6 +6,10 @@ license.workspace = true
 description = "CUDA inference backend for libmir"
 repository.workspace = true
 
+[features]
+default = []
+diagnostics = []
+
 [dependencies]
 architecture = { package = "libmir-admission", version = "0.3.0", path = "../admission" }
 async-trait.workspace = true

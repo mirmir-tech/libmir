@@ -5,6 +5,7 @@ use super::{ClampedRoutedLayerExecution, ClampedRoutedLayerTemplate};
 use crate::{
     CudaTensor, Error, PagedKvCache, PagedPrefillBatch, Result,
     backend::{
+        WindowedPrefillStaging,
         clamped_routed::{scratch::ClampedRoutedScratch, weights::ClampedRoutedExpertWeights},
         linear::SelectedDenseMoeBf16,
     },
@@ -68,6 +69,7 @@ impl ClampedRoutedLayerExecution {
         input: &DeviceBuffer<bf16>,
         cache: &mut PagedKvCache,
         batch: &PagedPrefillBatch,
+        windowed_prefill: Option<&mut WindowedPrefillStaging>,
         scratch: &mut ClampedRoutedScratch,
         dense_experts: &mut Option<SelectedDenseMoeBf16>,
         batch_split_decode: &mut Option<ClampedRoutedBatchSplitDecode>,
@@ -79,7 +81,35 @@ impl ClampedRoutedLayerExecution {
         if !cache.is_windowed() {
             cache.store_prefill_batch(batch, &scratch.key, &scratch.value)?;
         }
-        let split = (!cache.is_windowed())
+        let windowed_fmha = if cache.is_windowed()
+            && batch.max_query_tokens() >= super::super::WINDOWED_FMHA_MIN_QUERY_TOKENS
+        {
+            let staged = windowed_prefill
+                .ok_or(Error::InvalidExecutionPlan("windowed prefill staging was not prepared"))?;
+            staged.stage(
+                batch,
+                &scratch.key,
+                &scratch.value,
+                cache.key_pages(),
+                cache.value_pages(),
+                self.window.ok_or(Error::InvalidExecutionPlan(
+                    "windowed cache layer has no attention window",
+                ))?,
+            )?;
+            self.attention.execute_windowed_fmha(
+                &self.stream,
+                &scratch.query,
+                batch,
+                staged,
+                bf16s(&weights.sinks)?,
+                &mut scratch.normalized,
+                &mut scratch.attended,
+                self.config.scale,
+            )?
+        } else {
+            false
+        };
+        let split = (!cache.is_windowed() && !windowed_fmha)
             .then_some(batch_split_decode.as_mut())
             .flatten()
             .map(|split| {
@@ -97,7 +127,7 @@ impl ClampedRoutedLayerExecution {
             })
             .transpose()?
             .unwrap_or(false);
-        if !split {
+        if !split && !windowed_fmha {
             let tables = if cache.is_windowed() {
                 batch.ring_tables()
             } else {

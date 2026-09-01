@@ -1,6 +1,6 @@
 use mircuda::{
-    CompileOptions, DeviceBuffer, FmhaBf16Plan, FmhaBf16Spec, TypedKernel, bf16, cuda_export,
-    cuda_kernel_file,
+    CompileOptions, DeviceBuffer, FmhaBf16Plan, FmhaBf16Spec, FmhaCausalWindow, TypedKernel, bf16,
+    cuda_export, cuda_kernel_file,
 };
 use runtime::kv::KvCacheDType;
 
@@ -11,6 +11,7 @@ mod split;
 #[cfg(test)]
 mod tests;
 use execution::narrow;
+use fmha::ClampedRoutedFmha;
 pub use split::{ClampedRoutedBatchSplitDecode, ClampedRoutedSplitDecode};
 
 cuda_export!(DecodeKernel = "libmir_cuda_clamped_routed_paged_attention_bf16"(
@@ -54,7 +55,7 @@ pub struct ClampedRoutedAttention {
     prefill: TypedKernel<PrefillKernel>,
     batch_prefill: TypedKernel<BatchPrefillKernel>,
     sink_scale: TypedKernel<SinkScaleKernel>,
-    fmha: Option<FmhaBf16Plan>,
+    fmha: Option<ClampedRoutedFmha>,
     block_size: usize,
     query_heads: usize,
     kv_heads: usize,
@@ -70,6 +71,37 @@ impl ClampedRoutedAttention {
         head_dim: usize,
         dtype: KvCacheDType,
         window: Option<usize>,
+    ) -> Result<Self> {
+        Self::compile_with_fmha(
+            backend, block_size, query_heads, kv_heads, head_dim, dtype, window, true,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn compile_scalar(
+        backend: &CudaBackend,
+        block_size: usize,
+        query_heads: usize,
+        kv_heads: usize,
+        head_dim: usize,
+        dtype: KvCacheDType,
+        window: Option<usize>,
+    ) -> Result<Self> {
+        Self::compile_with_fmha(
+            backend, block_size, query_heads, kv_heads, head_dim, dtype, window, false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn compile_with_fmha(
+        backend: &CudaBackend,
+        block_size: usize,
+        query_heads: usize,
+        kv_heads: usize,
+        head_dim: usize,
+        dtype: KvCacheDType,
+        window: Option<usize>,
+        enable_fmha: bool,
     ) -> Result<Self> {
         if block_size == 0
             || query_heads == 0
@@ -92,15 +124,21 @@ impl ClampedRoutedAttention {
             cuda_kernel_file!("../../../../kernels/clamped_routed_attention_bf16.cu"),
             &options,
         )?;
-        let fmha = (window.is_none()
+        let fmha = (enable_fmha
             && matches!(dtype, KvCacheDType::Auto | KvCacheDType::BFloat16)
             && matches!(head_dim, 64 | 128))
         .then(|| {
-            FmhaBf16Plan::new(
-                backend.context(),
-                backend.stream(),
-                FmhaBf16Spec::new(query_heads, kv_heads, head_dim, head_dim)?,
-            )
+            Ok::<_, Error>(ClampedRoutedFmha {
+                plan: FmhaBf16Plan::new(
+                    backend.context(),
+                    backend.stream(),
+                    FmhaBf16Spec::new(query_heads, kv_heads, head_dim, head_dim)?,
+                )?,
+                window: match window {
+                    Some(tokens) => FmhaCausalWindow::sliding(tokens)?,
+                    None => FmhaCausalWindow::Full,
+                },
+            })
         })
         .transpose()?;
         Ok(Self {

@@ -1,15 +1,39 @@
+use std::time::Duration;
+
 use foundation::model::BackendTarget;
 use models::{
-    chat::ChatTemplate,
+    chat::{ChatPrompt, ChatTemplate},
     execution::{DecoderExecutionContract, ModelTask, TaskExecutionPlan},
     generation::{GenerationOverrides, GenerationSettings},
     layout::{DecoderConfig, ImageProcessorConfig, ModelLayout, ModelMetadata, VisionConfig},
-    tokenizer::{TextTokenizer, TokenizerValidation},
+    tokenizer::{TextTokenizer, TokenizedPrompt, TokenizerValidation},
     weights::TensorReadiness,
 };
 
 use super::ModelDescriptor;
 use crate::Result;
+
+#[derive(Debug, Clone)]
+/// Rendered prompt and tokenization produced before backend execution.
+pub struct PreparedPrompt {
+    /// Rendered chat prompt, including the selected template behavior.
+    pub prompt: ChatPrompt,
+    /// Tokenized prompt passed to the inference backend.
+    pub tokens: TokenizedPrompt,
+    /// Stable chat-message boundaries worth retaining as reusable cache states.
+    pub cache_checkpoints: Vec<usize>,
+    /// CPU wall-clock stages used to prepare this prompt.
+    pub timings: PromptPreparationTimings,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+/// CPU wall-clock durations for rendering and tokenizing one prompt.
+pub struct PromptPreparationTimings {
+    /// Time spent rendering the model's chat template.
+    pub render: Duration,
+    /// Time spent encoding the rendered prompt into token identifiers.
+    pub tokenize: Duration,
+}
 
 impl ModelDescriptor {
     #[must_use]

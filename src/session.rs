@@ -62,6 +62,7 @@ impl Session {
         expects_decode: bool,
         progress: &mut dyn FnMut(ProgressEvent),
     ) -> Result<PrefillOutput> {
+        let cache_started = std::time::Instant::now();
         let (admission, counters_before) = self.model.clone().with_cache(|cache| {
             let admission = self.state.probe_prefill_admission(cache, tokens, reserved_tokens)?;
             Ok((admission, cache.stats().counters))
@@ -90,7 +91,8 @@ impl Session {
                 .saturating_sub(counters_before.protected_prefix_skips),
             "prepared cache-aware prefill allocation"
         );
-        let output = self.model.prefill_request(
+        let cache_prepare = cache_started.elapsed();
+        let mut output = self.model.prefill_request(
             PrefillRequest {
                 model: self.model.handle().clone(),
                 session_id: request.session_id,
@@ -106,6 +108,7 @@ impl Session {
         self.model
             .clone()
             .with_cache(|cache| Ok(self.state.commit_ready_prefix_blocks(cache)?))?;
+        output.timings.get_or_insert_default().cache_prepare = cache_prepare;
         Ok(output)
     }
 

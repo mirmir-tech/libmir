@@ -14,6 +14,13 @@ impl PagedPrefillBatch {
         self.max_blocks
     }
 
+    pub(crate) fn fmha_max_context_tokens(&self) -> usize {
+        context_bucket(
+            self.max_context_tokens,
+            self.max_blocks.saturating_mul(self.cache.block_size),
+        )
+    }
+
     pub(crate) const fn token_counts(&self) -> &mircuda::DeviceBuffer<u32> {
         &self.token_counts.device
     }
@@ -43,5 +50,28 @@ impl PagedPrefillBatch {
             self.slot_mapping.upload(&self.stream)?;
         }
         Ok(())
+    }
+}
+
+fn context_bucket(tokens: usize, capacity: usize) -> usize {
+    let bucket = tokens.div_ceil(128).saturating_mul(128);
+    bucket.min(capacity)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::context_bucket;
+
+    #[test]
+    fn decode_keeps_fine_grained_fmha_rounding() {
+        assert_eq!(context_bucket(1, 131_072), 128);
+        assert_eq!(context_bucket(127, 131_072), 128);
+        assert_eq!(context_bucket(129, 131_072), 256);
+        assert_eq!(context_bucket(65_537, 131_072), 65_664);
+    }
+
+    #[test]
+    fn prefill_keeps_fine_grained_fmha_rounding() {
+        assert_eq!(context_bucket(2_175, 2_176), 2_176);
     }
 }

@@ -25,13 +25,14 @@ pub use foundation::{
     },
     model::BackendTarget,
 };
-pub use generation::{GenerationOutput, GenerationRequest};
+pub use generation::{GenerationOutput, GenerationRequest, ReasoningCyclePolicy};
 pub use memory::{MemorySnapshot, ModelMemoryEstimate};
 pub use model::{
     AdmissionCheck, AdmissionCheckKind, AdmissionStatus, BackendAdmissionReport,
     CheckpointEncoding, IMAGE_PLACEHOLDER, Library, MODEL_FORMAT_REGISTRY_SCHEMA_VERSION, Model,
-    ModelDescriptor, ModelLoadOptions, PreparedPrompt, PreparedVisionPrompt, RemoteModelContract,
-    RemoteTaskMetadata, RemoteVisionContract, WeightEncoding,
+    ModelDescriptor, ModelLoadOptions, PreparedPrompt, PreparedVisionPrompt,
+    PromptPreparationTimings, RemoteModelContract, RemoteTaskMetadata, RemoteVisionContract,
+    WeightEncoding,
 };
 pub use models::{
     chat::TemplateKind,
@@ -47,7 +48,8 @@ pub use rerank::{RerankOutput, RerankRequest, RerankResult};
 pub use runtime::{
     RuntimeError,
     backend::{
-        BackendInfo, DecodeOutput, DecodeTimings, ModelHandle, PrefillOutput, SamplingLogits,
+        BackendInfo, DecodeOutput, DecodeTimings, ModelHandle, PrefillOutput, PrefillTimings,
+        SamplingLogits,
     },
     kv::{CacheStats, KvCacheDType},
     metrics::GenerationMetrics,

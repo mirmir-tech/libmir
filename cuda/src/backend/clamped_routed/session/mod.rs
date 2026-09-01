@@ -148,6 +148,8 @@ impl CudaClampedRoutedModelSession {
             tokens.len() - 1,
             tokens.len(),
         )?;
+        #[cfg(feature = "diagnostics")]
+        plan.publish_fingerprints()?;
         self.final_norm.execute(
             &self.last_hidden,
             &self.template.final_norm,
