@@ -41,6 +41,15 @@ pub(super) fn forward(
     let Some(fused) = fused else {
         return execute(GateUpExecution::Separate, gate, up, None, input, stream);
     };
+    let active_decode_plan = tuner(stream).active_decode_plan();
+    if let Some(plan) = active_decode_plan {
+        let execution = if plan.fused_gate_up() {
+            GateUpExecution::Fused
+        } else {
+            GateUpExecution::Separate
+        };
+        return execute(execution, gate, up, Some(fused), input, stream);
+    }
     let key = key(fused, input)?;
     let action = tuner(stream).plan(key);
     match action {
@@ -58,6 +67,22 @@ pub(super) fn forward(
             })
         },
     }
+}
+
+pub(super) fn forward_decode_plan(
+    gate: &BoundLinear,
+    up: &BoundLinear,
+    fused: &FusedGateUp,
+    input: &Array,
+    stream: &Stream,
+) -> Result<(Array, Array)> {
+    let plan = tuner(stream).active_decode_plan();
+    let execution = if plan.is_some_and(super::DecodePlan::fused_gate_up) {
+        GateUpExecution::Fused
+    } else {
+        GateUpExecution::Separate
+    };
+    execute(execution, gate, up, Some(fused), input, stream)
 }
 
 fn tune(

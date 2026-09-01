@@ -2,12 +2,18 @@ use super::{Array, Error, QuantizedArrays, Result, Stream};
 
 #[derive(Debug)]
 pub struct FusedGateUp {
-    arrays: QuantizedArrays,
+    execution: FusedGateUpExecution,
     input_width: usize,
     gate_width: usize,
     up_width: usize,
     group_size: i32,
     bits: i32,
+}
+
+#[derive(Debug)]
+enum FusedGateUpExecution {
+    Affine(QuantizedArrays),
+    MxFp4 { weight: Array, scales: Array },
 }
 
 #[derive(Debug)]
@@ -38,7 +44,9 @@ impl FusedGateUp {
             ));
         }
         Ok(Self {
-            arrays: concatenate(gate, up, 0, group_size, bits, stream)?,
+            execution: FusedGateUpExecution::Affine(concatenate(
+                gate, up, 0, group_size, bits, stream,
+            )?),
             input_width,
             gate_width: gate_shape[0],
             up_width: up_shape[0],
@@ -47,14 +55,55 @@ impl FusedGateUp {
         })
     }
 
+    pub(crate) fn new_mxfp4(
+        gate: [&Array; 2],
+        up: [&Array; 2],
+        input_width: usize,
+        gate_width: usize,
+        up_width: usize,
+        stream: &Stream,
+    ) -> Result<Self> {
+        Ok(Self {
+            execution: FusedGateUpExecution::MxFp4 {
+                weight: Array::concatenate(&[gate[0], up[0]], 0, stream)?,
+                scales: Array::concatenate(&[gate[1], up[1]], 0, stream)?,
+            },
+            input_width,
+            gate_width,
+            up_width,
+            group_size: 32,
+            bits: 4,
+        })
+    }
+
     pub(crate) fn warm(&self, stream: &Stream) -> Result<()> {
-        self.arrays.weight.async_eval(stream)?;
-        self.arrays.scales.async_eval(stream)?;
-        self.arrays.biases.async_eval(stream)
+        match &self.execution {
+            FusedGateUpExecution::Affine(arrays) => {
+                arrays.weight.async_eval(stream)?;
+                arrays.scales.async_eval(stream)?;
+                arrays.biases.async_eval(stream)
+            },
+            FusedGateUpExecution::MxFp4 { weight, scales } => {
+                weight.async_eval(stream)?;
+                scales.async_eval(stream)
+            },
+        }
     }
 
     pub(crate) fn forward(&self, input: &Array, stream: &Stream) -> Result<GateUpOutput> {
-        let output = input.quantized_matmul(&self.arrays, true, stream)?;
+        let output = match &self.execution {
+            FusedGateUpExecution::Affine(arrays) => input.quantized_matmul(arrays, true, stream)?,
+            FusedGateUpExecution::MxFp4 { weight, scales } => {
+                Array::from_native(stream.native().graph().mxfp4_matmul(
+                    input.native(),
+                    mirtal::MxFp4 {
+                        weight: weight.native(),
+                        scales: scales.native(),
+                    },
+                    true,
+                )?)?
+            },
+        };
         let (gate, up) = split_last(&output, self.gate_width, stream)?;
         Ok(GateUpOutput { gate, up })
     }

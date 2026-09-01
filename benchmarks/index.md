@@ -47,7 +47,7 @@ matrix coverage, and per-depth results.
 
 | Model | Device | PP tok/s ↑<br>mirmir / MLX-LM | TG tok/s ↑<br>mirmir / MLX-LM |
 |:---|:---|---:|---:|
-| [Qwen3.6-35B-A3B MXFP4](qwen3.6-35b-a3b-nvfp4.md) | Apple M3 Max<br>40-core GPU · 64 GiB | 1,104.23 / 1,069.22<br>103.3% · 3/4 wins | 107.32 / 100.21<br>107.1% · 4/4 wins |
+| [Qwen3.6-35B-A3B MXFP4](qwen3.6-35b-a3b-nvfp4.md) | Apple M3 Max<br>40-core GPU · 64 GiB | 1,085.09 / 1,069.22<br>101.5% · 2/4 wins | 109.19 / 100.21<br>109.0% · 4/4 wins |
 
 ## Partial Metal reference diagnostics
 

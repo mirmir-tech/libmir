@@ -163,6 +163,18 @@ impl HybridLinearMoeLayer {
     pub(super) const fn has_fused_expert_gate_up(&self) -> bool {
         self.moe.has_fused_routed_gate_up()
     }
+
+    pub(super) fn has_decode_plan_candidates(&self) -> bool {
+        self.moe.has_decode_plan_candidates()
+    }
+
+    pub(super) fn decode_plan_candidate_bytes(&self) -> Result<Option<usize>> {
+        self.moe.decode_plan_candidate_bytes()
+    }
+
+    pub(super) fn enable_decode_plan_candidate(&mut self, stream: &Stream) -> Result<bool> {
+        self.moe.enable_decode_plan_candidate(stream)
+    }
 }
 
 impl ExpertFusion for HybridLinearMoeLayer {

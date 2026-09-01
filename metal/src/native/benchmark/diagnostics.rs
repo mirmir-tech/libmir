@@ -4,7 +4,9 @@ use crate::MetalConfig;
 
 pub(super) fn isolated_config() -> Arc<MetalConfig> {
     let mut config = MetalConfig::default();
-    config.cache.prefix_cache_entries = 0;
+    if !enabled("MIRMIR_BENCH_PREFIX_CACHE") {
+        config.cache.prefix_cache_entries = 0;
+    }
     config.cache.force_native_paged_attention =
         enabled("MIRMIR_METAL_FORCE_NATIVE_PAGED_ATTENTION");
     config.diagnostics.profile_layers = enabled("MIRMIR_METAL_PROFILE_LAYERS");

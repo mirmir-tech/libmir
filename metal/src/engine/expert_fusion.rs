@@ -101,6 +101,17 @@ fn fits_budget(memory: MemoryStats, additional: usize, reserve: usize) -> bool {
         .is_some_and(|required| required <= recommended)
 }
 
+pub fn fits_additional_fusion(stream: &Stream, additional: usize) -> Result<bool> {
+    stream.synchronize()?;
+    let memory = memory_stats()?;
+    let reserve = stream
+        .config()
+        .expert_fusion_reserve_bytes
+        .or_else(|| memory.recommended.map(default_reserve_bytes))
+        .unwrap_or(usize::MAX);
+    Ok(fits_budget(memory, additional, reserve))
+}
+
 fn default_reserve_bytes(recommended: usize) -> usize {
     max(MINIMUM_RESERVE_BYTES, recommended / RESERVE_DIVISOR)
 }

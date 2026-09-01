@@ -106,6 +106,17 @@ impl LoadedModel {
             session,
         })?;
         if state.pending.is_some() {
+            if sampling == SamplingLogits::None && model.has_decode_plan_candidates() {
+                let key = crate::engine::DecodePlanKey {
+                    model: self.info.manifest.id.clone(),
+                    weight_bytes: self.info.weight_bytes,
+                    context_bucket: crate::engine::decode_context_bucket(state.position),
+                    batch: 1,
+                };
+                return super::decode_tuning::decode_pending(
+                    model, stream, state, key, token, sampling,
+                );
+            }
             return super::step::decode_pending(model, stream, state, token, sampling);
         }
         let position = state.model_position()?;

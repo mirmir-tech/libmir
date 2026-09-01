@@ -10,6 +10,7 @@ use crate::{
         Array, Dtype, Error, QuantizedArrays, QuantizedLinear, Result, Stream,
         attention_batch_tuning::{BatchAttentionExecution, BatchAttentionKey},
         attention_tuning::AttentionKey,
+        decode_plan_tuning::{DecodePlan, DecodePlanAction, DecodePlanKey},
         expert_tuning::{ExpertExecution, ExpertKey},
         kernels::PagedExecution,
         route_tuning::{ExpertActivation, RoutingExecution, RoutingKey},
@@ -57,6 +58,11 @@ fn cached_mode_reuses_a_persisted_shape_decision()
         RoutingExecution::UnsortedNative,
         Duration::from_millis(1),
     );
+    startup.record_decode_plan(
+        decode_plan_key(),
+        DecodePlan::SeparateGateUp,
+        Duration::from_millis(1),
+    );
     startup.persist();
     let cached = MetalTuner::new(TuningConfig {
         mode: TuningMode::Cached,
@@ -75,8 +81,21 @@ fn cached_mode_reuses_a_persisted_shape_decision()
     );
     assert_eq!(cached.expert_decision(expert_key()), Some(ExpertExecution::Separate));
     assert_eq!(cached.routing_decision(routing_key()), Some(RoutingExecution::UnsortedNative));
+    assert_eq!(
+        cached.decode_plan_action(&decode_plan_key()),
+        DecodePlanAction::Execute(DecodePlan::SeparateGateUp)
+    );
     fs::remove_dir_all(directory)?;
     Ok(())
+}
+
+pub(super) fn decode_plan_key() -> DecodePlanKey {
+    DecodePlanKey {
+        model: "qwen-fixture".into(),
+        weight_bytes: 1_024,
+        context_bucket: 2_048,
+        batch: 1,
+    }
 }
 
 pub(super) fn batch_attention_key() -> BatchAttentionKey {

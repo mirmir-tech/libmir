@@ -4,6 +4,8 @@ use models::weights::{
 
 use crate::engine::{Array, Dtype, Error, ModelTensors, Result, Stream};
 
+mod fusion;
+
 #[derive(Debug)]
 pub(in crate::engine) struct MxFp4Linear {
     pub(in crate::engine) weight: Array,

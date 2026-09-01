@@ -11,6 +11,7 @@ impl BoundLinear {
     ) -> Result<Option<FusedGateUp>> {
         match (self, up) {
             (Self::Affine(gate), Self::Affine(up)) => gate.fuse_gate_up(up, stream),
+            (Self::MxFp4(gate), Self::MxFp4(up)) => gate.fuse_gate_up(up, stream),
             _ => Ok(None),
         }
     }
@@ -18,6 +19,7 @@ impl BoundLinear {
     pub(in crate::engine) fn fused_gate_up_bytes(&self, up: &Self) -> Result<Option<usize>> {
         match (self, up) {
             (Self::Affine(gate), Self::Affine(up)) => gate.fused_gate_up_bytes(up),
+            (Self::MxFp4(gate), Self::MxFp4(up)) => gate.fused_gate_up_bytes(up),
             _ => Ok(None),
         }
     }

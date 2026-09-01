@@ -10,6 +10,7 @@ use super::{
     super::{
         attention_batch_tuning::{BatchAttentionExecution, BatchAttentionKey},
         attention_tuning::AttentionKey,
+        decode_plan_tuning::{DecodePlan, DecodePlanKey},
         expert_tuning::{ExpertExecution, ExpertKey},
         kernels::PagedExecution,
         route_tuning::{RoutingExecution, RoutingKey},
@@ -17,7 +18,7 @@ use super::{
     GateUpExecution, GateUpKey,
 };
 
-const SCHEMA: u32 = 18;
+const SCHEMA: u32 = 19;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct ProfileFile {
@@ -29,6 +30,7 @@ struct ProfileFile {
     batch_attention: Vec<StoredBatchAttentionEntry>,
     experts: Vec<StoredExpertEntry>,
     routing: Vec<StoredRoutingEntry>,
+    decode_plans: Vec<StoredDecodePlan>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -61,6 +63,12 @@ struct StoredRoutingEntry {
     execution: RoutingExecution,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct StoredDecodePlan {
+    key: DecodePlanKey,
+    plan: DecodePlan,
+}
+
 #[derive(Debug, Default)]
 pub(super) struct StoredProfile {
     pub(super) gate_up: HashMap<GateUpKey, GateUpExecution>,
@@ -68,6 +76,7 @@ pub(super) struct StoredProfile {
     pub(super) batch_attention: HashMap<BatchAttentionKey, BatchAttentionExecution>,
     pub(super) experts: HashMap<ExpertKey, ExpertExecution>,
     pub(super) routing: HashMap<RoutingKey, RoutingExecution>,
+    pub(super) decode_plans: HashMap<DecodePlanKey, DecodePlan>,
 }
 
 pub(super) fn load(path: &Path) -> Option<StoredProfile> {
@@ -90,6 +99,11 @@ pub(super) fn load(path: &Path) -> Option<StoredProfile> {
                 .collect(),
             experts: file.experts.into_iter().map(|entry| (entry.key, entry.execution)).collect(),
             routing: file.routing.into_iter().map(|entry| (entry.key, entry.execution)).collect(),
+            decode_plans: file
+                .decode_plans
+                .into_iter()
+                .map(|entry| (entry.key, entry.plan))
+                .collect(),
         })
 }
 
@@ -100,6 +114,7 @@ pub(super) fn persist(
     batch_attention: &HashMap<BatchAttentionKey, BatchAttentionExecution>,
     experts: &HashMap<ExpertKey, ExpertExecution>,
     routing: &HashMap<RoutingKey, RoutingExecution>,
+    decode_plans: &HashMap<DecodePlanKey, DecodePlan>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -186,6 +201,7 @@ pub(super) fn persist(
             entry.key.fused_unsorted,
         )
     });
+    let decode_plans = sorted_decode_plans(decode_plans);
     let file = ProfileFile {
         schema: SCHEMA,
         engine_version: env!("CARGO_PKG_VERSION").into(),
@@ -195,14 +211,31 @@ pub(super) fn persist(
         batch_attention,
         experts,
         routing,
+        decode_plans,
     };
     fs::write(&temporary, serde_json::to_vec_pretty(&file)?)?;
     fs::rename(temporary, path)?;
     Ok(())
 }
 
+fn sorted_decode_plans(plans: &HashMap<DecodePlanKey, DecodePlan>) -> Vec<StoredDecodePlan> {
+    let mut stored = plans
+        .iter()
+        .map(|(key, plan)| StoredDecodePlan { key: key.clone(), plan: *plan })
+        .collect::<Vec<_>>();
+    stored.sort_by(|left, right| {
+        (&left.key.model, left.key.weight_bytes, left.key.context_bucket, left.key.batch).cmp(&(
+            &right.key.model,
+            right.key.weight_bytes,
+            right.key.context_bucket,
+            right.key.batch,
+        ))
+    });
+    stored
+}
+
 pub(super) fn cache_name() -> &'static str {
-    "execution-v18-metal-gpu0.json"
+    "execution-v19-metal-gpu0.json"
 }
 
 fn temporary_path(path: &Path) -> PathBuf {

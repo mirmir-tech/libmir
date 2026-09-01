@@ -75,15 +75,18 @@ scheduler diagnostic, not the 36-cell API matrix above.
 
 | Context | PP mirmir | PP MLX-LM | PP % | TG mirmir | TG MLX-LM | TG % |
 |---:|---:|---:|---:|---:|---:|---:|
-| 128 | 685.30 | 632.97 | 108.3% | 111.54 | 104.72 | 106.5% |
-| 512 | 1,243.35 | 1,219.34 | 102.0% | 110.50 | 104.22 | 106.0% |
-| 2,048 | 1,497.15 | 1,379.12 | 108.6% | 106.31 | 101.30 | 104.9% |
-| 8,192 | 1,165.46 | 1,227.90 | 94.9% | 101.24 | 91.20 | 111.0% |
-| Geometric mean | 1,104.23 | 1,069.22 | 103.3% | 107.32 | 100.21 | 107.1% |
+| 128 | 613.27 | 632.97 | 96.9% | 113.46 | 104.72 | 108.3% |
+| 512 | 1,160.76 | 1,219.34 | 95.2% | 112.18 | 104.22 | 107.6% |
+| 2,048 | 1,525.71 | 1,379.12 | 110.6% | 109.33 | 101.30 | 107.9% |
+| 8,192 | 1,276.45 | 1,227.90 | 104.0% | 102.15 | 91.20 | 112.0% |
+| Geometric mean | 1,085.09 | 1,069.22 | 101.5% | 109.19 | 100.21 | 109.0% |
 
 The device-token pipeline evaluates logits, recurrent state and paged K/V
 arenas as one explicit root generation before the next step. Three distinct
 128-token prompts preserve the full 128-token reference sequence. Native U32
 MXFP4 matmul/gather and compiled MXFP4 Gated Delta decode remain enabled.
+The complete-step tuner selects between separate and fused shared-expert
+gate/up plans from alternating measurements of the whole device pipeline. It
+rejects the locally faster fused operator in every observed context bucket.
 Generation leads MLX-LM in all four contexts; aggregate prefill also leads,
-while the 8,192-token prefill cell remains 5.1% below the reference.
+while the 128- and 512-token prefill cells remain below the reference.

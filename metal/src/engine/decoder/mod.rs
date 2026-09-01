@@ -20,6 +20,10 @@ pub trait DecoderExecution: Debug + Send {
         true
     }
 
+    fn has_decode_plan_candidates(&self) -> bool {
+        false
+    }
+
     fn new_cache(&self, stream: &Stream) -> Result<DecoderCache>;
 
     fn forward_decode(
@@ -120,6 +124,10 @@ impl DecoderModel {
 
     pub(crate) fn prefers_packed_decode(&self, stream: &Stream) -> bool {
         self.execution.prefers_packed_decode(stream)
+    }
+
+    pub(crate) fn has_decode_plan_candidates(&self) -> bool {
+        self.execution.has_decode_plan_candidates()
     }
 
     pub(crate) fn new_cache(&self, stream: &Stream) -> Result<DecoderCache> {

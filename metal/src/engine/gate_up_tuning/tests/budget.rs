@@ -4,9 +4,11 @@ use runtime::tuning::{TuningConfig, TuningMode};
 
 use super::{
     super::{GateUpExecution, MetalTuner, TuneAction},
-    batch_attention_key, fixture_key,
+    batch_attention_key, decode_plan_key, fixture_key,
 };
-use crate::engine::attention_batch_tuning::BatchAttentionExecution;
+use crate::engine::{
+    DecodePlan, DecodePlanAction, attention_batch_tuning::BatchAttentionExecution,
+};
 
 #[test]
 fn startup_mode_measures_once_then_reuses_the_shape_decision() {
@@ -31,6 +33,29 @@ fn exhausted_startup_budget_retains_the_fused_fallback() {
         ..TuningConfig::default()
     });
     assert_eq!(tuner.plan(fixture_key()), TuneAction::Execute(GateUpExecution::Fused));
+}
+
+#[test]
+fn decode_plan_defaults_to_safe_separate_execution_outside_startup() {
+    let tuner = MetalTuner::new(TuningConfig {
+        mode: TuningMode::Cached,
+        ..TuningConfig::default()
+    });
+    assert_eq!(
+        tuner.decode_plan_action(&decode_plan_key()),
+        DecodePlanAction::Execute(DecodePlan::SeparateGateUp)
+    );
+}
+
+#[test]
+fn complete_plan_measurement_suppresses_nested_operator_tuning() {
+    let mut tuner = MetalTuner::new(TuningConfig::default());
+    tuner.activate_decode_plan(DecodePlan::FusedGateUp, true);
+    assert!(!tuner.attention_budget_available());
+    assert!(!tuner.expert_budget_available());
+    assert!(!tuner.routing_runtime_budget_available());
+    tuner.clear_decode_plan();
+    assert!(tuner.attention_budget_available());
 }
 
 #[test]

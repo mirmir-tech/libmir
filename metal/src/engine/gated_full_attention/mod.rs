@@ -88,6 +88,29 @@ impl GatedFullAttention {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub(crate) fn forward_with_mode(
+        &self,
+        input: &Array,
+        cache: &mut KvCache,
+        page_min_context: usize,
+        position: i32,
+        causal: bool,
+        mode: PagedContextMode,
+        stream: &Stream,
+    ) -> Result<Array> {
+        self.forward_inner(
+            input,
+            cache,
+            page_min_context,
+            position,
+            causal,
+            None,
+            Some(mode),
+            stream,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn forward_with_positions(
         &self,
         input: &Array,
@@ -96,6 +119,23 @@ impl GatedFullAttention {
         position: i32,
         causal: bool,
         positions: Option<&Array>,
+        stream: &Stream,
+    ) -> Result<Array> {
+        self.forward_inner(
+            input, cache, page_min_context, position, causal, positions, None, stream,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn forward_inner(
+        &self,
+        input: &Array,
+        cache: &mut KvCache,
+        page_min_context: usize,
+        position: i32,
+        causal: bool,
+        positions: Option<&Array>,
+        mode: Option<PagedContextMode>,
         stream: &Stream,
     ) -> Result<Array> {
         let shape = input.shape()?;
@@ -124,7 +164,9 @@ impl GatedFullAttention {
             .forward(input, stream)?
             .reshape(&[batch, sequence, self.config.key_value_heads, head_dim], stream)?
             .transpose(&[0, 2, 1, 3], stream)?;
-        let mode = if sequence == 1 {
+        let mode = if let Some(mode) = mode {
+            mode
+        } else if sequence == 1 {
             native_paged_attention_mode(
                 head_dim,
                 heads,

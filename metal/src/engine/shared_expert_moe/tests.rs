@@ -55,7 +55,7 @@ fn execute(fused: bool, stream: &Stream) -> Result<()> {
         fused_shared_gate_up: None,
         shared_down: linear(&[64, 64], stream)?,
         shared_output_gate: linear(&[1, 64], stream)?,
-        fuse_shared_gate_up: false,
+        shared_gate_up_mode: FusionMode::Disabled,
     };
     let input = Array::from_f32(&vec![0.0; 64], &[1, 1, 64])?;
     let output = moe.forward(&input, stream)?;

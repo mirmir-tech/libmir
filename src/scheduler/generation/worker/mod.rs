@@ -3,7 +3,11 @@ use std::{
     sync::mpsc::{Receiver, TryRecvError},
 };
 
-use runtime::{backend::ModelHandle, kv::BlockId, scheduler::SchedulerConfig};
+use runtime::{
+    backend::{ModelHandle, PrefillOutput},
+    kv::BlockId,
+    scheduler::SchedulerConfig,
+};
 
 use super::{
     ActivePrefill, Command, PendingDecode, PendingPrefill,
@@ -28,6 +32,7 @@ pub(super) struct Worker {
     active_decode: HashMap<uuid::Uuid, Vec<BlockId>>,
     active_prefill: Option<ActivePrefill>,
     prefill_cohort: Option<prefill::PrefillCohort>,
+    completed_prefill: Vec<(PendingPrefill, PrefillOutput)>,
     prefill_profile: PrefillExecutionProfile,
     prefill_handoff: handoff::PrefillHandoff,
     stopping: bool,
@@ -51,6 +56,7 @@ impl Worker {
             active_decode: HashMap::new(),
             active_prefill: None,
             prefill_cohort: None,
+            completed_prefill: Vec::new(),
             prefill_profile,
             prefill_handoff: handoff::PrefillHandoff::default(),
             stopping: false,

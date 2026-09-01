@@ -27,6 +27,10 @@ pub struct HybridLinearMoeModel {
 }
 
 impl HybridLinearMoeModel {
+    pub(crate) fn has_decode_plan_candidates(&self) -> bool {
+        self.layers.iter().any(HybridLinearMoeLayer::has_decode_plan_candidates)
+    }
+
     pub fn load(
         tensors: &ModelTensors,
         decoder: &DecoderConfig,
@@ -64,6 +68,7 @@ impl HybridLinearMoeModel {
             stream,
             FusionPlanner::new(stream).expert_mode(FeedForwardLowering::SharedRouted),
         )?;
+        super::decode_plan::prepare(&mut layers, stream)?;
         Ok(Self {
             layers,
             mixers: lowering.iter().map(|layer| layer.mixer).collect(),

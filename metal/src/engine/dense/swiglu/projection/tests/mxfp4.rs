@@ -5,7 +5,7 @@ use models::weights::{
 };
 
 use super::*;
-use crate::engine::Dtype;
+use crate::engine::{Dtype, Error};
 
 #[test]
 fn executes_pinned_mxfp4_blocks_and_e8m0_scales() -> Result<()> {
@@ -15,6 +15,32 @@ fn executes_pinned_mxfp4_blocks_and_e8m0_scales() -> Result<()> {
 #[test]
 fn executes_mlx_u32_mxfp4_without_repacking() -> Result<()> {
     execute(BlockQuantization::MXFP4_MLX, "U32", &[2, 4], "u32")
+}
+
+#[test]
+fn fuses_ordinary_mlx_mxfp4_gate_and_up() -> Result<()> {
+    let root =
+        std::env::temp_dir().join(format!("libmir-metal-mxfp4-fused-{}", std::process::id()));
+    fs::create_dir_all(&root)?;
+    fs::write(root.join("config.json"), "{}")?;
+    write_safetensors(&root.join("model.safetensors"), "U32", &[2, 4])?;
+    let tensors = ModelTensors::load(&root, &Stream::new_cpu()?)?;
+    let stream = Stream::new_gpu()?;
+    let gate = BoundLinear::load(
+        &tensors,
+        &binding(BlockQuantization::MXFP4_MLX, &[2, 4], false),
+        &stream,
+    )?;
+    let fused = gate.fuse_gate_up(&gate, &stream)?.ok_or(Error::ShapeOverflow)?;
+    let input = Array::from_f32(&[1.0; 32], &[1, 32])?.astype(Dtype::Bfloat16, &stream)?;
+    let (actual_gate, actual_up) = fused.forward_pair(&input, &stream)?;
+    let expected = gate.forward(&input, &stream)?.to_vec_f32(&stream)?;
+
+    assert_eq!(actual_gate.to_vec_f32(&stream)?, expected);
+    assert_eq!(actual_up.to_vec_f32(&stream)?, expected);
+    drop(tensors);
+    fs::remove_dir_all(root)?;
+    Ok(())
 }
 
 fn execute(format: BlockQuantization, dtype: &str, shape: &[usize], label: &str) -> Result<()> {

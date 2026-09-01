@@ -116,5 +116,6 @@ impl Worker {
         failed.extend(self.prefill.drain(..remaining));
         self.prefill_cohort = None;
         complete_prefill_errors(failed, message);
+        self.fail_completed_prefill(message);
     }
 }

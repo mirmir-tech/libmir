@@ -60,9 +60,7 @@ impl<'a> FusionPlanner<'a> {
                 self.config.hybrid_dense_gate_up.enabled(),
                 true,
             ),
-            FeedForwardLowering::SharedRouted => {
-                (false, self.config.shared_dense_gate_up.enabled(), false)
-            },
+            FeedForwardLowering::SharedRouted => (false, true, false),
             FeedForwardLowering::ClampedRouted => (false, false, false),
         };
         ProjectionFusion {
@@ -77,6 +75,14 @@ impl<'a> FusionPlanner<'a> {
             FeedForwardLowering::DenseAndRouted => self.config.routed_expert_gate_up,
             FeedForwardLowering::SharedRouted => self.config.shared_expert_gate_up,
             FeedForwardLowering::Dense | FeedForwardLowering::ClampedRouted => FusionMode::Disabled,
+        }
+    }
+
+    pub fn shared_dense_gate_up_mode(self) -> FusionMode {
+        if self.config.shared_dense_gate_up.enabled() {
+            FusionMode::Enabled
+        } else {
+            FusionMode::Auto
         }
     }
 

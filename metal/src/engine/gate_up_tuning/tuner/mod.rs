@@ -6,6 +6,7 @@ use super::{
     super::{
         attention_batch_tuning::{BatchAttentionExecution, BatchAttentionKey},
         attention_tuning::AttentionKey,
+        decode_plan_tuning::{DecodePlan, DecodePlanKey},
         expert_tuning::{ExpertExecution, ExpertKey},
         kernels::PagedExecution,
         route_tuning::{RoutingExecution, RoutingKey},
@@ -24,6 +25,9 @@ pub struct MetalTuner {
     batch_attention: HashMap<BatchAttentionKey, BatchAttentionExecution>,
     experts: HashMap<ExpertKey, ExpertExecution>,
     routing: HashMap<RoutingKey, RoutingExecution>,
+    decode_plans: HashMap<DecodePlanKey, DecodePlan>,
+    active_decode_plan: Option<DecodePlan>,
+    suppress_operator_tuning: bool,
 }
 
 #[derive(Debug)]
@@ -34,6 +38,7 @@ struct TuningBudgets {
     batch_decode: StartupBudget,
     experts: StartupBudget,
     routing: StartupBudget,
+    decode_plan: StartupBudget,
 }
 
 impl TuningBudgets {
@@ -46,6 +51,7 @@ impl TuningBudgets {
             batch_decode: budget,
             experts: budget,
             routing: budget,
+            decode_plan: budget,
         }
     }
 
@@ -84,6 +90,9 @@ impl MetalTuner {
             batch_attention: stored.batch_attention,
             experts: stored.experts,
             routing: stored.routing,
+            decode_plans: stored.decode_plans,
+            active_decode_plan: None,
+            suppress_operator_tuning: false,
         }
     }
 
@@ -120,6 +129,7 @@ impl MetalTuner {
             &self.batch_attention,
             &self.experts,
             &self.routing,
+            &self.decode_plans,
         ) {
             tracing::warn!(
                 target: "libmir::metal::tuning",
@@ -135,23 +145,23 @@ impl MetalTuner {
     }
 
     pub const fn attention_budget_available(&self) -> bool {
-        self.startup_open && self.budgets.attention.available()
+        !self.suppress_operator_tuning && self.startup_open && self.budgets.attention.available()
     }
 
     pub const fn batch_attention_runtime_budget_available(&self, causal: bool) -> bool {
-        self.budgets.batch_attention(causal).available()
+        !self.suppress_operator_tuning && self.budgets.batch_attention(causal).available()
     }
 
     pub const fn expert_budget_available(&self) -> bool {
-        self.startup_open && self.budgets.experts.available()
+        !self.suppress_operator_tuning && self.startup_open && self.budgets.experts.available()
     }
 
     pub const fn routing_budget_available(&self) -> bool {
-        self.startup_open && self.budgets.routing.available()
+        !self.suppress_operator_tuning && self.startup_open && self.budgets.routing.available()
     }
 
     pub const fn routing_runtime_budget_available(&self) -> bool {
-        self.budgets.routing.available()
+        !self.suppress_operator_tuning && self.budgets.routing.available()
     }
 
     pub const fn finish_startup(&mut self) {
@@ -212,3 +222,5 @@ impl MetalTuner {
         self.routing.insert(key, execution);
     }
 }
+
+mod decode;

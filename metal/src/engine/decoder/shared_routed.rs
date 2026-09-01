@@ -4,6 +4,10 @@ use crate::engine::{
 };
 
 impl DecoderExecution for HybridLinearMoeModel {
+    fn has_decode_plan_candidates(&self) -> bool {
+        self.has_decode_plan_candidates()
+    }
+
     fn new_cache(&self, stream: &Stream) -> Result<DecoderCache> {
         self.new_cache(stream)
     }

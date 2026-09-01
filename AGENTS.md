@@ -213,9 +213,10 @@ The target shape is:
 - `MIRMIR_METAL_FUSED_SHARED_EXPERT_GATE_UP` applies the same auto/`=1`/`=0`
   policy to shared-expert routed SwiGLU models, including the native Qwen3.6
   hybrid linear stack. Routed expert fusion follows the automatic memory policy.
-  `MIRMIR_METAL_FUSED_SHARED_DENSE_GATE_UP=1` additionally fuses the ordinary
-  shared expert gate/up pair; it remains opt-in because its full-model benchmark
-  did not show a sustained decode gain. Fused QMMs duplicate quantized arrays.
+  Ordinary shared-expert gate/up fusion is an automatic complete-decode plan
+  candidate. The tuner measures the whole device step on state snapshots and
+  persists a decision per model and context bucket; it must not admit this path
+  from the operator microbenchmark alone. Fused QMMs duplicate quantized arrays.
 - The head-wide Qwen3.6 single-token recurrence kernel is enabled by default;
   `MIRMIR_METAL_FUSED_GATED_DELTA_DECODE=0` selects the general kernel for
   diagnosis. One 256-thread group handles a complete value head through eight

@@ -14,6 +14,7 @@ use super::{
 };
 
 mod construction;
+mod tuning;
 
 #[derive(Debug)]
 pub struct Stream {

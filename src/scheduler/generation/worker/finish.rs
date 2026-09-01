@@ -29,22 +29,33 @@ impl Worker {
         };
         match self.engine.finish_generation_prefill(active.batch) {
             Ok(outputs) if outputs.len() == active.requests.len() => {
-                let continuations = active
-                    .requests
+                self.completed_prefill.extend(active.requests.into_iter().zip(outputs));
+                if hold_prefill_completion(
+                    self.prefill_profile.interleave_prefill_decode,
+                    self.prefill_cohort.is_some(),
+                ) {
+                    return;
+                }
+                let completed = std::mem::take(&mut self.completed_prefill);
+                let continuations = completed
                     .iter()
-                    .filter(|pending| pending.expects_decode)
-                    .map(|pending| pending.request.session_id)
+                    .filter(|(pending, _)| pending.expects_decode)
+                    .map(|(pending, _)| pending.request.session_id)
                     .collect::<Vec<_>>();
                 self.begin_prefill_handoff(continuations);
-                for (pending, output) in active.requests.into_iter().zip(outputs) {
+                for (pending, output) in completed {
                     pending.response.complete(Ok(output));
                 }
             },
-            Ok(_) => complete_prefill_errors(
-                active.requests,
-                "backend returned another prefill batch size",
-            ),
-            Err(error) => complete_prefill_errors(active.requests, &error.to_string()),
+            Ok(_) => {
+                let message = "backend returned another prefill batch size";
+                complete_prefill_errors(active.requests, message);
+                self.fail_completed_prefill(message);
+            },
+            Err(error) => {
+                complete_prefill_errors(active.requests, &error.to_string());
+                self.fail_completed_prefill(&error.to_string());
+            },
         }
     }
 
@@ -52,6 +63,7 @@ impl Worker {
         if let Some(active) = self.active_prefill.take() {
             complete_prefill_errors(active.requests, message);
         }
+        self.fail_completed_prefill(message);
     }
 
     pub(super) fn fail_all(&mut self, message: &str) {
@@ -59,5 +71,26 @@ impl Worker {
         complete_decode_errors(self.decode.drain(..).collect(), message);
         complete_prefill_errors(self.prefill.drain(..).collect(), message);
         self.fail_active_prefill(message);
+    }
+
+    pub(super) fn fail_completed_prefill(&mut self, message: &str) {
+        let pending = self.completed_prefill.drain(..).map(|(pending, _)| pending).collect();
+        complete_prefill_errors(pending, message);
+    }
+}
+
+const fn hold_prefill_completion(interleave: bool, cohort_has_more_waves: bool) -> bool {
+    !interleave && cohort_has_more_waves
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hold_prefill_completion;
+
+    #[test]
+    fn non_interleaved_backends_release_the_logical_cohort_together() {
+        assert!(hold_prefill_completion(false, true));
+        assert!(!hold_prefill_completion(false, false));
+        assert!(!hold_prefill_completion(true, true));
     }
 }

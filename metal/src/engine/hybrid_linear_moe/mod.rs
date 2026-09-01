@@ -1,4 +1,5 @@
 mod batch;
+mod decode_plan;
 mod layer;
 mod model;
 mod prefill;

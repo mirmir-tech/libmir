@@ -31,10 +31,29 @@ impl SessionState {
         let position = i64::try_from(self.position)? + i64::from(self.rope_position_delta);
         Ok(usize::try_from(position)?)
     }
+
+    pub(super) fn snapshot(&self) -> crate::native::error::Result<Self> {
+        let cache_offset = self.cache.cached_tokens()?;
+        Ok(Self {
+            cache: self.cache.snapshot_at(cache_offset)?,
+            position: self.position,
+            rope_position_delta: self.rope_position_delta,
+            pending: self.pending.as_ref().map(PendingDecode::snapshot).transpose()?,
+        })
+    }
 }
 
 #[derive(Debug)]
 pub(super) struct PendingDecode {
     pub(super) token_id: u32,
     pub(super) logits: Array,
+}
+
+impl PendingDecode {
+    fn snapshot(&self) -> crate::native::error::Result<Self> {
+        Ok(Self {
+            token_id: self.token_id,
+            logits: self.logits.snapshot()?,
+        })
+    }
 }

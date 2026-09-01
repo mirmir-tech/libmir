@@ -6,12 +6,13 @@ use super::{
     Array, Error, FusedExpertGateUp, FusedGateUp, ModelTensors, Result, Stream,
     binding::BoundLinear,
     fusion_planner::FusionPlanner,
-    gate_up_tuning,
     lowering::FeedForwardLowering,
     route_tuning::{self, ExpertActivation, RoutingSpec},
 };
+use crate::FusionMode;
 
 mod load;
+mod plan;
 mod routed;
 use load::{linear, projection_biases};
 use routed::RoutedGateUp;
@@ -34,7 +35,7 @@ pub struct SharedExpertMoe {
     fused_shared_gate_up: Option<FusedGateUp>,
     shared_down: BoundLinear,
     shared_output_gate: BoundLinear,
-    fuse_shared_gate_up: bool,
+    shared_gate_up_mode: FusionMode,
 }
 
 impl SharedExpertMoeConfig {
@@ -60,7 +61,8 @@ impl SharedExpertMoe {
         let routed_up = linear(tensors, prefix, "switch_mlp.up_proj", group_size)?;
         let shared_gate = linear(tensors, prefix, "shared_expert.gate_proj", group_size)?;
         let shared_up = linear(tensors, prefix, "shared_expert.up_proj", group_size)?;
-        let fusion = FusionPlanner::new(stream).projections(
+        let planner = FusionPlanner::new(stream);
+        let fusion = planner.projections(
             FeedForwardLowering::SharedRouted,
             projection_biases(&shared_gate, &shared_up),
         );
@@ -78,7 +80,11 @@ impl SharedExpertMoe {
             fused_shared_gate_up: None,
             shared_down: linear(tensors, prefix, "shared_expert.down_proj", group_size)?,
             shared_output_gate: linear(tensors, prefix, "shared_expert_gate", group_size)?,
-            fuse_shared_gate_up: fusion.gate_up,
+            shared_gate_up_mode: if fusion.gate_up {
+                planner.shared_dense_gate_up_mode()
+            } else {
+                FusionMode::Disabled
+            },
         })
     }
 
@@ -92,8 +98,8 @@ impl SharedExpertMoe {
         let (routed_gate_up, routed_down) = RoutedGateUp::load(tensors, bindings.routed, stream)?;
         let shared_gate = BoundLinear::load(tensors, bindings.shared_gate, stream)?;
         let shared_up = BoundLinear::load(tensors, bindings.shared_up, stream)?;
-        let fusion = FusionPlanner::new(stream)
-            .projections(lowering, projection_biases(&shared_gate, &shared_up));
+        let planner = FusionPlanner::new(stream);
+        let fusion = planner.projections(lowering, projection_biases(&shared_gate, &shared_up));
         Ok(Self {
             config,
             router: BoundLinear::load(tensors, bindings.router, stream)?,
@@ -104,7 +110,11 @@ impl SharedExpertMoe {
             fused_shared_gate_up: None,
             shared_down: BoundLinear::load(tensors, bindings.shared_down, stream)?,
             shared_output_gate: BoundLinear::load(tensors, bindings.shared_output_gate, stream)?,
-            fuse_shared_gate_up: fusion.gate_up,
+            shared_gate_up_mode: if fusion.gate_up {
+                planner.shared_dense_gate_up_mode()
+            } else {
+                FusionMode::Disabled
+            },
         })
     }
 
@@ -119,28 +129,11 @@ impl SharedExpertMoe {
         if self.routed_gate_up.is_fused() {
             return Ok(true);
         }
-        let routed = self.routed_gate_up.enable(stream)?;
-        self.fused_shared_gate_up = self
-            .fuse_shared_gate_up
-            .then(|| self.shared_gate.fuse_gate_up(&self.shared_up, stream))
-            .transpose()?
-            .flatten();
-        self.fused_shared_gate_up.as_ref().map_or(Ok(()), |fused| fused.warm(stream))?;
-        Ok(routed)
+        self.routed_gate_up.enable(stream)
     }
 
     pub(crate) fn fused_routed_gate_up_bytes(&self) -> Result<Option<usize>> {
-        let routed = self.routed_gate_up.fused_bytes()?;
-        if !self.fuse_shared_gate_up {
-            return Ok(routed);
-        }
-        let shared = self.shared_gate.fused_gate_up_bytes(&self.shared_up)?;
-        match (routed, shared) {
-            (Some(routed), Some(shared)) => {
-                routed.checked_add(shared).map(Some).ok_or(Error::ShapeOverflow)
-            },
-            _ => Ok(None),
-        }
+        self.routed_gate_up.fused_bytes()
     }
 
     pub(crate) const fn has_fused_routed_gate_up(&self) -> bool {
@@ -223,25 +216,6 @@ impl SharedExpertMoe {
         } else {
             self.routed_down.gather(&activated, indices, sorted, stream)
         }
-    }
-
-    fn shared(&self, input: &Array, stream: &Stream) -> Result<Array> {
-        let fused = self.fused_shared_gate_up.as_ref();
-        let (gate, up) = if gate_up_tuning::is_single_token(input)? {
-            gate_up_tuning::forward(&self.shared_gate, &self.shared_up, fused, input, stream)?
-        } else {
-            fused.map_or_else(
-                || {
-                    Ok((
-                        self.shared_gate.forward(input, stream)?,
-                        self.shared_up.forward(input, stream)?,
-                    ))
-                },
-                |fused| fused.forward_pair(input, stream),
-            )?
-        };
-        let output = self.shared_down.forward(&gate.silu_mul(&up, stream)?, stream)?;
-        self.shared_output_gate.forward(input, stream)?.sigmoid_mul(&output, stream)
     }
 }
 

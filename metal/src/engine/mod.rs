@@ -6,6 +6,7 @@ mod binding;
 pub mod clamped_routed;
 mod compiled;
 mod decode_graph;
+mod decode_plan_tuning;
 mod decoder;
 pub mod dense;
 mod embedding;
@@ -49,6 +50,9 @@ pub mod vision;
 
 pub use array::Array;
 pub use attention::{ImageTokenSpan, PagedAttention, RopeOptions, prefix_attention_mask};
+pub(crate) use decode_plan_tuning::{
+    DecodePlan, DecodePlanAction, DecodePlanKey, context_bucket as decode_context_bucket,
+};
 pub use decoder::DecoderCache;
 pub(crate) use decoder::DecoderModel;
 pub use dense::{DenseEmbedding, DenseLinear};

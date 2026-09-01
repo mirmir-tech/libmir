@@ -1,6 +1,7 @@
 mod backend;
 #[cfg(test)]
 mod benchmark;
+mod decode_tuning;
 mod error;
 mod model;
 mod output;

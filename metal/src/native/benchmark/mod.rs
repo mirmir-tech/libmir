@@ -1,4 +1,5 @@
 mod bielik;
+mod branching;
 mod diagnostics;
 mod llama;
 mod matrix;
