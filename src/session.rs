@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 #[cfg(any(feature = "cuda", feature = "metal"))]
 use crate::PreparedVisionPrompt;
-use crate::{Model, ProgressEvent, Result, scheduler::PendingModelDecode};
+use crate::{Model, ProgressEvent, Result, model::FillClaim, scheduler::PendingModelDecode};
 
 /// Stateful low-level inference session with independent accelerator K/V state.
 pub struct Session {
@@ -63,10 +63,22 @@ impl Session {
         progress: &mut dyn FnMut(ProgressEvent),
     ) -> Result<PrefillOutput> {
         let cache_started = std::time::Instant::now();
-        let (admission, counters_before) = self.model.clone().with_cache(|cache| {
-            let admission = self.state.probe_prefill_admission(cache, tokens, reserved_tokens)?;
-            Ok((admission, cache.stats().counters))
-        })?;
+        let mut fill_wait = std::time::Duration::ZERO;
+        let (admission, counters_before, fill_guard) = loop {
+            let (admission, counters) = self.model.clone().with_cache(|cache| {
+                let admission =
+                    self.state.probe_prefill_admission(cache, tokens, reserved_tokens)?;
+                Ok((admission, cache.stats().counters))
+            })?;
+            match self.model.claim_cache_fill(
+                tokens,
+                cache_checkpoints,
+                tokens.len().saturating_sub(admission.missing_tokens),
+            ) {
+                FillClaim::Leader(guard) => break (admission, counters, guard),
+                FillClaim::Retry(wait) => fill_wait += wait,
+            }
+        };
         let cohort_wait = self
             .model
             .wait_for_cache_cohort(admission.needs_eviction, admission.missing_tokens);
@@ -82,7 +94,7 @@ impl Session {
             missing_tokens = request.missing_tokens,
             reserved_tokens,
             needs_eviction = admission.needs_eviction,
-            cohort_wait_ms = cohort_wait.as_secs_f64() * 1_000.0,
+            cohort_wait_ms = (cohort_wait + fill_wait).as_secs_f64() * 1_000.0,
             cache_evictions = counters_after.evictions,
             cache_protected_prefix_skips = counters_after.protected_prefix_skips,
             evictions_since_probe = counters_after.evictions.saturating_sub(counters_before.evictions),
@@ -108,6 +120,7 @@ impl Session {
         self.model
             .clone()
             .with_cache(|cache| Ok(self.state.commit_ready_prefix_blocks(cache)?))?;
+        drop(fill_guard);
         output.timings.get_or_insert_default().cache_prepare = cache_prepare;
         Ok(output)
     }

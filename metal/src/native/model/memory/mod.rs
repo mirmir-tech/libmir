@@ -11,7 +11,11 @@ const AUTO_PREFIX_CACHE_NUMERATOR: usize = 2;
 const AUTO_PREFIX_CACHE_DIVISOR: usize = 5;
 const ALLOCATOR_CACHE_DIVISOR: usize = 8;
 const ALLOCATOR_PRESSURE_PERCENT: usize = 85;
+const PACKED_PREFILL_RESERVE_DIVISOR: usize = 8;
+const PACKED_PREFILL_MINIMUM_RESERVE: usize = 2 * 1024 * 1024 * 1024;
+const PACKED_PREFILL_WORKSPACE_COPIES: usize = 8;
 
+mod pressure;
 #[cfg(test)]
 mod tests;
 
@@ -30,8 +34,62 @@ impl LoadedModel {
     pub(crate) fn settle_prefill_graph(&self) -> Result<()> {
         self.stream.synchronize()?;
         self.stream.detach_paged_arena_graphs()?;
-        let _reclaimed = Self::reclaim_prefill_allocator_cache()?;
+        clear_memory_cache()?;
         Ok(())
+    }
+
+    pub(crate) fn packed_prefill_fits(
+        &self,
+        batch: usize,
+        position: usize,
+        sequence: usize,
+    ) -> Result<bool> {
+        let memory = memory_stats()?;
+        let usable = usable_memory(memory);
+        if usable == 0 {
+            return Ok(false);
+        }
+        let Some(decoder) = self.info.decoder.as_ref() else {
+            return Ok(false);
+        };
+        let context = position.checked_add(sequence).ok_or(crate::engine::Error::ShapeOverflow)?;
+        let mut largest_context = 0_usize;
+        for layer in 0..decoder.num_hidden_layers {
+            if decoder.layer_type(layer) != AttentionLayerType::Full {
+                continue;
+            }
+            let elements = batch
+                .checked_mul(context)
+                .and_then(|value| value.checked_mul(decoder.layer_key_value_heads(layer)))
+                .and_then(|value| value.checked_mul(decoder.layer_head_dim(layer)))
+                .and_then(|value| value.checked_mul(2))
+                .ok_or(crate::engine::Error::ShapeOverflow)?;
+            let bytes = elements
+                .checked_mul(size_of::<f32>())
+                .ok_or(crate::engine::Error::ShapeOverflow)?;
+            largest_context = largest_context.max(bytes);
+        }
+        let workspace = largest_context
+            .checked_mul(PACKED_PREFILL_WORKSPACE_COPIES)
+            .ok_or(crate::engine::Error::ShapeOverflow)?;
+        let reserve = (usable / PACKED_PREFILL_RESERVE_DIVISOR).max(PACKED_PREFILL_MINIMUM_RESERVE);
+        let fits = memory
+            .active
+            .checked_add(workspace)
+            .and_then(|used| used.checked_add(reserve))
+            .is_some_and(|required| required <= usable);
+        tracing::debug!(
+            batch,
+            position,
+            sequence,
+            active_bytes = memory.active,
+            workspace_bytes = workspace,
+            reserve_bytes = reserve,
+            usable_bytes = usable,
+            fits,
+            "planned packed Metal prefill workspace"
+        );
+        Ok(fits)
     }
 
     pub(crate) fn flush_decode_graphs(&self) -> Result<()> {

@@ -4,6 +4,8 @@ use super::{Array, DecoderCache, ImageTokenSpan, Result, Stream};
 
 const PREFILL_UNSEGMENTED_TOKEN_PAIRS: usize = 4 * 1_024 * 1_024;
 const PREFILL_COMMAND_LAYER_TOKEN_PAIRS: usize = 96 * 1_024 * 1_024;
+const LONG_PREFILL_CONTEXT: usize = 16 * 1_024;
+const LONG_PREFILL_MINIMUM_QUERY: usize = 512;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MixerKind {
@@ -114,6 +116,11 @@ pub fn forward_layers<L: LoweredLayer>(
         if evaluate {
             hidden.async_eval(context.stream)?;
             context.stream.synchronize()?;
+            if options.evaluation_step.is_some() {
+                hidden.detach_graph(context.stream)?;
+                context.stream.detach_paged_arena_graphs()?;
+                crate::engine::clear_memory_cache()?;
+            }
         }
         if options.profile_layers {
             tracing::debug!(
@@ -158,7 +165,12 @@ pub(in crate::engine) fn prefill_evaluation_step(
     layers: usize,
 ) -> Option<usize> {
     let context = position.saturating_add(sequence);
-    let work = batch.saturating_mul(sequence).saturating_mul(context).max(1);
+    let planned_sequence = if context >= LONG_PREFILL_CONTEXT {
+        sequence.max(LONG_PREFILL_MINIMUM_QUERY)
+    } else {
+        sequence
+    };
+    let work = batch.saturating_mul(planned_sequence).saturating_mul(context).max(1);
     if work <= PREFILL_UNSEGMENTED_TOKEN_PAIRS {
         return None;
     }
@@ -176,5 +188,6 @@ mod tests {
         assert_eq!(prefill_evaluation_step(1, 512, 7_680, 36), None);
         assert_eq!(prefill_evaluation_step(1, 512, 8_192, 36), Some(22));
         assert_eq!(prefill_evaluation_step(10, 512, 8_192, 36), Some(2));
+        assert_eq!(prefill_evaluation_step(1, 2, 32_767, 36), Some(5));
     }
 }

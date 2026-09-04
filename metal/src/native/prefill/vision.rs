@@ -5,7 +5,7 @@ use models::vision::{
 use runtime::backend::SamplingLogits;
 use uuid::Uuid;
 
-use super::NativePrefill;
+use super::{NativePrefill, evaluation};
 use crate::{
     MetalProgressEvent,
     native::{
@@ -75,6 +75,7 @@ impl LoadedModel {
             prefix.len(),
             sampling == SamplingLogits::None,
         )?;
+        evaluation::materialize(self, &state, &logits)?;
         state.position = prompt.token_ids.len();
         let output = step::output(model, &self.stream, &mut state, logits, sampling)?;
         self.sessions.insert(session, state);
@@ -143,6 +144,7 @@ impl LoadedModel {
             model_position,
             sampling == SamplingLogits::None,
         )?;
+        evaluation::materialize(self, &state, &logits)?;
         state.position = prompt.token_ids.len();
         let output = step::output(model, &self.stream, &mut state, logits, sampling)?;
         self.sessions.insert(session, state);

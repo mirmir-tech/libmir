@@ -108,6 +108,7 @@ impl Library {
                 cache_cohort: CacheCohort::new(
                     config.scheduler.decode_batch_wait_us,
                     config.scheduler.max_batch_tokens,
+                    config.kv_cache.block_size,
                 ),
                 coordinator,
                 _memory: reservation,

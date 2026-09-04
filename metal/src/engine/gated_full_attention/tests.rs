@@ -1,4 +1,4 @@
-use super::*;
+use super::{batch::common_position, *};
 use crate::engine::{QuantizedArrays, QuantizedLinear};
 
 #[test]
@@ -33,6 +33,13 @@ fn executes_gated_grouped_query_attention_on_the_gpu_stream() -> Result<()> {
     assert!(output.to_vec_f32(&stream)?.iter().all(|value| *value == 0.0));
     assert_eq!(cache.offset()?, 2);
     Ok(())
+}
+
+#[test]
+fn batches_only_rows_with_a_common_position() {
+    assert_eq!(common_position(&[4, 4, 4]), Some(4));
+    assert_eq!(common_position(&[4, 5]), None);
+    assert_eq!(common_position(&[]), None);
 }
 
 fn linear(output_width: i32, stream: &Stream) -> Result<BoundLinear> {

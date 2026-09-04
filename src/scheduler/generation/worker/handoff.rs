@@ -18,13 +18,17 @@ impl Worker {
     }
 
     pub(super) fn begin_prefill_handoff(&mut self, sessions: impl IntoIterator<Item = uuid::Uuid>) {
-        if !self.prefill_profile.limit_deep_prefill_waves
-            || !self.prefill_profile.interleave_prefill_decode
-            || self.prefill.is_empty()
-        {
+        if !self.prefill_profile.limit_deep_prefill_waves || self.prefill.is_empty() {
             return;
         }
         self.prefill_handoff.begin(sessions);
+    }
+
+    pub(super) fn prefill_waits_for_decode(&self) -> bool {
+        serial_prefill_waits(
+            self.prefill_profile.interleave_prefill_decode,
+            !self.active_decode.is_empty(),
+        )
     }
 
     pub(super) fn collect_prefill_handoff(&mut self) {
@@ -71,6 +75,10 @@ impl Worker {
     }
 }
 
+const fn serial_prefill_waits(interleave: bool, decode_active: bool) -> bool {
+    !interleave && decode_active
+}
+
 impl PrefillHandoff {
     fn begin(&mut self, sessions: impl IntoIterator<Item = uuid::Uuid>) {
         self.sessions = sessions.into_iter().collect();
@@ -91,7 +99,14 @@ impl PrefillHandoff {
 
 #[cfg(test)]
 mod tests {
-    use super::PrefillHandoff;
+    use super::{PrefillHandoff, serial_prefill_waits};
+
+    #[test]
+    fn non_interleaved_prefill_waits_for_resident_decode() {
+        assert!(serial_prefill_waits(false, true));
+        assert!(!serial_prefill_waits(false, false));
+        assert!(!serial_prefill_waits(true, true));
+    }
 
     #[test]
     fn handoff_tracks_decode_or_release_resolution() {

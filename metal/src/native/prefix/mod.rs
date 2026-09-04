@@ -172,6 +172,7 @@ impl PrefixCache {
         self.touch_group(memory_group);
         self.remove_unindexed_groups();
         self.enforce_limits();
+        self.trace_snapshot("terminal", tokens.len());
         Ok(())
     }
 
@@ -221,6 +222,7 @@ impl PrefixCache {
         self.touch_group(memory_group);
         self.remove_unindexed_groups();
         self.enforce_limits();
+        self.trace_snapshot("checkpoint", tokens.len());
         Ok(())
     }
 

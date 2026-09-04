@@ -13,9 +13,18 @@ pub(super) struct PrefillCohort {
 
 impl Worker {
     pub(super) fn prepare_prefill(&mut self) {
-        if self.prefill_handoff_active() || self.active_prefill.is_some() || self.prefill.is_empty()
+        if self.prefill_handoff_active()
+            || self.active_prefill.is_some()
+            || self.prefill.is_empty()
+            || self.prefill_waits_for_decode()
         {
             return;
+        }
+        if let Err(error) = self
+            .engine
+            .refresh_prefill_memory_limits(&self.model, &mut self.prefill_profile)
+        {
+            tracing::warn!(%error, "could not refresh prefill memory limits");
         }
         if self.prefill_cohort.is_none() && !self.begin_prefill_cohort() {
             return;
@@ -76,7 +85,11 @@ impl Worker {
 
     fn begin_prefill_cohort(&mut self) -> bool {
         self.prioritize_prefill();
-        let count = self.prefill.len().min(self.prefill_admission_limit());
+        let count = prefill_cohort_rows(
+            self.prefill.iter().map(|pending| self.prefill_completion_tokens(pending)),
+            self.prefill_admission_limit(),
+            self.prefill_profile.max_prefill_cohort_tokens,
+        );
         let requests = self
             .prefill
             .iter()
@@ -120,5 +133,37 @@ impl Worker {
         self.prefill_cohort = None;
         complete_prefill_errors(failed, message);
         self.fail_completed_prefill(message);
+    }
+}
+
+fn prefill_cohort_rows(
+    prompt_tokens: impl IntoIterator<Item = usize>,
+    admission: usize,
+    token_budget: usize,
+) -> usize {
+    let mut resident_tokens = 0_usize;
+    let mut rows = 0_usize;
+    for tokens in prompt_tokens.into_iter().take(admission.max(1)) {
+        let tokens = tokens.max(1);
+        if rows > 0 && resident_tokens.saturating_add(tokens) > token_budget.max(1) {
+            break;
+        }
+        resident_tokens = resident_tokens.saturating_add(tokens);
+        rows += 1;
+    }
+    rows
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prefill_cohort_rows;
+
+    #[test]
+    fn logical_cohort_groups_small_tails_and_bounds_cold_prompts() {
+        let memory_tokens = 80 * 1_024;
+        assert_eq!(prefill_cohort_rows([2_066; 10], 10, memory_tokens), 10);
+        assert_eq!(prefill_cohort_rows([18_432; 10], 10, memory_tokens), 4);
+        assert_eq!(prefill_cohort_rows([34_816; 10], 10, memory_tokens), 2);
+        assert_eq!(prefill_cohort_rows([128 * 1_024; 10], 10, memory_tokens), 1);
     }
 }

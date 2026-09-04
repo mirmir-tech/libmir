@@ -13,7 +13,15 @@ impl ModelDescriptor {
         for message_count in 1..conversation.messages.len() {
             let mut prefix = conversation.clone();
             prefix.messages.truncate(message_count);
-            let Ok(prompt) = self.template.render(&prefix) else {
+            let prompt = self.template.render(&prefix).or_else(|_| {
+                let mut boundary = conversation.messages[message_count].clone();
+                boundary.content.clear();
+                boundary.reasoning_content = None;
+                boundary.tool_calls = None;
+                prefix.messages.push(boundary);
+                self.template.render(&prefix)
+            });
+            let Ok(prompt) = prompt else {
                 continue;
             };
             let tokens = self

@@ -11,6 +11,7 @@ use crate::MetalProgressEvent;
 
 mod batch;
 mod cohort;
+mod evaluation;
 #[cfg(test)]
 mod tests;
 mod vision;
@@ -80,11 +81,7 @@ impl LoadedModel {
                 &remaining[..count],
                 position,
             )?;
-            let mut roots = vec![&state_root];
-            state.cache.extend_graph_roots(&mut roots);
-            self.stream.eval_many(&roots)?;
-            self.settle_prefill_graph()?;
-            state.cache.detach_evaluated_graphs(&self.stream)?;
+            evaluation::materialize(self, &state, &state_root)?;
             position += count;
             remaining = &remaining[count..];
             if checkpoints.next_if_eq(&position).is_some() {
@@ -108,6 +105,7 @@ impl LoadedModel {
             position,
             sampling == SamplingLogits::None,
         )?;
+        evaluation::materialize(self, &state, &logits)?;
         state.position = tokens.len();
         let prefix_bytes = self
             .estimated_prefix_bytes(tokens.len())?

@@ -35,6 +35,26 @@ impl PrefixCache {
         self.byte_capacity
     }
 
+    pub(in crate::native) fn group_count(&self) -> usize {
+        self.groups.len()
+    }
+
+    pub(in crate::native) fn entry_count(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub(super) fn trace_snapshot(&self, kind: &'static str, tokens: usize) {
+        tracing::debug!(
+            kind,
+            tokens,
+            groups = self.groups.len(),
+            entries = self.entries.len(),
+            resident_bytes = self.resident_bytes(),
+            byte_capacity = self.byte_capacity,
+            "cached Metal prefix snapshot"
+        );
+    }
+
     pub(in crate::native) fn resident_bytes(&self) -> usize {
         self.groups.values().map(|group| group.bytes).sum()
     }

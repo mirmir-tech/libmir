@@ -4,7 +4,7 @@ mod pool;
 pub(super) use pool::{KvCachePools, SharedCacheMemory, SharedKvCache};
 use runtime::kv::{CacheStats, KvCache};
 
-use super::Model;
+use super::{Model, cache_cohort::FillClaim};
 use crate::Result;
 
 impl Model {
@@ -55,6 +55,15 @@ impl Model {
         missing_tokens: usize,
     ) -> std::time::Duration {
         self.inner.cache_cohort.wait(needs_eviction, missing_tokens)
+    }
+
+    pub(crate) fn claim_cache_fill(
+        &self,
+        tokens: &[u32],
+        checkpoints: &[usize],
+        cached_tokens: usize,
+    ) -> FillClaim {
+        self.inner.cache_cohort.claim_fill(tokens, checkpoints, cached_tokens)
     }
 
     #[must_use]

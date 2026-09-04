@@ -36,6 +36,7 @@ pub(in crate::native) struct FinishedPrefill {
 struct Batch {
     sequences: Vec<Sequence>,
     cursor: usize,
+    workspace_constrained: bool,
 }
 
 impl MetalPrefillBatch {
@@ -84,7 +85,11 @@ impl MetalPrefillBatch {
         Ok((
             Self {
                 model_id,
-                inner: Arc::new(Mutex::new(Some(Batch { sequences, cursor: 0 }))),
+                inner: Arc::new(Mutex::new(Some(Batch {
+                    sequences,
+                    cursor: 0,
+                    workspace_constrained: false,
+                }))),
             },
             events,
         ))
@@ -134,7 +139,9 @@ impl Batch {
             if sequence.output.is_some() {
                 continue;
             }
-            let used = sequence.advance(loaded, budget)?;
+            let scalar_budget =
+                LoadedModel::pressure_bounded_prefill_budget(budget, self.workspace_constrained)?;
+            let used = sequence.advance(loaded, scalar_budget)?;
             budget -= used;
             events.push((
                 row,

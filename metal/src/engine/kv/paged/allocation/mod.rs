@@ -3,6 +3,9 @@ use std::sync::Arc;
 use super::{Arena, PagedStore, Storage, lock};
 use crate::engine::{Array, Error, Result, Stream};
 
+mod copy;
+use copy::copy_page;
+
 pub(super) fn ensure(
     store: &mut PagedStore,
     keys: &Array,
@@ -157,60 +160,12 @@ fn ensure_capacity(arena: &mut Arena, required: usize, step: usize, stream: &Str
     Ok(())
 }
 
-fn copy_page(arena: &mut Arena, source: usize, target: usize, stream: &Stream) -> Result<()> {
-    let graph = stream.native().graph();
-    let stored_dim = arena.keys.native().shape()?.dimensions()[3];
-    let stop = [arena.kv_heads, source + 1, arena.page_size, stored_dim];
-    let keys = graph.slice(arena.keys.native(), &[0, source, 0, 0], &stop)?;
-    let values = graph.slice(arena.values.native(), &[0, source, 0, 0], &stop)?;
-    let target_stop = [arena.kv_heads, target + 1, arena.page_size, stored_dim];
-    arena.keys = Array::from_native(graph.slice_update(
-        arena.keys.native(),
-        &keys,
-        &[0, target, 0, 0],
-        &target_stop,
-    )?)?;
-    arena.values = Array::from_native(graph.slice_update(
-        arena.values.native(),
-        &values,
-        &[0, target, 0, 0],
-        &target_stop,
-    )?)?;
-    copy_scales(arena, source, target, graph)?;
-    Ok(())
-}
-
 fn grow_scales(arena: &mut Arena, capacity: usize, graph: mirtal::Graph<'_>) -> Result<()> {
     let shape = mirtal::Shape::new([arena.kv_heads, capacity - arena.capacity, arena.page_size])?;
     for scales in [&mut arena.key_scales, &mut arena.value_scales] {
         if let Some(current) = scales.take() {
             let extra = graph.full(&shape, 1.0, mirtal::DType::Float32)?;
             *scales = Some(Array::from_native(graph.concatenate(&[current.native(), &extra], 1)?)?);
-        }
-    }
-    Ok(())
-}
-
-fn copy_scales(
-    arena: &mut Arena,
-    source: usize,
-    target: usize,
-    graph: mirtal::Graph<'_>,
-) -> Result<()> {
-    for scales in [&mut arena.key_scales, &mut arena.value_scales] {
-        if let Some(current) = scales.take() {
-            let values = graph.slice(
-                current.native(),
-                &[0, source, 0],
-                &[arena.kv_heads, source + 1, arena.page_size],
-            )?;
-            let next = graph.slice_update(
-                current.native(),
-                &values,
-                &[0, target, 0],
-                &[arena.kv_heads, target + 1, arena.page_size],
-            )?;
-            *scales = Some(Array::from_native(next)?);
         }
     }
     Ok(())
@@ -241,5 +196,4 @@ fn growth_target(current: usize, required: usize, step: usize, maximum: usize) -
 }
 
 #[cfg(test)]
-#[path = "allocation/tests.rs"]
 mod tests;

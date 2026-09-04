@@ -20,6 +20,8 @@ use crate::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MetalPrefillSchedule {
     pub max_wave_rows: usize,
+    pub max_wave_tokens: usize,
+    pub max_cohort_tokens: usize,
     pub interleave_decode: bool,
 }
 
@@ -61,7 +63,9 @@ impl MetalBackend {
                 .decoder
                 .as_ref()
                 .is_some_and(|decoder| decoder.num_experts.is_some_and(|experts| experts > 0));
-            Ok(prefill_schedule(routed))
+            let memory_budgets =
+                routed.then(|| loaded.prefill_memory_token_budgets()).transpose()?;
+            Ok(prefill_schedule(routed, memory_budgets))
         })?)
     }
 
@@ -168,15 +172,26 @@ fn validate_prefill_requests(requests: &[PrefillRequest]) -> Result<&PrefillRequ
     Ok(first)
 }
 
-const fn prefill_schedule(routed: bool) -> MetalPrefillSchedule {
+const fn prefill_schedule(
+    routed: bool,
+    memory_budgets: Option<(usize, usize)>,
+) -> MetalPrefillSchedule {
     if routed {
+        let (max_wave_tokens, max_cohort_tokens) = match memory_budgets {
+            Some(budgets) => budgets,
+            None => (1, 1),
+        };
         MetalPrefillSchedule {
             max_wave_rows: usize::MAX,
+            max_wave_tokens,
+            max_cohort_tokens,
             interleave_decode: false,
         }
     } else {
         MetalPrefillSchedule {
             max_wave_rows: usize::MAX,
+            max_wave_tokens: usize::MAX,
+            max_cohort_tokens: usize::MAX,
             interleave_decode: true,
         }
     }
@@ -207,13 +222,17 @@ mod tests {
     }
 
     #[test]
-    fn routed_prefill_uses_the_scheduler_capacity_before_streaming() {
-        let routed = prefill_schedule(true);
+    fn routed_prefill_caps_resident_tokens_before_streaming() {
+        let routed = prefill_schedule(true, Some((80 * 1_024, 320 * 1_024)));
         assert_eq!(routed.max_wave_rows, usize::MAX);
+        assert_eq!(routed.max_wave_tokens, 80 * 1_024);
+        assert_eq!(routed.max_cohort_tokens, 320 * 1_024);
         assert!(!routed.interleave_decode);
 
-        let dense = prefill_schedule(false);
+        let dense = prefill_schedule(false, None);
         assert_eq!(dense.max_wave_rows, usize::MAX);
+        assert_eq!(dense.max_wave_tokens, usize::MAX);
+        assert_eq!(dense.max_cohort_tokens, usize::MAX);
         assert!(dense.interleave_decode);
     }
 }

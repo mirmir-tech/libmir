@@ -33,7 +33,7 @@ impl Worker {
             .unwrap_or(1)
     }
 
-    fn prefill_completion_tokens(
+    pub(super) fn prefill_completion_tokens(
         &self,
         pending: &crate::scheduler::generation::PendingPrefill,
     ) -> usize {

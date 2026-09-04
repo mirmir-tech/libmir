@@ -43,6 +43,7 @@ pub use vision::{IMAGE_PLACEHOLDER, PreparedVisionPrompt};
 
 use self::helpers::{model_id, validate_context};
 pub use self::{
+    cache_cohort::FillClaim,
     descriptor::{PreparedPrompt, PromptPreparationTimings},
     library::ModelLoadOptions,
 };

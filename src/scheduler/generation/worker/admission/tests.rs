@@ -32,10 +32,11 @@ fn prefill_quiet_window_extends_without_crossing_hard_deadline() {
 }
 
 #[test]
-fn idle_prefill_skips_the_worker_collection_window() {
-    assert_eq!(prefill_quiet_wait(200, 0, 1, 16), Duration::ZERO);
-    assert_eq!(prefill_quiet_wait(200, 1, 16, 16), Duration::ZERO);
-    assert_eq!(prefill_quiet_wait(200, 1, 1, 16), Duration::from_millis(30));
+fn idle_prefill_collects_a_short_burst() {
+    assert_eq!(prefill_quiet_wait(200, 0, 1, 16, false), Duration::from_millis(30));
+    assert_eq!(prefill_quiet_wait(200, 1, 16, 16, false), Duration::ZERO);
+    assert_eq!(prefill_quiet_wait(200, 1, 1, 16, false), Duration::from_millis(30));
+    assert_eq!(prefill_quiet_wait(200, 0, 1, 16, true), Duration::from_millis(500));
 }
 
 #[test]
@@ -85,6 +86,16 @@ fn backend_caps_the_physical_prefill_wave() {
     execution.max_prefill_wave_rows = 2;
     assert_eq!(prefill_wave_limit(10, 8_192, 2_066, execution, 10), 2);
     assert_eq!(prefill_wave_limit(10, 8_192, 4_100, execution, 10), 2);
+}
+
+#[test]
+fn routed_wave_respects_the_resident_prompt_budget() {
+    let mut execution = profile(2_048, 128, 1_000_000, true);
+    execution.max_prefill_wave_tokens = 80 * 1_024;
+    assert_eq!(prefill_wave_limit(8, 2_048, 2_048, execution, 8), 8);
+    assert_eq!(prefill_wave_limit(8, 2_048, 8_192, execution, 8), 8);
+    assert_eq!(prefill_wave_limit(8, 2_048, 18_432, execution, 8), 4);
+    assert_eq!(prefill_wave_limit(8, 2_048, 34_816, execution, 8), 2);
 }
 
 #[test]
@@ -152,6 +163,8 @@ fn profile(
         chunk_tokens,
         completion_round_tokens,
         max_prefill_wave_rows: usize::MAX,
+        max_prefill_wave_tokens: usize::MAX,
+        max_prefill_cohort_tokens: usize::MAX,
         block_tokens: 16,
         resident_token_slots,
         limit_deep_prefill_waves,

@@ -31,6 +31,9 @@ impl MetalPrefillCohort {
         let model_id = loaded.info.manifest.id.clone();
         let mut prefixes = HashMap::with_capacity(requests.len());
         let mut leased_groups = HashSet::new();
+        let cached_groups_before = loaded.prefixes.group_count();
+        let cached_entries_before = loaded.prefixes.entry_count();
+        let cached_bytes_before = loaded.prefixes.resident_bytes();
         let mut hits = 0;
         for request in requests {
             let leased = loaded.prefixes.lease_longest(&model_id, &request.prompt_tokens)?;
@@ -53,10 +56,12 @@ impl MetalPrefillCohort {
         let misses = requests.len().saturating_sub(hits);
         let evicted_leases = loaded.prefixes.evict_groups(&leased_groups);
         let evicted_misses = loaded.prefixes.reserve_batch_slots(misses);
-        let evicted = evicted_leases || evicted_misses;
-        if evicted {
+        let initially_evicted = evicted_leases || evicted_misses;
+        if initially_evicted {
             crate::engine::clear_memory_cache()?;
         }
+        let pressure_evicted = hits > 0 && loaded.reclaim_unleased_prefixes_for_prefill()?;
+        let evicted = initially_evicted || pressure_evicted;
         tracing::debug!(
             model = model_id,
             rows = requests.len(),
@@ -64,6 +69,10 @@ impl MetalPrefillCohort {
             prefix_misses = misses,
             leased_groups = leased_groups.len(),
             prefix_slots_reserved = misses.min(loaded.prefixes.capacity()),
+            cached_groups_before,
+            cached_entries_before,
+            cached_bytes_before,
+            cached_groups_after = loaded.prefixes.group_count(),
             evicted,
             "leased logical Metal prefill cohort"
         );

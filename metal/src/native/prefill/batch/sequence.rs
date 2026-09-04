@@ -2,7 +2,10 @@ use std::time::Instant;
 
 use runtime::backend::{PrefillRequest, SamplingLogits};
 
-use super::{super::NativePrefill, reservation};
+use super::{
+    super::{NativePrefill, evaluation},
+    reservation,
+};
 use crate::native::{
     error::{Error, Result},
     model::LoadedModel,
@@ -82,10 +85,6 @@ impl Sequence {
         })
     }
 
-    pub fn packed_prefill_eligible(&self) -> bool {
-        self.prefix_cache_tokens > 0
-    }
-
     pub fn advance_packed(
         loaded: &mut LoadedModel,
         sequences: &mut [&mut Self],
@@ -157,11 +156,7 @@ impl Sequence {
             })?;
             let state_root =
                 step::forward_prefill_state(model, &loaded.stream, state, tokens, self.position)?;
-            let mut roots = vec![&state_root];
-            state.cache.extend_graph_roots(&mut roots);
-            loaded.stream.eval_many(&roots)?;
-            loaded.settle_prefill_graph()?;
-            state.cache.detach_evaluated_graphs(&loaded.stream)?;
+            evaluation::materialize(loaded, state, &state_root)?;
             self.page_reservation_pending = false;
             self.position += count;
             self.cache_checkpoint(loaded)?;
@@ -220,6 +215,7 @@ impl Sequence {
             .state
             .take()
             .ok_or_else(|| Error::InvalidPrefillBatch("prefill sequence has no state".into()))?;
+        evaluation::materialize(loaded, &state, &logits)?;
         state.position = tokens.len();
         let prefix_bytes = loaded
             .estimated_prefix_bytes(tokens.len())?

@@ -5,6 +5,7 @@ use runtime::tuning::{TuningMode, select_robust_candidate};
 
 use super::{Array, Dtype, Error, Result, Stream};
 
+mod measurement;
 mod patterns;
 
 type RoutingPath<'a> = &'a dyn Fn(&Array) -> Result<Array>;
@@ -108,15 +109,7 @@ fn tune(
         ];
         let patterns = route_patterns(key, indices)?;
         let routes = [indices, &patterns.balanced, &patterns.hot_set];
-        let timings = executions
-            .map(|execution| {
-                routes
-                    .map(|indices| measure(execution, indices, stream, paths))
-                    .into_iter()
-                    .collect::<Result<Vec<_>>>()
-            })
-            .into_iter()
-            .collect::<Result<Vec<_>>>()?;
+        let timings = measurement::measure_candidates(executions, routes, stream, paths)?;
         let fallback_index =
             executions.iter().position(|execution| *execution == fallback).unwrap_or(0);
         let selected = select_robust_candidate(
@@ -155,25 +148,6 @@ fn tune(
         );
         execute(fallback, indices, paths)
     })
-}
-
-fn measure(
-    execution: RoutingExecution,
-    indices: &Array,
-    stream: &Stream,
-    paths: RoutingPaths<'_>,
-) -> Result<Duration> {
-    for _ in 0..stream.config().tuning.warmup_iterations {
-        execute(execution, indices, paths)?.async_eval(stream)?;
-    }
-    stream.synchronize()?;
-    let iterations = stream.config().tuning.measurement_iterations.max(1);
-    let started = Instant::now();
-    for _ in 0..iterations {
-        execute(execution, indices, paths)?.async_eval(stream)?;
-    }
-    stream.synchronize()?;
-    Ok(started.elapsed() / iterations)
 }
 
 fn execute(
@@ -221,7 +195,10 @@ fn key(spec: RoutingSpec, input: &Array, indices: &Array) -> Result<RoutingKey> 
 }
 
 fn fallback(indices: &Array) -> Result<RoutingExecution> {
-    if elements(&indices.shape()?)? >= 64 {
+    let routes = elements(&indices.shape()?)?;
+    if routes > 1_024 {
+        Ok(RoutingExecution::GroupedFused)
+    } else if routes >= 64 {
         Ok(RoutingExecution::SortedGraph)
     } else {
         Ok(RoutingExecution::Unsorted)

@@ -123,3 +123,37 @@ fn prepares_real_qwen35_multi_turn_checkpoint() -> Result<()> {
     assert!(multi_turn.cache_checkpoints[0] < multi_turn.tokens.token_ids.len());
     Ok(())
 }
+
+#[test]
+#[ignore = "loads a real Qwen 3.5/3.6 checkpoint; set MIRMIR_QWEN35_MODEL"]
+fn prepares_real_qwen35_system_boundary_checkpoint() -> Result<()> {
+    let path = std::env::var_os("MIRMIR_QWEN35_MODEL")
+        .ok_or(Error::MissingEnvironment("MIRMIR_QWEN35_MODEL"))?;
+    let descriptor = ModelDescriptor::inspect(path, GenerationOverrides::default())?;
+    let request = Conversation {
+        messages: vec![
+            Message {
+                role: "system".into(),
+                content: "Stały długi kontekst systemowy.".into(),
+                reasoning_content: None,
+                tool_calls: None,
+                tool_call_id: None,
+            },
+            Message {
+                role: "user".into(),
+                content: "Odpowiedz krótko.".into(),
+                reasoning_content: None,
+                tool_calls: None,
+                tool_call_id: None,
+            },
+        ],
+        tools: Vec::new(),
+        tool_choice: foundation::conversation::ToolChoice::default(),
+    };
+
+    let prepared = descriptor.prepare(&request)?;
+
+    assert_eq!(prepared.cache_checkpoints.len(), 1);
+    assert!(prepared.cache_checkpoints[0] < prepared.tokens.token_ids.len());
+    Ok(())
+}

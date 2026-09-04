@@ -145,6 +145,17 @@ impl HybridLinearMoeLayer {
                 .collect::<Result<Vec<_>>>()?;
             return layer.forward_packed_prefill(input, &mut attention_caches, positions, stream);
         }
+        if !causal
+            && let Attention::Full(layer) = &self.attention
+            && caches.len() > 1
+            && !use_native_paged_batch(caches.len(), 1, positions)
+        {
+            let mut attention_caches = caches
+                .iter_mut()
+                .map(|cache| cache.full_attention_cache(self.index))
+                .collect::<Result<Vec<_>>>()?;
+            return layer.forward_packed_decode(input, &mut attention_caches, positions, stream);
+        }
         let rows = self.attention_rows(input, caches, positions, causal, stream)?;
         let rows = rows.iter().collect::<Vec<_>>();
         Array::concatenate(&rows, 0, stream)

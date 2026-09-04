@@ -10,10 +10,12 @@ use super::Worker;
 use crate::{engine::PrefillExecutionProfile, scheduler::generation::Command};
 
 mod priority;
+use priority::take_ready;
 
 const PREFILL_QUIET_WAIT_MULTIPLIER: u64 = 150;
+const IDLE_PREFILL_QUIET_WAIT_MULTIPLIER: u64 = 150;
 const PREFILL_HARD_WAIT_MULTIPLIER: u32 = 4;
-
+const LONG_PREFILL_QUIET_WAIT_MULTIPLIER: u64 = 2_500;
 impl Worker {
     pub(super) fn collect_decode_admission(&mut self) {
         self.collect_prefill_handoff();
@@ -48,23 +50,28 @@ impl Worker {
     }
 
     pub(super) fn collect_prefill_admission(&mut self) {
-        if self.prefill_handoff_active() || self.active_prefill.is_some() || self.prefill.is_empty()
+        if self.prefill_handoff_active()
+            || self.active_prefill.is_some()
+            || self.prefill.is_empty()
+            || self.prefill_waits_for_decode()
         {
             return;
         }
+        let collect_idle = self.prefill_profile.collect_long_prefill_window
+            && self
+                .prefill
+                .iter()
+                .any(|pending| pending.request.prompt_tokens.len() > self.config.max_batch_tokens);
         let quiet = prefill_quiet_wait(
             self.config.prefill_batch_wait_us,
             self.active_decode.len(),
             self.prefill.len(),
             self.prefill_admission_limit(),
+            collect_idle,
         );
         let started = Instant::now();
         let hard_deadline = started + quiet.saturating_mul(PREFILL_HARD_WAIT_MULTIPLIER);
-        let mut full_window = self.prefill_profile.collect_long_prefill_window
-            && self
-                .prefill
-                .iter()
-                .any(|pending| pending.request.prompt_tokens.len() > self.config.max_batch_tokens);
+        let mut full_window = collect_idle;
         let mut quiet_deadline =
             prefill_admission_deadline(started, quiet, hard_deadline, full_window);
         while self.prefill.len() < self.prefill_admission_limit() && !self.stopping {
@@ -122,30 +129,25 @@ impl Worker {
     }
 }
 
-fn prefill_quiet_wait(base_us: u64, decode_rows: usize, waiting: usize, target: usize) -> Duration {
-    if decode_rows == 0 || waiting >= target {
+fn prefill_quiet_wait(
+    base_us: u64,
+    decode_rows: usize,
+    waiting: usize,
+    target: usize,
+    collect_idle: bool,
+) -> Duration {
+    if waiting >= target {
         Duration::ZERO
     } else {
-        Duration::from_micros(base_us.saturating_mul(PREFILL_QUIET_WAIT_MULTIPLIER))
-    }
-}
-
-fn take_ready<T>(
-    queue: &mut std::collections::VecDeque<T>,
-    limit: usize,
-    mut ready: impl FnMut(&T) -> bool,
-) -> Vec<T> {
-    let mut selected = Vec::with_capacity(limit);
-    let mut deferred = std::collections::VecDeque::with_capacity(queue.len());
-    while let Some(item) = queue.pop_front() {
-        if selected.len() < limit && ready(&item) {
-            selected.push(item);
+        let multiplier = if collect_idle {
+            LONG_PREFILL_QUIET_WAIT_MULTIPLIER
+        } else if decode_rows == 0 {
+            IDLE_PREFILL_QUIET_WAIT_MULTIPLIER
         } else {
-            deferred.push_back(item);
-        }
+            PREFILL_QUIET_WAIT_MULTIPLIER
+        };
+        Duration::from_micros(base_us.saturating_mul(multiplier))
     }
-    *queue = deferred;
-    selected
 }
 
 fn next_prefill_deadline(now: Instant, quiet: Duration, hard_deadline: Instant) -> Instant {
@@ -195,7 +197,15 @@ pub(super) fn prefill_wave_limit(
     if !profile.limit_deep_prefill_waves {
         return full_wave.min(resident_wave_rows);
     }
-    full_wave.min(resident_wave_rows).min(profile.max_prefill_wave_rows)
+    let resident_budget_rows = profile
+        .max_prefill_wave_tokens
+        .checked_div(max_prefill_tokens.max(1))
+        .unwrap_or(usize::MAX)
+        .max(1);
+    full_wave
+        .min(resident_wave_rows)
+        .min(profile.max_prefill_wave_rows)
+        .min(resident_budget_rows)
 }
 
 pub(super) fn pending_prefill_tokens(

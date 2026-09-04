@@ -8,7 +8,7 @@ use crate::engine::{
     Array, DecoderCache, Error, ExpertFusionDecision, ModelTensors, NormWeight, Result, Stream,
     binding::{BoundEmbedding, BoundLinear, adjusted_norm},
     configure_expert_fusion, decode_graph,
-    decoder::{LayerContext, LayerLoopOptions, forward_layers},
+    decoder::{LayerContext, LayerLoopOptions, forward_layers, prefill_evaluation_step},
     fusion_planner::FusionPlanner,
     lowering::{FeedForwardLowering, LayerLowering, MixerLowering},
 };
@@ -151,6 +151,15 @@ impl HybridLinearMoeModel {
     ) -> Result<Array> {
         let profile = stream.config().diagnostics.profile_layers;
         let profile_graph = stream.config().diagnostics.profile_graph_build;
+        let shape = hidden.shape()?;
+        let sequence = usize::try_from(*shape.get(1).ok_or_else(|| {
+            Error::InvalidModel("hybrid linear-MoE hidden state has no sequence axis".into())
+        })?)?;
+        let evaluation_step = if causal {
+            prefill_evaluation_step(1, sequence, usize::try_from(position)?, self.layers.len())
+        } else {
+            None
+        };
         let hidden = forward_layers(
             &self.layers,
             hidden,
@@ -162,7 +171,7 @@ impl HybridLinearMoeModel {
                 image: None,
                 stream,
             },
-            LayerLoopOptions::new(profile, None, profile_graph),
+            LayerLoopOptions::new(profile, evaluation_step, profile_graph),
         )?;
         let output = self.final_norm.apply(&hidden, self.rms_norm_eps, stream)?;
         Ok(output)

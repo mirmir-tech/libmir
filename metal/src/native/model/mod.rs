@@ -202,7 +202,7 @@ impl LoadedModel {
         )
     }
 
-    pub(super) fn prefill_chunk_len(&self, _position: usize, remaining: usize) -> usize {
-        remaining.min(self.info.prefill_step)
+    pub(super) fn prefill_chunk_len(&self, position: usize, remaining: usize) -> usize {
+        prefill::bounded_prefill_step(self.info.prefill_step, position, remaining)
     }
 }

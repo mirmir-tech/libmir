@@ -62,7 +62,8 @@ fn measures_shared_prefix_decode_batch() -> Result<()> {
         std::io::stderr().lock(),
         "shared_prefix_batch.benchmark: context={context}, batch={batch}, decode_tokens={}, aggregate={:.2} tok/s ({:.2}ms)",
         config.decode_tokens,
-        batch as f64 * config.decode_tokens as f64 / elapsed.as_secs_f64(),
+        f64::from(u32::try_from(batch)?) * f64::from(u32::try_from(config.decode_tokens)?)
+            / elapsed.as_secs_f64(),
         elapsed.as_secs_f64() * 1_000.0,
     )?;
     Ok(())

@@ -57,3 +57,29 @@ kernel void NAME( \
 PAGE_WRITE_KERNEL(mirmir_page_write_f32, float)
 PAGE_WRITE_KERNEL(mirmir_page_write_f16, half)
 PAGE_WRITE_KERNEL(mirmir_page_write_bf16, bfloat)
+
+struct PageCopyParameters {
+  uint source;
+  uint target;
+  uint capacity;
+  uint page_elements;
+};
+
+// Source pages are immutable/shared; the destination is exclusively reserved.
+// Copy bits, so this also supports packed quantized words and FP32 scales.
+#define PAGE_COPY_KERNEL(NAME, TYPE) \
+kernel void NAME( \
+    device TYPE* keys [[buffer(0)]], \
+    device TYPE* values [[buffer(1)]], \
+    constant PageCopyParameters& p [[buffer(2)]], \
+    uint index [[thread_position_in_grid]]) { \
+  uint head = index / p.page_elements; \
+  uint element = index % p.page_elements; \
+  uint source = (head * p.capacity + p.source) * p.page_elements + element; \
+  uint target = (head * p.capacity + p.target) * p.page_elements + element; \
+  keys[target] = keys[source]; \
+  values[target] = values[source]; \
+}
+
+PAGE_COPY_KERNEL(mirmir_page_copy_16, ushort)
+PAGE_COPY_KERNEL(mirmir_page_copy_32, uint)

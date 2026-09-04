@@ -12,6 +12,27 @@ impl GatedFullAttention {
         positions: &[i32],
         stream: &Stream,
     ) -> Result<Array> {
+        self.forward_packed(input, caches, positions, true, stream)
+    }
+
+    pub(crate) fn forward_packed_decode(
+        &self,
+        input: &Array,
+        caches: &mut [&mut KvCache],
+        positions: &[i32],
+        stream: &Stream,
+    ) -> Result<Array> {
+        self.forward_packed(input, caches, positions, false, stream)
+    }
+
+    fn forward_packed(
+        &self,
+        input: &Array,
+        caches: &mut [&mut KvCache],
+        positions: &[i32],
+        causal: bool,
+        stream: &Stream,
+    ) -> Result<Array> {
         let shape = input.shape()?;
         let batch = dimension(&shape, 0)?;
         let sequence = dimension(&shape, 1)?;
@@ -40,6 +61,12 @@ impl GatedFullAttention {
             .forward(input, stream)?
             .reshape(&[batch, sequence, key_value_heads, head_dim], stream)?
             .transpose(&[0, 2, 1, 3], stream)?;
+        if let Some(position) = common_position(positions) {
+            return self.forward_batched_rows(
+                &queries, &gate, &keys, &values, caches, position, batch, sequence,
+                key_value_heads, head_dim, query_width, causal, stream,
+            );
+        }
         let rows = caches
             .iter_mut()
             .enumerate()
@@ -60,7 +87,7 @@ impl GatedFullAttention {
                     &context.keys,
                     &context.values,
                     self.config.attention_scale,
-                    true,
+                    causal,
                     stream,
                 )?;
                 let attended = attended
@@ -83,6 +110,63 @@ impl GatedFullAttention {
         let rows = rows.iter().collect::<Vec<_>>();
         self.output.forward(&Array::concatenate(&rows, 0, stream)?, stream)
     }
+
+    #[allow(clippy::too_many_arguments)]
+    fn forward_batched_rows(
+        &self,
+        queries: &Array,
+        gate: &Array,
+        keys: &Array,
+        values: &Array,
+        caches: &mut [&mut KvCache],
+        position: i32,
+        batch: i32,
+        sequence: i32,
+        key_value_heads: i32,
+        head_dim: i32,
+        query_width: i32,
+        causal: bool,
+        stream: &Stream,
+    ) -> Result<Array> {
+        let queries = rope(queries, &self.config, position, None, stream)?;
+        let keys = rope(keys, &self.config, position, None, stream)?;
+        let contexts = caches
+            .iter_mut()
+            .enumerate()
+            .map(|(row, cache)| {
+                let keys = head_row(&keys, row, sequence, key_value_heads, head_dim, stream)?;
+                let values = head_row(values, row, sequence, key_value_heads, head_dim, stream)?;
+                cache.update_for_attention_mode(
+                    &keys,
+                    &values,
+                    stream,
+                    paged_attention_min_context(stream),
+                    PagedContextMode::View,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let context_keys = contexts.iter().map(|context| &context.keys).collect::<Vec<_>>();
+        let context_values = contexts.iter().map(|context| &context.values).collect::<Vec<_>>();
+        let keys = Array::concatenate(&context_keys, 0, stream)?;
+        let values = Array::concatenate(&context_values, 0, stream)?;
+        let attended = queries.scaled_dot_product_attention(
+            &keys,
+            &values,
+            self.config.attention_scale,
+            causal,
+            stream,
+        )?;
+        let attended = attended
+            .transpose(&[0, 2, 1, 3], stream)?
+            .reshape(&[batch, sequence, query_width], stream)?;
+        let gate = gate.reshape(&[batch, sequence, query_width], stream)?;
+        self.output.forward(&gate.sigmoid_mul(&attended, stream)?, stream)
+    }
+}
+
+pub(super) fn common_position(positions: &[i32]) -> Option<i32> {
+    let position = *positions.first()?;
+    positions.iter().all(|candidate| *candidate == position).then_some(position)
 }
 
 fn sequence_row(

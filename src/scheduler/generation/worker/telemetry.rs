@@ -36,6 +36,8 @@ pub(super) fn trace_prefill_cohort(
         prefill_chunk_tokens = worker.prefill_profile.chunk_tokens,
         completion_round_tokens = worker.prefill_profile.completion_round_tokens,
         max_prefill_wave_rows = worker.prefill_profile.max_prefill_wave_rows,
+        max_prefill_wave_tokens = worker.prefill_profile.max_prefill_wave_tokens,
+        max_prefill_cohort_tokens = worker.prefill_profile.max_prefill_cohort_tokens,
         cached_prefix_checkpoint_replay_tokens =
             worker.prefill_profile.cached_prefix_checkpoint_replay_tokens,
         cached_prefix_completion_slack_tokens =

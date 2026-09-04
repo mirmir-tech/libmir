@@ -6,6 +6,8 @@ use std::{
 
 use crate::engine::{Array, Error, KvCache, KvContext, PagedContextMode, Result, Stream};
 
+mod copy;
+mod memory;
 mod shared;
 mod snapshot;
 

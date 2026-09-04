@@ -12,6 +12,7 @@ mod mxfp4_gathered_linear;
 mod mxfp4_linear;
 mod nvfp4_convert;
 mod nvfp4_gathered_linear;
+mod page_copy;
 mod page_write;
 mod paged_attention;
 pub(super) use paged_attention::{PagedExecution, partial_blocks, two_pass_supported};

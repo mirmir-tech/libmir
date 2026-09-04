@@ -7,6 +7,8 @@ pub struct PrefillExecutionProfile {
     pub chunk_tokens: usize,
     pub completion_round_tokens: usize,
     pub max_prefill_wave_rows: usize,
+    pub max_prefill_wave_tokens: usize,
+    pub max_prefill_cohort_tokens: usize,
     pub block_tokens: usize,
     pub resident_token_slots: usize,
     pub limit_deep_prefill_waves: bool,
@@ -16,4 +18,28 @@ pub struct PrefillExecutionProfile {
     pub defer_new_decode: bool,
     pub interleave_prefill_decode: bool,
     pub collect_long_prefill_window: bool,
+}
+
+impl super::Engine {
+    pub(crate) fn refresh_prefill_memory_limits(
+        &self,
+        model: &runtime::backend::ModelHandle,
+        profile: &mut PrefillExecutionProfile,
+    ) -> crate::Result<()> {
+        match &self.inner {
+            #[cfg(feature = "cuda")]
+            super::EngineInner::Cuda(_) => {},
+            #[cfg(feature = "metal")]
+            super::EngineInner::Metal(metal) => {
+                let schedule = metal.prefill_schedule(model)?;
+                profile.max_prefill_wave_rows = schedule.max_wave_rows;
+                profile.max_prefill_wave_tokens = schedule.max_wave_tokens;
+                profile.max_prefill_cohort_tokens =
+                    schedule.max_cohort_tokens.min(profile.resident_token_slots);
+            },
+            #[cfg(not(any(feature = "cuda", feature = "metal")))]
+            super::EngineInner::Unavailable => {},
+        }
+        Ok(())
+    }
 }
