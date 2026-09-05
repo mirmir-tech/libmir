@@ -28,7 +28,9 @@ impl super::Engine {
     ) -> crate::Result<()> {
         match &self.inner {
             #[cfg(feature = "cuda")]
-            super::EngineInner::Cuda(_) => {},
+            super::EngineInner::Cuda(_) => {
+                let _ = (model, profile);
+            },
             #[cfg(feature = "metal")]
             super::EngineInner::Metal(metal) => {
                 let schedule = metal.prefill_schedule(model)?;
@@ -38,7 +40,9 @@ impl super::Engine {
                     schedule.max_cohort_tokens.min(profile.resident_token_slots);
             },
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            super::EngineInner::Unavailable => {},
+            super::EngineInner::Unavailable => {
+                let _ = (model, profile);
+            },
         }
         Ok(())
     }
