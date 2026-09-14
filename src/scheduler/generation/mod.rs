@@ -4,6 +4,7 @@ mod worker;
 use std::{
     sync::{
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
         mpsc::{self, Sender},
     },
     thread::JoinHandle,
@@ -22,6 +23,7 @@ use crate::{Engine, Result, engine::EnginePrefillBatch};
 
 pub(super) struct GenerationCoordinator {
     commands: Sender<Command>,
+    interrupt: Arc<AtomicBool>,
     worker: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -29,6 +31,7 @@ pub(super) enum Command {
     Decode(PendingDecode),
     Prefill(PendingPrefill),
     Release(uuid::Uuid),
+    Cancellation,
     Stop,
 }
 
@@ -46,6 +49,7 @@ pub(super) struct PendingPrefill {
     pub(super) enqueued: Instant,
     pub(super) scheduler_queue: Duration,
     pub(super) expects_decode: bool,
+    pub(super) cancellation: crate::CancellationToken,
 }
 
 pub(super) struct ActivePrefill {
@@ -63,9 +67,14 @@ impl GenerationCoordinator {
         let prefill_profile =
             engine.generation_prefill_profile(&model, config.max_batch_tokens, cache)?;
         let (commands, receiver) = mpsc::channel();
+        let interrupt = Arc::new(AtomicBool::new(false));
+        let worker_interrupt = interrupt.clone();
         let worker =
             std::thread::Builder::new().name("libmir-generation".into()).spawn(move || {
-                worker::Worker::new(engine, model, config, receiver, prefill_profile).run();
+                worker::Worker::new(
+                    engine, model, config, receiver, prefill_profile, worker_interrupt,
+                )
+                .run();
             });
         let worker = match worker {
             Ok(worker) => worker,
@@ -78,6 +87,7 @@ impl GenerationCoordinator {
         };
         Ok(Self {
             commands,
+            interrupt,
             worker: Mutex::new(Some(worker)),
         })
     }
@@ -98,6 +108,7 @@ impl GenerationCoordinator {
         &self,
         request: PrefillRequest,
         expects_decode: bool,
+        cancellation: &crate::CancellationToken,
         progress: &mut dyn FnMut(ProgressEvent),
     ) -> Result<PrefillOutput> {
         let response = Arc::new(PrefillResponse::new());
@@ -107,8 +118,12 @@ impl GenerationCoordinator {
             enqueued: Instant::now(),
             scheduler_queue: Duration::ZERO,
             expects_decode,
+            cancellation: cancellation.clone(),
         }))?;
-        response.wait(progress)
+        response.wait_cancellable(progress, cancellation, || {
+            self.interrupt.store(true, Ordering::Release);
+            self.send(Command::Cancellation)
+        })
     }
 
     pub(super) fn release(&self, session: uuid::Uuid) {

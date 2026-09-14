@@ -29,6 +29,9 @@ pub(super) fn sample(
     sampling: DeviceSampling,
 ) -> mirtal::Result<NativeArray> {
     let logits = vocab_logits(graph, input, sampling.vocab_size)?;
+    if sampling.top_k == 0 {
+        return full_sample(graph, &logits, sampling);
+    }
     let [mut indices, mut scores] = top_candidates(graph, &logits, sampling.top_k)?;
     let order = graph.argsort(&graph.negative(&scores)?, -1)?;
     indices = graph.take_along_axis(&indices, &order, -1)?;
@@ -106,4 +109,29 @@ fn scalar(graph: Graph<'_>, value: f32, dtype: DType) -> mirtal::Result<NativeAr
 
 fn invalid(message: impl Into<String>) -> NativeError {
     NativeError::InvalidOperation(message.into())
+}
+
+// Keep full-vocabulary sampling in vocabulary order, as in the host/CUDA
+// sampler. FP32 cumulative mass avoids BF16 CDF saturation for large
+// vocabularies.
+fn full_sample(
+    graph: Graph<'_>,
+    logits: &NativeArray,
+    sampling: DeviceSampling,
+) -> mirtal::Result<NativeArray> {
+    let logits = graph.astype(logits, DType::Float32)?;
+    let maximum = graph.reduce_max(&logits, -1, true)?;
+    let centered = graph.subtract(&logits, &maximum)?;
+    let temperature = scalar(graph, sampling.temperature, DType::Float32)?;
+    let weights = graph.exp(&graph.divide(&centered, &temperature)?)?;
+    let cumulative = graph.cumulative_sum(&weights, -1, false, true)?;
+    let shape = cumulative.shape()?;
+    let mut start = vec![0; shape.dimensions().len()];
+    let last = start.len() - 1;
+    start[last] = sampling.vocab_size - 1;
+    let total = graph.slice(&cumulative, &start, shape.dimensions())?;
+    let draw = scalar(graph, sampling.draw, DType::Float32)?;
+    let cumulative = graph.divide(&cumulative, &total)?;
+    // A strict comparison excludes zero-mass tokens even when draw is zero.
+    graph.argmax_axis(&graph.less(&draw, &cumulative)?, -1, false)
 }

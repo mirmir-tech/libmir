@@ -1,3 +1,3 @@
 mod template;
 
-pub use template::{ChatPrompt, ChatTemplate, TemplateKind, TemplateSource};
+pub use template::{ChatPrompt, ChatTemplate, ReasoningMode, TemplateKind, TemplateSource};

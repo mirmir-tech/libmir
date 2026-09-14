@@ -61,11 +61,20 @@ impl ModelClient {
             if event_sender.send(StartEvent::Ready(Ok(()))).is_err() {
                 return;
             }
-            for task in task_receiver {
+            for task in &task_receiver {
                 match task {
                     Task::Run(task) => task(&mut loaded),
                     Task::Shutdown => break,
                 }
+            }
+            // External prefill handles may outlive this worker. Settle writes
+            // before their eventual drop can release page ownership elsewhere.
+            let settled = loaded.recover_execution().and_then(|()| {
+                loaded.stream().eval_many_with_paged_arenas(&[])?;
+                Ok(loaded.stream().synchronize()?)
+            });
+            if let Err(error) = settled {
+                tracing::error!(%error, "Metal worker shutdown could not settle GPU work");
             }
         });
         let worker = match worker {
@@ -95,10 +104,34 @@ impl ModelClient {
     {
         let (sender, receiver) = mpsc::sync_channel(1);
         self.send(Task::Run(Box::new(move |model| {
-            let result = transferable(run(model));
+            let result = transferable(model.recover_execution().and_then(|()| run(model)));
             let _sent = sender.send(result);
         })))?;
         Ok(receiver.recv()??)
+    }
+
+    pub(super) fn prefill_retirement(&self) -> crate::native::prefill::RetirePrefill {
+        let sender = self.sender.clone();
+        Box::new(move |batch| {
+            // Never wait here: the last handle can be dropped by this worker.
+            // The queued closure owns all unfinished cache state until cleanup.
+            let task = Task::Run(Box::new(move |loaded| {
+                if let Err(error) = batch.cancel(loaded) {
+                    tracing::warn!(%error, "abandoned Metal prefill requires stream recovery");
+                }
+            }));
+            // A closed worker has already attempted its final stream drain.
+            let _sent = sender.send(task);
+        })
+    }
+
+    #[cfg(test)]
+    pub(super) fn retained_execution_state_count(&self) -> Result<Option<usize>> {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        self.send(Task::Run(Box::new(move |model| {
+            let _sent = sender.send(model.retained_execution_states().map(<[_]>::len));
+        })))?;
+        Ok(receiver.recv()?)
     }
 
     pub(super) fn run_with_progress<T>(
@@ -116,7 +149,8 @@ impl ModelClient {
             let mut report = |event| {
                 let _sent = sender.send(TaskEvent::Progress(event));
             };
-            let result = transferable(run(model, &mut report));
+            let result =
+                transferable(model.recover_execution().and_then(|()| run(model, &mut report)));
             let _sent = sender.send(TaskEvent::Complete(result));
         })))?;
         loop {

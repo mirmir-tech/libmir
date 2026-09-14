@@ -50,3 +50,7 @@ cuda_export!(pub(super) O = "chunk_fwd_kernel_o"(
     chunk_indices: &DeviceBuffer<i32>, scale: f32, tokens: u32,
     global_scratch: u64, profile_scratch: u64,
 ));
+
+cuda_export!(pub(super) InitializeInverse = "libmir_cuda_gdn_initialize_inverse_bf16"(
+    inverse: &mut DeviceBuffer<bf16>, elements: u32,
+));

@@ -170,6 +170,7 @@ mod tests {
             initial_context: 4096.0,
             beta_fast: 32.0,
             beta_slow: 1.0,
+            rope_truncate: false,
             swiglu_limit: 7.0,
         }
     }

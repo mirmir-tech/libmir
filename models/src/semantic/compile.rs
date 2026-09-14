@@ -130,12 +130,14 @@ fn rope_scaling(scaling: RopeScaling) -> RopeScalingSpec {
             beta_slow,
             original_context_len,
             attention_factor,
+            truncate,
         } => RopeScalingSpec::Yarn {
             factor,
             beta_fast,
             beta_slow,
             original_context_len,
             attention_factor,
+            truncate,
         },
     }
 }

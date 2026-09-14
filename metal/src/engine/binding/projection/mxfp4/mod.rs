@@ -4,7 +4,14 @@ use models::weights::{
 
 use crate::engine::{Array, Dtype, Error, ModelTensors, Result, Stream};
 
+#[cfg(test)]
+mod accuracy;
+mod execution;
+#[cfg(test)]
+mod experts;
 mod fusion;
+#[cfg(test)]
+mod joined;
 
 #[derive(Debug)]
 pub(in crate::engine) struct MxFp4Linear {
@@ -20,7 +27,7 @@ pub(in crate::engine) struct MxFp4Linear {
 #[derive(Debug, Clone, Copy)]
 pub(in crate::engine) enum MxFp4LinearLayout {
     Matrix,
-    Gathered { matrices: usize },
+    Gathered,
 }
 
 #[derive(Debug)]
@@ -68,6 +75,15 @@ pub(super) fn linear(
     if let Some(bias) = &checkpoint_bias {
         require(bias, Dtype::Bfloat16, &bias_shape, binding, "bias")?;
     }
+    let weight = if weight_dtype == Dtype::Uint8 {
+        let graph = stream.native().graph();
+        let packed = graph.view_dtype(weight.native(), mirtal::DType::Uint32)?;
+        let mut shape = bias_shape.clone();
+        shape.push(input_features / 8);
+        Array::from_native(graph.reshape(&packed, &mirtal::Shape::new(shape)?)?)?
+    } else {
+        weight
+    };
     let has_bias = checkpoint_bias.is_some();
     let bias = checkpoint_bias.map_or_else(
         || {
@@ -103,82 +119,6 @@ pub(super) fn embedding(
     })
 }
 
-impl MxFp4Linear {
-    pub(super) fn forward(&self, input: &Array, stream: &Stream) -> Result<Array> {
-        if !matches!(self.layout, MxFp4LinearLayout::Matrix) {
-            return Err(Error::InvalidQuantization(
-                "gathered MXFP4 matrix bank does not support ordinary execution".into(),
-            ));
-        }
-        if input.dtype()? != Dtype::Bfloat16 {
-            return Err(Error::InvalidQuantization("MXFP4 input must be BF16".into()));
-        }
-        let output = if self.weight.dtype()? == Dtype::Uint32 {
-            Array::from_native(stream.native().graph().mxfp4_matmul(
-                input.native(),
-                mirtal::MxFp4 {
-                    weight: self.weight.native(),
-                    scales: self.scales.native(),
-                },
-                true,
-            )?)?
-        } else {
-            return stream.kernels().mxfp4_linear(
-                [input, &self.weight, &self.scales, &self.bias],
-                self.input_features,
-                self.output_features,
-                stream,
-            );
-        };
-        if self.has_bias {
-            output.add(&self.bias, stream)
-        } else {
-            Ok(output)
-        }
-    }
-
-    pub(super) fn gather(
-        &self,
-        input: &Array,
-        indices: &Array,
-        sorted: bool,
-        stream: &Stream,
-    ) -> Result<Array> {
-        let MxFp4LinearLayout::Gathered { matrices } = self.layout else {
-            return Err(Error::InvalidQuantization(
-                "ordinary MXFP4 matrix does not support gathered execution".into(),
-            ));
-        };
-        if input.dtype()? != Dtype::Bfloat16 || indices.dtype()? != Dtype::Uint32 {
-            return Err(Error::InvalidQuantization(
-                "gathered MXFP4 requires BF16 input and U32 indices".into(),
-            ));
-        }
-        if self.weight.dtype()? == Dtype::Uint32 && !self.has_bias {
-            return Array::from_native(stream.native().graph().gather_mxfp4(
-                input.native(),
-                mirtal::MxFp4 {
-                    weight: self.weight.native(),
-                    scales: self.scales.native(),
-                },
-                indices.native(),
-                mirtal::GatherQmmOptions { transpose: true, sorted_indices: sorted },
-            )?);
-        }
-        stream.kernels().mxfp4_gathered_linear(
-            [input, &self.weight, &self.scales, &self.bias, indices],
-            self.input_features,
-            self.output_features,
-            matrices,
-            stream,
-        )
-    }
-
-    pub(super) const fn has_bias(&self) -> bool {
-        self.has_bias
-    }
-}
-
 impl MxFp4Embedding {
     pub(super) fn lookup(&self, indices: &Array, stream: &Stream) -> Result<Array> {
         stream.kernels().mxfp4_embedding(
@@ -207,17 +147,14 @@ fn projection_shape(
                 Some(BlockProjectionLayout::MatrixBank { matrices }),
                 Some([actual, output, input]),
             ) if matrices == *actual => {
-                (MxFp4LinearLayout::Gathered { matrices }, vec![matrices], *output, *input)
+                (MxFp4LinearLayout::Gathered, vec![matrices], *output, *input)
             },
             (
                 Some(BlockProjectionLayout::FusedGateUpBank { experts, interleaved: true }),
                 Some([actual, output, input]),
-            ) if experts == *actual => (
-                MxFp4LinearLayout::Gathered { matrices: experts },
-                vec![experts],
-                *output,
-                *input,
-            ),
+            ) if experts == *actual => {
+                (MxFp4LinearLayout::Gathered, vec![experts], *output, *input)
+            },
             _ => return Err(invalid(binding, "requires an ordinary or gathered matrix layout")),
         };
     if !input.is_multiple_of(BlockQuantization::MXFP4.block_size) {

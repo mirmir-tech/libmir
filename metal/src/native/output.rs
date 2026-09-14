@@ -44,7 +44,7 @@ pub(super) fn materialize(
                 top_k,
                 draw,
             } = sampling
-                && top_k > 0 =>
+                && super::step::supports_device_token(sampling) =>
         {
             sampled(model, &logits, vocab_size, top_k, top_p, temperature, draw)
         },

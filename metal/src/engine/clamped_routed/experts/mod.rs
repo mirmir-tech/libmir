@@ -23,12 +23,12 @@ pub(super) struct ClampedRoutedExperts {
 
 #[derive(Debug)]
 enum ExpertLayout {
-    Dense {
+    Separate {
         gate: BoundLinear,
         up: BoundLinear,
         down: BoundLinear,
     },
-    DenseFused {
+    Fused {
         gate_up: BoundLinear,
         down: BoundLinear,
         interleaved: bool,
@@ -63,10 +63,11 @@ impl ClampedRoutedExperts {
     ) -> Result<Self> {
         let layout = match bindings.experts {
             RoutedExpertBindings::InterleavedGateUp { gate_up, down } => {
-                if matches!(&gate_up.storage, TensorStorage::Dense { .. })
-                    && matches!(&down.storage, TensorStorage::Dense { .. })
-                {
-                    ExpertLayout::DenseFused {
+                if matches!(
+                    &gate_up.storage,
+                    TensorStorage::Dense { .. } | TensorStorage::BlockQuantized { .. }
+                ) {
+                    ExpertLayout::Fused {
                         gate_up: BoundLinear::load(tensors, gate_up, stream)?,
                         down: BoundLinear::load(tensors, down, stream)?,
                         interleaved: gate_up
@@ -78,11 +79,17 @@ impl ClampedRoutedExperts {
                 }
             },
             RoutedExpertBindings::SeparateGateUp { gate, up, down } => {
-                if matches!(&gate.storage, TensorStorage::Dense { .. })
-                    && matches!(&up.storage, TensorStorage::Dense { .. })
-                    && matches!(&down.storage, TensorStorage::Dense { .. })
-                {
-                    ExpertLayout::Dense {
+                if matches!(
+                    &gate.storage,
+                    TensorStorage::Dense { .. } | TensorStorage::BlockQuantized { .. }
+                ) && matches!(
+                    &up.storage,
+                    TensorStorage::Dense { .. } | TensorStorage::BlockQuantized { .. }
+                ) && matches!(
+                    &down.storage,
+                    TensorStorage::Dense { .. } | TensorStorage::BlockQuantized { .. }
+                ) {
+                    ExpertLayout::Separate {
                         gate: BoundLinear::load(tensors, gate, stream)?,
                         up: BoundLinear::load(tensors, up, stream)?,
                         down: BoundLinear::load(tensors, down, stream)?,
@@ -114,8 +121,9 @@ impl ClampedRoutedExperts {
                     .ok_or(crate::engine::Error::ShapeOverflow)
             })?;
         let flat = input.reshape(&[i32::try_from(tokens)?, self.config.hidden], stream)?;
-        let scores = self.router.forward(&flat, stream)?;
-        let routing = scores.router_top_k_unit(self.config.top_k, stream)?;
+        let routing = self.router.route_unit(&flat, self.config.top_k, stream)?;
+        #[cfg(test)]
+        crate::engine::probe::routing::record(&routing.indices)?;
         let output = self.execute(&flat, &routing, tokens, stream)?;
         output.reshape(&input_shape, stream)
     }
@@ -134,10 +142,10 @@ impl ClampedRoutedExperts {
             intermediate: usize::try_from(self.config.intermediate)?,
         };
         match &self.layout {
-            ExpertLayout::Dense { gate, up, down } => {
+            ExpertLayout::Separate { gate, up, down } => {
                 dense_experts(input, routing, [gate, up, down], &self.limit, shape, stream)
             },
-            ExpertLayout::DenseFused { gate_up, down, interleaved } => fused_dense_experts(
+            ExpertLayout::Fused { gate_up, down, interleaved } => fused_dense_experts(
                 input, routing, gate_up, down, *interleaved, &self.limit, shape, stream,
             ),
             ExpertLayout::Native {

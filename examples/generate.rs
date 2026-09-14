@@ -53,6 +53,7 @@ fn request() -> GenerationRequest {
         },
         seed: None,
         reasoning_cycle: libmir::ReasoningCyclePolicy::default(),
+        reasoning: libmir::ReasoningMode::ModelDefault,
     }
 }
 

@@ -29,7 +29,7 @@ pub(super) fn update(
         &update,
         current.native(),
     ])?;
-    state.value = Some(Array::from_native(next_state)?);
+    state.value = Some(Array::from_native(next_state)?.into());
     state.offset += dimensions.sequence;
     Array::from_native(output)
 }
@@ -64,7 +64,7 @@ pub(super) fn decode(
         ],
         normalize,
     )?;
-    state.value = Some(Array::from_native(next_state)?);
+    state.value = Some(Array::from_native(next_state)?.into());
     state.offset += 1;
     Array::from_native(output)
 }
@@ -127,7 +127,7 @@ fn ensure_state(
         )),
         None => {
             let value = stream.native().graph().full(&shape, 0.0, mirtal::DType::Float32)?;
-            state.value = Some(Array::from_native(value)?);
+            state.value = Some(Array::from_native(value)?.into());
             Ok(())
         },
     }

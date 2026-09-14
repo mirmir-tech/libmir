@@ -18,6 +18,8 @@ mod tuning;
 
 #[derive(Debug)]
 pub struct Stream {
+    #[cfg(test)]
+    history_budget: Arc<super::persistent_history::budget::Budget>,
     native: mirtal::Stream,
     compiled: CompiledGraphs,
     kernels: Kernels,
@@ -28,10 +30,6 @@ pub struct Stream {
 }
 
 impl Stream {
-    pub fn synchronize(&self) -> Result<()> {
-        Ok(self.native.synchronize()?)
-    }
-
     pub(crate) fn eval_many(&self, arrays: &[&super::Array]) -> Result<()> {
         let arrays = arrays.iter().map(|array| array.native()).collect::<Vec<_>>();
         Ok(self.native.eval_many(&arrays)?)
@@ -166,6 +164,18 @@ impl Stream {
             .batched_paged_attention(&self.native, inputs, page_size, context_tokens, scale)
     }
 
+    #[cfg(test)]
+    pub(super) fn batched_paged_two_pass(
+        &self,
+        inputs: [&mirtal::Array; 28],
+        page_size: usize,
+        context_tokens: usize,
+        scale: f32,
+    ) -> Result<mirtal::Array> {
+        self.kernels
+            .batched_paged_two_pass(&self.native, inputs, page_size, context_tokens, scale)
+    }
+
     pub(super) fn expert_restore_reduce(
         &self,
         inputs: [&mirtal::Array; 3],
@@ -203,6 +213,10 @@ impl Stream {
         &self,
         inputs: [&mirtal::Array; 6],
     ) -> Result<[mirtal::Array; 2]> {
+        #[cfg(test)]
+        if self.config.diagnostics.gdn_execution == crate::config::GdnExecution::PackedPrefill {
+            return self.experimental_recurrence(inputs);
+        }
         self.kernels.gated_delta_recurrence(&self.native, inputs)
     }
 

@@ -14,6 +14,7 @@ fn request(tokens: usize, block: usize) -> PrefillRequest {
         cache_checkpoints: Vec::new(),
         block_table: BlockTable::with_block_size(block),
         cached_tokens: 0,
+        generation_tokens: None,
         sampling_logits: SamplingLogits::None,
     }
 }

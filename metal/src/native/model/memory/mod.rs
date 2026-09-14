@@ -3,8 +3,11 @@ use runtime::kv::KvCacheDType;
 
 use super::LoadedModel;
 use crate::{
-    engine::{Array, DecoderCache, KvPageFormat, MemoryStats, clear_memory_cache, memory_stats},
-    native::{error::Result, prefix::PrefixCache, session::SessionState},
+    engine::{MemoryStats, clear_memory_cache, memory_stats},
+    native::{
+        error::Result,
+        prefill::diagnostics::{Stage, measure},
+    },
 };
 
 const AUTO_PREFIX_CACHE_NUMERATOR: usize = 2;
@@ -15,7 +18,12 @@ const PACKED_PREFILL_RESERVE_DIVISOR: usize = 8;
 const PACKED_PREFILL_MINIMUM_RESERVE: usize = 2 * 1024 * 1024 * 1024;
 const PACKED_PREFILL_WORKSPACE_COPIES: usize = 8;
 
+#[cfg(test)]
+mod history;
+mod pages;
+mod prefix;
 mod pressure;
+pub(in crate::native) use prefix::{cache_prefix_checkpoint, cache_prefix_snapshot};
 #[cfg(test)]
 mod tests;
 
@@ -32,9 +40,9 @@ pub(super) fn prefix_cache_budget(memory: MemoryStats, configured: Option<usize>
 
 impl LoadedModel {
     pub(crate) fn settle_prefill_graph(&self) -> Result<()> {
-        self.stream.synchronize()?;
-        self.stream.detach_paged_arena_graphs()?;
-        clear_memory_cache()?;
+        measure(Stage::Synchronize, || Ok(self.stream.synchronize()?))?;
+        measure(Stage::DetachArenas, || Ok(self.stream.detach_paged_arena_graphs()?))?;
+        let _reclaimed = measure(Stage::Reclaim, Self::reclaim_prefill_allocator_cache)?;
         Ok(())
     }
 
@@ -93,6 +101,7 @@ impl LoadedModel {
     }
 
     pub(crate) fn flush_decode_graphs(&self) -> Result<()> {
+        self.require_execution_ready()?;
         let mut roots = Vec::new();
         for state in self.sessions.values() {
             state.cache.extend_graph_roots(&mut roots);
@@ -102,45 +111,6 @@ impl LoadedModel {
         self.stream.detach_paged_arena_graphs()?;
         for state in self.sessions.values() {
             state.cache.detach_evaluated_graphs(&self.stream)?;
-        }
-        Ok(())
-    }
-
-    pub(crate) fn reserve_prefill_pages(&mut self, required: usize) -> Result<()> {
-        let maximum = DecoderCache::physical_page_capacity(&self.stream, self.info.cache_step);
-        let Some(decoder) = self.info.decoder.as_ref() else {
-            return Ok(());
-        };
-        let Some(layer) = (0..decoder.num_hidden_layers)
-            .find(|layer| decoder.layer_type(*layer) == AttentionLayerType::Full)
-        else {
-            return Ok(());
-        };
-        let kv_heads = decoder.layer_key_value_heads(layer);
-        let head_dim = decoder.layer_head_dim(layer);
-        let format = KvPageFormat::resolve(self.stream.config().kv_cache.dtype)?;
-        let available = |model: &Self| {
-            model
-                .stream
-                .paged_arenas()
-                .available_pages(maximum, layer, kv_heads, head_dim, format)
-        };
-        let mut evicted = false;
-        while available(self)? < required {
-            if !self.prefixes.evict_oldest() {
-                break;
-            }
-            evicted = true;
-        }
-        if evicted {
-            clear_memory_cache()?;
-        }
-        let available = available(self)?;
-        if available < required {
-            return Err(crate::engine::Error::InvalidModel(format!(
-                "Metal prefill requires {required} free K/V pages but only {available} remain"
-            ))
-            .into());
         }
         Ok(())
     }
@@ -203,39 +173,6 @@ impl LoadedModel {
         );
         Ok(true)
     }
-}
-
-pub(in crate::native) fn cache_prefix_snapshot(
-    prefixes: &mut PrefixCache,
-    model: &str,
-    tokens: &[u32],
-    state: &SessionState,
-    logits: &Array,
-    block_size: Option<usize>,
-    bytes: usize,
-) -> Result<bool> {
-    if !prefixes.enabled() {
-        return Ok(false);
-    }
-    let _reclaimed = LoadedModel::reclaim_prefill_allocator_cache()?;
-    prefixes.insert(model, tokens, state, logits, block_size, bytes)?;
-    Ok(true)
-}
-
-pub(in crate::native) fn cache_prefix_checkpoint(
-    prefixes: &mut PrefixCache,
-    model: &str,
-    tokens: &[u32],
-    state: &SessionState,
-    block_size: usize,
-    bytes: usize,
-) -> Result<bool> {
-    if !prefixes.enabled() {
-        return Ok(false);
-    }
-    let _reclaimed = LoadedModel::reclaim_prefill_allocator_cache()?;
-    prefixes.insert_checkpoint(model, tokens, state, block_size, bytes)?;
-    Ok(true)
 }
 
 fn usable_memory(memory: MemoryStats) -> usize {

@@ -1,7 +1,9 @@
 mod batch;
 mod convolution;
 mod execution;
+mod finish;
 mod gates;
+mod ragged;
 mod scratch;
 #[cfg(all(test, target_os = "linux"))]
 mod tests;

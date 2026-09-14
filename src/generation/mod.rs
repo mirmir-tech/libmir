@@ -17,7 +17,7 @@ use input::PreparedGeneration;
 pub use output::GenerationOutput;
 use output::{append_delta, finalize_output, finish_metrics, missing_decoder, should_stop};
 pub use request::{GenerationRequest, ReasoningCyclePolicy};
-use sampling::{choose_timed, request_sampling, sampler_config};
+use sampling::{choose_prefill, request_sampling, sampler_config};
 use telemetry::{record_prefill_metrics, record_publish};
 
 impl Model {
@@ -32,7 +32,8 @@ impl Model {
     }
 
     /// Generates like [`Model::generate`], stopping when `cancellation` is
-    /// signalled.
+    /// signalled. Text prefill observes cache waits and scheduler boundaries;
+    /// Metal also yields between evaluated prefill graphs before retiring rows.
     pub fn generate_cancellable(
         &self,
         request: &GenerationRequest,
@@ -44,7 +45,8 @@ impl Model {
     }
 
     /// Generates from one encoded image using the vision architecture declared
-    /// by the loaded checkpoint.
+    /// by the loaded checkpoint. Image prefill currently observes cancellation
+    /// before and after the complete prefill, then between decode steps.
     pub fn generate_image_cancellable(
         &self,
         request: &GenerationRequest,
@@ -69,8 +71,7 @@ impl Model {
         let descriptor = self.descriptor();
         let settings = descriptor.resolve_generation(request.options)?;
         let prompt_started = Instant::now();
-        let prepared =
-            PreparedGeneration::new(self, &request.conversation, settings, encoded_image)?;
+        let prepared = PreparedGeneration::new(self, request, settings, encoded_image)?;
         let prompt_tokens = prepared.token_ids().len();
         metrics.record_prompt(prompt_started.elapsed(), prompt_tokens);
         let prompt_stages = prepared.preparation_timings();
@@ -94,20 +95,19 @@ impl Model {
             CycleRecovery::new(settings, request.seed, vocab_size, sampling, harmony_exit)?;
         metrics.record_setup_stages(output_setup, sampler_setup, session_started.elapsed());
         let prefill_started = Instant::now();
-        let prefill = prepared.prefill(&mut session, settings.max_tokens, sampling, progress)?;
+        let prefill = prepared.prefill(
+            &mut session,
+            settings.max_tokens,
+            sampling,
+            cancellation,
+            progress,
+        )?;
         cancellation.check()?;
         record_prefill_metrics(&mut metrics, prefill_started, prompt_tokens, &prefill);
         let first_started = Instant::now();
         let mut published = false;
         let mut history = sampling.requires_history().then(|| prepared.token_ids().to_vec());
-        let mut next = choose_timed(
-            &mut metrics,
-            prefill.next_token,
-            prefill.logits.as_ref(),
-            prefill.candidates.as_ref(),
-            history.as_deref().unwrap_or_default(),
-            &mut sampler,
-        )?;
+        let mut next = choose_prefill(&prefill, history.as_deref(), &mut sampler, &mut metrics)?;
         let mut token_ids = Vec::with_capacity(settings.max_tokens);
         let (mut text, mut reasoning, mut tool_calls) =
             (String::new(), String::new(), String::new());

@@ -40,7 +40,8 @@ fn configuration(layers: usize, experts: usize) -> Value {
             "factor": 32.0,
             "beta_fast": 32.0,
             "beta_slow": 1.0,
-            "original_max_position_embeddings": 4096
+            "original_max_position_embeddings": 4096,
+            "truncate": false
         }
     });
     value["layer_types"] = Value::Array(
@@ -67,10 +68,11 @@ fn assert_contract(config: &DecoderConfig, layers: usize, experts: usize) -> Res
     assert!(!config.attention_sinks);
     assert!(config.layer_types.contains(&AttentionLayerType::Sliding));
     assert!(config.layer_types.contains(&AttentionLayerType::Full));
-    let (factor, beta_fast, beta_slow, context, attention_factor) = config
+    let (factor, beta_fast, beta_slow, context, attention_factor, truncate) = config
         .rope_scaling
         .and_then(RopeScaling::yarn)
         .ok_or_else(|| ModelsError::InvalidConfig("expected YaRN scaling".into()))?;
+    assert!(!truncate);
     assert_eq!((factor, beta_fast, beta_slow, context), (32.0, 32.0, 1.0, 4096));
     assert!((attention_factor - 0.1_f64.mul_add(32.0_f64.ln(), 1.0)).abs() < 1.0e-12);
     Ok(())

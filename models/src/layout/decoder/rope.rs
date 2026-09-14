@@ -17,6 +17,7 @@ pub enum RopeScaling {
         beta_slow: f64,
         original_context_len: usize,
         attention_factor: f64,
+        truncate: bool,
     },
 }
 
@@ -35,7 +36,7 @@ impl RopeScaling {
     }
 
     #[must_use]
-    pub const fn yarn(self) -> Option<(f64, f64, f64, usize, f64)> {
+    pub const fn yarn(self) -> Option<(f64, f64, f64, usize, f64, bool)> {
         match self {
             Self::Yarn {
                 factor,
@@ -43,7 +44,15 @@ impl RopeScaling {
                 beta_slow,
                 original_context_len,
                 attention_factor,
-            } => Some((factor, beta_fast, beta_slow, original_context_len, attention_factor)),
+                truncate,
+            } => Some((
+                factor,
+                beta_fast,
+                beta_slow,
+                original_context_len,
+                attention_factor,
+                truncate,
+            )),
             Self::PiecewiseFrequency { .. } => None,
         }
     }
@@ -91,6 +100,11 @@ fn yarn(value: &Value) -> Result<RopeScaling> {
     let beta_slow = optional_number(value, "beta_slow")?.unwrap_or(1.0);
     let original_context_len = integer(value, "original_max_position_embeddings")?;
     let attention_factor = yarn_attention_factor(value, factor)?;
+    let truncate = value.get("truncate").map_or(Ok(true), |value| {
+        value
+            .as_bool()
+            .ok_or_else(|| invalid("rope_scaling.truncate must be a boolean"))
+    })?;
     if !factor.is_finite()
         || !beta_fast.is_finite()
         || !beta_slow.is_finite()
@@ -109,6 +123,7 @@ fn yarn(value: &Value) -> Result<RopeScaling> {
         beta_slow,
         original_context_len,
         attention_factor,
+        truncate,
     })
 }
 

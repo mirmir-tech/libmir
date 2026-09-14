@@ -18,6 +18,7 @@ use crate::{
 };
 
 mod budget;
+mod storage;
 
 pub(super) fn fixture_key() -> GateUpKey {
     GateUpKey {

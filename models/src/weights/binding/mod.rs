@@ -38,8 +38,9 @@ pub use gptq::{
     GptqBits, GptqCheckpointFormat, GptqPacking, GptqQuantization, GptqScaleDType, GptqStorageDType,
 };
 pub use hybrid::{
-    GatedSoftmaxBindings, HybridDecoderLayerBindings, HybridMixerBindings, LinearAttentionBindings,
-    SharedRoutedFeedForwardBindings,
+    DenseFeedForwardBindings, GatedSoftmaxBindings, HybridDecoderLayerBindings,
+    HybridMixerBindings, LinearAttentionBindings, MixedDecoderLayerBindings,
+    MixedFeedForwardBindings, SharedRoutedFeedForwardBindings,
     moe::{
         HybridMoeAttentionBindings, HybridMoeDenseBindings, HybridMoeExpertBindings,
         HybridMoeLayerBindings, HybridMoeRouterBindings,

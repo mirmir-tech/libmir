@@ -102,6 +102,9 @@ pub struct PrefillRequest {
     pub cache_checkpoints: Vec<usize>,
     pub block_table: BlockTable,
     pub cached_tokens: usize,
+    /// Maximum generated tokens, including the first prefill prediction;
+    /// unknown for raw prefill.
+    pub generation_tokens: Option<std::num::NonZeroUsize>,
     pub sampling_logits: SamplingLogits,
 }
 

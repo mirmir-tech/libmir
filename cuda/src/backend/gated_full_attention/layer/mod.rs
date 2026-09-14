@@ -1,3 +1,5 @@
+mod composition;
+use crate::backend::feed_forward::{FeedForward, LayerNormConfig};
 mod batch;
 mod execution;
 mod scratch;
@@ -38,9 +40,9 @@ impl AffineGatedFullAttentionMoeLayerConfig {
 #[derive(Clone, Debug)]
 pub struct CudaAffineGatedFullAttentionMoeLayer {
     backend: CudaBackend,
-    config: AffineGatedFullAttentionMoeLayerConfig,
+    config: LayerNormConfig,
     attention: CudaAffineGatedFullAttention,
-    moe: CudaAffineSharedExpertMoe,
+    moe: FeedForward,
     input_norm: CudaTensor,
     post_attention_norm: CudaTensor,
 }
@@ -85,9 +87,13 @@ impl CudaAffineGatedFullAttentionMoeLayer {
         validate_norm(&post_attention_norm, config)?;
         Ok(Self {
             backend: backend.clone(),
-            config,
+            config: LayerNormConfig {
+                hidden_size: config.attention.hidden_size,
+                rms_norm_epsilon: config.rms_norm_epsilon,
+                norm_weight_shift: config.norm_weight_shift,
+            },
             attention,
-            moe,
+            moe: FeedForward::SharedRouted(Box::new(moe)),
             input_norm,
             post_attention_norm,
         })

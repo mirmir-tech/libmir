@@ -25,7 +25,10 @@ pub fn sample_u32(logits: &Array, sampling: DeviceSampling, stream: &Stream) -> 
 
 impl DeviceSampling {
     fn validate(self) -> Result<()> {
-        if self.vocab_size == 0 || self.top_k == 0 || self.top_k > self.vocab_size {
+        if self.vocab_size == 0
+            || self.top_k > self.vocab_size
+            || (self.top_k == 0 && self.top_p < 1.0)
+        {
             return Err(super::Error::InvalidSampling(
                 "vocab size and top-k must define a non-empty range".into(),
             ));

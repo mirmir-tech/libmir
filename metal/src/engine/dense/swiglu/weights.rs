@@ -88,6 +88,7 @@ fn rope_frequencies(config: DenseSwiGluLayerConfig, stream: &Stream) -> Result<O
                 beta_fast,
                 beta_slow,
                 original_context_len,
+                truncate,
                 ..
             } => Array::yarn_rope_frequencies(
                 config.head_dim,
@@ -96,6 +97,7 @@ fn rope_frequencies(config: DenseSwiGluLayerConfig, stream: &Stream) -> Result<O
                 beta_fast.to_string().parse()?,
                 beta_slow.to_string().parse()?,
                 i32::try_from(original_context_len)?,
+                truncate,
                 stream,
             ),
         })

@@ -30,12 +30,21 @@ pub(super) fn longest_indexed_prefix(
     tokens: &[u32],
     entries: &HashMap<PrefixKey, PrefixEntry>,
 ) -> Option<(PrefixKey, PrefixEntry)> {
+    longest_usable_prefix(model, tokens, entries, |_| true)
+}
+
+pub(super) fn longest_usable_prefix(
+    model: &str,
+    tokens: &[u32],
+    entries: &HashMap<PrefixKey, PrefixEntry>,
+    usable: impl Fn(&PrefixEntry) -> bool,
+) -> Option<(PrefixKey, PrefixEntry)> {
     let mut hasher = prefix_hasher(model);
     let mut longest = None;
     for token in tokens {
         hasher.update(&token.to_le_bytes());
         let key = PrefixKey(*hasher.finalize().as_bytes());
-        if let Some(entry) = entries.get(&key) {
+        if let Some(entry) = entries.get(&key).filter(|entry| usable(entry)) {
             longest = Some((key, *entry));
         }
     }

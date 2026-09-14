@@ -127,7 +127,7 @@ impl CudaEngine {
             return Err(Error::State("CUDA admitted a non-generation runtime".into()));
         };
         match runtime {
-            CudaDecoderRuntime::SharedRouted => {
+            CudaDecoderRuntime::SharedRouted | CudaDecoderRuntime::DenseMixed => {
                 let template = self.backend.load_shared_routed_model_template_with_progress(
                     decoder,
                     &contract.semantic,

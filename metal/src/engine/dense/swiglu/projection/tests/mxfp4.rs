@@ -56,6 +56,13 @@ fn execute(format: BlockQuantization, dtype: &str, shape: &[usize], label: &str)
 
     let linear = BoundLinear::load(&tensors, &binding(format, shape, true), &stream)?;
     let output = linear.forward(&input, &stream)?;
+    let reference = stream.kernels().mxfp4_linear(
+        [&input, &tensors.get("weight")?, &tensors.get("scales")?, &tensors.get("bias")?],
+        32,
+        2,
+        &stream,
+    )?;
+    assert_eq!(output.to_vec_f32(&stream)?, reference.to_vec_f32(&stream)?);
     assert_eq!(output.dtype()?, Dtype::Bfloat16);
     assert_eq!(output.to_vec_f32(&stream)?, [33.0, 94.0]);
     assert!(linear.has_bias());

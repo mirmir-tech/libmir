@@ -1,4 +1,5 @@
 mod batch;
+mod decode_timing;
 mod execution;
 mod generation;
 mod load;
@@ -171,14 +172,17 @@ impl MetalBackend {
     where
         T: Send + 'static,
     {
-        let model = self
-            .models
+        let model = self.model_client(id)?;
+        model.run(run)
+    }
+
+    fn model_client(&self, id: &str) -> Result<ModelClient> {
+        self.models
             .lock()?
             .models
             .get(id)
             .cloned()
-            .ok_or_else(|| Error::ModelNotLoaded(id.to_owned()))?;
-        model.run(run)
+            .ok_or_else(|| Error::ModelNotLoaded(id.to_owned()))
     }
 
     fn with_model_progress<T>(
@@ -192,13 +196,7 @@ impl MetalBackend {
     where
         T: Send + 'static,
     {
-        let model = self
-            .models
-            .lock()?
-            .models
-            .get(id)
-            .cloned()
-            .ok_or_else(|| Error::ModelNotLoaded(id.to_owned()))?;
+        let model = self.model_client(id)?;
         model.run_with_progress(run, progress)
     }
 }

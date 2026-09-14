@@ -1,12 +1,14 @@
 mod batch;
 mod load;
+mod position;
+mod projection;
 
 use models::layout::{AttentionOutput, DecoderConfig, RotaryEmbeddingLayout};
+use position::rope;
 
 use super::{
-    Array, Error, KvCache, NormWeight, PagedContextMode, Result, RopeOptions, Stream,
-    attention::apply_mrope, binding::BoundLinear, fused_gate_up::split_last,
-    native_paged_attention_mode,
+    Array, Error, KvCache, NormWeight, PagedContextMode, Result, Stream, binding::BoundLinear,
+    fused_gate_up::split_last, native_paged_attention_mode,
 };
 
 #[derive(Debug, Clone)]
@@ -27,6 +29,8 @@ pub struct GatedFullAttention {
     query: BoundLinear,
     key: BoundLinear,
     value: BoundLinear,
+    #[cfg(test)]
+    key_value_join: Option<super::binding::pair::KeyValueJoin>,
     output: BoundLinear,
     query_norm: NormWeight,
     key_norm: NormWeight,
@@ -144,6 +148,14 @@ impl GatedFullAttention {
         let heads = self.config.attention_heads;
         let head_dim = self.config.head_dim;
         let query_width = heads.checked_mul(head_dim).ok_or(Error::ShapeOverflow)?;
+        #[cfg(test)]
+        crate::engine::probe::detail(crate::engine::probe::Stage::AttentionNorm, input)?;
+        #[cfg(test)]
+        crate::engine::probe::Projection::capture(
+            crate::engine::probe::ProjectionKind::QueryGate,
+            &self.query,
+            input,
+        )?;
         let projected = self.query.forward(input, stream)?.reshape(
             &[batch, sequence, heads, head_dim.checked_mul(2).ok_or(Error::ShapeOverflow)?],
             stream,
@@ -151,19 +163,23 @@ impl GatedFullAttention {
         let (queries, gate) = split_last(&projected, usize::try_from(head_dim)?, stream)?;
         let gate = gate.reshape(&[batch, sequence, query_width], stream)?;
         let queries = self.query_norm.apply(&queries, self.config.rms_norm_eps, stream)?;
-        let queries = rope(&queries, &self.config, position, positions, stream)?;
 
         let keys = self
             .key
             .forward(input, stream)?
             .reshape(&[batch, sequence, self.config.key_value_heads, head_dim], stream)?;
         let keys = self.key_norm.apply(&keys, self.config.rms_norm_eps, stream)?;
-        let keys = rope(&keys, &self.config, position, positions, stream)?;
         let values = self
             .value
             .forward(input, stream)?
             .reshape(&[batch, sequence, self.config.key_value_heads, head_dim], stream)?
             .transpose(&[0, 2, 1, 3], stream)?;
+        #[cfg(test)]
+        projection::capture_inputs(&queries, &keys, &values, &gate)?;
+        let queries = rope(&queries, &self.config, position, positions, stream)?;
+        let keys = rope(&keys, &self.config, position, positions, stream)?;
+        #[cfg(test)]
+        projection::capture_rotated(&queries, &keys)?;
         let mode = if let Some(mode) = mode {
             mode
         } else if sequence == 1 {
@@ -197,38 +213,10 @@ impl GatedFullAttention {
         let attended = attended
             .transpose(&[0, 2, 1, 3], stream)?
             .reshape(&[batch, sequence, query_width], stream)?;
-        self.output.forward(&gate.sigmoid_mul(&attended, stream)?, stream)
+        #[cfg(test)]
+        crate::engine::probe::detail(crate::engine::probe::Stage::RawAttention, &attended)?;
+        self.project_output(&gate.sigmoid_mul(&attended, stream)?, stream)
     }
-}
-
-fn rope(
-    input: &Array,
-    config: &GatedFullAttentionConfig,
-    position: i32,
-    positions: Option<&Array>,
-    stream: &Stream,
-) -> Result<Array> {
-    let input = input.transpose(&[0, 2, 1, 3], stream)?;
-    if let Some(positions) = positions {
-        return apply_mrope(
-            &input,
-            positions,
-            usize::try_from(config.rope_dimensions)?,
-            config.rope_base,
-            &config.rope_layout,
-            stream,
-        );
-    }
-    input.rope(
-        RopeOptions {
-            dimensions: config.rope_dimensions,
-            traditional: false,
-            base: Some(config.rope_base),
-            scale: 1.0,
-            offset: position,
-        },
-        stream,
-    )
 }
 
 fn dimension(shape: &[i32], axis: usize, name: &str) -> Result<i32> {

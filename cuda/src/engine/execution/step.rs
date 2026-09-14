@@ -20,7 +20,7 @@ impl CudaEngine {
     pub fn execute_generation_step(
         &self,
         decode: Option<&DecodeBatchRequest>,
-        prefill: Option<&mut CudaPrefillBatch>,
+        mut prefill: Option<&mut CudaPrefillBatch>,
         prefill_budget: usize,
         progress: &mut dyn FnMut(usize, ProgressEvent),
     ) -> Result<CudaGenerationStepOutput> {
@@ -40,6 +40,17 @@ impl CudaEngine {
             decode.map_or(0, |request| request.sequences().len()),
             self.profile_decode() && decode.is_some(),
         )?;
+        if let (Some(request), Some(batch)) = (decode, prefill.as_deref_mut())
+            && let Some(mut output) = self.try_execute_combined_step(
+                &mut runner, batch, request, prefill_budget, progress, wait,
+            )?
+        {
+            drop(runner);
+            if let Some(profile) = profile {
+                profile.finish(&self.backend, &mut output.decode)?;
+            }
+            return Ok(output);
+        }
         let interleaved_decode = decode.is_some();
         let decode_started = Instant::now();
         let mut outputs = match decode {

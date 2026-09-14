@@ -49,3 +49,11 @@ pub(super) fn assert_outputs_close(
     assert!(expected.iter().zip(actual).all(|(left, right)| (left - right).abs() < 1.0e-4));
     Ok(())
 }
+pub(super) fn context(keys: &[f32], values: &[f32]) -> Result<KvContext> {
+    Ok(KvContext {
+        keys: Array::from_f32(keys, &[1, 1, 3, 2])?,
+        values: Array::from_f32(values, &[1, 1, 3, 2])?,
+        paged: None,
+        mask: None,
+    })
+}

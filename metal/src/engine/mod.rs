@@ -1,6 +1,8 @@
 mod array;
 mod attention;
 mod attention_batch_tuning;
+#[cfg(test)]
+pub(crate) use attention_batch_tuning::BatchAttentionExecution;
 mod attention_tuning;
 mod binding;
 pub mod clamped_routed;
@@ -8,7 +10,10 @@ mod compiled;
 mod decode_graph;
 mod decode_plan_tuning;
 mod decoder;
+#[cfg(test)]
+pub(crate) use decoder::probe;
 pub mod dense;
+pub(crate) mod diagnostics;
 mod embedding;
 mod error;
 pub(crate) mod expert_fusion;
@@ -26,6 +31,8 @@ pub mod hybrid_linear_moe;
 pub mod hybrid_moe;
 mod kernels;
 mod kv;
+#[cfg(test)]
+pub(crate) use kv::history as persistent_history;
 mod layer_norm;
 mod linear;
 pub mod lowering;
@@ -54,6 +61,8 @@ pub(crate) use decode_plan_tuning::{
     DecodePlan, DecodePlanAction, DecodePlanKey, context_bucket as decode_context_bucket,
 };
 pub use decoder::DecoderCache;
+#[cfg(test)]
+pub(crate) use decoder::DecoderExecution;
 pub(crate) use decoder::DecoderModel;
 pub use dense::{DenseEmbedding, DenseLinear};
 pub use embedding::QuantizedEmbedding;
@@ -65,11 +74,12 @@ pub(crate) use fused_gate_up::FusedGateUp;
 pub(crate) use fused_key_value::FusedKeyValue;
 pub use gated_delta::{GatedDeltaInputs, GatedDeltaLayer, GatedDeltaLayerConfig, GatedDeltaState};
 pub use gated_full_attention::{GatedFullAttention, GatedFullAttentionConfig};
-pub use kv::{KvCache, KvContext, PagedKvContext};
 pub(crate) use kv::{
-    KvPageFormat, NATIVE_PAGED_ATTENTION_MIN_CONTEXT, PagedArenaPool, PagedContextMode,
-    native_paged_attention_mode, paged_attention_enabled, paged_attention_min_context,
+    DecodeCapacity, KvPageFormat, NATIVE_PAGED_ATTENTION_MIN_CONTEXT, PagedArenaPool,
+    PagedContextMode, native_paged_attention_mode, paged_attention_enabled,
+    paged_attention_min_context,
 };
+pub use kv::{KvCache, KvContext, PagedKvContext};
 pub use layer_norm::LayerNorm;
 pub use linear::QuantizedLinear;
 pub(crate) use memory::{MemoryStats, configure_recommended_wired_limit, memory_stats};

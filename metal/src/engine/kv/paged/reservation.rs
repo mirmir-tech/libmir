@@ -1,4 +1,4 @@
-use super::{Arena, Result, Storage};
+use super::{Arena, PagedStore, Result, Storage, lock};
 
 impl Storage {
     pub(super) fn reservation_needed(&self, planned: usize) -> usize {
@@ -34,6 +34,26 @@ impl Storage {
     }
 }
 
+impl PagedStore {
+    pub(in crate::engine::kv) fn release_reservation_after(&mut self, tokens: usize) -> Result<()> {
+        let target = tokens.div_ceil(self.page_size).max(1);
+        if let Some(storage) = self.storage.as_mut() {
+            let keep = target.saturating_sub(storage.page_ids.len());
+            if keep < storage.reserved_page_ids.len() {
+                // These pages have never entered the device page table or a page write.
+                let mut arena = lock(&storage.arena)?;
+                for page in storage.reserved_page_ids.drain(keep..) {
+                    let count = &mut arena.references[usize::try_from(page)?];
+                    *count = count.saturating_sub(1);
+                }
+                drop(arena);
+            }
+        }
+        self.reserve_pages = self.reserve_pages.min(target);
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
@@ -55,6 +75,7 @@ mod tests {
             references: vec![1],
         }));
         let storage = Storage {
+            input_dtype: mirtal::DType::Float32,
             arena,
             table: Array::from_u32(&[0], &[1])?,
             page_ids: vec![0],

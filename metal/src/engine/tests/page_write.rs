@@ -186,3 +186,44 @@ fn median(mut values: Vec<f64>) -> f64 {
     values.sort_unstable_by(f64::total_cmp);
     values[values.len() / 2]
 }
+
+#[test]
+fn rejects_empty_rebind_and_reuses_the_page_writer() -> Result<()> {
+    let stream = Stream::new_gpu()?;
+    let mut inputs = Inputs::new()?;
+    let mut prepared = PreparedPageWrite::default();
+    inputs.write(0, &mut prepared, &stream)?;
+    let rejected = stream.page_write(
+        [
+            inputs.keys.native(),
+            inputs.values.native(),
+            inputs.page_keys.native(),
+            inputs.page_values.native(),
+            inputs.table.native(),
+        ],
+        PageWriteOptions {
+            sequence: 0,
+            offset: 1,
+            kv_heads: KV_HEADS,
+            page_capacity: PAGE_CAPACITY,
+            page_size: PAGE_SIZE,
+            head_dim: HEAD_DIM,
+        },
+        &mut prepared,
+    );
+    assert!(matches!(
+        rejected,
+        Err(crate::engine::Error::Mirtal(mirtal::Error::InvalidDispatch(_)))
+    ));
+    inputs.write(1, &mut prepared, &stream)?;
+    for (array, expected) in [(&inputs.page_keys, 0.25f32), (&inputs.page_values, 0.5f32)] {
+        let written = array.slice(&[0, 0, 0, 0], &[KV_HEADS, 1, 2, HEAD_DIM], &stream)?;
+        assert!(
+            written
+                .to_vec_f32(&stream)?
+                .iter()
+                .all(|value| (*value - expected).abs() < f32::EPSILON)
+        );
+    }
+    Ok(())
+}

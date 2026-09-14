@@ -1,4 +1,7 @@
+mod dense_mixed;
 mod fixture;
+mod ragged;
+mod retained_plans;
 
 use mircuda::{DeviceElement, bf16};
 use models::layout::DecoderConfig;
@@ -109,12 +112,18 @@ fn concurrent_sessions_reuse_model_kv_pages_and_plans() -> Result<()> {
     table.set_token_len(2);
     first.prefill(Uuid::from_u128(1), &[1, 2], &table)?;
     backend.synchronize()?;
-    let after_first_prefill = backend.memory_pool_stats()?.used;
     second.prefill(Uuid::from_u128(2), &[1, 2], &table)?;
+    backend.synchronize()?;
+    // Each session grows its own FMHA LSE scratch on first multi-token use.
+    // Check shared-plan reuse only after both session-local workspaces are warm.
+    let after_warmup = backend.memory_pool_stats()?.used;
+    table.set_token_len(4);
+    first.prefill(Uuid::from_u128(1), &[3, 4], &table)?;
+    second.prefill(Uuid::from_u128(2), &[3, 4], &table)?;
     backend.synchronize()?;
     let plans = template.plans.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     assert_eq!(plans.len(), 1);
-    assert_eq!(backend.memory_pool_stats()?.used, after_first_prefill);
+    assert_eq!(backend.memory_pool_stats()?.used, after_warmup);
     drop((first, second));
     Ok(())
 }

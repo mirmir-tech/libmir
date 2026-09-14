@@ -23,7 +23,7 @@ fn lowers_dense_qk_normalization_from_semantics() -> Result<()> {
         "hidden_act": "silu",
         "model_type": "misleading"
     }))?;
-    let catalog = TensorCatalog {
+    let mut catalog = TensorCatalog {
         tensors: [
             "model.layers.0.input_layernorm.weight",
             "model.layers.0.self_attn.q_norm.weight",
@@ -33,6 +33,7 @@ fn lowers_dense_qk_normalization_from_semantics() -> Result<()> {
         .map(tensor)
         .collect(),
     };
+    catalog.tensors.sort_by(|left, right| left.name.cmp(&right.name));
     let spec = SemanticModelSpec::discover(&decoder, &catalog)?;
     let plan = CudaDecoderPlan::lower(&spec);
 

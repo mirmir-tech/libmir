@@ -1,6 +1,14 @@
 use super::{Family, Reference, TestResult, active_target, require, validation_error};
 
 pub fn validate_modelopt_mixed_for(reference: &Reference, family: Family) -> TestResult<()> {
+    validate_for_target(reference, family, &active_target())
+}
+
+fn validate_for_target(
+    reference: &Reference,
+    family: Family,
+    target: &libmir::BackendTarget,
+) -> TestResult<()> {
     require(reference.schema == 2, "mixed ModelOpt reference schema must be 2")?;
     require(reference.family == family, "reference semantic family differs")?;
     require(
@@ -45,7 +53,7 @@ pub fn validate_modelopt_mixed_for(reference: &Reference, family: Family) -> Tes
     reference.validate_tokens()?;
     Reference::validate_logits(&reference.first_logits)?;
     reference
-        .gate(&active_target())
+        .gate(target)
         .ok_or_else(|| validation_error("mixed ModelOpt reference has no active gate"))?
         .validate()
 }
@@ -59,7 +67,11 @@ mod tests {
         let reference = Reference::parse(include_str!(
             "../../../validation/references/modelopt-mixed-qwen36-35b-a3b.toml"
         ))?;
-        validate_modelopt_mixed_for(&reference, Family::SharedRouted)?;
+        validate_for_target(&reference, Family::SharedRouted, &libmir::BackendTarget::Cuda)?;
+        assert!(
+            validate_for_target(&reference, Family::SharedRouted, &libmir::BackendTarget::Metal)
+                .is_err()
+        );
         let mut tied = reference.generated_tokens.clone();
         tied[5] = 368;
         let cuda = reference

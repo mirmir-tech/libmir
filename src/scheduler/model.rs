@@ -116,14 +116,15 @@ impl ModelCoordinator {
         &self,
         request: PrefillRequest,
         expects_decode: bool,
+        cancellation: &crate::CancellationToken,
         progress: &mut dyn FnMut(ProgressEvent),
     ) -> Result<PrefillOutput> {
         #[cfg(not(any(feature = "cuda", feature = "metal")))]
-        let _ = expects_decode;
+        let _ = (expects_decode, cancellation);
         match &self.inner {
             #[cfg(any(feature = "cuda", feature = "metal"))]
             Coordinator::Generation(coordinator) => {
-                coordinator.submit_prefill(request, expects_decode, progress)
+                coordinator.submit_prefill(request, expects_decode, cancellation, progress)
             },
             Coordinator::Split { prefill, .. } => prefill.submit(request, progress),
         }

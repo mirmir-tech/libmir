@@ -74,3 +74,18 @@ fn rejected_composition_names_the_missing_backend_runtime() -> AnyResult<()> {
     assert!(cuda_error.to_string().contains("CUDA has no runtime"));
     Ok(())
 }
+
+#[test]
+fn admits_dense_mixed_attention_only_on_cuda() -> AnyResult<()> {
+    let (task, dense) = dense_contract()?;
+    let mut semantic = shared_routed(dense.clone());
+    for (layer, original) in semantic.decoder.layers.iter_mut().zip(&dense.decoder.layers) {
+        layer.feed_forward = original.feed_forward.clone();
+    }
+    assert_eq!(
+        cuda::admit(&task, Some(&semantic))?,
+        cuda::CudaArchitecture::Generation(cuda::CudaDecoderRuntime::DenseMixed)
+    );
+    assert!(metal::admit(&task, Some(&semantic)).is_err());
+    Ok(())
+}

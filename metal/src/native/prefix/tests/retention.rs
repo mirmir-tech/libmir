@@ -37,7 +37,7 @@ fn logical_cohort_releases_only_leased_source_groups() -> Result<()> {
     assert!(cache.evict_groups(&groups));
 
     assert_eq!(cache.groups.len(), 1);
-    assert!(cache.restore_longest("model", &[3])?.is_some());
+    assert!(cache.lease_longest("model", &[3])?.is_some());
     assert!(leased.into_iter().all(|prefix| prefix.is_some()));
     Ok(())
 }

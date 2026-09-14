@@ -6,6 +6,7 @@ use crate::engine::{
     lowering::MixerLowering,
 };
 
+mod capacity;
 mod hybrid;
 mod lifecycle;
 #[cfg(test)]

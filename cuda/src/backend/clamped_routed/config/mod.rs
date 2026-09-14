@@ -25,6 +25,7 @@ pub(super) struct ClampedRoutedConfig {
     pub initial_context: f32,
     pub beta_fast: f32,
     pub beta_slow: f32,
+    pub rope_truncate: bool,
     pub swiglu_limit: f32,
 }
 
@@ -35,14 +36,15 @@ impl ClampedRoutedConfig {
                 Error::UnsupportedDecoderLayer("empty clamped-routed decoder".into())
             })?;
         let (attention, intermediate, experts, top_k, clamp) = layer_contract(first)?;
-        let (theta, factor, initial_context, beta_fast, beta_slow) = rotary(attention)?;
+        let (theta, factor, initial_context, beta_fast, beta_slow, rope_truncate) =
+            rotary(attention)?;
         for layer in &spec.decoder.layers {
             validate_uniform(layer_contract(layer)?, attention, intermediate, experts, top_k)?;
             let position = rotary(match &layer.mixer {
                 MixerSpec::SoftmaxAttention(attention) => attention,
                 MixerSpec::LinearAttention(_) => unreachable!("validated clamped-routed mixer"),
             })?;
-            if position != (theta, factor, initial_context, beta_fast, beta_slow) {
+            if position != (theta, factor, initial_context, beta_fast, beta_slow, rope_truncate) {
                 return Err(Error::UnsupportedDecoderLayer(format!(
                     "clamped-routed layer {} has non-uniform rotary geometry",
                     layer.index
@@ -65,6 +67,7 @@ impl ClampedRoutedConfig {
             initial_context,
             beta_fast,
             beta_slow,
+            rope_truncate,
             swiglu_limit: clamp.to_string().parse()?,
         };
         config.validate_semantics(spec)?;
@@ -168,7 +171,7 @@ fn validate_uniform(
     ))
 }
 
-fn rotary(attention: &AttentionSpec) -> Result<(f32, f32, f32, f32, f32)> {
+fn rotary(attention: &AttentionSpec) -> Result<(f32, f32, f32, f32, f32, bool)> {
     let PositionEncodingSpec::Rotary(rotary) = &attention.position else {
         return Err(Error::UnsupportedDecoderLayer(
             "clamped-routed CUDA kernels require rotary positions".into(),
@@ -179,6 +182,7 @@ fn rotary(attention: &AttentionSpec) -> Result<(f32, f32, f32, f32, f32)> {
         beta_fast,
         beta_slow,
         original_context_len,
+        truncate,
         ..
     }) = rotary.scaling
     else {
@@ -197,6 +201,7 @@ fn rotary(attention: &AttentionSpec) -> Result<(f32, f32, f32, f32, f32)> {
         original_context_len.to_string().parse()?,
         beta_fast.to_string().parse()?,
         beta_slow.to_string().parse()?,
+        truncate,
     ))
 }
 

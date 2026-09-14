@@ -28,7 +28,7 @@ impl Worker {
         serial_prefill_waits(
             self.prefill_profile.interleave_prefill_decode,
             !self.active_decode.is_empty(),
-        )
+        ) && !self.short_cached_refill_ready()
     }
 
     pub(super) fn collect_prefill_handoff(&mut self) {
@@ -42,7 +42,10 @@ impl Worker {
         while self.decode.is_empty() && !self.prefill_handoff.sessions.is_empty() && !self.stopping
         {
             match self.commands.recv() {
-                Ok(command) => self.admit(command),
+                Ok(command) => {
+                    self.admit(command);
+                    self.cancel_prefills();
+                },
                 Err(_) => self.stopping = true,
             }
         }

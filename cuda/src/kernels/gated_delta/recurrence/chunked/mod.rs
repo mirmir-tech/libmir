@@ -10,7 +10,7 @@ mod scratch;
 mod symbols;
 
 pub use scratch::GatedDeltaChunkedScratch;
-use symbols::{Cumsum, H, Kkt, LogParameters, O, Solve, Uw};
+use symbols::{Cumsum, H, InitializeInverse, Kkt, LogParameters, O, Solve, Uw};
 
 pub(super) const CHUNK: usize = 64;
 const CAPABILITY: (i32, i32) = (12, 1);
@@ -18,6 +18,7 @@ const CAPABILITY: (i32, i32) = (12, 1);
 #[derive(Clone, Debug)]
 pub struct GatedDeltaChunked {
     parameters: TypedKernel<LogParameters>,
+    initialize_inverse: TypedKernel<InitializeInverse>,
     cumsum: TypedKernel<Cumsum>,
     kkt: TypedKernel<Kkt>,
     solve: TypedKernel<Solve>,
@@ -34,7 +35,7 @@ impl GatedDeltaChunked {
             && compute_capability.1 == CAPABILITY.1
             && spec.tokens > 1
             && spec.key_heads == 16
-            && spec.value_heads == 32
+            && (spec.value_heads == 32 || (spec.value_heads == 48 && spec.tokens >= CHUNK))
             && spec.key_dim == 128
             && spec.value_dim == 128
     }
@@ -45,42 +46,55 @@ impl GatedDeltaChunked {
             cuda_kernel_file!("../../../../../kernels/gated_delta_bf16.cu"),
             &CompileOptions::default(),
         )?;
-        let cumsum = compiler.load_ptx(cuda_ptx_file!(
-            CAPABILITY,
-            "../../../../../kernels/gated_delta/chunked/sm121/cumsum.ptx"
-        ))?;
-        let kkt = compiler.load_ptx(cuda_ptx_file!(
-            CAPABILITY,
-            "../../../../../kernels/gated_delta/chunked/sm121/kkt.ptx"
-        ))?;
-        let solve = compiler.load_ptx(cuda_ptx_file!(
-            CAPABILITY,
-            "../../../../../kernels/gated_delta/chunked/sm121/solve64.ptx"
-        ))?;
-        let uw = compiler.load_ptx(cuda_ptx_file!(
-            CAPABILITY,
-            "../../../../../kernels/gated_delta/chunked/sm121/uw.ptx"
-        ))?;
-        let h = compiler
-            .load_ptx(cuda_ptx_file!(
-                CAPABILITY,
-                "../../../../../kernels/gated_delta/chunked/sm121/h.ptx"
-            ))?
-            .kernel()?;
+        macro_rules! load {
+            ($name:literal, $expanded:literal) => {
+                compiler.load_ptx(if spec.value_heads == 48 {
+                    cuda_ptx_file!(CAPABILITY, $expanded)
+                } else {
+                    cuda_ptx_file!(CAPABILITY, $name)
+                })?
+            };
+        }
+        let cumsum = load!(
+            "../../../../../kernels/gated_delta/chunked/sm121/cumsum.ptx",
+            "../../../../../kernels/gated_delta/chunked/sm121/heads48/cumsum.ptx"
+        );
+        let kkt = load!(
+            "../../../../../kernels/gated_delta/chunked/sm121/kkt.ptx",
+            "../../../../../kernels/gated_delta/chunked/sm121/heads48/kkt.ptx"
+        );
+        let solve = load!(
+            "../../../../../kernels/gated_delta/chunked/sm121/solve64.ptx",
+            "../../../../../kernels/gated_delta/chunked/sm121/heads48/solve64.ptx"
+        );
+        let uw = load!(
+            "../../../../../kernels/gated_delta/chunked/sm121/uw.ptx",
+            "../../../../../kernels/gated_delta/chunked/sm121/heads48/uw.ptx"
+        );
+        let h = load!(
+            "../../../../../kernels/gated_delta/chunked/sm121/h.ptx",
+            "../../../../../kernels/gated_delta/chunked/sm121/heads48/h.ptx"
+        )
+        .kernel()?;
         h.set_max_dynamic_shared_memory_bytes(90_632)?;
         Ok(Self {
             parameters: native.kernel()?,
+            initialize_inverse: compiler
+                .compile(
+                    cuda_kernel_file!("../../../../../kernels/gated_delta/chunked/initialize.cu"),
+                    &CompileOptions::default(),
+                )?
+                .kernel()?,
             cumsum: cumsum.kernel()?,
             kkt: kkt.kernel()?,
             solve: solve.kernel()?,
             uw: uw.kernel()?,
             h,
-            o: compiler
-                .load_ptx(cuda_ptx_file!(
-                    CAPABILITY,
-                    "../../../../../kernels/gated_delta/chunked/sm121/o.ptx"
-                ))?
-                .kernel()?,
+            o: load!(
+                "../../../../../kernels/gated_delta/chunked/sm121/o.ptx",
+                "../../../../../kernels/gated_delta/chunked/sm121/heads48/o.ptx"
+            )
+            .kernel()?,
             spec,
         })
     }

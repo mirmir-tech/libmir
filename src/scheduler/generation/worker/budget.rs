@@ -82,12 +82,22 @@ impl Worker {
                 })
                 .count()
         });
-        step_budget(
+        let budget = step_budget(
             self.config.max_batch_tokens,
             decode_rows,
             cached_rows,
             self.prefill_profile.cached_prefix_completion_slack_tokens,
-        )
+        );
+        if self.config.cached_prefill_policy == crate::CachedPrefillPolicy::InterleaveOneBlock
+            && !self.prefill_profile.interleave_prefill_decode
+            && !self.active_decode.is_empty()
+        {
+            // A logical hit can lose its backend snapshot before preparation.
+            // Bound actual replay as well as the admission estimate.
+            budget.min(self.prefill_profile.block_tokens.max(1))
+        } else {
+            budget
+        }
     }
 }
 

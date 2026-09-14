@@ -15,6 +15,7 @@ const DEFAULT_BATCH: usize = 5;
 #[test]
 #[ignore = "loads a real model; set MIRMIR_BENCH_MODEL or MODEL"]
 fn measures_shared_prefix_decode_batch() -> Result<()> {
+    super::init_profile_tracing();
     let config = BenchmarkConfig::from_env()?;
     let context = value("MIRMIR_BENCH_CONTEXT", DEFAULT_CONTEXT)?;
     let batch = value("MIRMIR_BENCH_BATCH", DEFAULT_BATCH)?;
@@ -44,12 +45,14 @@ fn measures_shared_prefix_decode_batch() -> Result<()> {
             })
         })
         .collect::<Result<Vec<_>>>()?;
+    let mut digest = blake3::Hasher::new();
     let started = Instant::now();
     for _ in 0..config.decode_tokens {
         let outputs = model.decode_batch(&inputs)?;
         let mut expected = None;
         for (input, output) in inputs.iter_mut().zip(outputs) {
             input.token = greedy_token(&output)?;
+            digest.update(&input.token.to_le_bytes());
             if expected.replace(input.token).is_some_and(|token| token != input.token) {
                 return Err(Error::Benchmark(
                     "identical shared-prefix rows produced different greedy tokens".into(),
@@ -58,6 +61,8 @@ fn measures_shared_prefix_decode_batch() -> Result<()> {
         }
     }
     let elapsed = started.elapsed();
+    let memory = crate::engine::memory_stats()?;
+    writeln!(std::io::stderr().lock(), "shared_prefix_batch.digest: {}", digest.finalize())?;
     writeln!(
         std::io::stderr().lock(),
         "shared_prefix_batch.benchmark: context={context}, batch={batch}, decode_tokens={}, aggregate={:.2} tok/s ({:.2}ms)",
@@ -65,6 +70,14 @@ fn measures_shared_prefix_decode_batch() -> Result<()> {
         f64::from(u32::try_from(batch)?) * f64::from(u32::try_from(config.decode_tokens)?)
             / elapsed.as_secs_f64(),
         elapsed.as_secs_f64() * 1_000.0,
+    )?;
+    writeln!(
+        std::io::stderr().lock(),
+        "shared_prefix_batch.memory: active={}, cached={}, peak={}, recommended={:?}",
+        memory.active,
+        memory.cached,
+        memory.peak,
+        memory.recommended,
     )?;
     Ok(())
 }

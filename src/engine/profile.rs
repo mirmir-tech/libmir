@@ -2,6 +2,29 @@ use super::{Engine, EngineInner};
 use crate::Result;
 
 impl Engine {
+    #[cfg_attr(
+        not(feature = "cuda"),
+        allow(clippy::unnecessary_wraps, reason = "CUDA performs a fallible model lookup")
+    )]
+    pub(crate) fn prefill_profile_shapes(
+        &self,
+        model: &runtime::backend::ModelHandle,
+        max_batch_tokens: usize,
+    ) -> Result<Vec<usize>> {
+        #[cfg(not(feature = "cuda"))]
+        let _ = (model, max_batch_tokens);
+        match &self.inner {
+            #[cfg(feature = "cuda")]
+            EngineInner::Cuda(cuda) => {
+                Ok(cuda.prefill_profile_shapes(&model.id, max_batch_tokens)?)
+            },
+            #[cfg(feature = "metal")]
+            EngineInner::Metal(_) => Ok(Vec::new()),
+            #[cfg(not(any(feature = "cuda", feature = "metal")))]
+            EngineInner::Unavailable => Ok(Vec::new()),
+        }
+    }
+
     /// Enables or disables backend decode profiling where supported.
     pub fn set_profile_decode(&self, enabled: bool) -> Result<()> {
         #[cfg(not(any(feature = "cuda", feature = "metal")))]

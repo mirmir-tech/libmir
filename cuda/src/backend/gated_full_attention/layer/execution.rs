@@ -1,12 +1,12 @@
 use mircuda::{DeviceBuffer, bf16};
 use runtime::kv::{BlockTable, KvWritePlan};
 
-use super::{AffineGatedFullAttentionMoeLayerConfig, scratch::FullAttentionLayerScratch};
+use super::scratch::FullAttentionLayerScratch;
 use crate::{
     CudaAffineGatedFullAttention, CudaAffineGatedFullAttentionExecution,
-    CudaAffineGatedFullAttentionState, CudaAffineSharedExpertMoe,
-    CudaAffineSharedExpertMoeExecution, CudaBackend, CudaTensor, Error, ExecutionPhase,
+    CudaAffineGatedFullAttentionState, CudaBackend, CudaTensor, Error, ExecutionPhase,
     PagedPrefillBatch, Result,
+    backend::feed_forward::{FeedForward, FeedForwardExecution, LayerNormConfig},
     kernels::{ElementwiseBf16, ShiftedRmsNorm},
 };
 
@@ -14,7 +14,7 @@ use crate::{
 pub struct CudaAffineGatedFullAttentionMoeExecution {
     pub(super) backend: CudaBackend,
     pub(super) attention: CudaAffineGatedFullAttentionExecution,
-    pub(super) moe: CudaAffineSharedExpertMoeExecution,
+    pub(super) moe: FeedForwardExecution,
     pub(super) input_norm: ShiftedRmsNorm,
     pub(super) post_attention_norm: ShiftedRmsNorm,
     pub(super) residual: ElementwiseBf16,
@@ -27,15 +27,15 @@ impl CudaAffineGatedFullAttentionMoeExecution {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         backend: &CudaBackend,
-        config: AffineGatedFullAttentionMoeLayerConfig,
+        config: LayerNormConfig,
         attention: &CudaAffineGatedFullAttention,
-        moe: &CudaAffineSharedExpertMoe,
+        moe: &FeedForward,
         input_norm_weight: &CudaTensor,
         post_attention_norm_weight: &CudaTensor,
         tokens: usize,
         phase: ExecutionPhase,
     ) -> Result<Self> {
-        let hidden = config.attention.hidden_size;
+        let hidden = config.hidden_size;
         let norm = || {
             ShiftedRmsNorm::compile(
                 &backend.inner.compiler,

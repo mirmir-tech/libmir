@@ -48,7 +48,7 @@ pub(super) fn update(
     }
     let output_refs = outputs.iter().collect::<Vec<_>>();
     let output = graph.stack(&output_refs, 1)?;
-    state.value = Some(Array::from_native(current)?);
+    state.value = Some(Array::from_native(current)?.into());
     state.offset += sequence;
     Array::from_native(output)
 }

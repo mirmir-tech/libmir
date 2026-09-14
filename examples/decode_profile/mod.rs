@@ -213,6 +213,7 @@ impl Config {
     }
 
     #[cfg(not(feature = "cuda"))]
+    #[allow(clippy::unused_self)]
     pub const fn output_label(&self) -> &'static str {
         ""
     }

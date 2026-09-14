@@ -21,6 +21,8 @@ pub enum BatchAttentionExecution {
     PagedBatched4,
     PagedBatched8,
     PagedBatched12,
+    #[cfg(test)]
+    PagedBatchedTwoPass,
 }
 
 pub(super) fn forward(
@@ -159,7 +161,7 @@ fn candidates(
     candidates
 }
 
-fn execute(
+pub(in crate::engine) fn execute(
     execution: BatchAttentionExecution,
     queries: &[&Array],
     contexts: &[&KvContext],
@@ -200,6 +202,10 @@ fn execute_measured(
         },
         BatchAttentionExecution::PagedBatched12 => {
             paged::batched(queries, contexts, scale, stream, 12)
+        },
+        #[cfg(test)]
+        BatchAttentionExecution::PagedBatchedTwoPass => {
+            paged::two_pass(queries, contexts, scale, stream)
         },
     }
 }

@@ -4,7 +4,7 @@ use runtime::{backend::SamplingLogits, tuning::select_fastest_candidate};
 
 use super::{
     error::{Error, Result},
-    model::NativeOutput,
+    model::{NativeOutput, recovery::ExecutionRecovery},
     session::SessionState,
     step,
 };
@@ -19,12 +19,13 @@ pub(super) fn decode_pending(
     key: DecodePlanKey,
     token: u32,
     sampling: SamplingLogits,
+    recovery: &mut ExecutionRecovery,
 ) -> Result<NativeOutput> {
     match stream.decode_plan_action(&key) {
         DecodePlanAction::Execute(plan) => {
             execute(model, stream, state, token, sampling, plan, false)
         },
-        DecodePlanAction::Measure => tune(model, stream, state, key, token, sampling),
+        DecodePlanAction::Measure => tune(model, stream, state, key, token, sampling, recovery),
     }
 }
 
@@ -35,39 +36,39 @@ fn tune(
     key: DecodePlanKey,
     token: u32,
     sampling: SamplingLogits,
+    recovery: &mut ExecutionRecovery,
 ) -> Result<NativeOutput> {
     let started = Instant::now();
-    let result = measure_candidates(model, stream, state, token, sampling).and_then(|timings| {
-        let fastest = usize::from(timings[1] < timings[0]);
-        let selected = select_fastest_candidate(
-            fastest,
-            0,
-            &timings,
-            stream.config().tuning.minimum_improvement_bps,
-        );
-        let plan = CANDIDATES[selected];
-        stream.record_decode_plan(key.clone(), plan, started.elapsed());
-        tracing::info!(
-            target: "libmir::metal::tuning",
-            ?plan,
-            model = %key.model,
-            weight_bytes = key.weight_bytes,
-            context_bucket = key.context_bucket,
-            separate_us = timings[0].as_secs_f64() * 1_000_000.0,
-            fused_us = timings[1].as_secs_f64() * 1_000_000.0,
-            "selected complete Metal decode execution plan"
-        );
-        execute(model, stream, state, token, sampling, plan, false)
-    });
-    result.or_else(|error| {
-        stream.record_decode_plan(key, DecodePlan::SeparateGateUp, started.elapsed());
-        tracing::warn!(
-            target: "libmir::metal::tuning",
-            %error,
-            "complete Metal decode plan tuning failed; retaining separate gate/up"
-        );
-        execute(model, stream, state, token, sampling, DecodePlan::SeparateGateUp, false)
-    })
+    let plan = match measure_candidates(model, stream, state, token, sampling, recovery) {
+        Ok(timings) => {
+            let fastest = usize::from(timings[1] < timings[0]);
+            let selected = select_fastest_candidate(
+                fastest,
+                0,
+                &timings,
+                stream.config().tuning.minimum_improvement_bps,
+            );
+            let plan = CANDIDATES[selected];
+            tracing::info!(
+                target: "libmir::metal::tuning", ?plan, model = %key.model,
+                weight_bytes = key.weight_bytes, context_bucket = key.context_bucket,
+                separate_us = timings[0].as_secs_f64() * 1_000_000.0,
+                fused_us = timings[1].as_secs_f64() * 1_000_000.0,
+                "selected complete Metal decode execution plan"
+            );
+            plan
+        },
+        Err(error) => {
+            if matches!(recovery, ExecutionRecovery::NeedsDrain(_)) {
+                return Err(error);
+            }
+            tracing::warn!(target: "libmir::metal::tuning", %error,
+                "complete Metal decode plan tuning failed; retaining separate gate/up");
+            DecodePlan::SeparateGateUp
+        },
+    };
+    stream.record_decode_plan(key, plan, started.elapsed());
+    execute(model, stream, state, token, sampling, plan, false)
 }
 
 fn measure_candidates(
@@ -76,21 +77,39 @@ fn measure_candidates(
     state: &SessionState,
     token: u32,
     sampling: SamplingLogits,
+    recovery: &mut ExecutionRecovery,
 ) -> Result<[Duration; 2]> {
     let config = stream.config().tuning.clone();
-    let _ = run_snapshot(model, stream, state, token, sampling, DecodePlan::SeparateGateUp, false)?;
+    let _ = run_snapshot(
+        model,
+        stream,
+        state,
+        token,
+        sampling,
+        DecodePlan::SeparateGateUp,
+        false,
+        recovery,
+    )?;
     for _ in 0..config.warmup_iterations {
         for plan in CANDIDATES {
-            let _ = run_snapshot(model, stream, state, token, sampling, plan, true)?;
+            let _ = run_snapshot(model, stream, state, token, sampling, plan, true, recovery)?;
         }
     }
     let mut samples = [Vec::new(), Vec::new()];
     let mut reference = None;
-    for iteration in 0..config.measurement_iterations.max(1) {
+    for iteration in 0..config.measurement_iterations.max(5) {
         for offset in 0..CANDIDATES.len() {
             let index = (usize::try_from(iteration)? + offset) % CANDIDATES.len();
-            let (elapsed, output) =
-                run_snapshot(model, stream, state, token, sampling, CANDIDATES[index], true)?;
+            let (elapsed, output) = run_snapshot(
+                model,
+                stream,
+                state,
+                token,
+                sampling,
+                CANDIDATES[index],
+                true,
+                recovery,
+            )?;
             if reference.replace(output).is_some_and(|expected| expected != output) {
                 return Err(Error::InvalidDecodeBatch(
                     "complete decode plan candidates produced different tokens".into(),
@@ -102,6 +121,7 @@ fn measure_candidates(
     Ok(samples.map(median))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_snapshot(
     model: &DecoderModel,
     stream: &Stream,
@@ -110,12 +130,23 @@ fn run_snapshot(
     sampling: SamplingLogits,
     plan: DecodePlan,
     suppress_operator_tuning: bool,
+    recovery: &mut ExecutionRecovery,
 ) -> Result<(Duration, u32)> {
     let mut snapshot = state.snapshot()?;
     let started = Instant::now();
     let output =
-        execute(model, stream, &mut snapshot, token, sampling, plan, suppress_operator_tuning)?;
-    stream.synchronize()?;
+        execute(model, stream, &mut snapshot, token, sampling, plan, suppress_operator_tuning)
+            .and_then(|output| {
+                stream.synchronize()?;
+                Ok(output)
+            });
+    let output = match output {
+        Ok(output) => output,
+        Err(error) => {
+            recovery.retain(snapshot);
+            return Err(error);
+        },
+    };
     let elapsed = started.elapsed();
     let NativeOutput::Greedy(token) = output else {
         return Err(Error::InvalidDecodeBatch(

@@ -10,22 +10,22 @@ struct PagedAttentionParameters {
   uint scale_bits;
 };
 
-template <typename T, uint HEAD_DIM>
+template <typename Element, uint Width>
 inline void paged_attention_partial(
-    const device T* queries,
-    const device T* key_pages,
-    const device T* value_pages,
+    const device Element* queries,
+    const device Element* key_pages,
+    const device Element* value_pages,
     const device uint* page_table,
-    const device uint* page_dependency,
-    device T* partials,
+    uint context_tokens,
+    device Element* partials,
     device float* sums,
     device float* maximums,
-    const device T* barrier,
-    constant PagedAttentionParameters& parameters,
+    const device Element* barrier,
+    PagedAttentionParameters parameters,
     uint lane,
     uint3 local,
     uint3 group) {
-  constexpr uint VALUES_PER_THREAD = HEAD_DIM / 32;
+  constexpr uint VALUES_PER_THREAD = Width / 32;
   uint kv_head = group.y;
   uint block = group.z;
   uint group_factor = parameters.query_heads / parameters.kv_heads;
@@ -33,11 +33,10 @@ inline void paged_attention_partial(
   thread float query[VALUES_PER_THREAD];
   thread float accumulator[VALUES_PER_THREAD];
   float scale = as_type<float>(parameters.scale_bits);
-  uint context_tokens = page_dependency[0];
   (void)barrier;
   for (uint index = 0; index < VALUES_PER_THREAD; ++index) {
     uint dimension = lane * VALUES_PER_THREAD + index;
-    query[index] = scale * float(queries[query_head * HEAD_DIM + dimension]);
+    query[index] = scale * float(queries[query_head * Width + dimension]);
     accumulator[index] = 0.0f;
   }
   float maximum = -INFINITY;
@@ -46,7 +45,7 @@ inline void paged_attention_partial(
     uint page = page_table[token / parameters.page_size];
     uint in_page = token % parameters.page_size;
     uint base = ((kv_head * parameters.page_capacity + page) * parameters.page_size + in_page) *
-        HEAD_DIM;
+        Width;
     float score = 0.0f;
     for (uint index = 0; index < VALUES_PER_THREAD; ++index) {
       score += query[index] * float(key_pages[base + lane * VALUES_PER_THREAD + index]);
@@ -68,9 +67,9 @@ inline void paged_attention_partial(
     sums[statistic] = normalizer;
     maximums[statistic] = maximum;
   }
-  uint output = statistic * HEAD_DIM + lane * VALUES_PER_THREAD;
+  uint output = statistic * Width + lane * VALUES_PER_THREAD;
   for (uint index = 0; index < VALUES_PER_THREAD; ++index) {
-    partials[output + index] = T(accumulator[index]);
+    partials[output + index] = Element(accumulator[index]);
   }
 }
 
@@ -90,7 +89,7 @@ kernel void NAME( \
     uint3 local [[thread_position_in_threadgroup]], \
     uint3 group [[threadgroup_position_in_grid]]) { \
   paged_attention_partial<TYPE, HEAD_DIM>( \
-      queries, key_pages, value_pages, page_table, page_dependency, partials, sums, maximums, \
+      queries, key_pages, value_pages, page_table, page_dependency[0], partials, sums, maximums, \
       barrier, parameters, lane, local, group); \
 }
 

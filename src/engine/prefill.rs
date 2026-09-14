@@ -23,49 +23,19 @@ impl Engine {
         sampling: SamplingLogits,
         progress: &mut dyn FnMut(ProgressEvent),
     ) -> RuntimeResult<PrefillOutput> {
-        #[cfg(not(feature = "cuda"))]
-        let _ = cached_tokens;
-        #[cfg(not(any(feature = "cuda", feature = "metal")))]
-        let _ = (
-            &model,
-            session_id,
-            &prompt_tokens,
-            &cache_checkpoints,
-            &block_table,
-            cached_tokens,
-            sampling,
-            &progress,
-        );
-        match &self.inner {
-            #[cfg(feature = "cuda")]
-            EngineInner::Cuda(cuda) => Ok(cuda.prefill_with_progress(
-                &PrefillRequest {
-                    model: model.clone(),
-                    session_id,
-                    prompt_tokens: prompt_tokens.to_vec(),
-                    cache_checkpoints: cache_checkpoints.to_vec(),
-                    block_table: block_table.clone(),
-                    cached_tokens,
-                    sampling_logits: sampling,
-                },
-                progress,
-            )?),
-            #[cfg(feature = "metal")]
-            EngineInner::Metal(metal) => metal.prefill_request_with_progress(
-                &PrefillRequest {
-                    model: model.clone(),
-                    session_id,
-                    prompt_tokens: prompt_tokens.to_vec(),
-                    cache_checkpoints: cache_checkpoints.to_vec(),
-                    block_table: block_table.clone(),
-                    cached_tokens,
-                    sampling_logits: sampling,
-                },
-                progress,
-            ),
-            #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => super::unavailable(),
-        }
+        self.prefill_request_with_progress(
+            &PrefillRequest {
+                model: model.clone(),
+                session_id,
+                prompt_tokens: prompt_tokens.to_vec(),
+                cache_checkpoints: cache_checkpoints.to_vec(),
+                block_table: block_table.clone(),
+                cached_tokens,
+                generation_tokens: None,
+                sampling_logits: sampling,
+            },
+            progress,
+        )
     }
 
     pub(crate) fn prefill_request_with_progress(
@@ -73,16 +43,16 @@ impl Engine {
         request: &PrefillRequest,
         progress: &mut dyn FnMut(ProgressEvent),
     ) -> RuntimeResult<PrefillOutput> {
-        self.prefill_tokens_with_progress(
-            &request.model,
-            request.session_id,
-            &request.prompt_tokens,
-            &request.cache_checkpoints,
-            &request.block_table,
-            request.cached_tokens,
-            request.sampling_logits,
-            progress,
-        )
+        #[cfg(not(any(feature = "cuda", feature = "metal")))]
+        let _ = (&request, &progress);
+        match &self.inner {
+            #[cfg(feature = "cuda")]
+            EngineInner::Cuda(cuda) => Ok(cuda.prefill_with_progress(request, progress)?),
+            #[cfg(feature = "metal")]
+            EngineInner::Metal(metal) => metal.prefill_request_with_progress(request, progress),
+            #[cfg(not(any(feature = "cuda", feature = "metal")))]
+            EngineInner::Unavailable => super::unavailable(),
+        }
     }
 
     #[allow(clippy::needless_pass_by_ref_mut)]

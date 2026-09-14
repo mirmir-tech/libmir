@@ -80,6 +80,7 @@ fn main() -> libmir::Result<()> {
             ..GenerationOverrides::default()
         },
         seed: None,
+        ..GenerationRequest::default()
     };
 
     model.generate(
@@ -90,6 +91,14 @@ fn main() -> libmir::Result<()> {
     Ok(())
 }
 ```
+
+Set `GenerationRequest::reasoning` to `ReasoningMode::Enabled` or
+`ReasoningMode::Disabled` to select a text request’s thinking template switch.
+The default preserves existing model rendering. Explicit modes require a
+Jinja `enable_thinking` input or a supported built-in Qwen/Gemma template;
+unsupported templates and image requests reject explicit modes.
+`GenerationOverrides::max_tokens` counts all generated tokens, including
+reasoning and final content. There is no separate reasoning-token budget.
 
 Run it with a local Hugging Face-format model directory:
 
@@ -128,3 +137,19 @@ methodology.
 - [Source and issues](https://github.com/mirmir-tech/libmir)
 
 Licensed under Apache-2.0.
+
+### Cached prefill admission
+
+`RuntimeConfig::scheduler.cached_prefill_policy` defaults to
+`CachedPrefillPolicy::BackendDefault`. The opt-in `InterleaveOneBlock` admits one
+cached continuation at the queue head while a backend normally defers prefill
+until resident decode finishes. It requires a free request slot, estimated work
+within one KV block and remaining token/memory capacity. Actual prefill work is
+also capped at one block per step if a backend snapshot has disappeared.
+Long queue heads and existing cohorts retain their normal ordering.
+
+This is a latency tradeoff, not a throughput optimization: the Qwen diagnostic
+reduced refill first-token latency from about 1 s to 47 ms while increasing
+survivor decode time by about 22%. The backend default remains unchanged.
+CUDA's normal interleaving is unaffected; GPT-OSS has not yet been measured
+with this opt-in policy.

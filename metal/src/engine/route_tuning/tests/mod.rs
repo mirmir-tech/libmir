@@ -11,6 +11,7 @@ use crate::{
     },
 };
 
+mod aligned;
 mod benchmark;
 mod patterns;
 mod policy;

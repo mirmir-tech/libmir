@@ -1,4 +1,8 @@
+mod capacity;
 mod contiguous;
+#[cfg(test)]
+pub mod history;
+pub use paged::DecodeCapacity;
 mod format;
 #[cfg(test)]
 mod inspection;
@@ -6,6 +10,7 @@ mod lifecycle;
 mod paged;
 mod policy;
 mod sliding;
+mod validation;
 
 use std::sync::Arc;
 
@@ -71,6 +76,8 @@ impl PagedKvContext {
 
 #[derive(Debug)]
 pub struct KvCache {
+    #[cfg(test)]
+    history: Option<history::Row>,
     keys: Option<Array>,
     values: Option<Array>,
     pages: Option<paged::PagedStore>,
@@ -137,6 +144,8 @@ impl KvCache {
         }
         let reserve_tokens = usize::from(page_storage.is_some()) * step;
         Ok(Self {
+            #[cfg(test)]
+            history: None,
             keys: None,
             values: None,
             pages: page_storage.map(|(size, format, max_pages, pool, layer)| {
@@ -155,18 +164,6 @@ impl KvCache {
         Ok(self.offset)
     }
 
-    pub fn reset(&mut self) -> Result<()> {
-        self.keys = None;
-        self.values = None;
-        if let Some(pages) = self.pages.as_mut() {
-            pages.reset()?;
-        }
-        self.offset = 0;
-        self.capacity = 0;
-        self.write_index = 0;
-        Ok(())
-    }
-
     pub fn reserve(&mut self, tokens: usize) -> Result<()> {
         self.reserve_tokens = self.reserve_tokens.max(tokens);
         if let Some(pages) = self.pages.as_mut() {
@@ -182,6 +179,8 @@ impl KvCache {
             ));
         }
         Ok(Self {
+            #[cfg(test)]
+            history: None,
             keys: clone_array(self.keys.as_ref())?,
             values: clone_array(self.values.as_ref())?,
             pages: self.pages.as_ref().map(|pages| pages.snapshot_at(offset)).transpose()?,

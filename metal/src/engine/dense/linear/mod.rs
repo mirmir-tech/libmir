@@ -1,5 +1,8 @@
 use crate::engine::{Array, Error, ModelTensors, Result, Stream};
 
+#[cfg(test)]
+mod joined;
+
 #[derive(Debug)]
 pub struct DenseLinear {
     transposed_weight: Array,

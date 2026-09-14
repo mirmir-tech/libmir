@@ -9,11 +9,13 @@ mod layers;
 mod shared_routed;
 
 pub use cache::DecoderCache;
-pub(super) use layers::prefill_evaluation_step;
+#[cfg(test)]
+pub use layers::probe;
 pub use layers::{
     LayerContext, LayerLoopOptions, LoweredLayer, LoweredPackedLayer, MixerKind, forward_layers,
     forward_packed_layers,
 };
+pub(super) use layers::{prefill_evaluation_step, profile as packed_profile};
 
 pub trait DecoderExecution: Debug + Send {
     fn prefers_packed_decode(&self, _stream: &Stream) -> bool {

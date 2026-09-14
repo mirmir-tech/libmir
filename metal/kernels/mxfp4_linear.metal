@@ -17,5 +17,6 @@ for (uint group = 0; group < groups; ++group) {
 }
 total = simd_sum(total);
 if (lane == 0) {
-  output[token * OUTPUT + row] = T(total + float(bias[row]));
+  T projected = T(total);
+  output[token * OUTPUT + row] = T(float(projected) + float(bias[row]));
 }

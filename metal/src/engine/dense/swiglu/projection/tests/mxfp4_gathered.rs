@@ -80,6 +80,17 @@ fn gather(format: BlockQuantization, dtype: &str, shape: &[usize], label: &str) 
     let input = Array::from_f32(&[1.0; 64], &[2, 1, 32])?.astype(Dtype::Bfloat16, &stream)?;
     let indices = Array::from_u32(&[1, 0], &[2])?;
 
+    let reference = stream.kernels().mxfp4_gathered_linear(
+        [&input, &tensors.get("weight")?, &tensors.get("scales")?, &tensors.get("bias")?, &indices],
+        32,
+        2,
+        2,
+        &stream,
+    )?;
+    assert_eq!(
+        linear.gather(&input, &indices, false, &stream)?.to_vec_f32(&stream)?,
+        reference.to_vec_f32(&stream)?
+    );
     assert!(linear.forward(&input, &stream).is_err());
     let output = linear.gather(&input, &indices, false, &stream)?;
     assert_eq!(output.shape()?, [2, 1, 2]);

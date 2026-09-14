@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use models::{
     layout::DecoderConfig,
-    semantic::{FeedForwardSpec, MixerSpec, SemanticModelSpec},
+    semantic::SemanticModelSpec,
     weights::{TensorCatalog, WeightBindingPlan},
 };
 use runtime::kv::{CacheConfig, KvStorageSpec};
@@ -70,23 +70,7 @@ impl CudaSharedRoutedModelTemplate {
         cache: CacheConfig,
         max_sequence_blocks: usize,
     ) -> Result<Self> {
-        let compatible = semantic.decoder.layers.iter().all(|layer| {
-            matches!(layer.feed_forward, FeedForwardSpec::Routed { shared: Some(_), .. })
-        }) && semantic
-            .decoder
-            .layers
-            .iter()
-            .any(|layer| matches!(layer.mixer, MixerSpec::LinearAttention(_)))
-            && semantic
-                .decoder
-                .layers
-                .iter()
-                .any(|layer| matches!(layer.mixer, MixerSpec::SoftmaxAttention(_)));
-        if !compatible || max_sequence_blocks == 0 {
-            return Err(Error::UnsupportedDecoderLayer(
-                "parsed decoder is not a shared-routed mixed-mixer stack".into(),
-            ));
-        }
+        load::validate_composition(semantic, max_sequence_blocks)?;
         let boundary = bindings.decoder_boundary()?;
         let embedding = CheckpointProjectionWeight::load_binding_prepared(
             backend,
@@ -110,7 +94,7 @@ impl CudaSharedRoutedModelTemplate {
                     tensors,
                     catalog,
                     layer,
-                    bindings.hybrid_decoder_layer(layer)?,
+                    bindings.mixed_decoder_layer(layer)?,
                     norm_shift,
                 )
             })
@@ -156,18 +140,6 @@ impl CudaSharedRoutedModelTemplate {
             self.decoder.vocab_size,
             &self.output,
         )
-    }
-
-    pub(crate) fn prepare_decode_batch(&self, rows: usize) -> Result<CudaSharedRoutedDecodeBatch> {
-        CudaSharedRoutedDecodeBatch::new(self, rows)
-    }
-
-    pub(crate) fn prepare_prefill_batch(
-        &self,
-        rows: usize,
-        row_tokens: usize,
-    ) -> Result<CudaSharedRoutedPrefillBatch> {
-        CudaSharedRoutedPrefillBatch::new(self, rows, row_tokens)
     }
 
     fn cache_spec(&self) -> Result<KvStorageSpec> {

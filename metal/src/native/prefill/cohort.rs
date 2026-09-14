@@ -28,6 +28,9 @@ impl MetalPrefillCohort {
         loaded: &mut LoadedModel,
         requests: &[PrefillRequest],
     ) -> Result<Self> {
+        super::validation::validate_requests(requests)?;
+        #[cfg(test)]
+        loaded.apply_history_pressure(crate::engine::memory_stats()?)?;
         let model_id = loaded.info.manifest.id.clone();
         let mut prefixes = HashMap::with_capacity(requests.len());
         let mut leased_groups = HashSet::new();
@@ -41,17 +44,10 @@ impl MetalPrefillCohort {
             if let Some(leased) = leased.as_ref() {
                 leased_groups.insert(leased.memory_group);
             }
-            if prefixes
-                .insert(
-                    request.session_id,
-                    leased.map_or(CohortPrefix::Miss, |leased| CohortPrefix::Hit(leased.restored)),
-                )
-                .is_some()
-            {
-                return Err(Error::InvalidPrefillBatch(
-                    "prefill cohort contains a duplicate session".into(),
-                ));
-            }
+            prefixes.insert(
+                request.session_id,
+                leased.map_or(CohortPrefix::Miss, |leased| CohortPrefix::Hit(leased.restored)),
+            );
         }
         let misses = requests.len().saturating_sub(hits);
         let evicted_leases = loaded.prefixes.evict_groups(&leased_groups);
@@ -82,10 +78,24 @@ impl MetalPrefillCohort {
         })
     }
 
-    pub(in crate::native) fn take(&self, session: Uuid) -> Result<CohortPrefix> {
-        self.prefixes.lock()?.remove(&session).ok_or_else(|| {
+    pub(in crate::native) fn take(
+        &self,
+        sessions: impl Iterator<Item = Uuid> + Clone,
+    ) -> Result<Vec<CohortPrefix>> {
+        let mut prefixes = self.prefixes.lock()?;
+        let missing = || {
             Error::InvalidPrefillBatch("prefill session is absent from its logical cohort".into())
-        })
+        };
+        // Validate the whole wave before consuming any of its cohort leases.
+        if sessions.clone().any(|session| !prefixes.contains_key(&session)) {
+            return Err(missing());
+        }
+        sessions.map(|session| prefixes.remove(&session).ok_or_else(missing)).collect()
+    }
+
+    pub(in crate::native) fn discard(&self, sessions: &[Uuid]) -> Result<()> {
+        self.prefixes.lock()?.retain(|session, _| !sessions.contains(session));
+        Ok(())
     }
 
     pub(in crate::native) fn model_id(&self) -> &str {
@@ -109,8 +119,9 @@ pub(in crate::native) fn restore_prefix(
 ) -> Result<Option<RestoredPrefix>> {
     match leased {
         Some(leased) => Ok(leased.into_restored()),
-        None => loaded
+        None => Ok(loaded
             .prefixes
-            .restore_longest(&loaded.info.manifest.id, &request.prompt_tokens),
+            .lease_longest(&loaded.info.manifest.id, &request.prompt_tokens)?
+            .map(|lease| lease.restored)),
     }
 }

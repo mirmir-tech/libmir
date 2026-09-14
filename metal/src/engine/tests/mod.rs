@@ -22,7 +22,8 @@ fn executes_addition_on_explicit_gpu_stream() -> Result<()> {
     output.async_eval(&stream)?;
     stream.synchronize()?;
     assert_eq!(output.to_vec_f32(&stream)?, vec![4.0, 6.0]);
-    assert!(version()?.starts_with("0.31."));
+    // MLX_PREFIX selects the installation; the version is not fixed to Homebrew.
+    assert!(!version()?.is_empty());
     Ok(())
 }
 

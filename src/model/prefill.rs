@@ -12,10 +12,13 @@ impl Model {
         &self,
         request: PrefillRequest,
         expects_decode: bool,
+        cancellation: &crate::CancellationToken,
         progress: &mut dyn FnMut(ProgressEvent),
     ) -> Result<PrefillOutput> {
         if matches!(self.inner.engine.target(), BackendTarget::Cuda | BackendTarget::Metal) {
-            self.inner.coordinator.submit_prefill(request, expects_decode, progress)
+            self.inner
+                .coordinator
+                .submit_prefill(request, expects_decode, cancellation, progress)
         } else {
             Ok(self.inner.engine.prefill_request_with_progress(&request, progress)?)
         }

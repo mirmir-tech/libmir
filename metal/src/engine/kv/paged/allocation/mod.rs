@@ -13,25 +13,26 @@ pub(super) fn ensure(
     offset: usize,
     stream: &Stream,
 ) -> Result<()> {
+    store.validate_update(keys, values)?;
     let shape = keys.native().shape()?;
     let dimensions = shape.dimensions();
-    if dimensions.len() != 4
-        || keys.native().shape()? != values.native().shape()?
-        || keys.native().dtype()? != values.native().dtype()?
-        || dimensions[0] != 1
-    {
-        return Err(Error::InvalidModel("paged K/V update arrays are incompatible".into()));
-    }
     let sequence = dimensions[2];
-    let needed = (offset + sequence).div_ceil(store.page_size);
-    if store.storage.is_none() {
-        store.storage = Some(create(store, keys, needed, stream)?);
-    }
-    let storage = store.storage.as_mut().ok_or(Error::NullHandle("paged storage"))?;
+    let end = offset.checked_add(sequence).ok_or(Error::ShapeOverflow)?;
+    let needed = end.div_ceil(store.page_size);
+    let candidate = store
+        .storage
+        .is_none()
+        .then(|| create(store, keys, needed, stream))
+        .transpose()?;
+    let storage = store
+        .storage
+        .as_ref()
+        .or(candidate.as_ref())
+        .ok_or(Error::NullHandle("paged storage"))?;
     let arena_handle = Arc::clone(&storage.arena);
     let mut arena = lock(&arena_handle)?;
     let first = offset / store.page_size;
-    let last = (offset + sequence - 1) / store.page_size;
+    let last = (end - 1) / store.page_size;
     let existing = storage.page_ids.len();
     let shared = (first..=last.min(existing.saturating_sub(1)))
         .filter(|logical| {
@@ -70,7 +71,11 @@ pub(super) fn ensure(
             "growing Metal paged K/V arena"
         );
     }
-    ensure_capacity(&mut arena, target, store.allocation_step, stream)?;
+    ensure_capacity(&mut arena, target, stream)?;
+    if let Some(candidate) = candidate {
+        store.storage = Some(candidate);
+    }
+    let storage = store.storage.as_mut().ok_or(Error::NullHandle("paged storage"))?;
     storage.reserve_contiguous(&mut arena, planned)?;
     let table_resized = needed > storage.table_capacity;
     if table_resized {
@@ -127,6 +132,7 @@ fn create(store: &PagedStore, keys: &Array, needed: usize, stream: &Stream) -> R
         .pool
         .acquire(store.layer, store.page_size, store.format, keys, capacity, stream)?;
     Ok(Storage {
+        input_dtype: keys.native().dtype()?,
         arena,
         table: page_table(&[], capacity)?,
         page_ids: Vec::new(),
@@ -136,11 +142,11 @@ fn create(store: &PagedStore, keys: &Array, needed: usize, stream: &Stream) -> R
     })
 }
 
-fn ensure_capacity(arena: &mut Arena, required: usize, step: usize, stream: &Stream) -> Result<()> {
+fn ensure_capacity(arena: &mut Arena, required: usize, stream: &Stream) -> Result<()> {
     if required <= arena.capacity {
         return Ok(());
     }
-    let capacity = round(required, step);
+    let capacity = required;
     let shape = mirtal::Shape::new([
         arena.kv_heads,
         capacity - arena.capacity,

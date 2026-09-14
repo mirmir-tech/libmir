@@ -2,7 +2,7 @@ use models::execution::ModelTask;
 use runtime::backend::SamplingLogits;
 
 use super::Model;
-use crate::{Error, ProgressEvent, Result, RuntimeError};
+use crate::{CancellationToken, Error, ProgressEvent, Result, RuntimeError};
 
 const PROFILE_CONTEXT_TOKENS: usize = 2_048;
 const PROFILE_DECODE_STEPS: usize = 2;
@@ -12,8 +12,10 @@ impl Model {
     /// Warms reusable accelerator execution profiles before serving requests.
     ///
     /// The workload is derived only from the model context and tokenizer. Two
-    /// identical sessions exercise both fresh and reusable-prefix execution,
+    /// sessions exercise both fresh and reusable-prefix execution,
     /// including the first two decode context buckets above the prompt length.
+    /// Backends may additionally warm exact full and interleaved prefill shapes
+    /// before startup tuning is sealed.
     pub fn warm_execution_profiles(&self, progress: &mut dyn FnMut(ProgressEvent)) -> Result<()> {
         let result = self.warm_execution_profiles_inner(progress);
         let finish = self.engine().finish_startup_tuning(self.handle());
@@ -41,7 +43,20 @@ impl Model {
             decode_steps = PROFILE_DECODE_STEPS,
             "warming accelerator execution profiles"
         );
-        let total = PROFILE_SESSIONS * (PROFILE_DECODE_STEPS + 1);
+        let profiles = self
+            .engine()
+            .prefill_profile_shapes(self.handle(), self.inner.config.scheduler.max_batch_tokens)?
+            .into_iter()
+            .filter_map(|shape| {
+                profile_checkpoint(
+                    shape,
+                    self.inner.config.kv_cache.block_size,
+                    self.descriptor().metadata().context_len,
+                )
+            })
+            .collect::<Vec<_>>();
+        let base_total = PROFILE_SESSIONS * (PROFILE_DECODE_STEPS + 1);
+        let total = base_total + profiles.len();
         progress(ProgressEvent::warmup(0, total, "warming accelerator execution profiles"));
         for session_index in 0..PROFILE_SESSIONS {
             let prompt = if session_index == 0 {
@@ -64,9 +79,43 @@ impl Model {
                 ));
             }
         }
+        for (index, (shape, tokens)) in profiles.into_iter().enumerate() {
+            // Each shape needs a distinct prefix: otherwise the preceding profile
+            // can satisfy it from cache without executing the intended projection.
+            // A checkpoint preserves the exact shape with other KV block sizes.
+            let seed = self
+                .descriptor()
+                .tokenizer()
+                .encode_with_special_tokens(
+                    &format!("Calibrate prefill {shape} accelerator execution."),
+                    false,
+                )?
+                .token_ids;
+            seed.first().copied().ok_or(Error::EmptyPrompt)?;
+            let prompt = seed.into_iter().cycle().take(tokens).collect::<Vec<_>>();
+            self.session().prefill_generation_reserved(
+                &prompt,
+                &[shape],
+                0,
+                SamplingLogits::None,
+                &CancellationToken::default(),
+                &mut |_| {},
+            )?;
+            tracing::info!(model = %self.handle().id, shape, "exact prefill profile is warm");
+            progress(ProgressEvent::warmup(
+                base_total + index + 1,
+                total,
+                "exact prefill profile is warm",
+            ));
+        }
         tracing::info!(model = %self.handle().id, "accelerator execution profiles are warm");
         Ok(())
     }
+}
+
+fn profile_checkpoint(shape: usize, block_tokens: usize, context: usize) -> Option<(usize, usize)> {
+    let tokens = shape.checked_add(block_tokens.max(1))?;
+    (shape > 0 && tokens <= context.checked_sub(PROFILE_DECODE_STEPS)?).then_some((shape, tokens))
 }
 
 fn required_token(token: Option<u32>) -> Result<u32> {
@@ -83,6 +132,16 @@ fn profile_context(context: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounds_interleaved_checkpoint_and_reserves_a_tail() {
+        assert_eq!(profile_checkpoint(960, 16, 40960), Some((960, 976)));
+        assert_eq!(profile_checkpoint(960, 32, 994), Some((960, 992)));
+        assert_eq!(profile_checkpoint(960, 32, 993), None);
+        assert_eq!(profile_checkpoint(0, 16, 40960), None);
+        assert_eq!(profile_checkpoint(960, 16, 1), None);
+        assert_eq!(profile_checkpoint(usize::MAX, 16, usize::MAX), None);
+    }
 
     #[test]
     fn bounds_profile_context_and_reserves_decode_positions() {

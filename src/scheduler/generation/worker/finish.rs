@@ -36,18 +36,7 @@ impl Worker {
                 ) {
                     return;
                 }
-                let completed = std::mem::take(&mut self.completed_prefill);
-                let continuations = completed
-                    .iter()
-                    .filter(|(pending, _)| pending.expects_decode)
-                    .map(|(pending, _)| pending.request.session_id)
-                    .collect::<Vec<_>>();
-                self.begin_prefill_handoff(continuations);
-                for (pending, mut output) in completed {
-                    output.timings.get_or_insert_default().scheduler_queue =
-                        pending.scheduler_queue;
-                    pending.response.complete(Ok(output));
-                }
+                self.publish_completed_prefill();
             },
             Ok(_) => {
                 let message = "backend returned another prefill batch size";
@@ -61,8 +50,39 @@ impl Worker {
         }
     }
 
+    pub(super) fn publish_completed_prefill(&mut self) {
+        if self.completed_prefill.is_empty()
+            || hold_prefill_completion(
+                self.prefill_profile.interleave_prefill_decode,
+                self.prefill_cohort.is_some(),
+            )
+        {
+            return;
+        }
+        let completed = std::mem::take(&mut self.completed_prefill);
+        let continuations = completed
+            .iter()
+            .filter(|(pending, _)| pending.expects_decode && !pending.cancellation.is_cancelled())
+            .map(|(pending, _)| pending.request.session_id)
+            .collect::<Vec<_>>();
+        self.begin_prefill_handoff(continuations);
+        for (pending, mut output) in completed {
+            output.timings.get_or_insert_default().scheduler_queue = pending.scheduler_queue;
+            if pending.cancellation.is_cancelled() {
+                let released = self.engine.release_session(&self.model, pending.request.session_id);
+                pending.response.complete(match released {
+                    Ok(()) => Err(crate::Error::Cancelled),
+                    Err(error) => Err(error.into()),
+                });
+            } else {
+                pending.response.complete(Ok(output));
+            }
+        }
+    }
+
     pub(super) fn fail_active_prefill(&mut self, message: &str) {
         if let Some(active) = self.active_prefill.take() {
+            drop(active.batch);
             complete_prefill_errors(active.requests, message);
         }
         self.fail_completed_prefill(message);

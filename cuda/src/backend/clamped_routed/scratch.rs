@@ -93,6 +93,21 @@ fn upload_rope_inverse(
     let circle = 2.0 * std::f32::consts::PI;
     let low = half_float * (config.initial_context / (config.beta_fast * circle)).ln() / theta_log;
     let high = half_float * (config.initial_context / (config.beta_slow * circle)).ln() / theta_log;
+    let low = if config.rope_truncate {
+        low.floor()
+    } else {
+        low
+    }
+    .max(0.0);
+    let mut high = if config.rope_truncate {
+        high.ceil()
+    } else {
+        high
+    }
+    .min(head_float - 1.0);
+    if low.to_bits() == high.to_bits() {
+        high += 0.001;
+    }
     let inverse = (0..half)
         .map(|pair| -> Result<f32> {
             let pair = f32::from(u16::try_from(pair)?);

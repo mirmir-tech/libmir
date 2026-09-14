@@ -18,12 +18,13 @@ pub(super) struct ClampedRoutedConfig {
     pub beta_slow: f32,
     pub original_context: i32,
     pub rope_concentration: f32,
+    pub rope_truncate: bool,
     pub swiglu_limit: f32,
 }
 
 impl ClampedRoutedConfig {
     pub fn from_decoder(decoder: &DecoderConfig) -> Result<Self> {
-        let (factor, beta_fast, beta_slow, original, attention_factor) = decoder
+        let (factor, beta_fast, beta_slow, original, attention_factor, truncate) = decoder
             .rope_scaling
             .and_then(models::layout::RopeScaling::yarn)
             .ok_or_else(|| {
@@ -49,6 +50,7 @@ impl ClampedRoutedConfig {
             beta_slow: beta_slow.to_string().parse()?,
             original_context: i32::try_from(original)?,
             rope_concentration: attention_factor.to_string().parse()?,
+            rope_truncate: truncate,
             swiglu_limit: decoder.swiglu_limit.unwrap_or(7.0).to_string().parse()?,
         };
         config.validate()?;

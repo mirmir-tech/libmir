@@ -36,6 +36,7 @@ fn preserves_deepseek_qwen_greedy_digest() -> Result<()> {
             },
             seed: None,
             reasoning_cycle: libmir::ReasoningCyclePolicy::default(),
+            reasoning: libmir::ReasoningMode::ModelDefault,
         },
         &mut |_event| {},
         &mut |_token| {},

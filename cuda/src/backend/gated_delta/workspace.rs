@@ -30,6 +30,19 @@ impl CudaGatedDeltaWorkspace {
 }
 
 impl CudaBackend {
+    #[cfg(test)]
+    pub(crate) fn poison_gated_delta_workspace(&self) -> Result<()> {
+        let mut workspace =
+            self.inner.gated_delta_workspace.lock().map_err(|_| {
+                Error::InvalidExecutionPlan("Gated Delta workspace lock is poisoned")
+            })?;
+        if let Some(workspace) = workspace.as_mut() {
+            workspace.scratch.poison(&self.inner.context, &self.inner.stream)?;
+        }
+        drop(workspace);
+        Ok(())
+    }
+
     pub(super) fn execute_gated_delta_chunked(
         &self,
         spec: GatedDeltaSpec,

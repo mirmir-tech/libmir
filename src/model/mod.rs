@@ -11,6 +11,7 @@ mod memory;
 mod memory_admission;
 mod memory_policy;
 mod prefill;
+mod prompt;
 mod remote;
 mod vision;
 mod warmup;
@@ -18,7 +19,6 @@ mod warmup;
 use std::{
     path::Path,
     sync::{Arc, Mutex},
-    time::Instant,
 };
 
 pub use admission::{
@@ -135,41 +135,6 @@ impl ModelDescriptor {
             tokenizer_validation,
             layout,
             metadata,
-        })
-    }
-
-    /// Renders and tokenizes a request, validating it against the model context
-    /// window.
-    pub fn prepare(&self, conversation: &Conversation) -> Result<PreparedPrompt> {
-        if !matches!(self.task_plan.task(), ModelTask::Generation) {
-            return Err(task_mismatch("generation", &self.task_plan));
-        }
-        self.prepare_with_settings(conversation, self.generation)
-    }
-
-    pub(crate) fn prepare_with_settings(
-        &self,
-        conversation: &Conversation,
-        generation: GenerationSettings,
-    ) -> Result<PreparedPrompt> {
-        let render_started = Instant::now();
-        let prompt = self.template.render(conversation)?;
-        let render = render_started.elapsed();
-        let tokenize_started = Instant::now();
-        let tokens = self
-            .tokenizer
-            .encode_with_special_tokens(&prompt.text, prompt.add_special_tokens)?;
-        let tokenize = tokenize_started.elapsed();
-        if tokens.token_ids.is_empty() {
-            return Err(Error::EmptyPrompt);
-        }
-        validate_context(tokens.token_ids.len(), generation.max_tokens, self.metadata.context_len)?;
-        let cache_checkpoints = self.cache_checkpoints(conversation, &tokens.token_ids)?;
-        Ok(PreparedPrompt {
-            prompt,
-            tokens,
-            cache_checkpoints,
-            timings: PromptPreparationTimings { render, tokenize },
         })
     }
 

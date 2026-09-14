@@ -17,11 +17,13 @@ fn reads_deepseek_qwen_yarn_defaults_and_legacy_attention_multiplier() -> Result
         beta_slow,
         original_context_len,
         attention_factor,
+        truncate,
     }) = config.rope_scaling
     else {
         return Err(ModelsError::InvalidConfig("expected YaRN scaling".into()));
     };
 
+    assert!(truncate);
     assert!(close(factor, 4.0));
     assert!(close(beta_fast, 32.0));
     assert!(close(beta_slow, 1.0));
@@ -42,7 +44,7 @@ fn prefers_explicit_yarn_attention_factor() -> Result<()> {
 
     assert_eq!(
         config.rope_scaling.and_then(RopeScaling::yarn),
-        Some((8.0, 32.0, 1.0, 8192, 1.25))
+        Some((8.0, 32.0, 1.0, 8192, 1.25, true))
     );
     Ok(())
 }
@@ -75,4 +77,23 @@ fn decoder(rope_scaling: &serde_json::Value) -> serde_json::Value {
 
 fn close(left: f64, right: f64) -> bool {
     (left - right).abs() < 1.0e-12
+}
+
+#[test]
+fn preserves_explicit_continuous_yarn_correction() -> Result<()> {
+    let config = DecoderConfig::from_value(&decoder(&json!({
+        "rope_type": "yarn", "factor": 32.0,
+        "original_max_position_embeddings": 4096, "truncate": false
+    })))?;
+    assert_eq!(config.rope_scaling.and_then(RopeScaling::yarn).map(|yarn| yarn.5), Some(false));
+    for truncate in [json!(null), json!("false"), json!(0)] {
+        assert!(
+            DecoderConfig::from_value(&decoder(&json!({
+                "rope_type": "yarn", "factor": 32.0,
+                "original_max_position_embeddings": 4096, "truncate": truncate
+            })))
+            .is_err()
+        );
+    }
+    Ok(())
 }

@@ -42,6 +42,9 @@ pub(in crate::engine) trait GenerationExecution: Send {
     }
 
     fn prefill_chunk_len(&self, remaining: usize) -> usize;
+    fn interleaved_prefill_budget(&self, budget: usize) -> usize {
+        budget
+    }
 
     fn prefill_chunk(
         &mut self,
@@ -85,6 +88,15 @@ pub(in crate::engine) trait GenerationExecution: Send {
         _backend: &CudaBackend,
         _sequences: &[DecodeSequence],
     ) -> Result<Option<Vec<Output>>> {
+        Ok(None)
+    }
+
+    fn prefill_decode_batch(
+        &mut self,
+        _backend: &CudaBackend,
+        _chunks: &[PrefillChunk<'_>],
+        _decode: &[DecodeSequence],
+    ) -> Result<Option<CombinedOutputs>> {
         Ok(None)
     }
 
@@ -145,4 +157,9 @@ fn unsupported(operation: &'static str) -> Error {
         geometry: "model execution boundary".into(),
         requirement: "the lowered mixer plan must implement this multimodal operation",
     }
+}
+
+pub(in crate::engine) struct CombinedOutputs {
+    pub(in crate::engine) prefill: Vec<Option<Output>>,
+    pub(in crate::engine) decode: Vec<Output>,
 }

@@ -43,6 +43,7 @@ impl CudaBackend {
         let tuner = CudaAutoTuner::new(&info, tuning);
         Ok(Self {
             inner: Arc::new(CudaRuntime {
+                dense_scratch: super::feed_forward::DenseScratchPool::default(),
                 device: info,
                 context,
                 stream,
@@ -98,6 +99,7 @@ impl CudaBackend {
     pub(crate) fn auxiliary_backend(&self) -> Self {
         Self {
             inner: Arc::new(CudaRuntime {
+                dense_scratch: super::feed_forward::DenseScratchPool::default(),
                 device: self.inner.device.clone(),
                 context: self.inner.context.clone(),
                 stream: self.inner.auxiliary_stream.clone(),

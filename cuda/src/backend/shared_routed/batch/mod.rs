@@ -9,6 +9,7 @@ mod layer;
 mod output;
 mod prefill;
 mod states;
+mod template;
 
 use graph::DecodeResources;
 pub use prefill::CudaSharedRoutedPrefillBatch;

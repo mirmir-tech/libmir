@@ -1,20 +1,19 @@
-use mirtal::{
-    Array, CompileOptions, Compiled, DType, Dispatch, Graph, MetalKernel, OutputSpec, Shape,
-    TemplateArg,
-};
+use mirtal::{Array, CompileOptions, Compiled, DType, Graph, Shape};
 
 use super::{GatedDeltaLayer, GatedDeltaLayerConfig};
-use crate::engine::{
-    GatedDeltaState, Result, Stream, kernels::gated_delta::new_gated_delta_decode_kernel,
-};
+use crate::engine::{GatedDeltaState, Result, Stream};
 
 mod batch;
+mod recurrence;
 mod weights;
+use recurrence::Recurrence;
 use weights::Weights;
 
 #[derive(Debug)]
 pub(super) struct CompiledDecode {
     graph: Compiled<3, 3>,
+    #[cfg(test)]
+    packed: Option<Compiled<3, 3>>,
 }
 
 impl CompiledDecode {
@@ -22,15 +21,45 @@ impl CompiledDecode {
         let Some(weights) = Weights::new(layer)? else {
             return Ok(None);
         };
-        Self::compile(weights, layer.config, stream).map(Some)
+        let graph = Self::compile(weights, layer.config, Recurrence::new()?, stream)?;
+        #[cfg(test)]
+        let packed = if layer.config.key_head_dim == 128 && layer.config.value_head_dim % 8 == 0 {
+            Weights::new(layer)?
+                .map(|weights| Self::compile(weights, layer.config, Recurrence::packed()?, stream))
+                .transpose()?
+        } else {
+            None
+        };
+        Ok(Some(Self {
+            graph,
+            #[cfg(test)]
+            packed,
+        }))
     }
 
-    fn compile(weights: Weights, config: GatedDeltaLayerConfig, stream: &Stream) -> Result<Self> {
-        let kernel = new_gated_delta_decode_kernel()?;
+    fn compile(
+        weights: Weights,
+        config: GatedDeltaLayerConfig,
+        kernel: Recurrence,
+        stream: &Stream,
+    ) -> Result<Compiled<3, 3>> {
         let graph = stream.native().compile(CompileOptions::default(), move |graph, inputs| {
             build(graph, inputs, &weights, config, &kernel)
         })?;
-        Ok(Self { graph })
+        Ok(graph)
+    }
+
+    fn selected(&self, stream: &Stream) -> &Compiled<3, 3> {
+        #[cfg(not(test))]
+        let _ = stream;
+        #[cfg(test)]
+        if stream.config().diagnostics.gdn_execution == crate::config::GdnExecution::PackedDecode
+            && let Some(graph) = &self.packed
+        {
+            crate::engine::kernels::gated_delta::experiment::record();
+            return graph;
+        }
+        &self.graph
     }
 
     pub(super) fn forward(
@@ -43,7 +72,7 @@ impl CompiledDecode {
             return Ok(None);
         };
         let [output, next_value, next_convolution] = self
-            .graph
+            .selected(stream)
             .call(stream.native(), [input.native(), value.native(), convolution.native()])?;
         state.commit_compiled_decode(
             crate::engine::Array::from_native(next_value)?,
@@ -58,7 +87,7 @@ fn build(
     [input, state, history]: [Array; 3],
     weights: &Weights,
     config: GatedDeltaLayerConfig,
-    kernel: &MetalKernel<8, 2>,
+    kernel: &Recurrence,
 ) -> mirtal::Result<[Array; 3]> {
     let input_shape = input.shape()?;
     let input_dimensions = input_shape.dimensions();
@@ -81,9 +110,8 @@ fn build(
     )?;
     let beta = weights.beta.forward(graph, &input)?;
     let alpha = weights.alpha.forward(graph, &input)?;
-    let [recurrent, next_state] = recurrence(
+    let [recurrent, next_state] = kernel.dispatch(
         graph,
-        kernel,
         [&query, &key, &value, &alpha, &beta, &weights.a_log, &weights.dt_bias, &state],
     )?;
     let normalized = graph.rms_norm(&recurrent, &weights.norm, config.rms_norm_eps)?;
@@ -124,38 +152,6 @@ fn split_qkv(
         slice(key_width, key_width * 2)?,
         slice(key_width * 2, key_width * 2 + value_width)?,
     ))
-}
-
-fn recurrence(
-    graph: Graph<'_>,
-    kernel: &MetalKernel<8, 2>,
-    inputs: [&Array; 8],
-) -> mirtal::Result<[Array; 2]> {
-    let query = inputs[0];
-    let value = inputs[2];
-    let query_shape = query.shape()?;
-    let value_shape = value.shape()?;
-    let query_dimensions = query_shape.dimensions().to_vec();
-    let value_dimensions = value_shape.dimensions().to_vec();
-    kernel.dispatch_graph(
-        graph,
-        inputs,
-        &[
-            OutputSpec::new(value_shape, query.dtype()?),
-            OutputSpec::new(inputs[7].shape()?, DType::Float32),
-        ],
-        &Dispatch::new([256, 1, value_dimensions[0] * value_dimensions[2]], [256, 1, 1]).templates(
-            [
-                TemplateArg::dtype("InT", query.dtype()?),
-                TemplateArg::dtype("StT", DType::Float32),
-                TemplateArg::int("DK", i32::try_from(query_dimensions[3])?),
-                TemplateArg::int("DV", i32::try_from(value_dimensions[3])?),
-                TemplateArg::int("HK", i32::try_from(query_dimensions[2])?),
-                TemplateArg::int("HV", i32::try_from(value_dimensions[2])?),
-                TemplateArg::bool("NORMALIZE", true),
-            ],
-        ),
-    )
 }
 
 fn precise_gate(

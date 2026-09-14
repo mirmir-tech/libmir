@@ -4,6 +4,6 @@ mod layer;
 mod model;
 mod prefill;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub use model::HybridLinearMoeModel;

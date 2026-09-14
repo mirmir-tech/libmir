@@ -1,4 +1,6 @@
 use super::{Kernels, template};
+#[cfg(test)]
+pub(super) mod batched_partial;
 use crate::engine::{
     Error, Result,
     attention::{PagedAttentionScratch, ScratchSpec},

@@ -17,10 +17,16 @@ pub struct PrefillExecutionProfile {
     pub cached_prefix_completion_slack_tokens: usize,
     pub defer_new_decode: bool,
     pub interleave_prefill_decode: bool,
-    pub collect_long_prefill_window: bool,
 }
 
 impl super::Engine {
+    #[cfg_attr(
+        not(feature = "metal"),
+        allow(
+            clippy::unnecessary_wraps,
+            reason = "only Metal refreshes fallible model memory limits"
+        )
+    )]
     pub(crate) fn refresh_prefill_memory_limits(
         &self,
         model: &runtime::backend::ModelHandle,
@@ -45,5 +51,61 @@ impl super::Engine {
             },
         }
         Ok(())
+    }
+}
+
+impl PrefillExecutionProfile {
+    pub(crate) fn with_decode_policy(
+        mut self,
+        policy: runtime::scheduler::PrefillDecodePolicy,
+    ) -> Self {
+        if policy == runtime::scheduler::PrefillDecodePolicy::CompleteCohort {
+            self.interleave_prefill_decode = false;
+            self.max_prefill_cohort_tokens =
+                self.max_prefill_cohort_tokens.min(self.resident_token_slots.max(1));
+        }
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use runtime::scheduler::PrefillDecodePolicy;
+
+    use super::*;
+
+    #[test]
+    fn completion_policy_is_opt_in_and_bounds_the_cohort_to_resident_slots() {
+        let profile = PrefillExecutionProfile {
+            chunk_tokens: 1024,
+            completion_round_tokens: 1024,
+            max_prefill_wave_rows: usize::MAX,
+            max_prefill_wave_tokens: usize::MAX,
+            max_prefill_cohort_tokens: usize::MAX,
+            block_tokens: 16,
+            resident_token_slots: 81920,
+            limit_deep_prefill_waves: true,
+            cached_prefix_replay_tokens: None,
+            cached_prefix_checkpoint_replay_tokens: None,
+            cached_prefix_completion_slack_tokens: 0,
+            defer_new_decode: false,
+            interleave_prefill_decode: true,
+        };
+        let default = profile.with_decode_policy(PrefillDecodePolicy::BackendDefault);
+        assert!(default.interleave_prefill_decode);
+        assert_eq!(default.max_prefill_cohort_tokens, usize::MAX);
+        let grouped = profile.with_decode_policy(PrefillDecodePolicy::CompleteCohort);
+        assert!(!grouped.interleave_prefill_decode);
+        assert_eq!(grouped.max_prefill_cohort_tokens, 81920);
+        let smaller = PrefillExecutionProfile {
+            max_prefill_cohort_tokens: 1024,
+            ..profile
+        };
+        assert_eq!(
+            smaller
+                .with_decode_policy(PrefillDecodePolicy::CompleteCohort)
+                .max_prefill_cohort_tokens,
+            1024
+        );
     }
 }

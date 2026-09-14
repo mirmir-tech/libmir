@@ -2,17 +2,21 @@ mod awq;
 mod bitsandbytes;
 mod direct_fp8;
 mod direct_fp8_embedding;
-mod expert_group;
+pub(super) mod expert_group;
 mod expert_reduce;
 pub(super) mod gated_delta;
 mod gptq;
 mod mxfp4;
 mod mxfp4_embedding;
+#[cfg(test)]
 mod mxfp4_gathered_linear;
+#[cfg(test)]
 mod mxfp4_linear;
 mod nvfp4_convert;
 mod nvfp4_gathered_linear;
 mod page_copy;
+#[cfg(test)]
+pub mod page_gather;
 mod page_write;
 mod paged_attention;
 pub(super) use paged_attention::{PagedExecution, partial_blocks, two_pass_supported};
@@ -191,24 +195,38 @@ mirtal::metal_kernel! {
 
 #[derive(Debug)]
 pub(super) struct Kernels {
+    #[cfg(test)]
+    pub(crate) history_append: crate::engine::persistent_history::Append,
+    #[cfg(test)]
+    pub(crate) page_gather: page_gather::Gather,
+    #[cfg(test)]
+    pub(in crate::engine) gdn_experiment: gated_delta::experiment::Recurrence,
     awq_repack: awq::AwqRepackKernel,
     bitsandbytes_4bit: bitsandbytes::BitsAndBytes4BitKernel,
     direct_fp8: direct_fp8::DirectFp8Kernel,
     direct_fp8_embedding: direct_fp8_embedding::DirectFp8EmbeddingKernel,
     gated_delta_gates: mirtal::MetalKernel<4, 2>,
     expert_group: expert_group::ExpertGroupKernel,
+    #[cfg(test)]
+    expert_group_aligned: expert_group::aligned::AlignedGroup,
+    #[cfg(test)]
+    expert_tiles: expert_group::tiles::TilePlan,
     expert_reduce: expert_reduce::ExpertReduceKernel,
     gated_delta_recurrence: mirtal::MetalKernel<6, 2>,
     gated_delta_decode: mirtal::MetalKernel<8, 2>,
     gptq: gptq::GptqKernels,
     paged_attention: mirtal::MetalKernel<6, 1>,
     paged_attention_batched: mirtal::MetalKernel<29, 1>,
+    #[cfg(test)]
+    paged_attention_batched_partial: mirtal::MetalKernel<27, 3>,
     paged_attention_partial: mirtal::MetalLibrary,
     paged_attention_reduce: mirtal::MetalKernel<3, 1>,
     paged_kv: mirtal::MetalLibrary,
     mxfp4_gate_up: mirtal::MetalKernel<6, 1>,
     mxfp4_embedding: mxfp4_embedding::MxFp4EmbeddingKernel,
+    #[cfg(test)]
     mxfp4_gathered_linear: mxfp4_gathered_linear::MxFp4GatheredLinearKernel,
+    #[cfg(test)]
     mxfp4_linear: mxfp4_linear::MxFp4LinearKernel,
     mxfp4_down: mirtal::MetalKernel<6, 1>,
     mxfp4_split_gate_up: mirtal::MetalKernel<9, 1>,

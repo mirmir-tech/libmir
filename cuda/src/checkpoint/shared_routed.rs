@@ -96,7 +96,7 @@ fn shared_routed_source<'a>(
         .collect::<HashSet<_>>();
     let mut names = bindings.decoder_boundary()?.physical_sources();
     for layer in 0..layers {
-        names.extend(bindings.hybrid_decoder_layer(layer)?.physical_sources());
+        names.extend(bindings.mixed_decoder_layer(layer)?.physical_sources());
     }
     let mut seen = HashSet::new();
     names

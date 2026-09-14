@@ -30,6 +30,9 @@ pub(super) enum Error {
     #[cfg(test)]
     #[error("benchmark output failed: {0}")]
     BenchmarkOutput(#[from] std::io::Error),
+    #[cfg(test)]
+    #[error("benchmark clock is before the Unix epoch: {0}")]
+    BenchmarkClock(#[from] std::time::SystemTimeError),
     #[error("model is not loaded: {0}")]
     ModelNotLoaded(String),
     #[error("model configuration error: {0}")]
@@ -40,6 +43,10 @@ pub(super) enum Error {
     Session { model: String, session: uuid::Uuid },
     #[error("native MLX has no scheduled greedy decode")]
     NoPendingDecode,
+    #[error("Metal execution recovery must complete before the model can run again")]
+    ExecutionRecoveryRequired,
+    #[error("execution failed: {execution}; draining failed state also failed: {drain}")]
+    ExecutionRecoveryFailed { execution: Box<Self>, drain: Box<Self> },
     #[error("native MLX prefix snapshot is missing prompt logits")]
     NoPrefixLogits,
     #[error("scheduled MLX token {expected} does not match requested token {actual}")]
@@ -74,6 +81,8 @@ impl<T> From<PoisonError<T>> for Error {
 impl From<Error> for runtime::RuntimeError {
     fn from(value: Error) -> Self {
         match value {
+            #[cfg(test)]
+            Error::BenchmarkClock(error) => Self::Backend(error.to_string()),
             Error::ModelNotLoaded(id) => Self::ModelNotLoaded(id),
             Error::Models(error) => Self::ModelLoad(error.to_string()),
             Error::UnsupportedModel(error) => Self::ModelLoad(error),
@@ -87,6 +96,8 @@ impl From<Error> for runtime::RuntimeError {
             #[cfg(test)]
             Error::Benchmark(error) => Self::Backend(error),
             Error::EmptyPrompt
+            | Error::ExecutionRecoveryRequired
+            | Error::ExecutionRecoveryFailed { .. }
             | Error::Session { .. }
             | Error::NoPendingDecode
             | Error::NoPrefixLogits

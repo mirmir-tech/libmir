@@ -22,6 +22,14 @@ impl Model {
 
     pub(crate) fn with_cache_wait<T>(
         &self,
+        use_cache: impl FnMut(&mut KvCache) -> Result<T>,
+    ) -> Result<T> {
+        self.with_cache_wait_cancellable(&crate::CancellationToken::default(), use_cache)
+    }
+
+    pub(crate) fn with_cache_wait_cancellable<T>(
+        &self,
+        cancellation: &crate::CancellationToken,
         mut use_cache: impl FnMut(&mut KvCache) -> Result<T>,
     ) -> Result<T> {
         let Ok(mut cache) = self.inner.cache.cache.lock() else {
@@ -30,9 +38,15 @@ impl Model {
             );
         };
         loop {
+            cancellation.check()?;
             match use_cache(&mut cache) {
                 Err(crate::Error::Runtime(runtime::RuntimeError::KvCachePressure)) => {
-                    let Ok(ready) = self.inner.cache.ready.wait(cache) else {
+                    let Ok((ready, _)) = self
+                        .inner
+                        .cache
+                        .ready
+                        .wait_timeout(cache, crate::cancellation::POLL_INTERVAL)
+                    else {
                         return Err(runtime::RuntimeError::KvCache(
                             "model KV cache wait is poisoned".into(),
                         )
@@ -53,8 +67,9 @@ impl Model {
         &self,
         needs_eviction: bool,
         missing_tokens: usize,
-    ) -> std::time::Duration {
-        self.inner.cache_cohort.wait(needs_eviction, missing_tokens)
+        cancellation: &crate::CancellationToken,
+    ) -> Result<std::time::Duration> {
+        self.inner.cache_cohort.wait(needs_eviction, missing_tokens, cancellation)
     }
 
     pub(crate) fn claim_cache_fill(
@@ -62,8 +77,11 @@ impl Model {
         tokens: &[u32],
         checkpoints: &[usize],
         cached_tokens: usize,
-    ) -> FillClaim {
-        self.inner.cache_cohort.claim_fill(tokens, checkpoints, cached_tokens)
+        cancellation: &crate::CancellationToken,
+    ) -> Result<FillClaim> {
+        self.inner
+            .cache_cohort
+            .claim_fill(tokens, checkpoints, cached_tokens, cancellation)
     }
 
     #[must_use]

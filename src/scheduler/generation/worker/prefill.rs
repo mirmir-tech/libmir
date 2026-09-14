@@ -7,8 +7,8 @@ use crate::{
 };
 
 pub(super) struct PrefillCohort {
-    lease: EnginePrefillCohort,
-    remaining: usize,
+    pub(super) lease: EnginePrefillCohort,
+    pub(super) remaining: usize,
 }
 
 impl Worker {
@@ -84,10 +84,16 @@ impl Worker {
     }
 
     fn begin_prefill_cohort(&mut self) -> bool {
-        self.prioritize_prefill();
+        let admission = if self.short_cached_refill_ready() {
+            // Keep this one-row cohort independent of queued long prefills.
+            1
+        } else {
+            self.prioritize_prefill();
+            self.prefill_admission_limit()
+        };
         let count = prefill_cohort_rows(
             self.prefill.iter().map(|pending| self.prefill_completion_tokens(pending)),
-            self.prefill_admission_limit(),
+            admission,
             self.prefill_profile.max_prefill_cohort_tokens,
         );
         let requests = self
@@ -113,7 +119,7 @@ impl Worker {
         self.prefill_cohort.as_ref().map_or(0, |cohort| cohort.remaining)
     }
 
-    fn advance_prefill_cohort(&mut self, count: usize) {
+    pub(super) fn advance_prefill_cohort(&mut self, count: usize) {
         let Some(cohort) = self.prefill_cohort.as_mut() else {
             return;
         };

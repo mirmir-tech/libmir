@@ -95,6 +95,7 @@ impl Array {
         Self::from_native(graph.reciprocal(&adjusted)?)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn yarn_rope_frequencies(
         rotary_dimensions: i32,
         base: f32,
@@ -102,6 +103,7 @@ impl Array {
         beta_fast: f32,
         beta_slow: f32,
         original_context_len: i32,
+        truncate: bool,
         stream: &Stream,
     ) -> Result<Self> {
         dimensions(rotary_dimensions)?;
@@ -124,12 +126,20 @@ impl Array {
         let frequencies = graph.power(&scalar(graph, base)?, &exponents)?;
         let inverse = graph.reciprocal(&frequencies)?;
         let original = f32::from(u16::try_from(original_context_len)?);
-        let low = (half * (original / (beta_fast * std::f32::consts::TAU)).ln() / base.ln())
-            .floor()
-            .max(0.0);
-        let mut high = (half * (original / (beta_slow * std::f32::consts::TAU)).ln() / base.ln())
-            .ceil()
-            .min(dimensions - 1.0);
+        let low = half * (original / (beta_fast * std::f32::consts::TAU)).ln() / base.ln();
+        let high = half * (original / (beta_slow * std::f32::consts::TAU)).ln() / base.ln();
+        let low = if truncate {
+            low.floor()
+        } else {
+            low
+        }
+        .max(0.0);
+        let mut high = if truncate {
+            high.ceil()
+        } else {
+            high
+        }
+        .min(dimensions - 1.0);
         if low.to_bits() == high.to_bits() {
             high += 0.001;
         }

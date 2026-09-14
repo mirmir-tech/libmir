@@ -103,6 +103,7 @@ fn request(case: &Case) -> GenerationRequest {
             ..GenerationOverrides::default()
         },
         seed: Some(20_260_805),
+        reasoning: libmir::ReasoningMode::ModelDefault,
         reasoning_cycle: if env::var_os("MIRMIR_SEMANTIC_HARMONY_EXIT").is_some() {
             ReasoningCyclePolicy::ExitReasoning {
                 min_tokens: env::var("MIRMIR_SEMANTIC_HARMONY_EXIT_MIN_TOKENS")
@@ -123,6 +124,7 @@ fn repetition_penalty() -> f32 {
         .unwrap_or(1.0)
 }
 
+#[cfg_attr(not(feature = "cuda"), allow(clippy::unnecessary_wraps))]
 fn runtime_config() -> Result<RuntimeConfig, &'static str> {
     let mut config = RuntimeConfig::default();
     config.scheduler.max_batch_requests = 1;

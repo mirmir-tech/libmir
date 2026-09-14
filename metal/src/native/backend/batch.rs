@@ -8,7 +8,7 @@ use runtime::{
 use super::{MetalBackend, execution::execution_sampling};
 use crate::native::{
     error::Result,
-    model::{DecodeInput, NativeOutput},
+    model::{DecodeExecution, DecodeInput},
     output,
 };
 
@@ -39,6 +39,7 @@ pub(super) fn execute_loaded_decode(
     profile: bool,
     started: Instant,
 ) -> Result<Vec<DecodeOutput>> {
+    let executing = Instant::now();
     let inputs = sequences
         .iter()
         .map(|sequence| DecodeInput {
@@ -47,51 +48,55 @@ pub(super) fn execute_loaded_decode(
             sampling: execution_sampling(sequence.sampling_logits, device_pipeline),
         })
         .collect::<Vec<_>>();
-    let batched = loaded.can_decode_batch(&inputs);
-    let native = if batched {
-        loaded.decode_batch(&inputs)?
-    } else {
-        inputs
-            .iter()
-            .map(|input| loaded.decode(input.session, input.token, input.sampling))
-            .collect::<Result<Vec<NativeOutput>>>()?
-    };
-    let mut outputs = native
+    let native = loaded.decode_grouped(&inputs)?;
+    let packed_rows = native
+        .iter()
+        .filter(|(_, mode)| matches!(mode, DecodeExecution::Packed { .. }))
+        .count();
+    let outputs = native
         .into_iter()
         .zip(sequences)
-        .map(|(native, sequence)| {
+        .map(|((native, execution), sequence)| {
             let output = output::materialize(loaded, native, sequence.sampling_logits)?;
             Ok(DecodeOutput {
                 event: TokenEvent {
                     token_id: output.next_token,
-                    text: if batched {
-                        "metal.decode=packed-device-token-pipeline".into()
-                    } else {
-                        "metal.decode=scalar-device-token-replay".into()
+                    text: match execution {
+                        DecodeExecution::Packed { .. } => {
+                            "metal.decode=packed-device-token-pipeline".into()
+                        },
+                        DecodeExecution::Scalar => "metal.decode=scalar".into(),
                     },
                     finished: false,
                 },
                 logits: output.logits,
                 candidates: output.candidates,
-                timings: None,
+                timings: profile.then(|| DecodeTimings {
+                    batch_rows: match execution {
+                        DecodeExecution::Scalar => 1,
+                        DecodeExecution::Packed { rows } => rows,
+                    },
+                    ..DecodeTimings::default()
+                }),
             })
         })
-        .collect::<Result<Vec<_>>>()?;
-    if profile {
-        let timings = DecodeTimings {
-            backend_execution: started.elapsed(),
-            batch_rows: inputs.len(),
-            ..DecodeTimings::default()
-        };
-        for output in &mut outputs {
-            output.timings = Some(timings);
+        .collect::<Result<Vec<_>>>();
+    let mut outputs = loaded.finish_decode(&inputs, outputs)?;
+    let finished = Instant::now();
+    let timing = super::decode_timing::finish(started, executing, finished);
+    for output in &mut outputs {
+        if let Some(row) = &mut output.timings {
+            row.backend_wait = timing.backend_wait;
+            row.backend_execution = timing.backend_execution;
         }
     }
     tracing::trace!(
         backend = "metal",
         rows = inputs.len(),
-        batched,
-        execution_ms = started.elapsed().as_secs_f64() * 1_000.0,
+        packed_rows,
+        backend_wait_ms = timing.backend_wait.as_secs_f64() * 1_000.0,
+        execution_ms = timing.backend_execution.as_secs_f64() * 1_000.0,
+        total_ms = finished.duration_since(started).as_secs_f64() * 1_000.0,
         "completed Metal decode batch"
     );
     Ok(outputs)

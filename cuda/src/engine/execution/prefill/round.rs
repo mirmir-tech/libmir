@@ -11,12 +11,19 @@ use crate::{
     },
 };
 
-struct ScheduledChunk {
-    row: usize,
-    count: usize,
-    offset: usize,
-    table: BlockTable,
-    final_chunk: bool,
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum ScheduleMode {
+    PrefillOnly,
+    SeparateDecode,
+    CombinedDecode,
+}
+
+pub(super) struct ScheduledChunk {
+    pub(super) row: usize,
+    pub(super) count: usize,
+    pub(super) offset: usize,
+    pub(super) table: BlockTable,
+    pub(super) final_chunk: bool,
     completion_first: bool,
 }
 
@@ -33,8 +40,17 @@ impl CudaEngine {
         let ModelExecution::Generation(generation) = &mut runner.execution else {
             return Err(Error::State("CUDA task is not a generation runner".into()));
         };
-        let scheduled =
-            schedule(generation.as_ref(), sequences, cursor, budget, interleaved_decode)?;
+        let scheduled = schedule(
+            generation.as_ref(),
+            sequences,
+            cursor,
+            budget,
+            if interleaved_decode {
+                ScheduleMode::SeparateDecode
+            } else {
+                ScheduleMode::PrefillOnly
+            },
+        )?;
         let scheduled_tokens = scheduled.iter().map(|chunk| chunk.count).sum::<usize>();
         let final_rows = scheduled.iter().filter(|chunk| chunk.final_chunk).count();
         let completion_first_rows = scheduled.iter().filter(|chunk| chunk.completion_first).count();
@@ -96,12 +112,12 @@ impl CudaEngine {
     }
 }
 
-fn schedule(
+pub(super) fn schedule(
     generation: &dyn crate::engine::model::GenerationExecution,
     sequences: &mut [Sequence],
     cursor: usize,
     budget: usize,
-    interleaved_decode: bool,
+    mode: ScheduleMode,
 ) -> Result<Vec<ScheduledChunk>> {
     let mut remaining_budget = budget;
     let mut scheduled = Vec::new();
@@ -110,16 +126,27 @@ fn schedule(
         let sequence = &mut sequences[row];
         let remaining = sequence.request.prompt_tokens.len() - sequence.consumed;
         let rows_left = rows.len() - index;
-        let completion_first = interleaved_decode && sequence.checkpoint_restored;
+        let completion_first = mode != ScheduleMode::PrefillOnly && sequence.checkpoint_restored;
         let row_budget = plan::row_chunk_budget(remaining_budget, rows_left, completion_first);
-        let context_budget = plan::context_chunk_budget(
-            sequence.consumed,
-            rows.len(),
-            budget,
-            interleaved_decode,
-            sequence.prefix_tokens > 0,
-            completion_first,
-        );
+        let row_budget = if mode == ScheduleMode::SeparateDecode {
+            generation.interleaved_prefill_budget(row_budget)
+        } else {
+            row_budget
+        };
+        let context_budget = if mode == ScheduleMode::CombinedDecode {
+            // Decode participates in this forward; splitting a configured 2048
+            // step into 1024 + decode rows loses its reusable projection shape.
+            remaining_budget
+        } else {
+            plan::context_chunk_budget(
+                sequence.consumed,
+                rows.len(),
+                budget,
+                mode != ScheduleMode::PrefillOnly,
+                sequence.prefix_tokens > 0,
+                completion_first,
+            )
+        };
         let terminal = generation.terminal_cache_checkpoint(&sequence.request);
         let alignment = generation.cache_checkpoint_alignment();
         let count = generation.prefill_chunk_len(

@@ -10,10 +10,10 @@ use crate::engine::{
 
 #[derive(Debug)]
 pub(super) struct ClampedRoutedLayer {
-    attention: ClampedRoutedAttention,
-    moe_norm: NormWeight,
-    experts: ClampedRoutedExperts,
-    epsilon: f32,
+    pub(super) attention: ClampedRoutedAttention,
+    pub(super) moe_norm: NormWeight,
+    pub(super) experts: ClampedRoutedExperts,
+    pub(super) epsilon: f32,
 }
 
 impl ClampedRoutedLayer {

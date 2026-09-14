@@ -1,10 +1,17 @@
 mod bielik;
 mod branching;
 mod diagnostics;
+mod greedy;
+pub(super) use greedy::argmax;
 mod llama;
 mod matrix;
 mod pipeline;
+mod prefill;
 mod qwen;
+mod recurrent;
+mod router;
+mod semantic;
+mod version;
 
 use std::{
     env,

@@ -65,6 +65,12 @@ impl GatedDeltaChunked {
                 NO_SCRATCH,
             ),
         )?;
+        let inverse_elements = product(product(self.spec.tokens, heads)?, CHUNK)?;
+        self.initialize_inverse.launch(
+            stream,
+            Self::config((inverse_elements.div_ceil(256), 1, 1), 8, 0)?,
+            (&mut scratch.inverse, narrow(inverse_elements)?),
+        )?;
         self.solve.launch(
             stream,
             Self::config((chunks, heads, 1), 4, 10_240)?,

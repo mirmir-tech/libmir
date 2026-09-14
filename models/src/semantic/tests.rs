@@ -22,6 +22,14 @@ fn semantic_discovery_does_not_depend_on_model_type() -> Result<()> {
     let unrelated = SemanticModelSpec::discover(&unrelated, &tensors)?;
 
     assert_eq!(named, unrelated);
+    let MixerSpec::SoftmaxAttention(attention) = &named.decoder.layers[0].mixer else {
+        return Err(crate::error::ModelsError::InvalidConfig("expected attention".into()));
+    };
+    let PositionEncodingSpec::Rotary(rotary) = &attention.position else {
+        return Err(crate::error::ModelsError::InvalidConfig("expected rotary positions".into()));
+    };
+    assert!(matches!(rotary.scaling, Some(RopeScalingSpec::Yarn { truncate: false, .. })));
+
     assert!(matches!(
         named.decoder.layers[0].mixer,
         MixerSpec::SoftmaxAttention(AttentionSpec { sinks: true, .. })
@@ -122,7 +130,8 @@ fn configuration(model_type: &str, architectures: &[&str]) -> serde_json::Value 
             "factor": 4.0,
             "beta_fast": 32.0,
             "beta_slow": 1.0,
-            "original_max_position_embeddings": 32
+            "original_max_position_embeddings": 32,
+            "truncate": false
         }
     })
 }
@@ -153,4 +162,20 @@ fn temp_path() -> PathBuf {
 
 fn temp_dir(label: &str) -> PathBuf {
     std::env::temp_dir().join(format!("mir-model-spec-{}-{label}", std::process::id()))
+}
+
+#[test]
+fn yarn_serialization_preserves_truncation_and_defaults_legacy_specs() -> crate::error::Result<()> {
+    let value = serde_json::json!({
+        "kind": "yarn", "factor": 32.0, "beta_fast": 32.0, "beta_slow": 1.0,
+        "original_context_len": 4096, "attention_factor": 1.0
+    });
+    let legacy: RopeScalingSpec = serde_json::from_value(value.clone())?;
+    assert!(matches!(legacy, RopeScalingSpec::Yarn { truncate: true, .. }));
+    let mut explicit = value;
+    explicit["truncate"] = serde_json::json!(false);
+    let parsed: RopeScalingSpec = serde_json::from_value(explicit.clone())?;
+    assert!(matches!(parsed, RopeScalingSpec::Yarn { truncate: false, .. }));
+    assert_eq!(serde_json::to_value(parsed)?, explicit);
+    Ok(())
 }

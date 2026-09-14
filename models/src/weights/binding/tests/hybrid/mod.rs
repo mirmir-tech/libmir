@@ -4,6 +4,7 @@ use serde_json::json;
 
 use super::*;
 
+mod dense_mixed;
 mod individual;
 mod moe;
 

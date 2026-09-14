@@ -37,7 +37,9 @@ impl ExpertReduceKernel {
             || sorted_shape[1] != 1
             || weights_shape.len() != 3
             || inverse.len() != weights.len()
-            || sorted_shape[0] != weights.len()
+            // The inverse map addresses real routes; grouped storage may
+            // include padding that is deliberately absent from that map.
+            || sorted_shape[0] < weights.len()
         {
             return Err(Error::InvalidModel("sorted expert reduction shapes do not align".into()));
         }

@@ -5,7 +5,9 @@ use super::{
 };
 use crate::error::{ModelsError, Result};
 
+mod mixed;
 pub(super) mod moe;
+pub use mixed::{DenseFeedForwardBindings, MixedDecoderLayerBindings, MixedFeedForwardBindings};
 
 #[derive(Debug, Clone, Copy)]
 pub struct HybridDecoderLayerBindings<'a> {

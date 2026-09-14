@@ -4,6 +4,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[cfg(test)]
+    #[error("persistent history budget is exhausted or suspended")]
+    HistoryBudgetUnavailable,
     #[error("MLX {0} returned a null handle")]
     NullHandle(&'static str),
     #[error("model tensor is missing: {0}")]
@@ -12,6 +15,14 @@ pub enum Error {
     InvalidQuantization(String),
     #[error("invalid native model configuration: {0}")]
     InvalidModel(String),
+    #[error(
+        "Metal execution requires {required} K/V pages in layer {layer} but its capacity is {maximum}"
+    )]
+    KvPageCapacity {
+        layer: usize,
+        required: usize,
+        maximum: usize,
+    },
     #[error("invalid sampling configuration: {0}")]
     InvalidSampling(String),
     #[error("float conversion failed: {0}")]
@@ -25,8 +36,18 @@ pub enum Error {
     #[error("integer parse failed: {0}")]
     IntegerParse(#[from] std::num::ParseIntError),
     #[cfg(test)]
+    #[error("benchmark clock is before the Unix epoch: {0}")]
+    BenchmarkClock(#[from] std::time::SystemTimeError),
+    #[cfg(test)]
     #[error("benchmark output failed: {0}")]
     BenchmarkOutput(#[from] std::io::Error),
+    #[cfg(test)]
+    #[error("benchmark stability failed for {case} ({variant}): {spread_percent}% spread")]
+    BenchmarkStability {
+        case: String,
+        variant: String,
+        spread_percent: f64,
+    },
     #[cfg(test)]
     #[error("test fixture JSON failed: {0}")]
     TestJson(#[from] serde_json::Error),

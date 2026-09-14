@@ -10,7 +10,11 @@ impl KvCache {
         page_min_context: usize,
         mode: PagedContextMode,
     ) -> Result<KvContext> {
-        let token_count = validate(keys, values)?;
+        let token_count = self.validate_update(keys, values)?;
+        #[cfg(test)]
+        {
+            self.history = None;
+        }
         let needed = self.offset.checked_add(token_count).ok_or(Error::ShapeOverflow)?;
         if self.max_context.is_some_and(|limit| needed > limit) {
             return self.update_sliding(keys, values, stream, token_count, needed);
@@ -35,10 +39,16 @@ impl KvCache {
         }
         let activate_pages =
             (page_min_context == 0 || needed >= page_min_context) && self.pages.is_some();
-        if activate_pages && self.offset == 0 && self.keys.is_none() {
+        if activate_pages {
+            let context_keys = promotion_input(self.keys.as_ref(), keys, self.offset, stream)?;
+            let context_values =
+                promotion_input(self.values.as_ref(), values, self.offset, stream)?;
             let pages = self.pages.as_mut().ok_or(Error::NullHandle("paged storage"))?;
-            pages.update(keys, values, 0, stream)?;
+            pages.update(&context_keys, &context_values, 0, stream)?;
             self.offset = needed;
+            self.keys = None;
+            self.values = None;
+            self.capacity = 0;
             return page_context(pages, keys, values, needed, stream, mode);
         }
         self.grow(keys, values, needed, stream)?;
@@ -49,13 +59,6 @@ impl KvCache {
         }
         let context_keys = context(self.keys.as_ref(), needed, stream)?;
         let context_values = context(self.values.as_ref(), needed, stream)?;
-        if activate_pages && let Some(pages) = self.pages.as_mut() {
-            pages.update(&context_keys, &context_values, 0, stream)?;
-            self.keys = None;
-            self.values = None;
-            self.capacity = 0;
-            return page_context(pages, keys, values, needed, stream, mode);
-        }
         Ok(KvContext {
             keys: context_keys,
             values: context_values,
@@ -118,16 +121,17 @@ fn page_context(
     })
 }
 
-fn validate(keys: &Array, values: &Array) -> Result<usize> {
-    let key_shape = keys.native().shape()?;
-    let value_shape = values.native().shape()?;
-    if key_shape.dimensions().len() != 4
-        || value_shape.dimensions().len() != 4
-        || key_shape.dimensions()[2] != value_shape.dimensions()[2]
-    {
-        return Err(Error::InvalidModel("KV cache expects matching rank-four arrays".into()));
+fn promotion_input(
+    current: Option<&Array>,
+    update: &Array,
+    offset: usize,
+    stream: &Stream,
+) -> Result<Array> {
+    if offset == 0 {
+        return clone_required(update);
     }
-    Ok(key_shape.dimensions()[2])
+    let prefix = context(current, offset, stream)?;
+    Array::from_native(stream.native().graph().concatenate(&[prefix.native(), update.native()], 2)?)
 }
 
 fn grow_array(

@@ -10,6 +10,7 @@ pub(super) fn render_model_template(
     body: &str,
     conversation: &Conversation,
     tokens: &TemplateTokens,
+    reasoning: super::ReasoningMode,
 ) -> Result<String> {
     let mut environment = Environment::new();
     environment.set_unknown_method_callback(unknown_method_callback);
@@ -17,6 +18,11 @@ pub(super) fn render_model_template(
     environment.add_function("raise_exception", raise_exception);
     environment.add_template("chat", body)?;
     let template = environment.get_template("chat")?;
+    if reasoning != super::ReasoningMode::ModelDefault
+        && !template.undeclared_variables(false).contains("enable_thinking")
+    {
+        return Err(crate::ModelsError::UnsupportedReasoningControl);
+    }
     let enabled = !matches!(conversation.tool_choice, ToolChoice::None);
     let tools = (enabled && !conversation.tools.is_empty()).then_some(&conversation.tools);
     Ok(template.render(context! {
@@ -25,7 +31,7 @@ pub(super) fn render_model_template(
         bos_token => tokens.bos(),
         eos_token => tokens.eos(),
         add_generation_prompt => true,
-        enable_thinking => true,
+        enable_thinking => reasoning.thinking_enabled(),
     })?)
 }
 
@@ -58,6 +64,7 @@ mod tests {
                 tool_choice: ToolChoice::default(),
             },
             &TemplateTokens::default(),
+            super::super::ReasoningMode::ModelDefault,
         )?;
 
         assert_eq!(rendered.len(), 10);
@@ -86,6 +93,7 @@ mod tests {
             body,
             &request("Explain Rust ownership."),
             &TemplateTokens::new("<s>", "</s>"),
+            super::super::ReasoningMode::ModelDefault,
         )?;
 
         assert_eq!(rendered, "<s>[INST] Explain Rust ownership.[/INST]");
@@ -96,7 +104,15 @@ mod tests {
     fn exposes_tools_only_when_present() -> Result<()> {
         let body = r"{%- if tools is not none -%}[AVAILABLE_TOOLS]{{ tools|tojson }}[/AVAILABLE_TOOLS]{%- endif -%}";
         let mut request = request("Weather?");
-        assert_eq!(render_model_template(body, &request, &TemplateTokens::default())?, "");
+        assert_eq!(
+            render_model_template(
+                body,
+                &request,
+                &TemplateTokens::default(),
+                super::super::ReasoningMode::ModelDefault
+            )?,
+            ""
+        );
         request.tools.push(foundation::conversation::Tool {
             kind: "function".into(),
             function: foundation::conversation::FunctionDefinition {
@@ -105,12 +121,25 @@ mod tests {
                 parameters: serde_json::json!({"type": "object"}),
             },
         });
-        let rendered = render_model_template(body, &request, &TemplateTokens::default())?;
+        let rendered = render_model_template(
+            body,
+            &request,
+            &TemplateTokens::default(),
+            super::super::ReasoningMode::ModelDefault,
+        )?;
         assert!(rendered.starts_with("[AVAILABLE_TOOLS]["));
         assert!(rendered.contains(r#""name":"weather""#));
         assert!(rendered.ends_with("][/AVAILABLE_TOOLS]"));
         request.tool_choice = ToolChoice::None;
-        assert_eq!(render_model_template(body, &request, &TemplateTokens::default())?, "");
+        assert_eq!(
+            render_model_template(
+                body,
+                &request,
+                &TemplateTokens::default(),
+                super::super::ReasoningMode::ModelDefault
+            )?,
+            ""
+        );
         Ok(())
     }
 

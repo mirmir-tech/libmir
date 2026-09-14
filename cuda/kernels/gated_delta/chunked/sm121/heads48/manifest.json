@@ -1,0 +1,81 @@
+{
+  "_generation": {
+    "batch": 1,
+    "chunk_size": 64,
+    "compute_capability": [
+      12,
+      1
+    ],
+    "device": "NVIDIA GB10",
+    "dtype": "bfloat16",
+    "generator_sha256": "05eebe7327e089639fd42823e64770f62de2465adafc1017489a5b4656857c0d",
+    "head_dim": 128,
+    "key_heads": 16,
+    "operation": "chunk_gated_delta_rule",
+    "state_dtype": "float32",
+    "tokens": 2048,
+    "torch_version": "2.13.0+cu130",
+    "value_heads": 48,
+    "vllm_version": "0.29.0"
+  },
+  "cumsum": {
+    "architecture": "sm121",
+    "hash": "f72ff41c1670d85b325b55fb1d525bf39e1faa808a35dc01e8f61dc656915fc8",
+    "selected": [],
+    "shared_memory_bytes": 8,
+    "stages": 3,
+    "symbol": "chunk_local_cumsum_scalar_kernel",
+    "triton_version": "3.7.1",
+    "warps": 2
+  },
+  "h": {
+    "architecture": "sm121",
+    "hash": "b98bf1ddf536c9073e68cf3350a537f4013f208f2ce20f6a238cda4017bbd97b",
+    "selected": [],
+    "shared_memory_bytes": 90632,
+    "stages": 3,
+    "symbol": "chunk_gated_delta_rule_fwd_kernel_h_blockdim64",
+    "triton_version": "3.7.1",
+    "warps": 4
+  },
+  "kkt": {
+    "architecture": "sm121",
+    "hash": "a6d436ae97c40965140758e55193ed4fb17b6c8948291aeb0d019fbe2450dd4a",
+    "selected": [],
+    "shared_memory_bytes": 24576,
+    "stages": 3,
+    "symbol": "chunk_scaled_dot_kkt_fwd_kernel",
+    "triton_version": "3.7.1",
+    "warps": 8
+  },
+  "o": {
+    "architecture": "sm121",
+    "hash": "c106ac0b023b71af9129c42c033ba563911deb23f528767bb672c31597b7750e",
+    "selected": [],
+    "shared_memory_bytes": 40960,
+    "stages": 3,
+    "symbol": "chunk_fwd_kernel_o",
+    "triton_version": "3.7.1",
+    "warps": 2
+  },
+  "solve64": {
+    "architecture": "sm121",
+    "hash": "fa5649eec878d0a535959eb7ad24d14ba84ece0a8db7508fcd17cb07e7b36230",
+    "selected": [],
+    "shared_memory_bytes": 10240,
+    "stages": 3,
+    "symbol": "merge_16x16_to_64x64_inverse_kernel",
+    "triton_version": "3.7.1",
+    "warps": 4
+  },
+  "uw": {
+    "architecture": "sm121",
+    "hash": "37e6b1323ad076e336ce94801fe398b6ff3e714f50ccc50bbf3f6d492b8e3813",
+    "selected": [],
+    "shared_memory_bytes": 33792,
+    "stages": 4,
+    "symbol": "recompute_w_u_fwd_kernel",
+    "triton_version": "3.7.1",
+    "warps": 2
+  }
+}

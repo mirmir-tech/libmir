@@ -34,3 +34,44 @@ fn samples_a_greedy_batch_with_one_argmax() -> Result<()> {
     assert_eq!(tokens.to_vec_u32(&stream)?, vec![0, 2]);
     Ok(())
 }
+
+#[test]
+fn full_vocabulary_sampling_preserves_mass_and_excludes_padding() -> Result<()> {
+    let stream = Stream::new_gpu()?;
+    let logits = Array::from_f32(&[-1000.0, 0.0, 0.0, 100.0], &[1, 1, 4])?
+        .astype(Dtype::Bfloat16, &stream)?;
+    let base = DeviceSampling {
+        vocab_size: 3,
+        top_k: 0,
+        top_p: 1.0,
+        temperature: 0.7,
+        draw: 0.0,
+    };
+    for (draw, expected) in [(0.0, 1), (0.49, 1), (0.51, 2), (0.999_999_94, 2)] {
+        assert_eq!(sample_u32(&logits, DeviceSampling { draw, ..base }, &stream)?, expected);
+    }
+    assert!(sample(&logits, DeviceSampling { top_p: 0.9, ..base }, &stream).is_err());
+    Ok(())
+}
+
+#[test]
+fn full_vocabulary_sampling_uses_fp32_cumulative_mass() -> Result<()> {
+    let stream = Stream::new_gpu()?;
+    let logits =
+        Array::from_f32(&vec![0.0; 4096], &[2, 1, 2048])?.astype(Dtype::Bfloat16, &stream)?;
+    for (draw, expected) in [(0.1, 204), (0.5, 1024), (0.9, 1843), (0.999_999_94, 2047)] {
+        let tokens = sample(
+            &logits,
+            DeviceSampling {
+                vocab_size: 2048,
+                top_k: 0,
+                top_p: 1.0,
+                temperature: 1.0,
+                draw,
+            },
+            &stream,
+        )?;
+        assert_eq!(tokens.to_vec_u32(&stream)?, vec![expected; 2]);
+    }
+    Ok(())
+}

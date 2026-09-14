@@ -1,5 +1,7 @@
 mod decode;
 mod load;
+#[cfg(test)]
+mod prefill;
 mod projection;
 
 use models::layout::LinearAttentionConfig;
@@ -68,6 +70,19 @@ impl GatedDeltaLayer {
         state: &mut GatedDeltaState,
         stream: &Stream,
     ) -> Result<Array> {
+        self.forward_with_gates(input, state, None, stream, |output| {
+            self.out_proj.forward(output, stream)
+        })
+    }
+
+    fn forward_with_gates(
+        &self,
+        input: &Array,
+        state: &mut GatedDeltaState,
+        gates: Option<(Array, Array)>,
+        stream: &Stream,
+        project_output: impl FnOnce(&Array) -> Result<Array>,
+    ) -> Result<Array> {
         let shape = input.shape()?;
         let batch = dimension(&shape, 0)?;
         let sequence = dimension(&shape, 1)?;
@@ -108,8 +123,12 @@ impl GatedDeltaLayer {
             &[batch, sequence, self.config.value_heads, self.config.value_head_dim],
             stream,
         )?;
-        let alpha = self.in_proj_a.forward(input, stream)?;
-        let beta = self.in_proj_b.forward(input, stream)?;
+        let (alpha, beta) = match gates {
+            Some(gates) => gates,
+            None => {
+                (self.in_proj_a.forward(input, stream)?, self.in_proj_b.forward(input, stream)?)
+            },
+        };
         let inputs = GatedDeltaInputs {
             query: &query,
             key: &key,
@@ -134,8 +153,7 @@ impl GatedDeltaLayer {
             gate.native(),
             normalized.native(),
         )?)?;
-        self.out_proj
-            .forward(&output.reshape(&[batch, sequence, value_width], stream)?, stream)
+        project_output(&output.reshape(&[batch, sequence, value_width], stream)?)
     }
 
     pub(crate) fn forward_packed(

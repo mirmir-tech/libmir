@@ -2,6 +2,8 @@ use models::weights::TensorBinding;
 
 use super::{ModelTensors, NormWeight, Result, Stream};
 
+#[cfg(test)]
+pub(in crate::engine) mod pair;
 mod projection;
 
 pub(super) use projection::{BoundEmbedding, BoundLinear, GraphLinear};

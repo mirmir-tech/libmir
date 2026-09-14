@@ -139,7 +139,13 @@ fn greedy(logits: &[f32]) -> Result<u32, Box<dyn std::error::Error>> {
     let (index, _) = logits
         .iter()
         .enumerate()
-        .max_by(|(_, left), (_, right)| left.total_cmp(right))
+        .reduce(|best, candidate| {
+            if candidate.1 > best.1 {
+                candidate
+            } else {
+                best
+            }
+        })
         .ok_or("empty logits")?;
     Ok(u32::try_from(index)?)
 }

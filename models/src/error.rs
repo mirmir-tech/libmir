@@ -7,6 +7,8 @@ pub type Result<T> = std::result::Result<T, ModelsError>;
 
 #[derive(Debug, Error)]
 pub enum ModelsError {
+    #[error("this model does not declare a supported reasoning template control")]
+    UnsupportedReasoningControl,
     #[error("model file is missing: {0}")]
     MissingFile(PathBuf),
     #[error("invalid model config: {0}")]

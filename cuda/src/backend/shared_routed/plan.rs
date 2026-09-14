@@ -48,23 +48,49 @@ impl SharedRoutedExecutionPlanCache {
     }
 
     pub(super) fn reserve(&mut self, tokens: usize) {
-        if self.plans.contains_key(&tokens) || self.plans.len() < RETAINED_PLAN_SHAPES {
+        if self.plans.contains_key(&tokens) {
             return;
         }
-        if let Some(oldest) = self
-            .plans
-            .iter()
-            .min_by_key(|(_, cached)| cached.last_used)
-            .map(|(tokens, _)| *tokens)
+        // Each shape owns scratch for every layer. Bound total token capacity,
+        // not just shape count, to retain roughly one prefill chunk plus decode.
+        // Evict before constructing the replacement so old scratch is freed on
+        // the same CUDA stream before its new allocations are enqueued.
+        let budget = crate::backend::model::DEFAULT_PREFILL_CHUNK_TOKENS
+            .max(tokens)
+            .saturating_add(1);
+        while self.plans.len() >= RETAINED_PLAN_SHAPES
+            || self.retained_tokens().saturating_add(tokens) > budget
         {
+            let Some(oldest) = self
+                .plans
+                .iter()
+                .min_by_key(|(_, cached)| cached.last_used)
+                .map(|(tokens, _)| *tokens)
+            else {
+                break;
+            };
             self.plans.remove(&oldest);
+            tracing::debug!(
+                evicted_tokens = oldest,
+                incoming_tokens = tokens,
+                budget,
+                "evicted CUDA mixed-mixer execution scratch"
+            );
         }
+    }
+
+    fn retained_tokens(&self) -> usize {
+        self.plans.keys().fold(0_usize, |total, tokens| total.saturating_add(*tokens))
     }
 
     pub(super) fn insert(&mut self, tokens: usize, plan: SharedRoutedExecutionPlan) {
         self.reserve(tokens);
         self.clock = self.clock.wrapping_add(1);
         self.plans.insert(tokens, CachedExecutionPlan { plan, last_used: self.clock });
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.plans.clear();
     }
 
     #[cfg(test)]

@@ -1,5 +1,12 @@
 use super::{Array, KvContext, Result, Stream};
 
+#[derive(Clone, Copy)]
+enum Kernel {
+    Direct,
+    #[cfg(test)]
+    TwoPass,
+}
+
 pub(super) fn batchable(contexts: &[&KvContext]) -> bool {
     let Some(first) = contexts.first().and_then(|context| context.paged.as_ref()) else {
         return false;
@@ -51,6 +58,27 @@ pub(super) fn batched(
     stream: &Stream,
     chunk_rows: usize,
 ) -> Result<Vec<Array>> {
+    batched_kernel(queries, contexts, scale, stream, chunk_rows, Kernel::Direct)
+}
+
+#[cfg(test)]
+pub(super) fn two_pass(
+    queries: &[&Array],
+    contexts: &[&KvContext],
+    scale: f32,
+    stream: &Stream,
+) -> Result<Vec<Array>> {
+    batched_kernel(queries, contexts, scale, stream, 12, Kernel::TwoPass)
+}
+
+fn batched_kernel(
+    queries: &[&Array],
+    contexts: &[&KvContext],
+    scale: f32,
+    stream: &Stream,
+    chunk_rows: usize,
+    kernel: Kernel,
+) -> Result<Vec<Array>> {
     if !batchable(contexts) {
         return Err(super::super::Error::InvalidModel(
             "paged contexts are not batch compatible".into(),
@@ -59,7 +87,7 @@ pub(super) fn batched(
     let chunk_rows = chunk_rows.clamp(1, super::super::kernels::BATCHED_PAGED_ROWS);
     let mut chunks = Vec::new();
     for (queries, contexts) in queries.chunks(chunk_rows).zip(contexts.chunks(chunk_rows)) {
-        chunks.push(chunk(queries, contexts, scale, stream)?);
+        chunks.push(chunk(queries, contexts, scale, stream, kernel)?);
     }
     let output = if chunks.len() == 1 {
         chunks.pop().ok_or(super::super::Error::ShapeOverflow)?
@@ -89,6 +117,7 @@ fn chunk(
     contexts: &[&KvContext],
     scale: f32,
     stream: &Stream,
+    kernel: Kernel,
 ) -> Result<Array> {
     let first = paged(contexts[0])?;
     let queries = Array::concatenate(queries, 0, stream)?;
@@ -115,41 +144,45 @@ fn chunk(
     let tables = Array::concatenate(&table_refs, 0, stream)?;
     let dependencies = Array::concatenate(&dependencies, 0, stream)?;
     let capacities = Array::from_u32(&capacities, &[i32::try_from(capacities.len())?])?;
-    let output = stream.batched_paged_attention(
-        [
-            queries.native(),
-            keys[0],
-            keys[1],
-            keys[2],
-            keys[3],
-            keys[4],
-            keys[5],
-            keys[6],
-            keys[7],
-            keys[8],
-            keys[9],
-            keys[10],
-            keys[11],
-            values[0],
-            values[1],
-            values[2],
-            values[3],
-            values[4],
-            values[5],
-            values[6],
-            values[7],
-            values[8],
-            values[9],
-            values[10],
-            values[11],
-            tables.native(),
-            dependencies.native(),
-            capacities.native(),
-        ],
-        first.page_size,
-        context_tokens,
-        scale,
-    )?;
+    let inputs = [
+        queries.native(),
+        keys[0],
+        keys[1],
+        keys[2],
+        keys[3],
+        keys[4],
+        keys[5],
+        keys[6],
+        keys[7],
+        keys[8],
+        keys[9],
+        keys[10],
+        keys[11],
+        values[0],
+        values[1],
+        values[2],
+        values[3],
+        values[4],
+        values[5],
+        values[6],
+        values[7],
+        values[8],
+        values[9],
+        values[10],
+        values[11],
+        tables.native(),
+        dependencies.native(),
+        capacities.native(),
+    ];
+    let output = match kernel {
+        Kernel::Direct => {
+            stream.batched_paged_attention(inputs, first.page_size, context_tokens, scale)?
+        },
+        #[cfg(test)]
+        Kernel::TwoPass => {
+            stream.batched_paged_two_pass(inputs, first.page_size, context_tokens, scale)?
+        },
+    };
     Array::from_native(output)
 }
 

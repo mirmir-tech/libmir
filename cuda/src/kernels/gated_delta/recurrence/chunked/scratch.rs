@@ -21,6 +21,23 @@ pub struct GatedDeltaChunkedScratch {
 }
 
 impl GatedDeltaChunkedScratch {
+    #[cfg(test)]
+    pub(crate) fn poison(&mut self, context: &Context, stream: &Stream) -> Result<()> {
+        for buffer in [&mut self.cumulative_decay, &mut self.matrix] {
+            let mut host = context.allocate_pinned(buffer.len())?;
+            host.copy_from_slice(&vec![f32::NAN; buffer.len()])?;
+            stream.copy_to_device(&mut host, buffer)?;
+        }
+        for buffer in
+            [&mut self.inverse, &mut self.w, &mut self.u, &mut self.chunks, &mut self.value]
+        {
+            let mut host = context.allocate_pinned(buffer.len())?;
+            host.copy_from_slice(&vec![bf16::from_f32(f32::NAN); buffer.len()])?;
+            stream.copy_to_device(&mut host, buffer)?;
+        }
+        Ok(())
+    }
+
     pub fn new(
         context: &Context,
         pool: &MemoryPool,

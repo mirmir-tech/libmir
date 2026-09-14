@@ -29,6 +29,13 @@ impl PagedStore {
         let stop = [1, arena.kv_heads, tokens, arena.head_dim];
         let keys = graph.slice(&keys, &[0, 0, 0, 0], &stop)?;
         let values = graph.slice(&values, &[0, 0, 0, 0], &stop)?;
+        #[cfg(test)]
+        crate::engine::probe::history::pages::record(
+            self.layer,
+            &storage.page_ids[..pages],
+            [arena.keys.native(), arena.values.native()],
+            [&keys, &values],
+        )?;
         drop(arena);
         Ok((Array::from_native(keys)?, Array::from_native(values)?))
     }

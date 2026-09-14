@@ -4,6 +4,7 @@ mod clamped_routed;
 mod decoder;
 mod dense;
 mod embedding;
+mod feed_forward;
 mod gated_delta;
 mod gated_full_attention;
 mod hybrid_layer;
@@ -89,6 +90,7 @@ use linear::{
 use mircuda::{Compiler, Context, DeviceInfo, MemoryPool, Stream};
 pub use model::{
     CudaDecodeBatch, CudaModelSessionConfig, CudaMoeModelSession, CudaMoeModelTemplate,
+    DEFAULT_PREFILL_CHUNK_TOKENS,
 };
 pub use output::{CudaAffineOutputHead, CudaOutputHead};
 pub use planning::{
@@ -125,6 +127,7 @@ pub struct CudaBackend {
 
 #[derive(Debug)]
 struct CudaRuntime {
+    dense_scratch: feed_forward::DenseScratchPool,
     device: DeviceInfo,
     context: Context,
     stream: Stream,

@@ -49,6 +49,7 @@ fn derives_deduplicated_requirements_from_semantics_and_task() -> crate::Result<
                 beta_slow: 1.0,
                 original_context_len: 4096,
                 attention_factor: 1.0,
+                truncate: false,
             });
         }
     }

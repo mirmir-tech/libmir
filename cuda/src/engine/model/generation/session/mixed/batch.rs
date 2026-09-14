@@ -11,11 +11,17 @@ use crate::{
     },
 };
 
+pub(super) const PACKED_PREFILL_TOKEN_LIMIT: usize = 512;
+
 pub(super) fn prefill(
     execution: &mut MixedMixerExecution,
     backend: &CudaBackend,
     chunks: &[PrefillChunk<'_>],
 ) -> Result<Vec<Option<Output>>> {
+    if let Some(outputs) = super::combined::execute(execution, backend, chunks, &[])? {
+        return Ok(outputs.prefill);
+    }
+    execution.combined.clear();
     prefill_rows(execution, backend, chunks)
 }
 
@@ -92,7 +98,7 @@ fn can_pack(chunks: &[PrefillChunk<'_>]) -> bool {
     };
     (2..=2).contains(&chunks.len())
         && !first.final_chunk
-        && chunks.len().saturating_mul(first.tokens.len()) <= 512
+        && chunks.len().saturating_mul(first.tokens.len()) <= PACKED_PREFILL_TOKEN_LIMIT
         && chunks.iter().all(|chunk| {
             chunk.tokens.len() == first.tokens.len()
                 && chunk.final_chunk == first.final_chunk
@@ -146,7 +152,7 @@ fn prefill_packed(
     Ok(outputs)
 }
 
-fn take_sessions(
+pub(super) fn take_sessions(
     sessions: &mut HashMap<Uuid, CudaSharedRoutedModelSession>,
     ids: impl Iterator<Item = Uuid>,
 ) -> Result<Vec<(Uuid, CudaSharedRoutedModelSession)>> {
@@ -161,7 +167,7 @@ fn take_sessions(
     Ok(owned)
 }
 
-fn restore_sessions(
+pub(super) fn restore_sessions(
     sessions: &mut HashMap<Uuid, CudaSharedRoutedModelSession>,
     owned: Vec<(Uuid, CudaSharedRoutedModelSession)>,
 ) {

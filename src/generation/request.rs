@@ -31,6 +31,9 @@ pub struct GenerationRequest {
     pub seed: Option<u64>,
     /// Policy applied after a high-confidence reasoning cycle is detected.
     pub reasoning_cycle: ReasoningCyclePolicy,
+    /// Controls the prompt thinking mode; output limits still count all
+    /// channels.
+    pub reasoning: crate::ReasoningMode,
 }
 
 #[cfg(test)]

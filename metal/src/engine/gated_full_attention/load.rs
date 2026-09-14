@@ -18,6 +18,8 @@ impl GatedFullAttention {
         Ok(Self {
             config,
             query: linear(tensors, prefix, "q_proj", group_size)?,
+            #[cfg(test)]
+            key_value_join: None,
             key: linear(tensors, prefix, "k_proj", group_size)?,
             value: linear(tensors, prefix, "v_proj", group_size)?,
             output: linear(tensors, prefix, "o_proj", group_size)?,
@@ -43,11 +45,15 @@ impl GatedFullAttention {
         norm_shift: f32,
         stream: &Stream,
     ) -> Result<Self> {
+        let key = BoundLinear::load(tensors, bindings.key, stream)?;
+        let value = BoundLinear::load(tensors, bindings.value, stream)?;
         Ok(Self {
+            #[cfg(test)]
+            key_value_join: crate::engine::binding::pair::KeyValueJoin::new(&key, &value, stream)?,
             config,
             query: BoundLinear::load(tensors, bindings.query, stream)?,
-            key: BoundLinear::load(tensors, bindings.key, stream)?,
-            value: BoundLinear::load(tensors, bindings.value, stream)?,
+            key,
+            value,
             output: BoundLinear::load(tensors, bindings.output, stream)?,
             query_norm: adjusted_norm(tensors, bindings.query_norm, norm_shift, stream)?,
             key_norm: adjusted_norm(tensors, bindings.key_norm, norm_shift, stream)?,

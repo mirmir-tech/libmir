@@ -8,6 +8,7 @@ use std::{
     time::Instant,
 };
 
+#[cfg(feature = "cuda")]
 use cuda::{CudaKernelAdmission, CudaNumericalPolicy, CudaOutputHeadPolicy};
 use libmir::{Conversation, Error, GenerationOverrides, Library, Message, RuntimeConfig};
 use models::generation::{GenerationChannel, OutputNormalizer};
@@ -139,7 +140,13 @@ fn selected(
     }
     logits
         .and_then(|trace| {
-            trace.values.iter().enumerate().max_by(|left, right| left.1.total_cmp(right.1))
+            trace.values.iter().enumerate().reduce(|best, candidate| {
+                if candidate.1 > best.1 {
+                    candidate
+                } else {
+                    best
+                }
+            })
         })
         .and_then(|(index, _)| u32::try_from(index).ok())
         .ok_or("generation returned neither token nor logits")
@@ -159,31 +166,36 @@ fn conversation(prompt: &str) -> Conversation {
     }
 }
 
+#[cfg_attr(not(feature = "cuda"), allow(clippy::unnecessary_wraps))]
 fn runtime() -> Result<RuntimeConfig, &'static str> {
     let mut config = RuntimeConfig::default();
     config.scheduler.max_batch_requests = 1;
     config.scheduler.decode_batch_wait_us = 0;
-    match env::var("MIRMIR_SEMANTIC_OUTPUT_HEAD").as_deref().unwrap_or("auto") {
-        "auto" => {
-            config.cuda.planning.numerical = CudaNumericalPolicy::Throughput;
-            config.cuda.planning.admission = CudaKernelAdmission::Experimental;
-            config.cuda.planning.output_head = CudaOutputHeadPolicy::Auto;
-        },
-        "bf16-experimental" => {
-            config.cuda.planning.numerical = CudaNumericalPolicy::Throughput;
-            config.cuda.planning.admission = CudaKernelAdmission::Experimental;
-            config.cuda.planning.output_head = CudaOutputHeadPolicy::Bf16;
-        },
-        "bf16-stable" => config.cuda.planning.output_head = CudaOutputHeadPolicy::Bf16,
-        _ => {
-            return Err(
-                "MIRMIR_SEMANTIC_OUTPUT_HEAD must be auto, bf16-experimental, or bf16-stable",
-            );
-        },
-    }
-    config.cuda.tuning.cache_directory = env::var_os("MIRMIR_CUDA_TUNING_CACHE").map(Into::into);
-    if env::var_os("MIRMIR_SEMANTIC_DISABLE_TUNING").is_some() {
-        config.cuda.tuning.mode = runtime::tuning::TuningMode::Disabled;
+    #[cfg(feature = "cuda")]
+    {
+        match env::var("MIRMIR_SEMANTIC_OUTPUT_HEAD").as_deref().unwrap_or("auto") {
+            "auto" => {
+                config.cuda.planning.numerical = CudaNumericalPolicy::Throughput;
+                config.cuda.planning.admission = CudaKernelAdmission::Experimental;
+                config.cuda.planning.output_head = CudaOutputHeadPolicy::Auto;
+            },
+            "bf16-experimental" => {
+                config.cuda.planning.numerical = CudaNumericalPolicy::Throughput;
+                config.cuda.planning.admission = CudaKernelAdmission::Experimental;
+                config.cuda.planning.output_head = CudaOutputHeadPolicy::Bf16;
+            },
+            "bf16-stable" => config.cuda.planning.output_head = CudaOutputHeadPolicy::Bf16,
+            _ => {
+                return Err(
+                    "MIRMIR_SEMANTIC_OUTPUT_HEAD must be auto, bf16-experimental, or bf16-stable",
+                );
+            },
+        }
+        config.cuda.tuning.cache_directory =
+            env::var_os("MIRMIR_CUDA_TUNING_CACHE").map(Into::into);
+        if env::var_os("MIRMIR_SEMANTIC_DISABLE_TUNING").is_some() {
+            config.cuda.tuning.mode = runtime::tuning::TuningMode::Disabled;
+        }
     }
     Ok(config)
 }

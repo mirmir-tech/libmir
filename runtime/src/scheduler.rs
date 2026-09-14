@@ -2,6 +2,50 @@ use std::collections::VecDeque;
 
 use uuid::Uuid;
 
+/// Admission preference for cached continuations during resident decode.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CachedPrefillPolicy {
+    /// Preserve the backend's normal prefill/decode scheduling.
+    #[default]
+    BackendDefault,
+    /// Admit one cached queue head with at most one block of work per step.
+    /// This lowers refill first-token latency at the cost of resident decode
+    /// latency.
+    InterleaveOneBlock,
+}
+
+impl std::fmt::Display for CachedPrefillPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::BackendDefault => "backend_default",
+            Self::InterleaveOneBlock => "interleave_one_block",
+        })
+    }
+}
+
+/// When newly admitted prompts may begin decoding.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrefillDecodePolicy {
+    /// Preserve the backend's latency/throughput scheduling policy.
+    #[default]
+    BackendDefault,
+    /// Finish a bounded admitted cohort before publishing its first tokens.
+    /// Improves decode occupancy at the cost of early-request first-token
+    /// latency.
+    CompleteCohort,
+}
+
+impl std::fmt::Display for PrefillDecodePolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::BackendDefault => "backend_default",
+            Self::CompleteCohort => "complete_cohort",
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ScheduledRequest {
     pub id: Uuid,
@@ -16,6 +60,8 @@ pub struct SchedulerConfig {
     pub prefill_batch_wait_us: u64,
     pub decode_batch_wait_us: u64,
     pub decode_priority_burst: usize,
+    pub cached_prefill_policy: CachedPrefillPolicy,
+    pub prefill_decode_policy: PrefillDecodePolicy,
 }
 
 #[derive(Debug, Clone)]
@@ -92,6 +138,8 @@ impl Default for SchedulerConfig {
             prefill_batch_wait_us: 200,
             decode_batch_wait_us: 200,
             decode_priority_burst: 8,
+            cached_prefill_policy: CachedPrefillPolicy::default(),
+            prefill_decode_policy: PrefillDecodePolicy::default(),
         }
     }
 }

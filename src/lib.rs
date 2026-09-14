@@ -27,6 +27,8 @@ pub use foundation::{
 };
 pub use generation::{GenerationOutput, GenerationRequest, ReasoningCyclePolicy};
 pub use memory::{MemorySnapshot, ModelMemoryEstimate};
+#[cfg(feature = "metal")]
+pub use metal::DecodeReservation as MetalDecodeReservation;
 pub use model::{
     AdmissionCheck, AdmissionCheckKind, AdmissionStatus, BackendAdmissionReport,
     CheckpointEncoding, IMAGE_PLACEHOLDER, Library, MODEL_FORMAT_REGISTRY_SCHEMA_VERSION, Model,
@@ -35,7 +37,7 @@ pub use model::{
     WeightEncoding,
 };
 pub use models::{
-    chat::TemplateKind,
+    chat::{ReasoningMode, TemplateKind},
     execution::{
         ArchitectureCapability, ArchitectureRequirements, EmbeddingTask, ModelTask, PoolingMode,
         TaskExecutionPlan,
@@ -54,6 +56,7 @@ pub use runtime::{
     kv::{CacheStats, KvCacheDType},
     metrics::GenerationMetrics,
     progress::{ProgressCount, ProgressEvent, ProgressStage, ProgressUnit},
+    scheduler::{CachedPrefillPolicy, PrefillDecodePolicy},
 };
 pub use session::Session;
 pub use telemetry::DeviceTelemetrySnapshot;

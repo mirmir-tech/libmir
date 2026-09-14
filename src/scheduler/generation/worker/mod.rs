@@ -1,6 +1,10 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    sync::mpsc::{Receiver, TryRecvError},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{Receiver, TryRecvError},
+    },
 };
 
 use runtime::{
@@ -17,6 +21,7 @@ use crate::{Engine, engine::PrefillExecutionProfile};
 
 mod admission;
 mod budget;
+mod cancellation;
 mod finish;
 mod handoff;
 mod prefill;
@@ -27,6 +32,7 @@ pub(super) struct Worker {
     model: ModelHandle,
     config: SchedulerConfig,
     commands: Receiver<Command>,
+    interrupt: Arc<AtomicBool>,
     decode: VecDeque<PendingDecode>,
     prefill: VecDeque<PendingPrefill>,
     active_decode: HashMap<uuid::Uuid, Vec<BlockId>>,
@@ -45,12 +51,15 @@ impl Worker {
         config: SchedulerConfig,
         commands: Receiver<Command>,
         prefill_profile: PrefillExecutionProfile,
+        interrupt: Arc<AtomicBool>,
     ) -> Self {
+        let prefill_profile = prefill_profile.with_decode_policy(config.prefill_decode_policy);
         Self {
             engine,
             model,
             config,
             commands,
+            interrupt,
             decode: VecDeque::new(),
             prefill: VecDeque::new(),
             active_decode: HashMap::new(),
@@ -65,6 +74,9 @@ impl Worker {
 
     pub(super) fn run(mut self) {
         loop {
+            // Clear before reading commands so a concurrent cancellation either
+            // joins this maintenance pass or interrupts the next GPU quantum.
+            self.interrupt.store(false, Ordering::Release);
             if self.stopping {
                 self.fail_all("accelerator generation worker stopped");
                 return;
@@ -80,9 +92,12 @@ impl Worker {
                 self.fail_all("accelerator generation worker stopped");
                 return;
             }
+            self.cancel_prefills();
             self.collect_decode_admission();
             self.collect_prefill_admission();
+            self.cancel_prefills();
             self.prepare_prefill();
+            self.cancel_prefills();
             if self.has_executable_work() {
                 self.execute_step();
             } else if self.has_work() {
@@ -116,6 +131,7 @@ impl Worker {
                 self.resolve_prefill_handoff(session);
                 self.active_decode.remove(&session);
             },
+            Command::Cancellation => {},
             Command::Stop => self.stopping = true,
         }
     }
@@ -161,12 +177,24 @@ impl Worker {
                     response.report(event);
                 }
             };
+            let cancellations = self
+                .active_prefill
+                .as_ref()
+                .into_iter()
+                .flat_map(|active| &active.requests)
+                .map(|pending| pending.cancellation.clone())
+                .collect::<Vec<_>>();
+            let interrupt = self.interrupt.clone();
             self.engine.execute_generation_step(
                 &self.model,
                 sequences,
                 self.active_prefill.as_mut().map(|active| &mut active.batch),
                 budget,
                 &mut report,
+                move || {
+                    interrupt.load(Ordering::Acquire)
+                        || cancellations.iter().any(crate::CancellationToken::is_cancelled)
+                },
             )
         };
         match result {

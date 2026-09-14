@@ -14,6 +14,7 @@ mod mxfp4;
 mod mxfp8;
 mod nvfp4;
 mod packed_integer;
+mod routing;
 use bitsandbytes::BitsAndBytes4BitLinear;
 pub(in crate::engine) use embedding::BoundEmbedding;
 use float8::Float8Linear;

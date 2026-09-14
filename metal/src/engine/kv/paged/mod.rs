@@ -2,8 +2,11 @@ mod allocation;
 mod context;
 #[cfg(test)]
 mod inspection;
+mod planning;
 mod pool;
+pub use planning::DecodeCapacity;
 mod reservation;
+mod validation;
 mod write;
 
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -34,6 +37,7 @@ pub(super) struct PagedStore {
 
 #[derive(Debug)]
 struct Storage {
+    input_dtype: mirtal::DType,
     arena: Arc<Mutex<Arena>>,
     table: Array,
     page_ids: Vec<u32>,
@@ -112,6 +116,7 @@ impl PagedStore {
                 }
                 drop(arena);
                 Ok(Storage {
+                    input_dtype: storage.input_dtype,
                     arena: Arc::clone(&storage.arena),
                     table: Array::from_native(storage.table.native().clone())?,
                     identity: page_ids

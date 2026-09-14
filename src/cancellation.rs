@@ -5,6 +5,8 @@ use std::sync::{
 
 use crate::{Error, Result};
 
+pub const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
+
 #[derive(Debug, Clone, Default)]
 /// Thread-safe signal used to stop generation between inference steps.
 pub struct CancellationToken(Arc<AtomicBool>);

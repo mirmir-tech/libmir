@@ -9,6 +9,7 @@ use crate::{
     native::{error::Result, session::SessionState},
 };
 
+mod memory;
 mod retention;
 
 #[test]
@@ -32,11 +33,13 @@ fn continuation_replays_an_unaligned_terminal_page() -> Result<()> {
     cache.insert("model", &[1, 2, 3, 4, 5], &state, &logits, Some(2), 100)?;
 
     let (continued, continued_logits) = cache
-        .restore_longest("model", &[1, 2, 3, 4, 5, 6])?
-        .ok_or(crate::native::error::Error::NoPrefixLogits)?;
+        .lease_longest("model", &[1, 2, 3, 4, 5, 6])?
+        .ok_or(crate::native::error::Error::NoPrefixLogits)?
+        .restored;
     let (exact, exact_logits) = cache
-        .restore_longest("model", &[1, 2, 3, 4, 5])?
-        .ok_or(crate::native::error::Error::NoPrefixLogits)?;
+        .lease_longest("model", &[1, 2, 3, 4, 5])?
+        .ok_or(crate::native::error::Error::NoPrefixLogits)?
+        .restored;
 
     assert_eq!(continued.position, 4);
     assert!(continued_logits.is_none());
@@ -53,15 +56,17 @@ fn continuation_replays_an_unaligned_checkpoint_page() -> Result<()> {
     cache.insert_checkpoint("model", &[1, 2, 3, 4, 5], &state, 2, 100)?;
 
     let (continued, logits) = cache
-        .restore_longest("model", &[1, 2, 3, 4, 5, 6])?
-        .ok_or(crate::native::error::Error::NoPrefixLogits)?;
+        .lease_longest("model", &[1, 2, 3, 4, 5, 6])?
+        .ok_or(crate::native::error::Error::NoPrefixLogits)?
+        .restored;
 
     assert_eq!(continued.position, 4);
     assert!(logits.is_none());
 
     let (completed, completed_logits) = cache
-        .restore_longest("model", &[1, 2, 3, 4, 5])?
-        .ok_or(crate::native::error::Error::NoPrefixLogits)?;
+        .lease_longest("model", &[1, 2, 3, 4, 5])?
+        .ok_or(crate::native::error::Error::NoPrefixLogits)?
+        .restored;
     assert_eq!(completed.position, 4);
     assert!(completed_logits.is_none());
     Ok(())
@@ -78,8 +83,9 @@ fn shared_checkpoints_count_only_the_largest_group_footprint() -> Result<()> {
     cache.insert("model", &[1, 2, 3], &state, &logits, None, 60)?;
 
     let (restored, logits) = cache
-        .restore_longest("model", &[1, 2, 9])?
-        .ok_or(crate::native::error::Error::NoPrefixLogits)?;
+        .lease_longest("model", &[1, 2, 9])?
+        .ok_or(crate::native::error::Error::NoPrefixLogits)?
+        .restored;
 
     assert_eq!(restored.position, 2);
     assert!(logits.is_none());
@@ -130,12 +136,14 @@ fn evicts_complete_sequence_groups_in_lru_order() -> Result<()> {
 }
 
 #[test]
-fn reserves_one_group_before_computing_a_cache_miss() -> Result<()> {
+fn lookup_miss_preserves_groups_until_explicit_reservation() -> Result<()> {
     let mut cache = PrefixCache::new(2, usize::MAX);
     insert_snapshot(&mut cache, 1, 1, 100)?;
     insert_snapshot(&mut cache, 2, 2, 100)?;
 
-    assert!(cache.restore_longest("missing", &[1])?.is_none());
+    assert!(cache.lease_longest("missing", &[1])?.is_none());
+    assert_eq!(cache.group_count(), 2);
+    cache.reserve_miss_slot();
 
     assert!(!cache.groups.contains_key(&1));
     assert!(cache.groups.contains_key(&2));
@@ -215,6 +223,7 @@ fn insert_snapshot_with_key(
         terminal: Some(PrefixSnapshot {
             state: SessionState::new(DecoderCache::new(&[], 1)?),
             logits: Some(Array::from_u32(&[0], &[1])?),
+            recurrent: std::collections::HashSet::default(),
         }),
         checkpoints: HashMap::new(),
         bytes,

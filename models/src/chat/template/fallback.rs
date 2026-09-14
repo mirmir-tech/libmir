@@ -1,26 +1,31 @@
 use foundation::conversation::Conversation;
 
-use super::{TemplateKind, config::TemplateTokens};
+use super::{ReasoningMode, TemplateKind, config::TemplateTokens};
 
 pub(super) fn render_builtin(
     conversation: &Conversation,
     kind: TemplateKind,
     tokens: &TemplateTokens,
+    reasoning: ReasoningMode,
 ) -> String {
     match kind {
         TemplateKind::ChatMl => render_chatml(conversation),
-        TemplateKind::QwenChatMl => render_qwen(conversation),
+        TemplateKind::QwenChatMl => render_qwen(conversation, reasoning),
         TemplateKind::TurnDelimited => render_turns(conversation, tokens),
         TemplateKind::MistralInst => render_mistral(conversation, tokens),
-        TemplateKind::Gemma4 => render_gemma4(conversation, tokens),
+        TemplateKind::Gemma4 => render_gemma4(conversation, tokens, reasoning),
         TemplateKind::Plain => render_plain(conversation),
         TemplateKind::ModelJinja => unreachable!("model template has a Jinja body"),
     }
 }
 
-fn render_qwen(conversation: &Conversation) -> String {
+fn render_qwen(conversation: &Conversation, reasoning: ReasoningMode) -> String {
     let mut prompt = render_chatml(conversation);
-    prompt.push_str("<think>\n");
+    prompt.push_str(if reasoning.thinking_enabled() {
+        "<think>\n"
+    } else {
+        "<think>\n\n</think>\n\n"
+    });
     prompt
 }
 
@@ -93,14 +98,21 @@ fn render_turns(conversation: &Conversation, tokens: &TemplateTokens) -> String 
     prompt
 }
 
-fn render_gemma4(conversation: &Conversation, tokens: &TemplateTokens) -> String {
+fn render_gemma4(
+    conversation: &Conversation,
+    tokens: &TemplateTokens,
+    reasoning: ReasoningMode,
+) -> String {
     let Some((start, end)) = tokens.turn_tokens() else {
         unreachable!("Gemma 4 fallback requires turn tokens");
     };
     let mut messages = conversation.messages.as_slice();
     let mut prompt = tokens.bos().to_owned();
     prompt.push_str(start);
-    prompt.push_str("system\n<|think|>\n");
+    prompt.push_str("system\n");
+    if reasoning.thinking_enabled() {
+        prompt.push_str("<|think|>\n");
+    }
     if let Some(message) = messages
         .first()
         .filter(|message| matches!(message.role.as_str(), "system" | "developer"))

@@ -9,6 +9,8 @@ use runtime::{
 use super::Output;
 use crate::{Error, Result, engine::CudaEngine};
 
+mod cancellation;
+mod combined;
 mod plan;
 mod prefix;
 mod profile;

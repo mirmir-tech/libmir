@@ -105,7 +105,8 @@ impl Library {
                 engine,
                 handle,
                 cache: cache.cache,
-                cache_cohort: CacheCohort::new(
+                cache_cohort: CacheCohort::for_backend(
+                    &target,
                     config.scheduler.decode_batch_wait_us,
                     config.scheduler.max_batch_tokens,
                     config.kv_cache.block_size,

@@ -10,6 +10,7 @@ use runtime::{
 use super::{Engine, EngineInner};
 use crate::Result;
 
+mod cancellation;
 mod cohort;
 mod profile;
 pub use cohort::EnginePrefillCohort;
@@ -114,12 +115,6 @@ impl Engine {
             #[cfg(feature = "metal")]
             EngineInner::Metal(_) => metal_schedule.is_none_or(|value| value.interleave_decode),
         };
-        let collect_long_prefill_window = match &self.inner {
-            #[cfg(feature = "cuda")]
-            EngineInner::Cuda(_) => false,
-            #[cfg(feature = "metal")]
-            EngineInner::Metal(_) => true,
-        };
         Ok(PrefillExecutionProfile {
             chunk_tokens: chunk_tokens.max(1),
             completion_round_tokens: completion_round_tokens.max(1),
@@ -134,7 +129,6 @@ impl Engine {
             cached_prefix_completion_slack_tokens,
             defer_new_decode,
             interleave_prefill_decode,
-            collect_long_prefill_window,
         })
     }
 
@@ -169,7 +163,10 @@ impl Engine {
         prefill: Option<&mut EnginePrefillBatch>,
         prefill_budget: usize,
         progress: &mut dyn FnMut(usize, ProgressEvent),
+        should_yield: impl FnMut() -> bool + Send + 'static,
     ) -> Result<EngineGenerationStepOutput> {
+        #[cfg(not(feature = "metal"))]
+        drop(should_yield);
         let request = if sequences.is_empty() {
             None
         } else {
@@ -206,11 +203,12 @@ impl Engine {
                     #[cfg(feature = "cuda")]
                     Some(EnginePrefillBatch::Cuda(_)) => return Err(batch_backend_mismatch()),
                 };
-                let output = metal.execute_generation_step(
+                let output = metal.execute_generation_step_until(
                     request.as_ref(),
                     batch.as_deref(),
                     prefill_budget,
                     progress,
+                    should_yield,
                 )?;
                 Ok(EngineGenerationStepOutput {
                     decode: output.decode,

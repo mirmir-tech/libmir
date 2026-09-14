@@ -11,9 +11,15 @@ use super::{
 };
 use crate::FusionMode;
 
+#[cfg(test)]
+mod aligned;
+#[cfg(test)]
+mod diagnosis;
 mod load;
 mod plan;
 mod routed;
+#[cfg(test)]
+mod tiles;
 use load::{linear, projection_biases};
 use routed::RoutedGateUp;
 
@@ -119,8 +125,9 @@ impl SharedExpertMoe {
     }
 
     pub fn forward(&self, input: &Array, stream: &Stream) -> Result<Array> {
-        let scores = self.router.forward(input, stream)?;
-        let routing = scores.router_top_k_unit(i32::try_from(self.config.top_k)?, stream)?;
+        let routing = self.router.route_unit(input, i32::try_from(self.config.top_k)?, stream)?;
+        #[cfg(test)]
+        crate::engine::probe::routing::record(&routing.indices)?;
         let routed = self.routed(input, &routing.indices, &routing.weights, stream)?;
         routed.add(&self.shared(input, stream)?, stream)
     }
@@ -147,6 +154,18 @@ impl SharedExpertMoe {
         weights: &Array,
         stream: &Stream,
     ) -> Result<Array> {
+        #[cfg(test)]
+        if let Some(output) = self.aligned_routed(input, indices, weights, stream)? {
+            return Ok(output);
+        }
+        #[cfg(test)]
+        if stream.config().diagnostics.moe_prefill == crate::config::MoePrefill::Tiles64
+            && indices.native().len() > 1024
+        {
+            let grouped = input.group_expert_inputs(indices, self.config.expert_count, stream)?;
+            let output = self.tiled_mlp(&grouped, stream.kernels().expert_tiles(), stream)?;
+            return grouped.restore_weighted(&output, weights, stream);
+        }
         let (group_size, bits) = self.routed_gate_up.tuning_format();
         let spec = RoutingSpec {
             experts: self.config.expert_count,

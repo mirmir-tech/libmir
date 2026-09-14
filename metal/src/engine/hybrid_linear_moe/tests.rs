@@ -98,7 +98,7 @@ fn packed_prefill_matches_independent_rows() -> Result<()> {
     Ok(())
 }
 
-fn write_config(root: &Path) -> Result<()> {
+pub fn write_config(root: &Path) -> Result<()> {
     let config = json!({
         "architectures": ["HybridForCausalLM"],
         "hidden_size": 32,
@@ -126,7 +126,7 @@ fn write_config(root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn write_weights(path: &Path) -> Result<()> {
+pub fn write_weights(path: &Path) -> Result<()> {
     let layer = "language_model.model.layers.0";
     let full = "language_model.model.layers.1";
     let specs = [

@@ -1,4 +1,3 @@
-use foundation::conversation::Conversation;
 use models::generation::GenerationSettings;
 use runtime::backend::{PrefillOutput, SamplingLogits};
 
@@ -15,20 +14,30 @@ pub(super) enum PreparedGeneration {
 impl PreparedGeneration {
     pub(super) fn new(
         model: &Model,
-        conversation: &Conversation,
+        request: &super::GenerationRequest,
         settings: GenerationSettings,
         encoded_image: Option<&[u8]>,
     ) -> Result<Self> {
         let Some(encoded_image) = encoded_image else {
-            return Ok(Self::Text(
-                model.descriptor().prepare_with_settings(conversation, settings)?,
-            ));
+            return Ok(Self::Text(model.descriptor().prepare_with_reasoning(
+                &request.conversation,
+                settings,
+                request.reasoning,
+            )?));
         };
+        if request.reasoning != crate::ReasoningMode::ModelDefault {
+            return Err(models::ModelsError::InvalidConfig(
+                "explicit reasoning mode is not supported for image requests".into(),
+            )
+            .into());
+        }
         #[cfg(any(feature = "cuda", feature = "metal"))]
         {
-            Ok(Self::Vision(
-                model.prepare_image_with_settings(conversation, encoded_image, settings)?,
-            ))
+            Ok(Self::Vision(model.prepare_image_with_settings(
+                &request.conversation,
+                encoded_image,
+                settings,
+            )?))
         }
         #[cfg(not(any(feature = "cuda", feature = "metal")))]
         {
@@ -74,6 +83,7 @@ impl PreparedGeneration {
         session: &mut Session,
         reserved_tokens: usize,
         sampling: SamplingLogits,
+        cancellation: &crate::CancellationToken,
         progress: &mut dyn FnMut(ProgressEvent),
     ) -> Result<PrefillOutput> {
         match self {
@@ -82,6 +92,7 @@ impl PreparedGeneration {
                 &prepared.cache_checkpoints,
                 reserved_tokens,
                 sampling,
+                cancellation,
                 progress,
             ),
             #[cfg(any(feature = "cuda", feature = "metal"))]

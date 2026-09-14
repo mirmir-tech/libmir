@@ -15,6 +15,7 @@ fn admits_dynamic_geometry_instead_of_one_checkpoint_size() -> crate::Result<()>
     assert_eq!(config.hidden, 64);
     assert_eq!(config.intermediate, 96);
     assert_eq!(config.top_k, 2);
+    assert!(!config.rope_truncate);
     Ok(())
 }
 
@@ -69,6 +70,7 @@ fn spec(
                             beta_slow: 1.0,
                             original_context_len: 4096,
                             attention_factor: 1.0,
+                            truncate: false,
                         }),
                     }),
                 }),

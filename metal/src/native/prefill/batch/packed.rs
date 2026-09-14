@@ -1,10 +1,23 @@
+use std::time::Instant;
+
 use super::{Batch, Sequence};
 use crate::{
     MetalProgressEvent,
     native::{error::Result, model::LoadedModel},
 };
 
-type PackedStep = Option<(usize, Vec<(usize, MetalProgressEvent)>)>;
+pub(super) enum PackedStep {
+    Advanced(usize, Vec<(usize, MetalProgressEvent)>),
+    #[cfg(test)]
+    InsufficientBudget,
+    Unavailable,
+}
+
+#[cfg(test)]
+pub(super) enum RemainderPolicy {
+    Consume,
+    PreserveCohort,
+}
 const MAX_PACKED_PREFILL_TOKEN_PAIRS: usize = 32 * 1_024 * 1_024;
 
 impl Batch {
@@ -16,7 +29,7 @@ impl Batch {
         self.workspace_constrained = false;
         let model = loaded.execution.decoder()?;
         if !model.supports_packed_prefill() {
-            return Ok(None);
+            return Ok(PackedStep::Unavailable);
         }
         let Some(position) = self
             .sequences
@@ -24,8 +37,15 @@ impl Batch {
             .find(|sequence| sequence.prefill_count(loaded, 1).is_some())
             .map(|sequence| sequence.position)
         else {
-            return Ok(None);
+            return Ok(PackedStep::Unavailable);
         };
+        #[cfg(test)]
+        let row_limit = match self.remainder_policy {
+            RemainderPolicy::Consume => budget,
+            RemainderPolicy::PreserveCohort => usize::MAX,
+        };
+        #[cfg(not(test))]
+        let row_limit = budget;
         let candidates = self
             .sequences
             .iter()
@@ -34,10 +54,16 @@ impl Batch {
                 sequence.position == position && sequence.prefill_count(loaded, 1).is_some()
             })
             .map(|(row, _)| row)
-            .take(budget)
+            .take(row_limit)
             .collect::<Vec<_>>();
         if candidates.len() < 2 {
-            return Ok(None);
+            return Ok(PackedStep::Unavailable);
+        }
+        #[cfg(test)]
+        if candidates.len() > budget {
+            // A remainder smaller than the cohort must not move only some rows
+            // forward: subsequent steps would lose their common position.
+            return Ok(PackedStep::InsufficientBudget);
         }
         let row_budget = budget / candidates.len();
         let count = candidates
@@ -46,7 +72,7 @@ impl Batch {
             .min()
             .unwrap_or(0);
         if count == 0 {
-            return Ok(None);
+            return Ok(PackedStep::Unavailable);
         }
         let work_fits = packed_prefill_work_fits(candidates.len(), position, count);
         let memory_fits =
@@ -60,7 +86,7 @@ impl Batch {
                 memory_constrained = self.workspace_constrained,
                 "using sequential Metal prefill to preserve workspace headroom"
             );
-            return Ok(None);
+            return Ok(PackedStep::Unavailable);
         }
         let mut selected = vec![false; self.sequences.len()];
         for row in &candidates {
@@ -72,7 +98,12 @@ impl Batch {
             .enumerate()
             .filter_map(|(row, sequence)| selected[row].then_some(sequence))
             .collect::<Vec<&mut Sequence>>();
+        let advancing = Instant::now();
         Sequence::advance_packed(loaded, &mut sequences, count)?;
+        let elapsed = advancing.elapsed();
+        for sequence in sequences {
+            sequence.timing.record(elapsed);
+        }
         let events = candidates
             .iter()
             .map(|row| {
@@ -87,7 +118,7 @@ impl Batch {
             })
             .collect();
         self.cursor = (candidates[candidates.len() - 1] + 1) % self.sequences.len();
-        Ok(Some((count * candidates.len(), events)))
+        Ok(PackedStep::Advanced(count * candidates.len(), events))
     }
 }
 

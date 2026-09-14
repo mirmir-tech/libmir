@@ -70,8 +70,7 @@ impl HybridMoeModel {
             if evaluation_step
                 .is_some_and(|step| (index + 1) % step == 0 || index + 1 == self.layers.len())
             {
-                hidden.async_eval(stream)?;
-                stream.synchronize()?;
+                crate::engine::diagnostics::evaluate_segment(&hidden, stream)?;
             }
         }
         Ok(hidden)

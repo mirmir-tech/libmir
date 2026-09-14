@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use models::generation::GenerationSettings;
 use runtime::{
-    backend::{CandidateLogitsTrace, LogitsTrace, SamplingLogits},
+    backend::{CandidateLogitsTrace, LogitsTrace, PrefillOutput, SamplingLogits},
     metrics::GenerationMetricsRecorder,
     sampling::{Sampler, SamplerConfig},
 };
@@ -107,4 +107,20 @@ pub(super) fn choose_timed(
     let result = choose(token, logits, candidates, history, sampler);
     metrics.record_sampling(started.elapsed());
     result
+}
+
+pub(super) fn choose_prefill(
+    prefill: &PrefillOutput,
+    history: Option<&[u32]>,
+    sampler: &mut Sampler,
+    metrics: &mut GenerationMetricsRecorder,
+) -> Result<u32> {
+    choose_timed(
+        metrics,
+        prefill.next_token,
+        prefill.logits.as_ref(),
+        prefill.candidates.as_ref(),
+        history.unwrap_or_default(),
+        sampler,
+    )
 }

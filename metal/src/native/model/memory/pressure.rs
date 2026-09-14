@@ -55,7 +55,7 @@ impl LoadedModel {
     }
 }
 
-fn prefix_reclamation_needed(memory: crate::engine::MemoryStats) -> bool {
+pub(super) fn prefix_reclamation_needed(memory: crate::engine::MemoryStats) -> bool {
     let usable = usable_memory(memory);
     usable > 0
         && memory.active.saturating_add(memory.cached)

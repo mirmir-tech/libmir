@@ -1,9 +1,11 @@
 mod convolution;
 mod fallback;
 mod layer;
+mod state;
 mod update;
 
 pub use layer::{GatedDeltaLayer, GatedDeltaLayerConfig};
+use state::StateArray;
 
 use super::{Array, Error, Result, Stream};
 
@@ -20,8 +22,8 @@ pub struct GatedDeltaInputs<'a> {
 
 #[derive(Debug, Default)]
 pub struct GatedDeltaState {
-    value: Option<Array>,
-    convolution: Option<Array>,
+    value: Option<StateArray>,
+    convolution: Option<StateArray>,
     offset: usize,
 }
 
@@ -43,25 +45,42 @@ impl GatedDeltaState {
 
     pub(crate) fn detach_evaluated_graphs(&self, stream: &Stream) -> Result<()> {
         for array in [&self.value, &self.convolution].into_iter().flatten() {
-            array.detach_graph(stream)?;
+            array.graph_root().detach_graph(stream)?;
         }
         Ok(())
     }
 
     pub(crate) fn graph_roots(&self) -> impl Iterator<Item = &Array> {
-        [self.value.as_ref(), self.convolution.as_ref()].into_iter().flatten()
+        [self.value.as_ref(), self.convolution.as_ref()]
+            .into_iter()
+            .flatten()
+            .map(StateArray::graph_root)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn prepare_prefix_retention(&mut self, stream: &Stream) -> Result<()> {
+        if let Some(history) = &self.convolution {
+            let compact = stream.native().graph().contiguous(history.native())?;
+            self.convolution = Some(Array::from_native(compact)?.into());
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn convolution_root(&self) -> Option<&Array> {
+        self.convolution.as_ref().map(StateArray::graph_root)
     }
 
     pub fn snapshot(&self) -> Result<Self> {
         Ok(Self {
-            value: clone_array(self.value.as_ref())?,
-            convolution: clone_array(self.convolution.as_ref())?,
+            value: self.value.as_ref().map(StateArray::try_clone).transpose()?,
+            convolution: self.convolution.as_ref().map(StateArray::try_clone).transpose()?,
             offset: self.offset,
         })
     }
 
     pub fn values(&self) -> Result<Array> {
-        clone_array(self.value.as_ref())?
+        clone_array(self.value.as_deref())?
             .ok_or_else(|| Error::InvalidModel("Gated Delta cache has no state".into()))
     }
 
@@ -95,10 +114,25 @@ impl GatedDeltaState {
     }
 
     pub(crate) fn compiled_decode_state(&self) -> Option<(&Array, &Array)> {
-        self.value.as_ref().zip(self.convolution.as_ref())
+        self.value.as_deref().zip(self.convolution.as_deref())
     }
 
     pub(crate) fn commit_compiled_decode(&mut self, value: Array, convolution: Array) {
+        self.commit_packed_decode(value.into(), convolution.into());
+    }
+
+    #[cfg(test)]
+    pub(crate) fn discard_packed_source(&mut self) -> Result<()> {
+        self.value = clone_array(self.value.as_deref())?.map(StateArray::from);
+        self.convolution = clone_array(self.convolution.as_deref())?.map(StateArray::from);
+        Ok(())
+    }
+
+    fn compiled_batch_state(&self) -> Option<(&StateArray, &StateArray)> {
+        self.value.as_ref().zip(self.convolution.as_ref())
+    }
+
+    fn commit_packed_decode(&mut self, value: StateArray, convolution: StateArray) {
         self.value = Some(value);
         self.convolution = Some(convolution);
         self.offset += 1;

@@ -11,7 +11,10 @@ use crate::{
 
 mod batch;
 mod checkpoint;
+mod combined;
+mod prefill_budget;
 use checkpoint::PrefixCheckpoints;
+use prefill_budget::reusable_prefill_budget;
 
 pub(in crate::engine) struct MixedMixerExecution {
     template: CudaSharedRoutedModelTemplate,
@@ -21,6 +24,7 @@ pub(in crate::engine) struct MixedMixerExecution {
     decode_batches: HashMap<usize, CudaSharedRoutedDecodeBatch>,
     prefill_batches: HashMap<(usize, usize), CudaSharedRoutedPrefillBatch>,
     checkpoints: PrefixCheckpoints,
+    combined: combined::CombinedBatches,
 }
 
 impl MixedMixerExecution {
@@ -40,6 +44,7 @@ impl MixedMixerExecution {
             decode_batches: HashMap::new(),
             prefill_batches: HashMap::new(),
             checkpoints: PrefixCheckpoints::new(128),
+            combined: combined::CombinedBatches::default(),
         })
     }
 
@@ -110,6 +115,10 @@ impl GenerationExecution for MixedMixerExecution {
         remaining.min(self.prefill_chunk_tokens)
     }
 
+    fn interleaved_prefill_budget(&self, budget: usize) -> usize {
+        reusable_prefill_budget(budget, self.prefill_chunk_tokens)
+    }
+
     fn prefill_chunk(
         &mut self,
         backend: &CudaBackend,
@@ -161,7 +170,17 @@ impl GenerationExecution for MixedMixerExecution {
         batch::decode(self, backend, sequences)
     }
 
+    fn prefill_decode_batch(
+        &mut self,
+        backend: &CudaBackend,
+        chunks: &[super::super::super::PrefillChunk<'_>],
+        decode: &[runtime::backend::DecodeSequence],
+    ) -> Result<Option<crate::engine::model::generation::CombinedOutputs>> {
+        combined::execute(self, backend, chunks, decode)
+    }
+
     fn clear_sessions(&mut self) {
+        self.combined.clear();
         self.sessions.clear();
         self.decode_batches.clear();
         self.prefill_batches.clear();

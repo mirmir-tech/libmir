@@ -1,6 +1,7 @@
 use super::{
     error::{Error, Result},
     model::NativeOutput,
+    prefill::diagnostics::{Stage, measure},
     session::{PendingDecode, SessionState},
 };
 use crate::engine::{Array, DecoderModel, DeviceSampling, Stream, sample};
@@ -42,7 +43,9 @@ pub(super) fn forward_prefill_state(
     let length = i32::try_from(tokens.len())?;
     let token_ids = Array::from_u32(tokens, &[1, length])?;
     let position = i32::try_from(position)?;
-    Ok(model.forward_prefill_state(&token_ids, &mut state.cache, position, stream)?)
+    measure(Stage::Forward, || {
+        Ok(model.forward_prefill_state(&token_ids, &mut state.cache, position, stream)?)
+    })
 }
 
 pub(super) fn forward_packed_prefill_state(
@@ -61,7 +64,9 @@ pub(super) fn forward_packed_prefill_state(
         .map(i32::try_from)
         .collect::<std::result::Result<Vec<_>, _>>()?;
     let mut caches = states.iter_mut().map(|state| &mut state.cache).collect::<Vec<_>>();
-    Ok(model.forward_packed_prefill_state(&token_ids, &mut caches, &positions, stream)?)
+    measure(Stage::Forward, || {
+        Ok(model.forward_packed_prefill_state(&token_ids, &mut caches, &positions, stream)?)
+    })
 }
 
 fn forward_ids(
@@ -132,13 +137,14 @@ pub(super) fn decode_pending(
 }
 
 pub(super) fn take_pending(state: &mut SessionState, token: u32) -> Result<Array> {
-    let pending = state.pending.take().ok_or(Error::NoPendingDecode)?;
+    let pending = state.pending.as_ref().ok_or(Error::NoPendingDecode)?;
     if pending.token_id != token {
         return Err(Error::PendingToken {
             expected: pending.token_id,
             actual: token,
         });
     }
+    let pending = state.pending.take().ok_or(Error::NoPendingDecode)?;
     state.position += 1;
     Ok(pending.logits)
 }
@@ -146,7 +152,7 @@ pub(super) fn take_pending(state: &mut SessionState, token: u32) -> Result<Array
 pub(super) const fn supports_device_token(sampling: SamplingLogits) -> bool {
     match sampling {
         SamplingLogits::None | SamplingLogits::SampleTopK { .. } => true,
-        SamplingLogits::Sample { top_k, .. } => top_k > 0,
+        SamplingLogits::Sample { top_k, top_p, .. } => top_k > 0 || top_p >= 1.0,
         SamplingLogits::Full | SamplingLogits::TopK { .. } => false,
     }
 }

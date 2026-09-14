@@ -1,10 +1,10 @@
 use mircuda::{DeviceBuffer, bf16};
 
-use super::{AffineGatedDeltaMoeLayerConfig, scratch::HybridLayerScratch};
+use super::scratch::HybridLayerScratch;
 use crate::{
-    CudaAffineGatedDeltaExecution, CudaAffineGatedDeltaLayer, CudaAffineSharedExpertMoe,
-    CudaAffineSharedExpertMoeExecution, CudaBackend, CudaGatedDeltaState, CudaTensor, Error,
-    ExecutionPhase, Result,
+    CudaAffineGatedDeltaExecution, CudaAffineGatedDeltaLayer, CudaBackend, CudaGatedDeltaState,
+    CudaTensor, Error, ExecutionPhase, Result,
+    backend::feed_forward::{FeedForward, FeedForwardExecution, LayerNormConfig},
     kernels::{ElementwiseBf16, ShiftedRmsNorm},
 };
 
@@ -12,7 +12,7 @@ use crate::{
 pub struct CudaAffineGatedDeltaMoeExecution {
     backend: CudaBackend,
     attention: CudaAffineGatedDeltaExecution,
-    moe: CudaAffineSharedExpertMoeExecution,
+    moe: FeedForwardExecution,
     input_norm: ShiftedRmsNorm,
     post_attention_norm: ShiftedRmsNorm,
     residual: ElementwiseBf16,
@@ -25,9 +25,9 @@ impl CudaAffineGatedDeltaMoeExecution {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         backend: &CudaBackend,
-        config: AffineGatedDeltaMoeLayerConfig,
+        config: LayerNormConfig,
         attention: &CudaAffineGatedDeltaLayer,
-        moe: &CudaAffineSharedExpertMoe,
+        moe: &FeedForward,
         input_norm_weight: &CudaTensor,
         post_attention_norm_weight: &CudaTensor,
         tokens: usize,
@@ -37,7 +37,7 @@ impl CudaAffineGatedDeltaMoeExecution {
             ShiftedRmsNorm::compile(
                 &backend.inner.compiler,
                 tokens,
-                config.attention.hidden_size,
+                config.hidden_size,
                 config.rms_norm_epsilon,
                 config.norm_weight_shift,
             )
@@ -50,11 +50,11 @@ impl CudaAffineGatedDeltaMoeExecution {
             post_attention_norm: norm()?,
             residual: ElementwiseBf16::compile(
                 &backend.inner.compiler,
-                tokens * config.attention.hidden_size,
+                tokens * config.hidden_size,
             )?,
             input_norm_weight: input_norm_weight.clone(),
             post_attention_norm_weight: post_attention_norm_weight.clone(),
-            scratch: HybridLayerScratch::new(backend, tokens, config.attention.hidden_size)?,
+            scratch: HybridLayerScratch::new(backend, tokens, config.hidden_size)?,
         })
     }
 
@@ -124,6 +124,41 @@ impl CudaAffineGatedDeltaMoeExecution {
         )?;
         self.attention
             .execute_prepared_packed(&self.scratch.normalized, &mut self.scratch.attention)?;
+        self.moe.execute_residual_norm(
+            &self.post_attention_norm,
+            input,
+            &self.scratch.attention,
+            bf16(&self.post_attention_norm_weight)?,
+            &mut self.scratch.residual,
+            &mut self.scratch.normalized,
+            &mut self.scratch.moe,
+            output,
+            &self.residual,
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn execute_ragged(
+        &mut self,
+        input: &DeviceBuffer<bf16>,
+        states: &mut [&mut CudaGatedDeltaState],
+        counts: &[usize],
+        output: &mut DeviceBuffer<bf16>,
+    ) -> Result<()> {
+        self.validate(input, output)?;
+        let stream = &self.backend.inner.stream;
+        self.input_norm.execute(
+            stream,
+            input,
+            bf16(&self.input_norm_weight)?,
+            &mut self.scratch.normalized,
+        )?;
+        self.attention.execute_ragged(
+            &self.scratch.normalized,
+            states,
+            counts,
+            &mut self.scratch.attention,
+        )?;
         self.moe.execute_residual_norm(
             &self.post_attention_norm,
             input,

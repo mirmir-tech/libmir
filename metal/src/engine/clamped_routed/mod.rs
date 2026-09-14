@@ -1,4 +1,5 @@
 mod attention;
+mod batch;
 mod config;
 mod dense;
 mod experts;
@@ -9,4 +10,4 @@ mod projection;
 pub use model::ClampedRoutedModel;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

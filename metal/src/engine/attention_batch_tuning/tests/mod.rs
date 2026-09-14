@@ -3,8 +3,9 @@ use std::sync::Arc;
 mod batched_paged;
 mod prefill;
 mod support;
+mod two_pass;
 
-use support::{assert_outputs_close, native_decode_context, paged_context, patterned};
+use support::{assert_outputs_close, context, native_decode_context, paged_context, patterned};
 
 use super::{
     BatchAttentionExecution, candidates, compatible_groups, execute, fallback, forward, paged,
@@ -238,13 +239,4 @@ fn startup_profiles_once_and_reuses_the_shape_decision() -> Result<()> {
         .ok_or_else(|| Error::InvalidModel("cached output is missing".into()))?;
     assert_eq!(first.len(), second.len());
     Ok(())
-}
-
-fn context(keys: &[f32], values: &[f32]) -> Result<KvContext> {
-    Ok(KvContext {
-        keys: Array::from_f32(keys, &[1, 1, 3, 2])?,
-        values: Array::from_f32(values, &[1, 1, 3, 2])?,
-        paged: None,
-        mask: None,
-    })
 }

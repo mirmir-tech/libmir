@@ -25,8 +25,11 @@ mod batch;
 mod load;
 mod memory;
 mod prefill;
+pub(super) mod recovery;
 
-pub(super) use batch::DecodeInput;
+#[cfg(test)]
+pub(super) use batch::profile::Profile as DecodeProfile;
+pub(super) use batch::{DecodeExecution, DecodeInput};
 pub(super) use memory::{cache_prefix_checkpoint, cache_prefix_snapshot};
 use prefill::prefill_step;
 
@@ -60,6 +63,8 @@ pub(super) struct LoadedModel {
     pub(super) vision_model: Option<LoadedVisionModel>,
     pub(super) prefixes: PrefixCache,
     pub(super) sessions: HashMap<Uuid, SessionState>,
+    recovery: recovery::ExecutionRecovery,
+    pub(super) prefill_reservations: super::prefill::Reservations,
 }
 
 #[derive(Debug)]
@@ -93,7 +98,7 @@ pub(super) enum NativeOutput {
 }
 
 impl LoadedModel {
-    pub fn decode(
+    pub(super) fn decode_admitted(
         &mut self,
         session: Uuid,
         token: u32,
@@ -114,7 +119,13 @@ impl LoadedModel {
                     batch: 1,
                 };
                 return super::decode_tuning::decode_pending(
-                    model, stream, state, key, token, sampling,
+                    model,
+                    stream,
+                    state,
+                    key,
+                    token,
+                    sampling,
+                    &mut self.recovery,
                 );
             }
             return super::step::decode_pending(model, stream, state, token, sampling);
@@ -122,7 +133,7 @@ impl LoadedModel {
         let position = state.model_position()?;
         let logits = super::step::forward_token(model, stream, state, token, position, false)?;
         state.position += 1;
-        Ok(NativeOutput::Logits(logits))
+        super::step::output(model, stream, state, logits, sampling)
     }
 
     pub(super) fn session_cached_tokens(&self, session: Uuid) -> Result<usize> {
@@ -142,6 +153,7 @@ impl LoadedModel {
     }
 
     pub(super) fn release_session(&mut self, session: Uuid) -> Result<()> {
+        self.recover_execution()?;
         if self.sessions.contains_key(&session) {
             self.flush_decode_graphs()?;
         }

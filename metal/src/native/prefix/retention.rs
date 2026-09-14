@@ -50,13 +50,16 @@ impl PrefixCache {
             groups = self.groups.len(),
             entries = self.entries.len(),
             resident_bytes = self.resident_bytes(),
+            recurrent_bytes = self.recurrent_bytes(),
             byte_capacity = self.byte_capacity,
             "cached Metal prefix snapshot"
         );
     }
 
     pub(in crate::native) fn resident_bytes(&self) -> usize {
-        self.groups.values().map(|group| group.bytes).sum()
+        self.groups
+            .values()
+            .fold(self.recurrent_bytes(), |total, group| total.saturating_add(group.bytes))
     }
 
     pub(in crate::native) fn clear(&mut self) {
@@ -91,7 +94,7 @@ impl PrefixCache {
         self.group_recency.retain(|group| indexed.contains(group));
     }
 
-    pub(super) fn reserve_miss_slot(&mut self) {
+    pub(in crate::native) fn reserve_miss_slot(&mut self) {
         if self.groups.len() >= self.capacity || self.resident_bytes() >= self.byte_capacity {
             self.evict_oldest();
         }

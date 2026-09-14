@@ -168,6 +168,8 @@ impl LoadedModel {
             vision_model,
             prefixes: PrefixCache::new(prefix_cache_entries, prefix_cache_bytes),
             sessions: std::collections::HashMap::new(),
+            recovery: super::recovery::ExecutionRecovery::Ready,
+            prefill_reservations: crate::native::prefill::Reservations::default(),
         })
     }
 }

@@ -1,4 +1,6 @@
 mod index;
+mod memory;
+mod restoration;
 mod retention;
 
 use std::collections::{HashMap, VecDeque};
@@ -29,6 +31,7 @@ struct PrefixEntry {
 struct PrefixSnapshot {
     state: SessionState,
     logits: Option<Array>,
+    recurrent: std::collections::HashSet<mirtal::memory::Allocation>,
 }
 
 #[derive(Debug, Default)]
@@ -60,72 +63,6 @@ impl PrefixCache {
         }
     }
 
-    pub(super) fn restore_longest(
-        &mut self,
-        model: &str,
-        tokens: &[u32],
-    ) -> Result<Option<RestoredPrefix>> {
-        Ok(self
-            .restore_longest_with_miss_reservation(model, tokens, true)?
-            .map(|leased| leased.restored))
-    }
-
-    pub(super) fn lease_longest(
-        &mut self,
-        model: &str,
-        tokens: &[u32],
-    ) -> Result<Option<LeasedPrefix>> {
-        self.restore_longest_with_miss_reservation(model, tokens, false)
-    }
-
-    fn restore_longest_with_miss_reservation(
-        &mut self,
-        model: &str,
-        tokens: &[u32],
-        reserve_miss: bool,
-    ) -> Result<Option<LeasedPrefix>> {
-        let Some((_, entry)) = longest_indexed_prefix(model, tokens, &self.entries) else {
-            if reserve_miss {
-                self.reserve_miss_slot();
-            }
-            return Ok(None);
-        };
-        let group = entry.memory_group;
-        let Some(group_state) = self.groups.get(&group) else {
-            return Ok(None);
-        };
-        let direct = group_state.checkpoints.get(&entry.position);
-        let source = if let Some(checkpoint) = direct {
-            checkpoint
-        } else {
-            let Some(terminal) = group_state.terminal.as_ref() else {
-                return Ok(None);
-            };
-            terminal
-        };
-        let complete_prompt = entry.position == tokens.len();
-        let exact =
-            complete_prompt && entry.position == source.state.position && source.logits.is_some();
-        let position = if exact {
-            entry.position
-        } else if complete_prompt {
-            entry.completion_position
-        } else {
-            entry.continuation_position
-        };
-        let cache = source.state.cache.snapshot_at(position)?;
-        let logits = if exact {
-            source.logits.as_ref().map(Array::snapshot).transpose()?
-        } else {
-            None
-        };
-        self.touch_group(group);
-        Ok(Some(LeasedPrefix {
-            restored: (SessionState::from_prefix(cache, position), logits),
-            memory_group: group,
-        }))
-    }
-
     pub(super) fn insert(
         &mut self,
         model: &str,
@@ -139,13 +76,11 @@ impl PrefixCache {
             return Ok(());
         }
         let memory_group = self.pending_group(model, tokens).unwrap_or_else(|| self.new_group());
-        let snapshot = PrefixSnapshot {
-            state: SessionState::from_prefix(
-                state.cache.snapshot_at(state.position)?,
-                state.position,
-            ),
-            logits: Some(logits.snapshot()?),
-        };
+        let snapshot = PrefixSnapshot::new(
+            state.cache.snapshot_at(state.position)?,
+            state.position,
+            Some(logits.snapshot()?),
+        )?;
         let block_size =
             block_size.filter(|size| *size > 0 && state.cache.supports_prefix_offsets());
         for (key, position) in indexed_prefixes(model, tokens, block_size) {
@@ -199,10 +134,7 @@ impl PrefixCache {
         } else {
             position.saturating_sub(1)
         };
-        let snapshot = PrefixSnapshot {
-            state: SessionState::from_prefix(state.cache.snapshot_at(position)?, position),
-            logits: None,
-        };
+        let snapshot = PrefixSnapshot::new(state.cache.snapshot_at(position)?, position, None)?;
         let key = indexed_prefixes(model, tokens, None)
             .pop()
             .map(|(key, _)| key)
