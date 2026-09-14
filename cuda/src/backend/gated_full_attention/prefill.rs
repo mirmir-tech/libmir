@@ -42,7 +42,7 @@ impl CudaAffineGatedFullAttentionExecution {
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
         if states.len() != batch.active()
-            || batch.tokens() != self.tokens
+            || batch.tokens() > self.tokens
             || positions.len() != 3 * self.tokens
         {
             return Err(Error::InvalidPagedKv("gated packed prefill shape mismatch"));
@@ -66,12 +66,13 @@ impl CudaAffineGatedFullAttentionExecution {
             .prefill
             .as_mut()
             .ok_or(Error::InvalidPagedKv("missing gated packed prefill plan"))?;
+        let active_query = super::checked(batch.tokens(), self.config.query_width()?)?;
         prefill.attention.execute_paged_varlen(
             &self.backend.inner.stream,
-            &self.scratch.rotated_query,
+            &self.scratch.rotated_query.slice(0..active_query)?,
             state.cache.key_pages(),
             state.cache.value_pages(),
-            &mut self.scratch.attended,
+            &mut self.scratch.attended.slice(0..active_query)?,
             batch.query_starts(),
             batch.token_counts(),
             batch.context_starts(),

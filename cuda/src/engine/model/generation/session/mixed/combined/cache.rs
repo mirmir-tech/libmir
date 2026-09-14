@@ -7,6 +7,7 @@ use crate::{
 
 struct RetainedBatch {
     counts: Vec<usize>,
+    capacity: usize,
     batch: CudaSharedRoutedPrefillBatch,
 }
 
@@ -26,11 +27,14 @@ impl CombinedBatches {
         counts: &[usize],
     ) -> Result<()> {
         let tokens = counts.iter().sum::<usize>();
-        if let Some(index) = self
-            .batches
-            .iter()
-            .position(|batch| batch.counts.iter().sum::<usize>() == tokens)
-        {
+        let capacity = if tokens > 512 {
+            tokens
+                .checked_next_multiple_of(64)
+                .ok_or(Error::InvalidExecutionPlan("mixed batch capacity overflow"))?
+        } else {
+            tokens
+        };
+        if let Some(index) = self.batches.iter().position(|batch| batch.capacity == capacity) {
             let mut retained = self
                 .batches
                 .remove(index)
@@ -44,16 +48,18 @@ impl CombinedBatches {
         }
         // Keep the scalar-plan aggregate limit. Evict before constructing the
         // new shape, so checkpoint tails do not double the scratch peak.
-        let budget = DEFAULT_PREFILL_CHUNK_TOKENS.max(tokens).saturating_add(1);
-        while self.batches.len() >= 8 || self.retained_tokens().saturating_add(tokens) > budget {
+        let budget = DEFAULT_PREFILL_CHUNK_TOKENS.max(capacity).saturating_add(1);
+        while self.batches.len() >= 8 || self.retained_tokens().saturating_add(capacity) > budget {
             if self.batches.pop_front().is_none() {
                 break;
             }
         }
-        let batch = template.prepare_ragged_prefill_batch(counts)?;
-        self.batches.push_back(RetainedBatch { counts: counts.to_vec(), batch });
+        let batch = template.prepare_padded_prefill_batch(counts, capacity)?;
+        self.batches
+            .push_back(RetainedBatch { counts: counts.to_vec(), capacity, batch });
         tracing::debug!(
             tokens,
+            capacity,
             retained_tokens = self.retained_tokens(),
             retained_shapes = self.batches.len(),
             budget,
@@ -72,7 +78,6 @@ impl CombinedBatches {
     fn retained_tokens(&self) -> usize {
         self.batches
             .iter()
-            .flat_map(|batch| &batch.counts)
-            .fold(0_usize, |total, count| total.saturating_add(*count))
+            .fold(0_usize, |total, batch| total.saturating_add(batch.capacity))
     }
 }

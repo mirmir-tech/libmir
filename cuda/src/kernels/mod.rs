@@ -3,6 +3,8 @@
 //! Mircuda supplies compilation and typed dispatch; this module owns model
 //! mathematics, quantization formats, launch geometry, and numerical policy.
 
+mod attention_transform;
+pub(crate) use attention_transform::AttentionTransform;
 mod affine;
 mod awq;
 mod bitsandbytes;

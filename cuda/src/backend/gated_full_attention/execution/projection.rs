@@ -41,35 +41,16 @@ impl CudaAffineGatedFullAttentionExecution {
                 ));
             },
         }
-        self.split.execute(
+        self.transform.execute(
             stream,
             &self.scratch.query_projected,
-            &mut self.scratch.query,
-            &mut self.scratch.gate,
-        )?;
-        self.query_norm.execute(
-            stream,
-            &self.scratch.query,
-            bf16_tensor(&self.weights.query_norm)?,
-            &mut self.scratch.normalized_query,
-        )?;
-        self.key_norm.execute(
-            stream,
             &self.scratch.key,
+            bf16_tensor(&self.weights.query_norm)?,
             bf16_tensor(&self.weights.key_norm)?,
-            &mut self.scratch.normalized_key,
-        )?;
-        self.query_rope.execute(
-            stream,
-            &self.scratch.normalized_query,
             positions,
             &mut self.scratch.rotated_query,
-        )?;
-        self.key_rope.execute(
-            stream,
-            &self.scratch.normalized_key,
-            positions,
             &mut self.scratch.rotated_key,
+            &mut self.scratch.gate,
         )
     }
 }

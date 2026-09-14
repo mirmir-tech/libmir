@@ -17,6 +17,29 @@ fn packed_gdn48_preserves_five_checkpoint_tails_and_decode() -> Result<()> {
     run_rounds(true, vec![vec![112; 5], vec![16; 5], vec![1; 5]])
 }
 
+#[test]
+fn padded_gdn48_preserves_logical_rows_across_token_capacity_reuse() -> Result<()> {
+    run_rounds_with_capacity(
+        true,
+        vec![vec![1008], vec![1008, 1], vec![1, 1008, 1, 1, 1], vec![16; 5], vec![1; 5]],
+        Some(1024),
+    )
+}
+
+#[test]
+fn padded_gdn48_reuses_2048_capacity_for_terminal_checkpoint_chunks() -> Result<()> {
+    run_rounds_with_capacity(
+        true,
+        vec![vec![2048], vec![1984], vec![1, 1984, 1], vec![16; 5], vec![1; 5]],
+        Some(2048),
+    )
+}
+
+#[test]
+fn padded_hybrid_preserves_small_head_recurrence_and_continuation() -> Result<()> {
+    run_rounds_with_capacity(false, vec![vec![17], vec![16, 1], vec![1, 16, 1]], Some(64))
+}
+
 fn run(gdn48: bool) -> Result<()> {
     let rounds = if gdn48 {
         vec![vec![960, 1, 63], vec![1024], vec![1, 1023], vec![1, 1, 1], vec![7, 1, 2]]
@@ -27,23 +50,35 @@ fn run(gdn48: bool) -> Result<()> {
 }
 
 fn run_rounds(gdn48: bool, rounds: Vec<Vec<usize>>) -> Result<()> {
+    run_rounds_with_capacity(gdn48, rounds, None)
+}
+
+fn run_rounds_with_capacity(
+    gdn48: bool,
+    rounds: Vec<Vec<usize>>,
+    capacity: Option<usize>,
+) -> Result<()> {
     let rows = rounds
         .iter()
         .map(Vec::len)
         .max()
         .ok_or(Error::InvalidExecutionPlan("test has no prefill rounds"))?;
     let backend = CudaBackend::new(CudaConfig::default())?;
+    let blocks = sequence_blocks(&rounds, rows)?;
     let decoder = dense_decoder(gdn48)?;
     let fixture = fixture::HybridFixture::nonzero_dense(&decoder)?;
     let cache = CacheConfig {
         block_size: 16,
-        block_count: u32::try_from(128 * rows)?,
+        block_count: blocks * u32::try_from(rows)?,
         dtype: KvCacheDType::BFloat16,
     };
     let template = backend.load_shared_routed_model_template(
         &decoder,
         &fixture.catalog(),
-        crate::SharedRoutedModelLoadConfig { cache, max_sequence_blocks: 128 },
+        crate::SharedRoutedModelLoadConfig {
+            cache,
+            max_sequence_blocks: usize::try_from(blocks)?,
+        },
     )?;
     assert!(template.prepare_ragged_prefill_batch(&[]).is_err());
     assert!(template.prepare_ragged_prefill_batch(&[1, 0]).is_err());
@@ -59,8 +94,8 @@ fn run_rounds(gdn48: bool, rounds: Vec<Vec<usize>>) -> Result<()> {
     let mut tables = (0..u32::try_from(rows)?)
         .map(|row| {
             let mut table = BlockTable::with_block_size(16);
-            for block in 0..128 {
-                table.push(BlockId(row * 128 + block));
+            for block in 0..blocks {
+                table.push(BlockId(row * blocks + block));
             }
             table
         })
@@ -91,7 +126,7 @@ fn run_rounds(gdn48: bool, rounds: Vec<Vec<usize>>) -> Result<()> {
             )?;
             expected.push(read(&backend, reference[row].sample(SamplingLogits::None)?)?[0]);
         }
-        let batch = retained_batch(&mut retained, &template, &counts)?;
+        let batch = retained_batch(&mut retained, &template, &counts, capacity)?;
         assert!(
             batch
                 .execute(
@@ -173,14 +208,28 @@ fn retained_batch<'a>(
     slot: &'a mut Option<(usize, CudaSharedRoutedPrefillBatch)>,
     template: &CudaSharedRoutedModelTemplate,
     counts: &[usize],
+    capacity: Option<usize>,
 ) -> Result<&'a mut CudaSharedRoutedPrefillBatch> {
-    let tokens = counts.iter().sum();
+    let tokens = capacity.unwrap_or_else(|| counts.iter().sum());
     if slot.as_ref().is_none_or(|(capacity, _)| *capacity != tokens) {
-        *slot = Some((tokens, template.prepare_ragged_prefill_batch(counts)?));
+        *slot = Some((tokens, template.prepare_padded_prefill_batch(counts, tokens)?));
     }
     let (_, batch) = slot.as_mut().ok_or(Error::InvalidExecutionPlan("missing test batch"))?;
     assert!(batch.reconfigure(template, &[0]).is_err());
     assert!(batch.reconfigure(template, &[tokens + 1]).is_err());
     batch.reconfigure(template, counts)?;
     Ok(batch)
+}
+
+fn sequence_blocks(rounds: &[Vec<usize>], rows: usize) -> Result<u32> {
+    Ok(u32::try_from(
+        ((0..rows)
+            .map(|row| {
+                rounds.iter().map(|counts| counts.get(row).copied().unwrap_or(0)).sum::<usize>()
+            })
+            .max()
+            .unwrap_or(0)
+            + 16)
+            .div_ceil(16),
+    )?)
 }

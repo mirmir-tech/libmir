@@ -7,12 +7,9 @@ use crate::{CudaBackend, Result};
 pub(super) struct GatedAttentionScratch {
     pub(super) packed_qkv: Option<DeviceBuffer<bf16>>,
     pub(super) query_projected: DeviceBuffer<bf16>,
-    pub(super) query: DeviceBuffer<bf16>,
     pub(super) gate: DeviceBuffer<bf16>,
-    pub(super) normalized_query: DeviceBuffer<bf16>,
     pub(super) rotated_query: DeviceBuffer<bf16>,
     pub(super) key: DeviceBuffer<bf16>,
-    pub(super) normalized_key: DeviceBuffer<bf16>,
     pub(super) rotated_key: DeviceBuffer<bf16>,
     pub(super) value: DeviceBuffer<bf16>,
     pub(super) attended: DeviceBuffer<bf16>,
@@ -35,15 +32,12 @@ impl GatedAttentionScratch {
         Ok(Self {
             packed_qkv: packed_qkv.then(|| allocate(packed)).transpose()?,
             query_projected: allocate(checked(query, 2)?)?,
-            query: allocate(query)?,
             gate: allocate(query)?,
-            normalized_query: allocate(query)?,
             rotated_query: allocate(query)?,
             key: allocate(key_value)?,
-            normalized_key: allocate(key_value)?,
             rotated_key: allocate(key_value)?,
             value: allocate(key_value)?,
-            attended: allocate(query)?,
+            attended: backend.inner.pool.allocate_zeroed(&backend.inner.stream, query)?,
             gated: allocate(query)?,
         })
     }

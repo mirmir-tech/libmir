@@ -11,8 +11,8 @@ use crate::{
     CudaBackend, DenseRole, Error, Result,
     backend::linear::{CheckpointProjection, CheckpointProjectionWeight},
     kernels::{
-        BatchedSplitAttentionWorkspace, GatedAttentionSplit, Mrope, MropeSpec, ProjectionPackSplit,
-        ShiftedRmsNorm, SigmoidElementwiseBf16,
+        AttentionTransform, BatchedSplitAttentionWorkspace, MropeSpec, ProjectionPackSplit,
+        SigmoidElementwiseBf16,
     },
 };
 
@@ -32,11 +32,7 @@ pub struct CudaAffineGatedFullAttentionExecution {
     packed_qkv: Option<CheckpointProjection>,
     packed_split: Option<ProjectionPackSplit>,
     pub(super) output: CheckpointProjection,
-    split: GatedAttentionSplit,
-    query_norm: ShiftedRmsNorm,
-    key_norm: ShiftedRmsNorm,
-    query_rope: Mrope,
-    key_rope: Mrope,
+    transform: AttentionTransform,
     pub(super) gate: SigmoidElementwiseBf16,
     weights: AffineGatedFullAttentionWeights,
     pub(super) scratch: GatedAttentionScratch,
@@ -65,29 +61,6 @@ impl CudaAffineGatedFullAttentionExecution {
         let (packed, packed_split) = prepare_packed_projection(
             backend, config, tokens, packed_qkv, projected_query, key_value_width,
         )?;
-        let norm = |heads| {
-            ShiftedRmsNorm::compile(
-                &backend.inner.compiler,
-                checked(tokens, heads)?,
-                config.head_dim,
-                config.rms_norm_epsilon,
-                config.norm_weight_shift,
-            )
-        };
-        let rope = |heads| {
-            Mrope::compile(
-                &backend.inner.compiler,
-                MropeSpec {
-                    tokens,
-                    heads,
-                    head_dim: config.head_dim,
-                    rotary_dim: config.rotary_dim,
-                    sections: config.rope_sections,
-                    interleaved: config.rope_interleaved,
-                    theta: config.rope_theta,
-                },
-            )
-        };
         Ok(Self {
             backend: backend.clone(),
             config,
@@ -130,16 +103,21 @@ impl CudaAffineGatedFullAttentionExecution {
                 DenseRole::AttentionOutput,
                 &weights.output,
             )?,
-            split: GatedAttentionSplit::compile(
+            transform: AttentionTransform::compile(
                 &backend.inner.compiler,
-                tokens,
-                config.query_heads,
-                config.head_dim,
+                MropeSpec {
+                    tokens,
+                    heads: config.query_heads,
+                    head_dim: config.head_dim,
+                    rotary_dim: config.rotary_dim,
+                    sections: config.rope_sections,
+                    interleaved: config.rope_interleaved,
+                    theta: config.rope_theta,
+                },
+                config.key_value_heads,
+                config.rms_norm_epsilon,
+                config.norm_weight_shift,
             )?,
-            query_norm: norm(config.query_heads)?,
-            key_norm: norm(config.key_value_heads)?,
-            query_rope: rope(config.query_heads)?,
-            key_rope: rope(config.key_value_heads)?,
             gate: SigmoidElementwiseBf16::compile(
                 &backend.inner.compiler,
                 checked(tokens, query_width)?,

@@ -15,7 +15,7 @@ impl CudaAffineGatedDeltaExecution {
         if states.is_empty()
             || states.len() != counts.len()
             || counts.contains(&0)
-            || total != Some(self.tokens)
+            || total.is_none_or(|total| total > self.tokens)
         {
             return Err(Error::InvalidDecoderKernel("Gated Delta ragged row mismatch"));
         }

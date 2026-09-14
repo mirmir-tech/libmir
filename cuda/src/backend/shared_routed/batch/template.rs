@@ -22,6 +22,7 @@ impl CudaSharedRoutedModelTemplate {
             })
     }
 
+    #[cfg(test)]
     pub(crate) fn prepare_ragged_prefill_batch(
         &self,
         counts: &[usize],
@@ -33,5 +34,17 @@ impl CudaSharedRoutedModelTemplate {
             .map_err(|_| Error::InvalidExecutionPlan("mixed plan cache lock poisoned"))?
             .clear();
         CudaSharedRoutedPrefillBatch::new_ragged(self, counts)
+    }
+
+    pub(crate) fn prepare_padded_prefill_batch(
+        &self,
+        counts: &[usize],
+        capacity: usize,
+    ) -> Result<CudaSharedRoutedPrefillBatch> {
+        self.plans
+            .lock()
+            .map_err(|_| Error::InvalidExecutionPlan("mixed plan cache lock poisoned"))?
+            .clear();
+        CudaSharedRoutedPrefillBatch::with_capacity(self, counts, capacity)
     }
 }

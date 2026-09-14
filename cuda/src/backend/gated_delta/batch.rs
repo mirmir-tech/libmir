@@ -2,7 +2,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use mircuda::{DeviceBuffer, bf16};
 
-use super::{CudaGatedDeltaState, GatedDeltaInputs, GatedDeltaStateConfig, channels};
+use super::{
+    CudaGatedDeltaState, GatedDeltaInputs, GatedDeltaStateConfig, channels,
+    residency::GatedDeltaDestination,
+};
 use crate::{
     CudaBackend, Error, Result,
     kernels::{
@@ -22,6 +25,7 @@ pub struct CudaGatedDeltaBatchState {
     convolution: GatedDeltaBatchConvolution,
     recurrence: GatedDeltaBatchRecurrence,
     sources: Vec<(u64, u64)>,
+    destinations: Vec<GatedDeltaDestination>,
     identity: u64,
 }
 
@@ -69,6 +73,7 @@ impl CudaGatedDeltaBatchState {
                 },
             )?,
             sources: Vec::new(),
+            destinations: Vec::new(),
             identity: NEXT_BATCH_IDENTITY.fetch_add(1, Ordering::Relaxed),
         })
     }
@@ -78,21 +83,26 @@ impl CudaGatedDeltaBatchState {
     }
 
     pub(crate) fn pack(&mut self, states: &[&mut CudaGatedDeltaState]) -> Result<()> {
-        if states.len() != self.rows {
+        if states.len() != self.rows || states.iter().any(|state| state.config != self.config) {
             return Err(Error::InvalidDecoderKernel("Gated Delta packed state row mismatch"));
         }
         if self.sources.len() == states.len()
             && self.sources.iter().zip(states).all(|(source, state)| *source == state.stamp())
+            && states
+                .iter()
+                .enumerate()
+                .all(|(row, state)| state.resident_in(self.identity, row))
         {
             return Ok(());
         }
         let stream = &self.backend.inner.stream;
+        // Preserve every live previous row before writing any replacement. A
+        // permutation aliases this buffer, and omitted sessions may resume later.
+        for destination in &self.destinations {
+            destination.preserve(stream, &self.state, &self.history)?;
+        }
+        self.destinations.clear();
         for (row, state) in states.iter().enumerate() {
-            if state.config != self.config {
-                return Err(Error::InvalidDecoderKernel(
-                    "Gated Delta packed state config mismatch",
-                ));
-            }
             if !state.resident_in(self.identity, row) {
                 let (source, range) = state.state_source();
                 stream.copy_device_range(
@@ -164,9 +174,15 @@ impl CudaGatedDeltaBatchState {
     }
 
     pub(crate) fn commit(&mut self, states: &mut [&mut CudaGatedDeltaState]) -> Result<()> {
+        self.destinations.clear();
         for (row, state) in states.iter_mut().enumerate() {
             state.advance(self.tokens)?;
-            state.bind_resident(self.identity, row, self.state.clone(), self.history.clone());
+            self.destinations.push(state.bind_resident(
+                self.identity,
+                row,
+                self.state.clone(),
+                self.history.clone(),
+            ));
             self.sources[row] = state.stamp();
         }
         Ok(())

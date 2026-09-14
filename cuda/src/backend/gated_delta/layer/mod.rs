@@ -139,7 +139,7 @@ impl CudaAffineGatedDeltaLayer {
     pub fn new(
         backend: &CudaBackend,
         config: AffineGatedDeltaLayerConfig,
-        weights: AffineGatedDeltaLayerWeights,
+        mut weights: AffineGatedDeltaLayerWeights,
     ) -> Result<Self> {
         config.validate()?;
         weights.validate(config)?;
@@ -147,6 +147,14 @@ impl CudaAffineGatedDeltaLayer {
             backend,
             [&weights.qkv, &weights.gate],
         )?;
+        let packed_qkv_gate = match packed_qkv_gate {
+            Some(weight) => Some(weight),
+            None => crate::backend::linear::CheckpointProjectionWeight::pack_dense_pair(
+                backend,
+                &mut weights.qkv,
+                &mut weights.gate,
+            )?,
+        };
         let packed_alpha_beta = weights
             .alpha
             .dense_bf16()

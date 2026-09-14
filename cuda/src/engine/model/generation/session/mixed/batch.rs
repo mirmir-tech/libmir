@@ -30,6 +30,29 @@ pub(super) fn decode(
     backend: &CudaBackend,
     sequences: &[runtime::backend::DecodeSequence],
 ) -> Result<Option<Vec<Output>>> {
+    // Scheduler arrival order can change every step. Keep unchanged cohorts
+    // in stable device rows and return results in the caller's original order.
+    let mut order = (0..sequences.len()).collect::<Vec<_>>();
+    order.sort_unstable_by_key(|index| sequences[*index].session_id);
+    let sorted = order.iter().map(|index| sequences[*index].clone()).collect::<Vec<_>>();
+    let result = decode_ordered(execution, backend, &sorted)?;
+    result
+        .map(|outputs| {
+            if outputs.len() != order.len() {
+                return Err(Error::InvalidExecutionPlan("ordered decode output count differs"));
+            }
+            let mut indexed = order.into_iter().zip(outputs).collect::<Vec<_>>();
+            indexed.sort_unstable_by_key(|(index, _)| *index);
+            Ok(indexed.into_iter().map(|(_, output)| output).collect())
+        })
+        .transpose()
+}
+
+fn decode_ordered(
+    execution: &mut MixedMixerExecution,
+    backend: &CudaBackend,
+    sequences: &[runtime::backend::DecodeSequence],
+) -> Result<Option<Vec<Output>>> {
     let mut owned = take_sessions(
         &mut execution.sessions,
         sequences.iter().map(|sequence| sequence.session_id),

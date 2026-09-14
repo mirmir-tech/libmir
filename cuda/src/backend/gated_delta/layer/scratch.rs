@@ -39,7 +39,7 @@ impl GatedDeltaScratch {
         Ok(Self {
             packed_qkv_gate: packed_qkv_gate.then(|| allocate(packed)).transpose()?,
             mixed: allocate(mixed)?,
-            convolved: allocate(mixed)?,
+            convolved: backend.inner.pool.allocate_zeroed(&backend.inner.stream, mixed)?,
             value: allocate(value)?,
             normalized_query: allocate(key)?,
             normalized_key: allocate(key)?,
@@ -47,7 +47,7 @@ impl GatedDeltaScratch {
             alpha: allocate(heads)?,
             beta: allocate(heads)?,
             packed_alpha_beta: packed_alpha_beta.then(|| allocate(paired_heads)).transpose()?,
-            recurrent: allocate(value)?,
+            recurrent: backend.inner.pool.allocate_zeroed(&backend.inner.stream, value)?,
             gated: allocate(value)?,
         })
     }

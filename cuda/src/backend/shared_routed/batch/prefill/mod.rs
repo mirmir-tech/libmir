@@ -47,7 +47,16 @@ impl CudaSharedRoutedPrefillBatch {
             .iter()
             .try_fold(0_usize, |sum, count| sum.checked_add(*count))
             .ok_or(Error::InvalidDecoderKernel("shared-routed prefill size overflow"))?;
-        if counts.is_empty() || counts.contains(&0) {
+        Self::with_capacity(template, counts, tokens)
+    }
+
+    pub(crate) fn with_capacity(
+        template: &CudaSharedRoutedModelTemplate,
+        counts: &[usize],
+        tokens: usize,
+    ) -> Result<Self> {
+        let total = counts.iter().try_fold(0_usize, |sum, count| sum.checked_add(*count));
+        if counts.is_empty() || counts.contains(&0) || total.is_none_or(|total| total > tokens) {
             return Err(Error::InvalidDecoderKernel("shared-routed prefill batch is empty"));
         }
         let rows = counts.len();
@@ -88,9 +97,12 @@ impl CudaSharedRoutedPrefillBatch {
         counts: &[usize],
     ) -> Result<()> {
         let total = counts.iter().try_fold(0_usize, |sum, count| sum.checked_add(*count));
-        if counts.is_empty() || counts.contains(&0) || total != Some(self.token_ids.len()) {
+        if counts.is_empty()
+            || counts.contains(&0)
+            || total.is_none_or(|total| total > self.token_ids.len())
+        {
             return Err(Error::InvalidDecoderKernel(
-                "ragged reconfiguration changes token capacity",
+                "ragged reconfiguration exceeds token capacity",
             ));
         }
         if counts.len() != self.rows {
@@ -122,13 +134,19 @@ impl CudaSharedRoutedPrefillBatch {
             return Err(Error::InvalidDecoderKernel("packed sampling row mismatch"));
         }
         self.paging.prepare(tables, starts, &self.counts)?;
-        self.token_staging.copy_from_slice(tokens)?;
-        self.position_staging
-            .copy_from_slice(&self.paging_positions(starts)?.repeat(3))?;
+        // Padding participates only in row-independent projections. Attention,
+        // recurrence, K/V writes and session positions use the logical counts.
+        let mut padded_tokens = vec![0; self.token_ids.len()];
+        padded_tokens[..tokens.len()].copy_from_slice(tokens);
+        self.token_staging.copy_from_slice(&padded_tokens)?;
+        let mut positions = self.paging_positions(starts)?;
+        positions.resize(self.token_ids.len(), 0);
+        self.position_staging.copy_from_slice(&positions.repeat(3))?;
         let stream = &self.backend.inner.stream;
         stream.copy_to_device(&mut self.token_staging, &mut self.token_ids)?;
         stream.copy_to_device(&mut self.position_staging, &mut self.positions)?;
-        self.embedding.execute_batch(&self.token_ids, tokens.len(), &mut self.first)?;
+        self.embedding
+            .execute_batch(&self.token_ids, self.token_ids.len(), &mut self.first)?;
         for index in 0..self.layers.len() {
             let (input, output) = if index.is_multiple_of(2) {
                 (&self.first, &mut self.second)
@@ -138,7 +156,10 @@ impl CudaSharedRoutedPrefillBatch {
             match &mut self.layers[index] {
                 SharedRoutedBatchLayer::Linear(layer) => {
                     let mut states = linear_states(sessions, index)?;
-                    if self.rows > 1 && self.counts.iter().all(|count| *count == self.counts[0]) {
+                    if self.rows > 1
+                        && tokens.len() == self.token_ids.len()
+                        && self.counts.iter().all(|count| *count == self.counts[0])
+                    {
                         layer.execute_packed(input, &mut states, output)?;
                     } else {
                         layer.execute_ragged(input, &mut states, &self.counts, output)?;
@@ -193,7 +214,7 @@ impl CudaSharedRoutedPrefillBatch {
         if sessions.len() != self.rows
             || tables.len() != self.rows
             || starts.len() != self.rows
-            || tokens.len() != self.token_ids.len()
+            || tokens.len() != self.counts.iter().sum::<usize>()
         {
             return Err(Error::InvalidDecoderKernel("shared-routed prefill batch shape mismatch"));
         }

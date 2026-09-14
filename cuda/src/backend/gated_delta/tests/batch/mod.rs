@@ -1,3 +1,5 @@
+mod relocation;
+
 use super::*;
 
 #[test]

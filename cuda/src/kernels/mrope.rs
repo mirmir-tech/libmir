@@ -76,7 +76,7 @@ impl Mrope {
     }
 }
 
-fn validate(spec: MropeSpec) -> Result<()> {
+pub(super) fn validate(spec: MropeSpec) -> Result<()> {
     let covered = spec.sections.iter().try_fold(0_usize, |total, section| {
         total
             .checked_add(*section)
