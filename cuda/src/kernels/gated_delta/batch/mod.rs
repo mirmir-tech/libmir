@@ -117,8 +117,8 @@ impl GatedDeltaBatchConvolution {
         history: &mut DeviceBuffer<bf16>,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
-        // The kernel reads every channel's old history before shifting that same
-        // channel toward lower indices, so aliasing both history arguments is safe.
+        // A channel's token-zero thread computes every history-dependent output
+        // before shifting its history; later tokens only read the input tensor.
         let source = history.clone();
         self.execute(stream, input, weight, &source, history, output)
     }

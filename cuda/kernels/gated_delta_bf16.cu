@@ -141,16 +141,24 @@ extern "C" __global__ void libmir_cuda_gated_delta_batch_convolution_bf16(
   const unsigned int channel = index % channels;
   const unsigned int history_tokens = kernel_size - 1u;
   const unsigned int history_base = row * history_tokens * channels;
-  float sum = 0.0f;
-  for (unsigned int kernel = 0; kernel < kernel_size; ++kernel) {
-    const unsigned int position = token + kernel;
-    const float source = position < history_tokens
-        ? __bfloat162float(history[history_base + position * channels + channel])
-        : __bfloat162float(input[(row * tokens + position - history_tokens) *
-            input_stride + input_offset + channel]);
-    sum += source * __bfloat162float(weight[channel * kernel_size + kernel]);
+  // All outputs that read old history belong to the token-zero thread for
+  // this channel. Other tokens must not race its in-place history update.
+  if (token > 0u && token < history_tokens) return;
+  const unsigned int end = token == 0u
+      ? (tokens < history_tokens ? tokens : history_tokens) : token + 1u;
+  for (unsigned int time = token; time < end; ++time) {
+    float sum = 0.0f;
+    for (unsigned int kernel = 0; kernel < kernel_size; ++kernel) {
+      const unsigned int position = time + kernel;
+      const float source = position < history_tokens
+          ? __bfloat162float(history[history_base + position * channels + channel])
+          : __bfloat162float(input[(row * tokens + position - history_tokens) *
+              input_stride + input_offset + channel]);
+      sum += source * __bfloat162float(weight[channel * kernel_size + kernel]);
+    }
+    output[(row * tokens + time) * channels + channel] =
+        __float2bfloat16_rn(sum / (1.0f + expf(-sum)));
   }
-  output[index] = __float2bfloat16_rn(sum / (1.0f + expf(-sum)));
   if (token == 0) {
     for (unsigned int history_token = 0; history_token < history_tokens; ++history_token) {
       const unsigned int combined = tokens + history_token;
