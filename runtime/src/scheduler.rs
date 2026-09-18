@@ -46,6 +46,28 @@ impl std::fmt::Display for PrefillDecodePolicy {
     }
 }
 
+/// Admission of new short prompts during an existing long prefill.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrefillRefillPolicy {
+    /// Keep the admitted prefill batch closed.
+    #[default]
+    Closed,
+    /// Join queued prompts of at most 128 tokens at CUDA chunk boundaries.
+    /// Requires a dense mixed-attention runner and interleaved decode; reduces
+    /// short-request waiting at the cost of long-request first-token latency.
+    ShortPrompt,
+}
+
+impl std::fmt::Display for PrefillRefillPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Closed => "closed",
+            Self::ShortPrompt => "short_prompt",
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ScheduledRequest {
     pub id: Uuid,
@@ -62,6 +84,7 @@ pub struct SchedulerConfig {
     pub decode_priority_burst: usize,
     pub cached_prefill_policy: CachedPrefillPolicy,
     pub prefill_decode_policy: PrefillDecodePolicy,
+    pub prefill_refill_policy: PrefillRefillPolicy,
 }
 
 #[derive(Debug, Clone)]
@@ -140,6 +163,7 @@ impl Default for SchedulerConfig {
             decode_priority_burst: 8,
             cached_prefill_policy: CachedPrefillPolicy::default(),
             prefill_decode_policy: PrefillDecodePolicy::default(),
+            prefill_refill_policy: PrefillRefillPolicy::default(),
         }
     }
 }

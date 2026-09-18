@@ -56,7 +56,7 @@ pub use runtime::{
     kv::{CacheStats, KvCacheDType},
     metrics::GenerationMetrics,
     progress::{ProgressCount, ProgressEvent, ProgressStage, ProgressUnit},
-    scheduler::{CachedPrefillPolicy, PrefillDecodePolicy},
+    scheduler::{CachedPrefillPolicy, PrefillDecodePolicy, PrefillRefillPolicy},
 };
 pub use session::Session;
 pub use telemetry::DeviceTelemetrySnapshot;

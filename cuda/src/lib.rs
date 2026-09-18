@@ -58,7 +58,9 @@ pub use checkpoint::{
     DenseSwiGluLayerLoadConfig, NvFp4MoeLayerLoadConfig, SharedRoutedModelLoadConfig,
 };
 pub use config::CudaConfig;
-pub use engine::{CudaEngine, CudaGenerationStepOutput, CudaMemoryStats, CudaPrefillBatch};
+pub use engine::{
+    CudaEngine, CudaGenerationStepOutput, CudaMemoryStats, CudaPrefillBatch, CudaPrefillSchedule,
+};
 pub use error::{Error, Result};
 pub use kernels::{RopeSpec, RouterSpec};
 pub use tensor::{CudaTensor, CudaTensorDType, CudaTensorSet, TensorUploadBatch};

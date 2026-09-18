@@ -157,6 +157,8 @@ fn profile(
     limit_deep_prefill_waves: bool,
 ) -> PrefillExecutionProfile {
     PrefillExecutionProfile {
+        refill: crate::engine::PrefillRefillPolicy::Closed,
+        admission: crate::engine::PrefillAdmissionPolicy::Uniform,
         chunk_tokens,
         completion_round_tokens,
         max_prefill_wave_rows: usize::MAX,

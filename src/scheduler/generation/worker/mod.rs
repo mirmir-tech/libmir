@@ -25,6 +25,7 @@ mod cancellation;
 mod finish;
 mod handoff;
 mod prefill;
+mod refill;
 mod telemetry;
 
 pub(super) struct Worker {
@@ -97,6 +98,7 @@ impl Worker {
             self.collect_prefill_admission();
             self.cancel_prefills();
             self.prepare_prefill();
+            self.refill_prefill();
             self.cancel_prefills();
             if self.has_executable_work() {
                 self.execute_step();

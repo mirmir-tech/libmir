@@ -14,6 +14,10 @@ pub(in crate::engine) use graph::GraphExecution;
 pub(in crate::engine) use session::{MixedMixerExecution, SinkAttentionExecution};
 
 pub(in crate::engine) trait GenerationExecution: Send {
+    fn prefill_schedule(&self) -> crate::CudaPrefillSchedule {
+        crate::CudaPrefillSchedule::RoundRobin
+    }
+
     fn prefix_replay_tokens(&self) -> Option<usize> {
         None
     }

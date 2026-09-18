@@ -18,9 +18,47 @@ impl Worker {
         self.observe_decode(rows);
         match output.prefill {
             Ok(true) => self.finish_prefill(),
-            Ok(false) => {},
+            Ok(false) => self.finish_ready_prefill(),
             Err(error) => self.fail_active_prefill(&error.to_string()),
         }
+    }
+
+    fn finish_ready_prefill(&mut self) {
+        if !self.prefill_profile.interleave_prefill_decode {
+            return;
+        }
+        let Some(active) = self.active_prefill.as_mut() else {
+            return;
+        };
+        let outputs = match self.engine.take_completed_generation_prefill(&mut active.batch) {
+            Ok(outputs) => outputs,
+            Err(error) => {
+                self.fail_active_prefill(&error.to_string());
+                return;
+            },
+        };
+        let unique = outputs
+            .iter()
+            .map(|(session, _)| *session)
+            .collect::<std::collections::HashSet<_>>();
+        if unique.len() != outputs.len()
+            || outputs.iter().any(|(session, _)| {
+                !active.requests.iter().any(|pending| pending.request.session_id == *session)
+            })
+        {
+            self.fail_active_prefill("backend returned invalid completed prefill sessions");
+            return;
+        }
+        for (session, output) in outputs {
+            let Some(row) =
+                active.requests.iter().position(|pending| pending.request.session_id == session)
+            else {
+                self.fail_active_prefill("completed prefill session disappeared");
+                return;
+            };
+            self.completed_prefill.push((active.requests.remove(row), output));
+        }
+        self.publish_completed_prefill();
     }
 
     fn finish_prefill(&mut self) {

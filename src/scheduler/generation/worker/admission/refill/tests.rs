@@ -33,6 +33,8 @@ fn worker() -> crate::Result<Worker> {
         config.scheduler,
         commands,
         PrefillExecutionProfile {
+            refill: crate::engine::PrefillRefillPolicy::Closed,
+            admission: crate::engine::PrefillAdmissionPolicy::Uniform,
             chunk_tokens: 8,
             completion_round_tokens: 8,
             max_prefill_wave_rows: 2,

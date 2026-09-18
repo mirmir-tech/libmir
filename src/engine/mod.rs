@@ -19,9 +19,9 @@ use foundation::model::BackendTarget;
 #[cfg(any(feature = "cuda", feature = "metal"))]
 pub use generation::EnginePrefillCohort;
 #[cfg(any(feature = "cuda", feature = "metal"))]
-pub use generation::PrefillExecutionProfile;
-#[cfg(any(feature = "cuda", feature = "metal"))]
 pub use generation::{EngineGenerationStepOutput, EnginePrefillBatch};
+#[cfg(any(feature = "cuda", feature = "metal"))]
+pub use generation::{PrefillAdmissionPolicy, PrefillExecutionProfile, PrefillRefillPolicy};
 #[cfg(feature = "metal")]
 use metal::MetalBackend;
 #[cfg(not(any(feature = "cuda", feature = "metal")))]

@@ -11,9 +11,11 @@ use crate::{Error, Result, engine::CudaEngine};
 
 mod cancellation;
 mod combined;
+mod completion;
 mod plan;
 mod prefix;
 mod profile;
+mod refill;
 mod round;
 mod sequence;
 #[cfg(test)]

@@ -9,6 +9,7 @@ use runtime::kv::{BlockId, BlockTable};
 use super::Worker;
 use crate::{engine::PrefillExecutionProfile, scheduler::generation::Command};
 
+mod policy;
 mod priority;
 mod refill;
 mod window;
@@ -68,11 +69,7 @@ impl Worker {
         if self.short_cached_refill_ready() {
             return;
         }
-        let quiet = prefill_quiet_wait(
-            self.config.prefill_batch_wait_us,
-            self.prefill.len(),
-            self.prefill_admission_limit(),
-        );
+        let quiet = self.prefill_collection_wait();
         let Some(mut window) =
             PrefillWindow::new(quiet, self.prefill.iter().map(|pending| pending.enqueued))
         else {
@@ -99,6 +96,7 @@ impl Worker {
                         window.arrived(pending.enqueued);
                     }
                     self.admit(command);
+                    window.widen(self.prefill_collection_wait());
                 },
                 Err(RecvTimeoutError::Timeout) => break,
                 Err(RecvTimeoutError::Disconnected) => self.stopping = true,

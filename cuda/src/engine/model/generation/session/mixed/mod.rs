@@ -71,6 +71,14 @@ impl MixedMixerExecution {
 }
 
 impl GenerationExecution for MixedMixerExecution {
+    fn prefill_schedule(&self) -> crate::CudaPrefillSchedule {
+        if self.template.decoder().num_experts.is_none() {
+            crate::CudaPrefillSchedule::CompletionFirst
+        } else {
+            crate::CudaPrefillSchedule::RoundRobin
+        }
+    }
+
     fn prefix_replay_tokens(&self) -> Option<usize> {
         Some(usize::MAX)
     }
@@ -108,7 +116,9 @@ impl GenerationExecution for MixedMixerExecution {
         &self,
         request: &runtime::backend::PrefillRequest,
     ) -> Option<usize> {
-        request.terminal_cache_checkpoint()
+        request.terminal_cache_checkpoint().filter(|tokens| {
+            self.prefill_schedule() != crate::CudaPrefillSchedule::CompletionFirst || *tokens >= 128
+        })
     }
 
     fn prefill_chunk_len(&self, remaining: usize) -> usize {

@@ -121,12 +121,21 @@ pub(super) fn schedule(
 ) -> Result<Vec<ScheduledChunk>> {
     let mut remaining_budget = budget;
     let mut scheduled = Vec::new();
-    let rows = round_rows(sequences, cursor);
+    let fifo = generation.prefill_schedule() == crate::CudaPrefillSchedule::CompletionFirst;
+    let rows = round_rows(
+        sequences,
+        if fifo {
+            0
+        } else {
+            cursor
+        },
+    );
     for (index, row) in rows.iter().copied().enumerate() {
         let sequence = &mut sequences[row];
         let remaining = sequence.request.prompt_tokens.len() - sequence.consumed;
         let rows_left = rows.len() - index;
-        let completion_first = mode != ScheduleMode::PrefillOnly && sequence.checkpoint_restored;
+        let completion_first =
+            fifo || (mode != ScheduleMode::PrefillOnly && sequence.checkpoint_restored);
         let row_budget = plan::row_chunk_budget(remaining_budget, rows_left, completion_first);
         let row_budget = if mode == ScheduleMode::SeparateDecode {
             generation.interleaved_prefill_budget(row_budget)
@@ -181,3 +190,6 @@ fn round_rows(sequences: &[Sequence], cursor: usize) -> Vec<usize> {
     let pending = sequences.iter().map(Sequence::pending).collect::<Vec<_>>();
     plan::round_rows_from_pending(&pending, cursor)
 }
+
+#[cfg(test)]
+mod tests;

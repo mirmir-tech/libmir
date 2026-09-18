@@ -64,8 +64,21 @@ impl GenerationCoordinator {
         config: SchedulerConfig,
         cache: CacheConfig,
     ) -> Result<Self> {
-        let prefill_profile =
-            engine.generation_prefill_profile(&model, config.max_batch_tokens, cache)?;
+        if config.prefill_refill_policy == runtime::scheduler::PrefillRefillPolicy::ShortPrompt
+            && config.prefill_decode_policy
+                == runtime::scheduler::PrefillDecodePolicy::CompleteCohort
+        {
+            return Err(runtime::RuntimeError::Config(
+                "short_prompt refill requires backend_default prefill_decode_policy".into(),
+            )
+            .into());
+        }
+        let prefill_profile = engine.generation_prefill_profile(
+            &model,
+            config.max_batch_tokens,
+            cache,
+            config.prefill_refill_policy,
+        )?;
         let (commands, receiver) = mpsc::channel();
         let interrupt = Arc::new(AtomicBool::new(false));
         let worker_interrupt = interrupt.clone();

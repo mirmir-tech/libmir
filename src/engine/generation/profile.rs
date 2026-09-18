@@ -1,9 +1,27 @@
+pub use runtime::scheduler::PrefillRefillPolicy;
+
+#[derive(Clone, Copy)]
+pub enum PrefillAdmissionPolicy {
+    #[cfg_attr(
+        not(feature = "metal"),
+        allow(dead_code, reason = "uniform admission is selected by Metal")
+    )]
+    Uniform,
+    #[cfg_attr(
+        not(feature = "cuda"),
+        allow(dead_code, reason = "short-prompt admission is a CUDA dense mixed-attention policy")
+    )]
+    ShortPrompt,
+}
+
 #[derive(Clone, Copy)]
 #[allow(
     clippy::struct_excessive_bools,
     reason = "backend scheduling capabilities are independent binary contracts"
 )]
 pub struct PrefillExecutionProfile {
+    pub refill: PrefillRefillPolicy,
+    pub admission: PrefillAdmissionPolicy,
     pub chunk_tokens: usize,
     pub completion_round_tokens: usize,
     pub max_prefill_wave_rows: usize,
@@ -20,6 +38,34 @@ pub struct PrefillExecutionProfile {
 }
 
 impl super::Engine {
+    pub(super) fn prefill_admission_policy(
+        &self,
+        model: &runtime::backend::ModelHandle,
+        refill: PrefillRefillPolicy,
+    ) -> crate::Result<PrefillAdmissionPolicy> {
+        #[cfg(not(feature = "cuda"))]
+        let _ = model;
+        let admission = match &self.inner {
+            #[cfg(feature = "cuda")]
+            super::EngineInner::Cuda(cuda)
+                if cuda.prefill_schedule(&model.id)?
+                    == cuda::CudaPrefillSchedule::CompletionFirst =>
+            {
+                PrefillAdmissionPolicy::ShortPrompt
+            },
+            _ => PrefillAdmissionPolicy::Uniform,
+        };
+        if refill == PrefillRefillPolicy::ShortPrompt
+            && !matches!(admission, PrefillAdmissionPolicy::ShortPrompt)
+        {
+            return Err(runtime::RuntimeError::Config(
+                "short_prompt refill requires a CUDA dense mixed-attention model".into(),
+            )
+            .into());
+        }
+        Ok(admission)
+    }
+
     #[cfg_attr(
         not(feature = "metal"),
         allow(
@@ -77,6 +123,8 @@ mod tests {
     #[test]
     fn completion_policy_is_opt_in_and_bounds_the_cohort_to_resident_slots() {
         let profile = PrefillExecutionProfile {
+            refill: PrefillRefillPolicy::Closed,
+            admission: PrefillAdmissionPolicy::Uniform,
             chunk_tokens: 1024,
             completion_round_tokens: 1024,
             max_prefill_wave_rows: usize::MAX,

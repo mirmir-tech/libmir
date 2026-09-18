@@ -4,6 +4,16 @@ use crate::{
 };
 
 impl CudaEngine {
+    /// Scheduling capability of the loaded generation runner.
+    pub fn prefill_schedule(&self, model_id: &str) -> Result<crate::CudaPrefillSchedule> {
+        let loaded = self.model(model_id)?;
+        let runner = loaded.prefill_runner()?;
+        Ok(match &runner.execution {
+            ModelExecution::Generation(generation) => generation.prefill_schedule(),
+            _ => crate::CudaPrefillSchedule::RoundRobin,
+        })
+    }
+
     /// Exact full and interleaved prefill shapes to calibrate before serving.
     pub fn prefill_profile_shapes(
         &self,

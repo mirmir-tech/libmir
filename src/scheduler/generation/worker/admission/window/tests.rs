@@ -52,3 +52,30 @@ fn disabled_collection_and_empty_queues_do_not_wait() -> Result<(), &'static str
     assert_eq!(window.remaining(now), Duration::ZERO);
     Ok(())
 }
+
+#[test]
+fn long_arrival_widens_from_original_timestamps() -> Result<(), &'static str> {
+    let start = Instant::now();
+    let next = start + Duration::from_millis(2);
+    let mut window =
+        PrefillWindow::new(Duration::from_millis(3), [start].into_iter()).ok_or("request")?;
+    window.arrived(next);
+    window.widen(Duration::from_millis(30));
+    assert_eq!(window.remaining(next), Duration::from_millis(30));
+    assert_eq!(window.remaining(start + Duration::from_millis(32)), Duration::ZERO);
+    window.widen(Duration::from_millis(3));
+    assert_eq!(window.remaining(next), Duration::from_millis(30));
+    Ok(())
+}
+
+#[test]
+fn widening_does_not_restart_an_aged_queue() -> Result<(), &'static str> {
+    let start = Instant::now();
+    let mut window =
+        PrefillWindow::new(Duration::from_millis(3), [start].into_iter()).ok_or("request")?;
+    window.widen(Duration::from_millis(30));
+    assert_eq!(window.remaining(start + Duration::from_millis(40)), Duration::ZERO);
+    window.arrived(start + Duration::from_millis(115));
+    assert_eq!(window.remaining(start + Duration::from_millis(115)), Duration::from_millis(5));
+    Ok(())
+}
