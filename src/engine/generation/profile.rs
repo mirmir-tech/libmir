@@ -9,7 +9,7 @@ pub enum PrefillAdmissionPolicy {
     Uniform,
     #[cfg_attr(
         not(feature = "cuda"),
-        allow(dead_code, reason = "short-prompt admission is a CUDA dense mixed-attention policy")
+        allow(dead_code, reason = "short-prompt admission is a CUDA mixed-attention policy")
     )]
     ShortPrompt,
 }
@@ -59,7 +59,8 @@ impl super::Engine {
             && !matches!(admission, PrefillAdmissionPolicy::ShortPrompt)
         {
             return Err(runtime::RuntimeError::Config(
-                "short_prompt refill requires a CUDA dense mixed-attention model".into(),
+                "short_prompt refill requires a CUDA mixed-attention model with combined steps"
+                    .into(),
             )
             .into());
         }

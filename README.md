@@ -156,7 +156,8 @@ with this opt-in policy.
 
 ### CUDA prefill completion and short admission
 
-Dense mixed-attention runners use completion-first prefill, retaining device
+Mixed-attention runners whose rows can join combined ragged steps, dense or
+routed, use completion-first prefill, retaining device
 state between chunks and publishing completed rows before the batch ends.
 Automatic terminal checkpoints below 128 tokens do not force an extra forward;
 explicitly requested checkpoints remain honored. Idle all-short queues cap the
@@ -166,7 +167,7 @@ that window using the original arrival timestamps.
 `RuntimeConfig::scheduler.prefill_refill_policy` defaults to
 `PrefillRefillPolicy::Closed`. Explicit `ShortPrompt` lets queue-head prompts of
 at most 128 tokens join a running long prefill at chunk boundaries. It requires
-a dense mixed-attention CUDA runner and rejects `CompleteCohort`. Available
+such a completion-first CUDA runner and rejects `CompleteCohort`. Available
 request slots, resident KV pages and half the step token budget bound admission.
 The policy trades long-request first-token latency for shorter waiting by new
 short requests. Other CUDA runners retain round-robin prefill, and Metal retains

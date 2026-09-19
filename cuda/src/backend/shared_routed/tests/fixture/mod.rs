@@ -1,4 +1,5 @@
 mod dense;
+mod routed;
 
 use std::{fs, path::PathBuf};
 

@@ -72,7 +72,10 @@ impl MixedMixerExecution {
 
 impl GenerationExecution for MixedMixerExecution {
     fn prefill_schedule(&self) -> crate::CudaPrefillSchedule {
-        if self.template.decoder().num_experts.is_none() {
+        // Routed runners qualify once their rows can join combined ragged steps.
+        if self.template.decoder().num_experts.is_none()
+            || self.template.supports_combined_generation()
+        {
             crate::CudaPrefillSchedule::CompletionFirst
         } else {
             crate::CudaPrefillSchedule::RoundRobin

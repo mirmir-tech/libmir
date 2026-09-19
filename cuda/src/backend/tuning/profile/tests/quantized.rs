@@ -184,3 +184,23 @@ fn mxfp8_profile_isolated_from_affine_and_token_shape() -> Result<(), Box<dyn st
     fs::remove_dir_all(&directory)?;
     Ok(())
 }
+
+#[test]
+fn sealed_startup_still_measures_batched_weight_only_decode_rows() {
+    let tuner = CudaAutoTuner::new(&device(), CudaTuningConfig::default());
+    // Startup measurements may exhaust the budget before batched rows appear.
+    tuner.record_quantized(
+        QuantizedProfileRequest::nvfp4_bf16_weight_only(1_024, 2_048, 512),
+        QuantizedProfileExecution::NvFp4WeightOnly(NvFp4WeightOnlyExecution::Materialized),
+        Duration::from_micros(35),
+        Duration::from_secs(3_600),
+    );
+    tuner.finish_startup();
+
+    assert!(tuner.claim_quantized(QuantizedProfileRequest::nvfp4_bf16_weight_only(5, 2_048, 512)));
+    assert!(!tuner.claim_quantized(QuantizedProfileRequest::nvfp4_bf16_weight_only(5, 2_048, 512)));
+    assert!(
+        !tuner.claim_quantized(QuantizedProfileRequest::nvfp4_bf16_weight_only(16, 2_048, 512))
+    );
+    assert!(!tuner.claim_quantized(QuantizedProfileRequest::mxfp8(5, 2_048, 512)));
+}

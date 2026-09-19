@@ -186,8 +186,8 @@ impl CudaAutoTuner {
             return false;
         };
         self.inner.config.mode == super::CudaTuningMode::Startup
-            && (!state.sealed || request.late_decode_allowed())
-            && state.budget.available()
+            && self.inner.config.startup_budget_ms > 0
+            && (request.late_decode_allowed() || (!state.sealed && state.budget.available()))
             && !state.moe.contains_key(&request)
             && state.moe_inflight.insert(request)
     }

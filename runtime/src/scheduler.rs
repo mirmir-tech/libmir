@@ -54,8 +54,9 @@ pub enum PrefillRefillPolicy {
     #[default]
     Closed,
     /// Join queued prompts of at most 128 tokens at CUDA chunk boundaries.
-    /// Requires a dense mixed-attention runner and interleaved decode; reduces
-    /// short-request waiting at the cost of long-request first-token latency.
+    /// Requires a mixed-attention runner with combined steps and interleaved
+    /// decode; reduces short-request waiting at the cost of long-request
+    /// first-token latency.
     ShortPrompt,
 }
 

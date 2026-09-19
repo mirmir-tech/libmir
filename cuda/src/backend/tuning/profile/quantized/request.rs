@@ -1,6 +1,9 @@
 use super::{DirectFp8ScaleDType, DirectFp8WeightScale};
 use crate::ExecutionPhase;
 
+/// Largest row count served by the dense weight-only Marlin plans.
+const LATE_BATCHED_DECODE_TOKENS: usize = 8;
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
 pub(super) enum QuantizedProfileFormat {
     Affine {
@@ -36,6 +39,13 @@ impl QuantizedProfileRequest {
     #[must_use]
     pub(in crate::backend) const fn tokens(self) -> usize {
         self.tokens
+    }
+
+    /// Batched decode rows first execute after startup sealing. Their
+    /// weight-only plans are measured once, like weight-only routed decode.
+    pub(super) const fn late_batched_decode_allowed(self) -> bool {
+        matches!(self.format, QuantizedProfileFormat::NvFp4Bf16WeightOnly)
+            && self.tokens <= LATE_BATCHED_DECODE_TOKENS
     }
 
     pub(in crate::backend) const fn affine(

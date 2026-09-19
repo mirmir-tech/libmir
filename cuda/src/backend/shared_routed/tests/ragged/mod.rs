@@ -1,4 +1,8 @@
+mod routed;
+mod support;
+
 use runtime::backend::SamplingLogits;
+use support::compare_continuation;
 
 use super::*;
 
@@ -63,17 +67,28 @@ fn run_rounds_with_capacity(
         .map(Vec::len)
         .max()
         .ok_or(Error::InvalidExecutionPlan("test has no prefill rounds"))?;
-    let backend = CudaBackend::new(CudaConfig::default())?;
-    let blocks = sequence_blocks(&rounds, rows)?;
     let decoder = dense_decoder(gdn48)?;
     let fixture = fixture::HybridFixture::nonzero_dense(&decoder)?;
+    run_fixture(&decoder, &fixture, rounds, rows, capacity, true)
+}
+
+fn run_fixture(
+    decoder: &DecoderConfig,
+    fixture: &fixture::HybridFixture,
+    rounds: Vec<Vec<usize>>,
+    rows: usize,
+    capacity: Option<usize>,
+    exact_tokens: bool,
+) -> Result<()> {
+    let backend = CudaBackend::new(CudaConfig::default())?;
+    let blocks = sequence_blocks(&rounds, rows)?;
     let cache = CacheConfig {
         block_size: 16,
         block_count: blocks * u32::try_from(rows)?,
         dtype: KvCacheDType::BFloat16,
     };
     let template = backend.load_shared_routed_model_template(
-        &decoder,
+        decoder,
         &fixture.catalog(),
         crate::SharedRoutedModelLoadConfig {
             cache,
@@ -152,7 +167,12 @@ fn run_rounds_with_capacity(
             &starts,
             Some(&vec![SamplingLogits::None; rows]),
         )?;
-        assert_eq!(selected, Some(expected));
+        // Routed logits have near ties whose order follows the tuned kernel
+        // choice; the continuation below compares their logits instead.
+        assert_eq!(selected.as_ref().map(Vec::len), Some(expected.len()));
+        if exact_tokens {
+            assert_eq!(selected, Some(expected));
+        }
         for row in 0..rows {
             assert_eq!(actual[row].position(), starts[row] + counts[row]);
         }
@@ -180,28 +200,6 @@ fn dense_decoder(gdn48: bool) -> Result<DecoderConfig> {
         linear.value_head_dim = 128;
     }
     Ok(decoder)
-}
-
-fn compare_continuation(
-    backend: &CudaBackend,
-    actual: &mut [CudaSharedRoutedModelSession],
-    reference: &mut [CudaSharedRoutedModelSession],
-    tables: &mut [BlockTable],
-) -> Result<()> {
-    for row in 0..actual.len() {
-        tables[row].set_token_len(actual[row].position() + 1);
-        let token = u32::try_from(row + 1)?;
-        let expected = read(backend, reference[row].decode(Uuid::nil(), token, &tables[row])?)?;
-        let values = read(backend, actual[row].decode(Uuid::nil(), token, &tables[row])?)?;
-        assert!(expected.iter().any(|value| value.to_f32().abs() > 0.01));
-        for (actual, expected) in values.iter().zip(&expected) {
-            assert!(
-                (actual.to_f32() - expected.to_f32()).abs() < 0.03,
-                "row={row} actual={actual:?} expected={expected:?}"
-            );
-        }
-    }
-    Ok(())
 }
 
 fn retained_batch<'a>(

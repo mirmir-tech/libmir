@@ -9,6 +9,10 @@ use crate::{
     kernels::{RoutePattern, RoutePatternGenerator, RoutePatternSpec},
 };
 
+/// Copied before each timed run so selected experts are read from memory, as
+/// they are between real decoder layers.
+const EVICTION_ELEMENTS: usize = 16 << 20;
+
 struct RoutePatterns {
     balanced: DeviceBuffer<u32>,
     hot_set: DeviceBuffer<u32>,
@@ -85,8 +89,18 @@ impl AutoNvFp4Experts {
         warmup: u32,
         iterations: u32,
     ) -> Result<Vec<Duration>> {
+        let eviction_source = self
+            .backend
+            .pool()
+            .allocate_zeroed::<bf16>(self.backend.stream(), EVICTION_ELEMENTS)?;
+        let mut eviction = (
+            &eviction_source,
+            self.backend.pool().allocate::<bf16>(self.backend.stream(), EVICTION_ELEMENTS)?,
+        );
         for round in 0..warmup {
-            self.execute_round(round as usize, input, selected, routing, output, None)?;
+            self.execute_round(
+                round as usize, input, selected, routing, output, &mut eviction, None,
+            )?;
         }
         let mut totals = vec![Duration::ZERO; self.candidates.len()];
         for round in 0..iterations {
@@ -96,6 +110,7 @@ impl AutoNvFp4Experts {
                 selected,
                 routing,
                 output,
+                &mut eviction,
                 Some(&mut totals),
             )?;
         }
@@ -110,11 +125,18 @@ impl AutoNvFp4Experts {
         selected: &DeviceBuffer<u32>,
         routing: &DeviceBuffer<bf16>,
         output: &mut DeviceBuffer<bf16>,
+        eviction: &mut (&DeviceBuffer<bf16>, DeviceBuffer<bf16>),
         mut totals: Option<&mut [Duration]>,
     ) -> Result<()> {
         let candidates = self.candidates.len();
         for step in 0..candidates {
             let index = (offset + step) % candidates;
+            self.backend.stream().copy_device_range(
+                eviction.0,
+                0..EVICTION_ELEMENTS,
+                &mut eviction.1,
+                0,
+            )?;
             let started = self.backend.context().create_event(true)?;
             let completed = self.backend.context().create_event(true)?;
             started.record(self.backend.stream())?;

@@ -1,4 +1,4 @@
-use mircuda::{Context, DeviceBuffer, MarlinNvFp4ThreadConfig, Stream, bf16};
+use mircuda::{Context, DeviceBuffer, MarlinNvFp4ThreadConfig, MemoryPool, Stream, bf16};
 use runtime::tuning::select_fastest_candidate;
 
 use super::{
@@ -31,6 +31,7 @@ pub(super) struct Selection {
     scratch: DeviceBuffer<bf16>,
     validation: DeviceBuffer<bf16>,
     context: Context,
+    pool: MemoryPool,
     tuner: CudaAutoTuner,
 }
 
@@ -46,17 +47,7 @@ impl Selection {
             config.input_features,
             config.output_features,
         );
-        let cached = backend.auto_tuner().lookup_quantized(request).and_then(|(value, source)| {
-            let QuantizedProfileExecution::NvFp4WeightOnly(value) = value else {
-                return None;
-            };
-            let execution: Execution = value.into();
-            if execution.is_marlin() && !marlin_available {
-                return None;
-            }
-            super::profile::trace(request, execution, source, None);
-            Some(execution)
-        });
+        let cached = cached(backend.auto_tuner(), request, marlin_available);
         let claimed = cached.is_none() && backend.auto_tuner().claim_quantized(request);
         let elements = tokens.checked_mul(config.output_features).ok_or(
             crate::Error::InvalidExecutionPlan("NVFP4 W4A16 tuning scratch size overflows"),
@@ -80,6 +71,7 @@ impl Selection {
                 },
             )?,
             context: backend.context().clone(),
+            pool: backend.pool().clone(),
             tuner: backend.auto_tuner().clone(),
         })
     }
@@ -100,7 +92,12 @@ impl Selection {
         input: &DeviceBuffer<bf16>,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
-        if self.selected.is_some() || !self.claimed {
+        if self.selected.is_some() {
+            return Ok(());
+        }
+        if !self.claimed {
+            // Another layer owns this measurement; adopt its result once recorded.
+            self.selected = cached(&self.tuner, self.request, marlin.is_some());
             return Ok(());
         }
         let tensor_core_compatible = super::validation::tensor_core_compatible(
@@ -194,6 +191,23 @@ impl Selection {
         super::profile::trace(self.request, execution, PlanSource::MeasuredStartup, Some(average));
         Ok(())
     }
+}
+
+fn cached(
+    tuner: &CudaAutoTuner,
+    request: QuantizedProfileRequest,
+    marlin_available: bool,
+) -> Option<Execution> {
+    let (value, source) = tuner.lookup_quantized(request)?;
+    let QuantizedProfileExecution::NvFp4WeightOnly(value) = value else {
+        return None;
+    };
+    let execution: Execution = value.into();
+    if execution.is_marlin() && !marlin_available {
+        return None;
+    }
+    super::profile::trace(request, execution, source, None);
+    Some(execution)
 }
 
 impl Execution {

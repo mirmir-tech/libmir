@@ -81,8 +81,11 @@ impl CudaAutoTuner {
             return false;
         };
         self.inner.config.mode == super::CudaTuningMode::Startup
-            && !state.sealed
-            && state.budget.available()
+            && self.inner.config.startup_budget_ms > 0
+            // A few late decode shapes are bounded by count, not by the budget
+            // that limits startup latency.
+            && (request.late_batched_decode_allowed()
+                || (!state.sealed && state.budget.available()))
             && !state.quantized.contains_key(&request)
             && state.quantized_inflight.insert(request)
     }

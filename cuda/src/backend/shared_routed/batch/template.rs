@@ -15,11 +15,12 @@ impl CudaSharedRoutedModelTemplate {
     }
 
     pub(crate) fn supports_combined_generation(&self) -> bool {
-        self.decoder.num_experts.is_none()
-            && self.layers.iter().enumerate().all(|(index, layer)| {
-                !matches!(layer, super::super::SharedRoutedLayerTemplate::Full(_))
-                    || matches!(self.decoder.layer_head_dim(index), 64 | 128 | 256)
-            })
+        // Routed feed-forward layers are token-wise, so ragged rows need only
+        // the attention and recurrence support shared with dense layers.
+        self.layers.iter().enumerate().all(|(index, layer)| {
+            !matches!(layer, super::super::SharedRoutedLayerTemplate::Full(_))
+                || matches!(self.decoder.layer_head_dim(index), 64 | 128 | 256)
+        })
     }
 
     #[cfg(test)]
