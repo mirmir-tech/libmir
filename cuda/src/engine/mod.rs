@@ -134,6 +134,9 @@ impl CudaEngine {
         let removed = self.models()?.remove(model_id);
         let unloaded = removed.is_some();
         drop(removed);
+        if unloaded {
+            self.backend.reset_memory_retention()?;
+        }
         Ok(unloaded)
     }
 

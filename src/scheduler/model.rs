@@ -95,12 +95,23 @@ impl ModelCoordinator {
         }
     }
 
+    /// Counts a request whose prompt is being prepared, where a generation
+    /// worker collects prefill cohorts.
+    pub(crate) fn announce_preparation(&self) -> Option<super::PreparationGuard> {
+        match &self.inner {
+            #[cfg(any(feature = "cuda", feature = "metal"))]
+            Coordinator::Generation(coordinator) => Some(coordinator.announce_preparation()),
+            Coordinator::Split { .. } => None,
+        }
+    }
+
     pub(crate) fn finish_decode(&self, pending: PendingModelDecode) -> Result<DecodeOutput> {
         match (&self.inner, pending.0) {
             #[cfg(any(feature = "cuda", feature = "metal"))]
-            (Coordinator::Generation(_), PendingModelDecodeInner::Generation(response)) => {
-                response.wait()
-            },
+            (
+                Coordinator::Generation(coordinator),
+                PendingModelDecodeInner::Generation(response),
+            ) => coordinator.finish_decode(&response),
             (Coordinator::Split { decode, .. }, PendingModelDecodeInner::Split(sequence)) => {
                 decode.submit(sequence)
             },

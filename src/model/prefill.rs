@@ -8,6 +8,10 @@ use super::Model;
 use crate::Result;
 
 impl Model {
+    pub(crate) fn announce_preparation(&self) -> Option<crate::scheduler::PreparationGuard> {
+        self.inner.coordinator.announce_preparation()
+    }
+
     pub(crate) fn prefill_request(
         &self,
         request: PrefillRequest,

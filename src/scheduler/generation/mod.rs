@@ -4,7 +4,7 @@ mod worker;
 use std::{
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Sender},
     },
     thread::JoinHandle,
@@ -18,13 +18,18 @@ use runtime::{
     scheduler::SchedulerConfig,
 };
 
-use super::{prefill::PrefillResponse, response::DecodeResponse};
+use super::{
+    PreparationGuard, PreparingRequests, prefill::PrefillResponse, response::DecodeResponse,
+};
 use crate::{Engine, Result, engine::EnginePrefillBatch};
 
 pub(super) struct GenerationCoordinator {
     commands: Sender<Command>,
     interrupt: Arc<AtomicBool>,
     worker: Mutex<Option<JoinHandle<()>>>,
+    /// Latest observed decode round trip, in microseconds.
+    decode_round_trip_us: AtomicU64,
+    preparing: PreparingRequests,
 }
 
 pub(super) enum Command {
@@ -79,6 +84,8 @@ impl GenerationCoordinator {
             cache,
             config.prefill_refill_policy,
         )?;
+        let preparing = PreparingRequests::default();
+        let worker_preparing = preparing.clone();
         let (commands, receiver) = mpsc::channel();
         let interrupt = Arc::new(AtomicBool::new(false));
         let worker_interrupt = interrupt.clone();
@@ -86,6 +93,7 @@ impl GenerationCoordinator {
             std::thread::Builder::new().name("libmir-generation".into()).spawn(move || {
                 worker::Worker::new(
                     engine, model, config, receiver, prefill_profile, worker_interrupt,
+                    worker_preparing,
                 )
                 .run();
             });
@@ -102,7 +110,13 @@ impl GenerationCoordinator {
             commands,
             interrupt,
             worker: Mutex::new(Some(worker)),
+            decode_round_trip_us: AtomicU64::new(0),
+            preparing,
         })
+    }
+
+    pub(super) fn announce_preparation(&self) -> PreparationGuard {
+        self.preparing.announce()
     }
 
     pub(super) fn start_decode(&self, sequence: DecodeSequence) -> Result<Arc<DecodeResponse>> {
@@ -115,6 +129,17 @@ impl GenerationCoordinator {
             newly_active: false,
         }))?;
         Ok(response)
+    }
+
+    pub(super) fn finish_decode(
+        &self,
+        response: &DecodeResponse,
+    ) -> Result<runtime::backend::DecodeOutput> {
+        let expected = Duration::from_micros(self.decode_round_trip_us.load(Ordering::Relaxed));
+        let output = response.wait_near(expected)?;
+        let elapsed = u64::try_from(response.elapsed().as_micros()).unwrap_or(u64::MAX);
+        self.decode_round_trip_us.store(elapsed, Ordering::Relaxed);
+        Ok(output)
     }
 
     pub(super) fn submit_prefill(

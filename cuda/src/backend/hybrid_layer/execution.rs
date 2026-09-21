@@ -1,10 +1,12 @@
 use mircuda::{DeviceBuffer, bf16};
 
-use super::scratch::HybridLayerScratch;
 use crate::{
     CudaAffineGatedDeltaExecution, CudaAffineGatedDeltaLayer, CudaBackend, CudaGatedDeltaState,
     CudaTensor, Error, ExecutionPhase, Result,
-    backend::feed_forward::{FeedForward, FeedForwardExecution, LayerNormConfig},
+    backend::{
+        feed_forward::{FeedForward, FeedForwardExecution, LayerNormConfig},
+        layer_scratch::SharedLayerScratch,
+    },
     kernels::{ElementwiseBf16, ShiftedRmsNorm},
 };
 
@@ -18,7 +20,7 @@ pub struct CudaAffineGatedDeltaMoeExecution {
     residual: ElementwiseBf16,
     input_norm_weight: CudaTensor,
     post_attention_norm_weight: CudaTensor,
-    scratch: HybridLayerScratch,
+    scratch: SharedLayerScratch,
 }
 
 impl CudaAffineGatedDeltaMoeExecution {
@@ -54,7 +56,7 @@ impl CudaAffineGatedDeltaMoeExecution {
             )?,
             input_norm_weight: input_norm_weight.clone(),
             post_attention_norm_weight: post_attention_norm_weight.clone(),
-            scratch: HybridLayerScratch::new(backend, tokens, config.hidden_size)?,
+            scratch: backend.inner.layer_scratch.acquire(backend, tokens, config.hidden_size)?,
         })
     }
 
@@ -65,26 +67,28 @@ impl CudaAffineGatedDeltaMoeExecution {
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
         self.validate(input, output)?;
+        let mut guard = self.scratch.lock()?;
+        let scratch = &mut *guard;
         let stream = &self.backend.inner.stream;
         self.input_norm.execute(
             stream,
             input,
             bf16(&self.input_norm_weight)?,
-            &mut self.scratch.normalized,
+            &mut scratch.normalized,
         )?;
-        self.attention
-            .execute(&self.scratch.normalized, state, &mut self.scratch.attention)?;
+        self.attention.execute(&scratch.normalized, state, &mut scratch.attention)?;
         self.moe.execute_residual_norm(
             &self.post_attention_norm,
             input,
-            &self.scratch.attention,
+            &scratch.attention,
             bf16(&self.post_attention_norm_weight)?,
-            &mut self.scratch.residual,
-            &mut self.scratch.normalized,
-            &mut self.scratch.moe,
+            &mut scratch.residual,
+            &mut scratch.normalized,
+            &mut scratch.moe,
             output,
             &self.residual,
         )?;
+        drop(guard);
         Ok(())
     }
 
@@ -106,8 +110,8 @@ impl CudaAffineGatedDeltaMoeExecution {
         output: &DeviceBuffer<bf16>,
     ) -> Result<()> {
         self.validate(input, output)?;
-        self.attention
-            .prepare_packed(&self.scratch.normalized, states, &self.scratch.attention)
+        let scratch = self.scratch.lock()?;
+        self.attention.prepare_packed(&scratch.normalized, states, &scratch.attention)
     }
 
     pub(crate) fn execute_prepared_packed(
@@ -115,26 +119,29 @@ impl CudaAffineGatedDeltaMoeExecution {
         input: &DeviceBuffer<bf16>,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
+        let mut guard = self.scratch.lock()?;
+        let scratch = &mut *guard;
         let stream = &self.backend.inner.stream;
         self.input_norm.execute(
             stream,
             input,
             bf16(&self.input_norm_weight)?,
-            &mut self.scratch.normalized,
+            &mut scratch.normalized,
         )?;
         self.attention
-            .execute_prepared_packed(&self.scratch.normalized, &mut self.scratch.attention)?;
+            .execute_prepared_packed(&scratch.normalized, &mut scratch.attention)?;
         self.moe.execute_residual_norm(
             &self.post_attention_norm,
             input,
-            &self.scratch.attention,
+            &scratch.attention,
             bf16(&self.post_attention_norm_weight)?,
-            &mut self.scratch.residual,
-            &mut self.scratch.normalized,
-            &mut self.scratch.moe,
+            &mut scratch.residual,
+            &mut scratch.normalized,
+            &mut scratch.moe,
             output,
             &self.residual,
         )?;
+        drop(guard);
         Ok(())
     }
 
@@ -146,30 +153,33 @@ impl CudaAffineGatedDeltaMoeExecution {
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
         self.validate(input, output)?;
+        let mut guard = self.scratch.lock()?;
+        let scratch = &mut *guard;
         let stream = &self.backend.inner.stream;
         self.input_norm.execute(
             stream,
             input,
             bf16(&self.input_norm_weight)?,
-            &mut self.scratch.normalized,
+            &mut scratch.normalized,
         )?;
         self.attention.execute_ragged(
-            &self.scratch.normalized,
+            &scratch.normalized,
             states,
             counts,
-            &mut self.scratch.attention,
+            &mut scratch.attention,
         )?;
         self.moe.execute_residual_norm(
             &self.post_attention_norm,
             input,
-            &self.scratch.attention,
+            &scratch.attention,
             bf16(&self.post_attention_norm_weight)?,
-            &mut self.scratch.residual,
-            &mut self.scratch.normalized,
-            &mut self.scratch.moe,
+            &mut scratch.residual,
+            &mut scratch.normalized,
+            &mut scratch.moe,
             output,
             &self.residual,
         )?;
+        drop(guard);
         Ok(())
     }
 
@@ -178,7 +188,7 @@ impl CudaAffineGatedDeltaMoeExecution {
     }
 
     fn validate(&self, input: &DeviceBuffer<bf16>, output: &DeviceBuffer<bf16>) -> Result<()> {
-        let expected = self.scratch.residual.len();
+        let expected = self.scratch.elements();
         if input.len() != expected || output.len() != expected {
             return Err(Error::InvalidDecoderKernel("affine hybrid layer buffer mismatch"));
         }

@@ -12,6 +12,7 @@ mod measure;
 
 const ABSOLUTE_TOLERANCE: f32 = 0.5;
 const RELATIVE_TOLERANCE: f32 = 0.01;
+const SHORT_PREFILL_TOKENS: usize = 64;
 
 impl AutoNvFp4Experts {
     pub(super) fn tune(
@@ -123,6 +124,15 @@ fn candidate_executions(request: MoePlanRequest, weight_only: bool) -> &'static 
                 MoeExecution::SelectedWeightOnlyTiled2,
                 MoeExecution::SelectedWeightOnlyTiled4,
                 MoeExecution::SelectedWeightOnlyTiled8,
+                MoeExecution::MarlinWeightOnlyN128K128,
+                MoeExecution::MarlinWeightOnlyN128K64,
+                MoeExecution::MarlinWeightOnlyN64K128,
+            ],
+            // Checkpoint tails and short chunks are memory-bound like decode.
+            (ExecutionPhase::Prefill, tokens) if tokens <= SHORT_PREFILL_TOKENS => &[
+                MoeExecution::Bucketed,
+                MoeExecution::IndexedGrouped,
+                MoeExecution::SelectedWeightOnly,
                 MoeExecution::MarlinWeightOnlyN128K128,
                 MoeExecution::MarlinWeightOnlyN128K64,
                 MoeExecution::MarlinWeightOnlyN64K128,

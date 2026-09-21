@@ -200,7 +200,7 @@ fn sealed_startup_still_measures_batched_weight_only_decode_rows() {
     assert!(tuner.claim_quantized(QuantizedProfileRequest::nvfp4_bf16_weight_only(5, 2_048, 512)));
     assert!(!tuner.claim_quantized(QuantizedProfileRequest::nvfp4_bf16_weight_only(5, 2_048, 512)));
     assert!(
-        !tuner.claim_quantized(QuantizedProfileRequest::nvfp4_bf16_weight_only(16, 2_048, 512))
+        !tuner.claim_quantized(QuantizedProfileRequest::nvfp4_bf16_weight_only(128, 2_048, 512))
     );
     assert!(!tuner.claim_quantized(QuantizedProfileRequest::mxfp8(5, 2_048, 512)));
 }

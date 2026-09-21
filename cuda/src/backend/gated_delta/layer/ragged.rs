@@ -1,6 +1,10 @@
 use mircuda::{DeviceBuffer, bf16};
 
-use super::{CudaAffineGatedDeltaExecution, CudaGatedDeltaState, execution::bf16};
+use super::{
+    CudaAffineGatedDeltaExecution, CudaGatedDeltaState,
+    execution::bf16,
+    segments::{RowSegment, row_segments},
+};
 use crate::{Error, GatedDeltaInputs, Result};
 
 impl CudaAffineGatedDeltaExecution {
@@ -41,8 +45,9 @@ impl CudaAffineGatedDeltaExecution {
         } else {
             &self.scratch.mixed
         };
-        let mut offset = 0;
-        for (state, count) in states.iter_mut().zip(counts.iter().copied()) {
+        let segments = row_segments(states, counts)?;
+        for RowSegment { row, offset, count, checkpoint } in segments.iter().copied() {
+            let state = &mut *states[row];
             if self.config.key_dim == 128 {
                 state.convolve_silu_split_normalize_strided(
                     count,
@@ -67,7 +72,9 @@ impl CudaAffineGatedDeltaExecution {
                     0,
                 )?;
             }
-            offset += count;
+            if checkpoint {
+                state.stage_convolution()?;
+            }
         }
         if self.config.key_dim != 128 {
             self.transforms.split_normalize(
@@ -78,8 +85,8 @@ impl CudaAffineGatedDeltaExecution {
                 &mut self.scratch.value,
             )?;
         }
-        offset = 0;
-        for (state, count) in states.iter_mut().zip(counts.iter().copied()) {
+        for RowSegment { row, offset, count, checkpoint } in segments {
+            let state = &mut *states[row];
             state.execute(
                 count,
                 GatedDeltaInputs {
@@ -99,7 +106,9 @@ impl CudaAffineGatedDeltaExecution {
                 },
                 &mut self.scratch.recurrent.slice(offset * value..(offset + count) * value)?,
             )?;
-            offset += count;
+            if checkpoint {
+                state.stage_state()?;
+            }
         }
         self.finish_projected(packed, output)
     }

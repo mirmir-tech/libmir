@@ -1,7 +1,6 @@
 mod composition;
 use crate::backend::feed_forward::{FeedForward, LayerNormConfig};
 mod execution;
-mod scratch;
 #[cfg(all(test, target_os = "linux"))]
 mod tests;
 

@@ -2,6 +2,7 @@
 mod generation;
 mod model;
 mod prefill;
+mod preparation;
 mod response;
 mod step;
 #[cfg(test)]
@@ -15,6 +16,9 @@ use std::{
 
 pub use model::{ModelCoordinator, PendingModelDecode};
 pub use prefill::PrefillCoordinator;
+pub use preparation::PreparationGuard;
+#[cfg(any(feature = "cuda", feature = "metal"))]
+pub use preparation::PreparingRequests;
 use runtime::{
     backend::{DecodeOutput, DecodeSequence, ModelHandle},
     scheduler::SchedulerConfig,

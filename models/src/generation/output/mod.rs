@@ -73,6 +73,12 @@ impl OutputNormalizer {
         self.push_text(text)
     }
 
+    /// Attaches text released at the end of generation to the withheld ids.
+    #[must_use]
+    pub fn finish(&mut self, text: String) -> Option<GenerationToken> {
+        self.push_text(text)
+    }
+
     fn push_text(&mut self, text: String) -> Option<GenerationToken> {
         if matches!(&self.state, State::RoleName) {
             return None;

@@ -2,7 +2,7 @@ use super::{DirectFp8ScaleDType, DirectFp8WeightScale};
 use crate::ExecutionPhase;
 
 /// Largest row count served by the dense weight-only Marlin plans.
-const LATE_BATCHED_DECODE_TOKENS: usize = 8;
+const LATE_BATCHED_DECODE_TOKENS: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
 pub(super) enum QuantizedProfileFormat {

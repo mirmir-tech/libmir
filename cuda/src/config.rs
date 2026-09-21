@@ -7,7 +7,8 @@ use crate::backend::{CudaModelSessionConfig, CudaPlanningPolicy, CudaTuningConfi
 pub struct CudaConfig {
     /// CUDA device ordinal selected during backend construction.
     pub device_ordinal: usize,
-    /// Bytes retained by CUDA's default memory pool after use.
+    /// Unused bytes retained by CUDA's default memory pool, counted above the
+    /// memory in use once startup tuning of a model has finished.
     pub memory_pool_release_threshold: u64,
     /// Header roots passed explicitly to NVRTC for toolkit-backed kernels.
     pub nvrtc_include_paths: Vec<PathBuf>,
@@ -25,7 +26,7 @@ impl Default for CudaConfig {
     fn default() -> Self {
         Self {
             device_ordinal: 0,
-            memory_pool_release_threshold: 512 * 1_024 * 1_024,
+            memory_pool_release_threshold: 2 * 1_024 * 1_024 * 1_024,
             nvrtc_include_paths: vec![
                 PathBuf::from("/usr/local/cuda/include"),
                 PathBuf::from("/usr/local/cuda/include/cccl"),

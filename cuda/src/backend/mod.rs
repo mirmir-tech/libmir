@@ -10,6 +10,7 @@ mod gated_full_attention;
 mod hybrid_layer;
 mod init;
 mod kv;
+mod layer_scratch;
 mod linear;
 mod model;
 mod output;
@@ -90,7 +91,7 @@ use linear::{
 use mircuda::{Compiler, Context, DeviceInfo, MemoryPool, Stream};
 pub use model::{
     CudaDecodeBatch, CudaModelSessionConfig, CudaMoeModelSession, CudaMoeModelTemplate,
-    DEFAULT_PREFILL_CHUNK_TOKENS,
+    DEFAULT_PREFILL_CHUNK_TOKENS, RETAINED_CHUNK_SLACK_TOKENS, SMALL_PLAN_TOKENS,
 };
 pub use output::{CudaAffineOutputHead, CudaOutputHead};
 pub use planning::{
@@ -128,11 +129,13 @@ pub struct CudaBackend {
 #[derive(Debug)]
 struct CudaRuntime {
     dense_scratch: feed_forward::DenseScratchPool,
+    layer_scratch: layer_scratch::LayerScratchPool,
     device: DeviceInfo,
     context: Context,
     stream: Stream,
     auxiliary_stream: Stream,
     pool: MemoryPool,
+    pool_release_slack: u64,
     compiler: Arc<Compiler>,
     mxfp8_scratch: Mutex<HashMap<(usize, usize), Arc<mircuda::MxFp8TensorCoreScratch>>>,
     nvfp4_bucket_scratch:

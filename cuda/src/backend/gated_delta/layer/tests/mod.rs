@@ -1,5 +1,6 @@
 mod fixture;
 mod gates;
+mod inline_checkpoint;
 mod packing;
 
 use mircuda::{DeviceBuffer, DeviceElement, bf16};

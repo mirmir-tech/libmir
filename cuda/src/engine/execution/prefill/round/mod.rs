@@ -156,14 +156,15 @@ pub(super) fn schedule(
                 completion_first,
             )
         };
-        let terminal = generation.terminal_cache_checkpoint(&sequence.request);
+        let terminal = generation
+            .splits_at_terminal_checkpoint()
+            .then(|| generation.terminal_cache_checkpoint(&sequence.request))
+            .flatten();
         let alignment = generation.cache_checkpoint_alignment();
-        let count = generation.prefill_chunk_len(
-            remaining
-                .min(row_budget)
-                .min(context_budget)
-                .min(sequence.checkpoint_distance(terminal, alignment)),
-        );
+        let boundary = sequence.checkpoint_distance(terminal, alignment);
+        let limit = remaining.min(row_budget).min(context_budget).min(boundary);
+        let count =
+            generation.prefill_chunk_len(plan::absorb_remainder(limit, remaining, boundary));
         if !plan::valid_chunk(count, remaining, remaining_budget) {
             return Err(Error::InvalidDecoderKernel(
                 "CUDA lowering returned an invalid prefill chunk",
@@ -178,7 +179,7 @@ pub(super) fn schedule(
             final_chunk: sequence.consumed + count == sequence.request.prompt_tokens.len(),
             completion_first,
         });
-        remaining_budget -= count;
+        remaining_budget = remaining_budget.saturating_sub(count);
         if remaining_budget == 0 {
             break;
         }

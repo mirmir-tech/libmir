@@ -2,7 +2,10 @@ use std::collections::VecDeque;
 
 use crate::{
     CudaSharedRoutedModelTemplate, Error, Result,
-    backend::{CudaSharedRoutedPrefillBatch, DEFAULT_PREFILL_CHUNK_TOKENS},
+    backend::{
+        CudaSharedRoutedPrefillBatch, DEFAULT_PREFILL_CHUNK_TOKENS, RETAINED_CHUNK_SLACK_TOKENS,
+        SMALL_PLAN_TOKENS,
+    },
 };
 
 struct RetainedBatch {
@@ -48,7 +51,9 @@ impl CombinedBatches {
         }
         // Keep the scalar-plan aggregate limit. Evict before constructing the
         // new shape, so checkpoint tails do not double the scratch peak.
-        let budget = DEFAULT_PREFILL_CHUNK_TOKENS.max(capacity).saturating_add(1);
+        let budget = DEFAULT_PREFILL_CHUNK_TOKENS
+            .max(capacity)
+            .saturating_add(RETAINED_CHUNK_SLACK_TOKENS);
         while self.batches.len() >= 8 || self.retained_tokens().saturating_add(capacity) > budget {
             if self.batches.pop_front().is_none() {
                 break;
@@ -78,6 +83,7 @@ impl CombinedBatches {
     fn retained_tokens(&self) -> usize {
         self.batches
             .iter()
+            .filter(|batch| batch.capacity > SMALL_PLAN_TOKENS)
             .fold(0_usize, |total, batch| total.saturating_add(batch.capacity))
     }
 }

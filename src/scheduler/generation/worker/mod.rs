@@ -3,7 +3,7 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc::{Receiver, TryRecvError},
+        mpsc::Receiver,
     },
 };
 
@@ -22,6 +22,7 @@ use crate::{Engine, engine::PrefillExecutionProfile};
 mod admission;
 mod budget;
 mod cancellation;
+mod commands;
 mod finish;
 mod handoff;
 mod prefill;
@@ -42,6 +43,7 @@ pub(super) struct Worker {
     completed_prefill: Vec<(PendingPrefill, PrefillOutput)>,
     prefill_profile: PrefillExecutionProfile,
     prefill_handoff: handoff::PrefillHandoff,
+    preparing: crate::scheduler::PreparingRequests,
     stopping: bool,
 }
 
@@ -53,6 +55,7 @@ impl Worker {
         commands: Receiver<Command>,
         prefill_profile: PrefillExecutionProfile,
         interrupt: Arc<AtomicBool>,
+        preparing: crate::scheduler::PreparingRequests,
     ) -> Self {
         let prefill_profile = prefill_profile.with_decode_policy(config.prefill_decode_policy);
         Self {
@@ -69,6 +72,7 @@ impl Worker {
             completed_prefill: Vec::new(),
             prefill_profile,
             prefill_handoff: handoff::PrefillHandoff::default(),
+            preparing,
             stopping: false,
         }
     }
@@ -83,7 +87,7 @@ impl Worker {
                 return;
             }
             if !self.has_work() {
-                match self.commands.recv() {
+                match self.next_command() {
                     Ok(command) => self.admit(command),
                     Err(_) => self.stopping = true,
                 }
@@ -135,19 +139,6 @@ impl Worker {
             },
             Command::Cancellation => {},
             Command::Stop => self.stopping = true,
-        }
-    }
-
-    fn drain_commands(&mut self) {
-        loop {
-            match self.commands.try_recv() {
-                Ok(command) => self.admit(command),
-                Err(TryRecvError::Empty) => return,
-                Err(TryRecvError::Disconnected) => {
-                    self.stopping = true;
-                    return;
-                },
-            }
         }
     }
 

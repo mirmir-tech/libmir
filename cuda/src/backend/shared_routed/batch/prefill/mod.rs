@@ -156,9 +156,12 @@ impl CudaSharedRoutedPrefillBatch {
             match &mut self.layers[index] {
                 SharedRoutedBatchLayer::Linear(layer) => {
                     let mut states = linear_states(sessions, index)?;
+                    // A row with an armed checkpoint splits its recurrence,
+                    // which only the ragged path does.
                     if self.rows > 1
                         && tokens.len() == self.token_ids.len()
                         && self.counts.iter().all(|count| *count == self.counts[0])
+                        && states.iter().all(|state| state.armed_checkpoint().is_none())
                     {
                         layer.execute_packed(input, &mut states, output)?;
                     } else {

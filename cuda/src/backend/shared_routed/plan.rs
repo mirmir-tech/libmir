@@ -52,12 +52,13 @@ impl SharedRoutedExecutionPlanCache {
             return;
         }
         // Each shape owns scratch for every layer. Bound total token capacity,
-        // not just shape count, to retain roughly one prefill chunk plus decode.
-        // Evict before constructing the replacement so old scratch is freed on
-        // the same CUDA stream before its new allocations are enqueued.
+        // not just shape count, to retain roughly one prefill chunk plus
+        // decode. Evict before constructing the replacement so old
+        // scratch is freed on the same CUDA stream before its new
+        // allocations are enqueued.
         let budget = crate::backend::model::DEFAULT_PREFILL_CHUNK_TOKENS
             .max(tokens)
-            .saturating_add(1);
+            .saturating_add(crate::backend::model::RETAINED_CHUNK_SLACK_TOKENS);
         while self.plans.len() >= RETAINED_PLAN_SHAPES
             || self.retained_tokens().saturating_add(tokens) > budget
         {
@@ -79,8 +80,14 @@ impl SharedRoutedExecutionPlanCache {
         }
     }
 
+    /// Token capacity held by chunk-sized shapes. Decode and prompt-tail shapes
+    /// own little scratch and are bounded by the shape count alone; counting
+    /// them made two chunks of one prompt evict each other on every request.
     fn retained_tokens(&self) -> usize {
-        self.plans.keys().fold(0_usize, |total, tokens| total.saturating_add(*tokens))
+        self.plans
+            .keys()
+            .filter(|tokens| **tokens > crate::backend::model::SMALL_PLAN_TOKENS)
+            .fold(0_usize, |total, tokens| total.saturating_add(*tokens))
     }
 
     pub(super) fn insert(&mut self, tokens: usize, plan: SharedRoutedExecutionPlan) {

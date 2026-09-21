@@ -1,5 +1,6 @@
 mod dense_mixed;
 mod fixture;
+mod inline_checkpoint;
 mod ragged;
 mod retained_plans;
 
@@ -115,7 +116,8 @@ fn concurrent_sessions_reuse_model_kv_pages_and_plans() -> Result<()> {
     second.prefill(Uuid::from_u128(2), &[1, 2], &table)?;
     backend.synchronize()?;
     // Each session grows its own FMHA LSE scratch on first multi-token use.
-    // Check shared-plan reuse only after both session-local workspaces are warm.
+    // Check shared-plan reuse only after both session-local workspaces are
+    // warm.
     let after_warmup = backend.memory_pool_stats()?.used;
     table.set_token_len(4);
     first.prefill(Uuid::from_u128(1), &[3, 4], &table)?;

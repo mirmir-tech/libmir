@@ -134,6 +134,10 @@ impl CudaAffineGatedDeltaExecution {
         state: &mut CudaGatedDeltaState,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
+        if state.armed_checkpoint().is_some() {
+            // The ragged path splits the row at the checkpoint position.
+            return self.execute_ragged(input, &mut [state], &[self.tokens], output);
+        }
         self.validate(input, state, output)?;
         let packed = self.project_qkv_gate(input)?;
         self.project_alpha_beta(input)?;

@@ -36,6 +36,7 @@ pub(super) fn execute(
             let session = execution.template.instantiate_with_caches(&execution.caches)?;
             execution.sessions.insert(row.request.session_id, session);
         }
+        execution.arm_terminal_checkpoint(row.request, row.offset, row.tokens.len())?;
     }
     let ids = chunks
         .iter()

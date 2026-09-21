@@ -59,6 +59,7 @@ pub(super) fn worker() -> crate::Result<(Worker, mpsc::Sender<Command>)> {
         commands,
         profile(16, 16, 1_000_000, false),
         Arc::new(AtomicBool::new(false)),
+        crate::scheduler::PreparingRequests::default(),
     );
     Ok((worker, sender))
 }

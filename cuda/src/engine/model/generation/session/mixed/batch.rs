@@ -102,6 +102,7 @@ fn prefill_rows(
                 let session = execution.template.instantiate_with_caches(&execution.caches)?;
                 execution.sessions.insert(chunk.request.session_id, session);
             }
+            execution.arm_terminal_checkpoint(chunk.request, chunk.offset, chunk.tokens.len())?;
             let session = required(&mut execution.sessions, chunk.request.session_id)?;
             session.prefill(chunk.request.session_id, chunk.tokens, chunk.table)?;
             execution.checkpoint_prefix(chunk.request)?;
@@ -138,6 +139,7 @@ fn prefill_packed(
             let session = execution.template.instantiate_with_caches(&execution.caches)?;
             execution.sessions.insert(chunk.request.session_id, session);
         }
+        execution.arm_terminal_checkpoint(chunk.request, chunk.offset, chunk.tokens.len())?;
     }
     let ids = chunks.iter().map(|chunk| chunk.request.session_id).collect::<Vec<_>>();
     let mut owned = take_sessions(&mut execution.sessions, ids.iter().copied())?;

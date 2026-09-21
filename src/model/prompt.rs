@@ -36,16 +36,15 @@ impl ModelDescriptor {
         let prompt = self.template.render_with_reasoning(conversation, reasoning)?;
         let render = render_started.elapsed();
         let tokenize_started = Instant::now();
-        let tokens = self
-            .tokenizer
-            .encode_with_special_tokens(&prompt.text, prompt.add_special_tokens)?;
+        let (tokens, token_ends) =
+            self.tokenizer.encode_with_token_ends(&prompt.text, prompt.add_special_tokens)?;
         let tokenize = tokenize_started.elapsed();
         if tokens.token_ids.is_empty() {
             return Err(Error::EmptyPrompt);
         }
         validate_context(tokens.token_ids.len(), generation.max_tokens, self.metadata.context_len)?;
         let cache_checkpoints =
-            self.cache_checkpoints(conversation, &tokens.token_ids, reasoning)?;
+            self.cache_checkpoints(conversation, &prompt.text, &token_ends, reasoning);
         Ok(PreparedPrompt {
             prompt,
             tokens,

@@ -10,7 +10,7 @@ impl MarlinNvFp4Bf16Linear {
         left: &NvFp4WeightOnlyWeight,
         right: &NvFp4WeightOnlyWeight,
     ) -> Result<Option<Self>> {
-        if left.config != right.config || tokens == 0 || tokens > 8 {
+        if left.config != right.config || tokens == 0 || tokens > super::MAX_DENSE_MARLIN_TOKENS {
             return Ok(None);
         }
         let output = left

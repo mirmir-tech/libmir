@@ -98,3 +98,15 @@ fn retains_ids_buffered_before_visible_text() {
     assert_eq!(token.as_ref().map(|token| token.preceding_ids.as_slice()), Some([7].as_slice()));
     assert_eq!(token.map(|token| token.id), Some(8));
 }
+
+#[test]
+fn finish_attaches_released_text_to_withheld_ids() {
+    let mut normalizer = normalizer(Markers::default());
+    assert!(normalizer.push(7, String::new()).is_none());
+    assert!(normalizer.push(8, String::new()).is_none());
+    let token = normalizer.finish("\u{fffd}".into());
+    assert_eq!(token.as_ref().map(|token| token.preceding_ids.as_slice()), Some([7].as_slice()));
+    assert_eq!(token.as_ref().map(|token| token.id), Some(8));
+    assert_eq!(token.map(|token| token.text), Some("\u{fffd}".into()));
+    assert!(normalizer.finish(String::new()).is_none());
+}

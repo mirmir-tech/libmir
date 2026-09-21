@@ -1,4 +1,7 @@
-use models::generation::{GenerationChannel, GenerationSettings, GenerationToken};
+use models::{
+    generation::{GenerationChannel, GenerationSettings, GenerationToken, OutputNormalizer},
+    tokenizer::{TextDecoder, TextTokenizer},
+};
 use runtime::metrics::{GenerationMetrics, GenerationMetricsRecorder};
 
 use super::telemetry::trace_latency;
@@ -89,4 +92,29 @@ pub(super) fn should_stop(
     stop_tokens: &[u32],
 ) -> bool {
     !settings.ignore_eos && generated_tokens >= settings.min_tokens && stop_tokens.contains(&token)
+}
+
+/// Incremental detokenization joined with channel normalization.
+pub(super) struct TokenStream<'a> {
+    decoder: TextDecoder<'a>,
+    normalizer: OutputNormalizer,
+}
+
+impl<'a> TokenStream<'a> {
+    pub(super) fn new(tokenizer: &'a TextTokenizer, prompt: &str) -> Self {
+        Self {
+            decoder: tokenizer.decoder(),
+            normalizer: OutputNormalizer::new(tokenizer, prompt),
+        }
+    }
+
+    pub(super) fn step(&mut self, token: u32) -> crate::Result<Option<GenerationToken>> {
+        let piece = self.decoder.step(token)?.unwrap_or_default();
+        Ok(self.normalizer.push(token, piece))
+    }
+
+    /// Releases text withheld as a partial UTF-8 sequence with its ids.
+    pub(super) fn finish(&mut self) -> crate::Result<Option<GenerationToken>> {
+        Ok(self.decoder.finish()?.and_then(|piece| self.normalizer.finish(piece)))
+    }
 }

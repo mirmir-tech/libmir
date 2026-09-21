@@ -26,6 +26,26 @@ impl CudaBackend {
 
     pub(crate) fn finish_startup_tuning(&self) {
         self.inner.tuner.finish_startup();
+        if let Err(error) = self.retain_resident_memory() {
+            tracing::warn!(%error, "CUDA memory pool keeps its startup release threshold");
+        }
+    }
+
+    /// Counts the release threshold from the memory in use once a model is
+    /// resident. CUDA compares the threshold with all reserved memory, so a
+    /// fixed value below the model size returns every freed scratch buffer to
+    /// the driver at the next synchronization and reserves it again for the
+    /// next execution shape.
+    fn retain_resident_memory(&self) -> Result<()> {
+        let resident = self.inner.pool.stats()?.used;
+        let threshold = resident.saturating_add(self.inner.pool_release_slack);
+        tracing::debug!(resident, threshold, "raised CUDA memory pool release threshold");
+        Ok(self.inner.pool.set_release_threshold(threshold)?)
+    }
+
+    /// Restores the configured threshold after resident memory was dropped.
+    pub(crate) fn reset_memory_retention(&self) -> Result<()> {
+        Ok(self.inner.pool.set_release_threshold(self.inner.pool_release_slack)?)
     }
 
     #[cfg(all(test, target_os = "linux"))]

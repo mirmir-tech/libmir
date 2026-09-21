@@ -106,12 +106,14 @@ impl CudaGatedDeltaState {
         if !self.resident_in(owner, row) {
             self.resident = None;
         }
-        let resident = self.resident.get_or_insert_with(|| GatedDeltaResidency {
-            owner,
-            row,
-            state,
-            history,
-            valid: Arc::new(AtomicBool::new(true)),
+        let resident = self.resident.get_or_insert_with(|| {
+            Box::new(GatedDeltaResidency {
+                owner,
+                row,
+                state,
+                history,
+                valid: Arc::new(AtomicBool::new(true)),
+            })
         });
         GatedDeltaDestination {
             row,

@@ -2,7 +2,6 @@ mod composition;
 use crate::backend::feed_forward::{FeedForward, LayerNormConfig};
 mod batch;
 mod execution;
-mod scratch;
 
 pub use execution::CudaAffineGatedFullAttentionMoeExecution;
 use runtime::kv::KvStorageSpec;

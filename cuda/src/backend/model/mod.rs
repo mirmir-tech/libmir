@@ -10,6 +10,9 @@ mod template;
 mod tests;
 
 pub use batch::CudaDecodeBatch;
-pub use config::{CudaModelSessionConfig, DEFAULT_PREFILL_CHUNK_TOKENS};
+pub use config::{
+    CudaModelSessionConfig, DEFAULT_PREFILL_CHUNK_TOKENS, RETAINED_CHUNK_SLACK_TOKENS,
+    SMALL_PLAN_TOKENS,
+};
 pub use session::CudaMoeModelSession;
 pub use template::CudaMoeModelTemplate;

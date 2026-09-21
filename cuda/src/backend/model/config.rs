@@ -1,6 +1,12 @@
 use crate::{Error, Result};
 
 pub const DEFAULT_PREFILL_CHUNK_TOKENS: usize = 2_096;
+/// Execution shapes this small own little scratch; retention bounds them by
+/// shape count, not by token capacity.
+pub const SMALL_PLAN_TOKENS: usize = 64;
+/// Retention room for a chunk that absorbed a short prompt remainder and was
+/// rounded up to its batch capacity, next to the full chunk before it.
+pub const RETAINED_CHUNK_SLACK_TOKENS: usize = 128;
 
 /// Explicit allocation policy for one CUDA model session.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

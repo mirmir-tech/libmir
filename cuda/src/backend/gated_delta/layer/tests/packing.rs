@@ -9,8 +9,10 @@ fn packed_bf16_qkv_gate_preserves_prefill_and_decode() -> Result<()> {
     Ok(())
 }
 
-fn compare(key_dim: usize) -> Result<()> {
-    let backend = CudaBackend::new(CudaConfig::default())?;
+pub(super) fn dense_weights(
+    backend: &CudaBackend,
+    key_dim: usize,
+) -> Result<(AffineGatedDeltaLayerConfig, AffineGatedDeltaLayerWeights)> {
     let config = AffineGatedDeltaLayerConfig {
         hidden_size: 128,
         key_heads: 1,
@@ -25,7 +27,7 @@ fn compare(key_dim: usize) -> Result<()> {
     };
     let tensor = |name: &str, shape: Vec<usize>, seed: usize| {
         let values = pattern(shape.iter().product(), seed);
-        Ok::<_, crate::Error>(CudaTensor::from_bf16(name.into(), shape, copy(&backend, &values)?))
+        Ok::<_, crate::Error>(CudaTensor::from_bf16(name.into(), shape, copy(backend, &values)?))
     };
     let dense = |name, rows, seed| {
         tensor(name, vec![rows, config.hidden_size], seed).map(CheckpointProjectionWeight::Dense)
@@ -45,6 +47,12 @@ fn compare(key_dim: usize) -> Result<()> {
         a_log: tensor("a", vec![2], 15)?,
         dt_bias: tensor("dt", vec![2], 17)?,
     };
+    Ok((config, weights))
+}
+
+fn compare(key_dim: usize) -> Result<()> {
+    let backend = CudaBackend::new(CudaConfig::default())?;
+    let (config, weights) = dense_weights(&backend, key_dim)?;
     let original_qkv = read(&backend, buffer(Some(&weights.qkv))?)?;
     let original_gate = read(&backend, buffer(Some(&weights.gate))?)?;
     let packed = CudaAffineGatedDeltaLayer::new(&backend, config, weights)?;
@@ -75,7 +83,7 @@ fn compare(key_dim: usize) -> Result<()> {
     Ok(())
 }
 
-fn pattern(elements: usize, seed: usize) -> Vec<bf16> {
+pub(super) fn pattern(elements: usize, seed: usize) -> Vec<bf16> {
     (0..elements)
         .map(|index| {
             let value = i16::try_from((index * 17 + seed) % 31).unwrap_or_default() - 15;

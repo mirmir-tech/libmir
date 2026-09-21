@@ -5,6 +5,7 @@ mod finish;
 mod gates;
 mod ragged;
 mod scratch;
+mod segments;
 #[cfg(all(test, target_os = "linux"))]
 mod tests;
 mod weights;

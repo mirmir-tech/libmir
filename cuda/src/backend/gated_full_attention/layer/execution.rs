@@ -1,12 +1,14 @@
 use mircuda::{DeviceBuffer, bf16};
 use runtime::kv::{BlockTable, KvWritePlan};
 
-use super::scratch::FullAttentionLayerScratch;
 use crate::{
     CudaAffineGatedFullAttention, CudaAffineGatedFullAttentionExecution,
     CudaAffineGatedFullAttentionState, CudaBackend, CudaTensor, Error, ExecutionPhase,
     PagedPrefillBatch, Result,
-    backend::feed_forward::{FeedForward, FeedForwardExecution, LayerNormConfig},
+    backend::{
+        feed_forward::{FeedForward, FeedForwardExecution, LayerNormConfig},
+        layer_scratch::SharedLayerScratch,
+    },
     kernels::{ElementwiseBf16, ShiftedRmsNorm},
 };
 
@@ -20,7 +22,7 @@ pub struct CudaAffineGatedFullAttentionMoeExecution {
     pub(super) residual: ElementwiseBf16,
     pub(super) input_norm_weight: CudaTensor,
     pub(super) post_attention_norm_weight: CudaTensor,
-    pub(super) scratch: FullAttentionLayerScratch,
+    pub(super) scratch: SharedLayerScratch,
 }
 
 impl CudaAffineGatedFullAttentionMoeExecution {
@@ -57,7 +59,7 @@ impl CudaAffineGatedFullAttentionMoeExecution {
             residual: ElementwiseBf16::compile(&backend.inner.compiler, elements)?,
             input_norm_weight: input_norm_weight.clone(),
             post_attention_norm_weight: post_attention_norm_weight.clone(),
-            scratch: FullAttentionLayerScratch::new(backend, tokens, hidden)?,
+            scratch: backend.inner.layer_scratch.acquire(backend, tokens, hidden)?,
         })
     }
 
@@ -87,31 +89,34 @@ impl CudaAffineGatedFullAttentionMoeExecution {
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
         self.validate(input, output)?;
+        let mut guard = self.scratch.lock()?;
+        let scratch = &mut *guard;
         let stream = &self.backend.inner.stream;
         self.input_norm.execute(
             stream,
             input,
             bf16_tensor(&self.input_norm_weight)?,
-            &mut self.scratch.normalized,
+            &mut scratch.normalized,
         )?;
         self.attention.execute_packed_prefill(
-            &self.scratch.normalized,
+            &scratch.normalized,
             positions,
             states,
             batch,
-            &mut self.scratch.attention,
+            &mut scratch.attention,
         )?;
         self.moe.execute_residual_norm(
             &self.post_attention_norm,
             input,
-            &self.scratch.attention,
+            &scratch.attention,
             bf16_tensor(&self.post_attention_norm_weight)?,
-            &mut self.scratch.residual,
-            &mut self.scratch.normalized,
-            &mut self.scratch.moe,
+            &mut scratch.residual,
+            &mut scratch.normalized,
+            &mut scratch.moe,
             output,
             &self.residual,
         )?;
+        drop(guard);
         Ok(())
     }
 
@@ -129,15 +134,17 @@ impl CudaAffineGatedFullAttentionMoeExecution {
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
         self.validate(input, output)?;
+        let mut guard = self.scratch.lock()?;
+        let scratch = &mut *guard;
         let stream = &self.backend.inner.stream;
         self.input_norm.execute(
             stream,
             input,
             bf16_tensor(&self.input_norm_weight)?,
-            &mut self.scratch.normalized,
+            &mut scratch.normalized,
         )?;
         self.attention.execute_with_image_span(
-            &self.scratch.normalized,
+            &scratch.normalized,
             positions,
             state,
             write_plan,
@@ -145,19 +152,20 @@ impl CudaAffineGatedFullAttentionMoeExecution {
             start_position,
             window,
             image_span,
-            &mut self.scratch.attention,
+            &mut scratch.attention,
         )?;
         self.moe.execute_residual_norm(
             &self.post_attention_norm,
             input,
-            &self.scratch.attention,
+            &scratch.attention,
             bf16_tensor(&self.post_attention_norm_weight)?,
-            &mut self.scratch.residual,
-            &mut self.scratch.normalized,
-            &mut self.scratch.moe,
+            &mut scratch.residual,
+            &mut scratch.normalized,
+            &mut scratch.moe,
             output,
             &self.residual,
         )?;
+        drop(guard);
         Ok(())
     }
 
@@ -166,7 +174,7 @@ impl CudaAffineGatedFullAttentionMoeExecution {
         input: &DeviceBuffer<bf16>,
         output: &DeviceBuffer<bf16>,
     ) -> Result<()> {
-        let expected = self.scratch.residual.len();
+        let expected = self.scratch.elements();
         if input.len() != expected || output.len() != expected {
             return Err(Error::InvalidDecoderKernel(
                 "gated full-attention MoE layer buffer mismatch",

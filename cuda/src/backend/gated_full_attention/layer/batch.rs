@@ -22,29 +22,32 @@ impl CudaAffineGatedFullAttentionMoeExecution {
         paging: &PagedDecodeBatch,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
+        let mut guard = self.scratch.lock()?;
+        let scratch = &mut *guard;
         let stream = &self.backend.inner.stream;
         self.input_norm.execute(
             stream,
             input,
             bf16_tensor(&self.input_norm_weight)?,
-            &mut self.scratch.normalized,
+            &mut scratch.normalized,
         )?;
         self.attention.execute_prepared_packed(
-            &self.scratch.normalized,
+            &scratch.normalized,
             positions,
             paging,
-            &mut self.scratch.attention,
+            &mut scratch.attention,
         )?;
-        self.residual
-            .add(stream, input, &self.scratch.attention, &mut self.scratch.residual)?;
+        self.residual.add(stream, input, &scratch.attention, &mut scratch.residual)?;
         self.post_attention_norm.execute(
             stream,
-            &self.scratch.residual,
+            &scratch.residual,
             bf16_tensor(&self.post_attention_norm_weight)?,
-            &mut self.scratch.normalized,
+            &mut scratch.normalized,
         )?;
-        self.moe.execute(&self.scratch.normalized, &mut self.scratch.moe)?;
-        self.residual.add(stream, &self.scratch.residual, &self.scratch.moe, output)
+        self.moe.execute(&scratch.normalized, &mut scratch.moe)?;
+        let result = self.residual.add(stream, &scratch.residual, &scratch.moe, output);
+        drop(guard);
+        result
     }
 
     pub(crate) fn packed_capture_partitions(&self, paging: &PagedDecodeBatch) -> usize {

@@ -50,6 +50,7 @@ fn worker() -> crate::Result<Worker> {
             interleave_prefill_decode: false,
         },
         Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        crate::scheduler::PreparingRequests::default(),
     ))
 }
 

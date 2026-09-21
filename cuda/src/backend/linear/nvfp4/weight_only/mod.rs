@@ -112,9 +112,10 @@ impl NvFp4WeightOnlyBf16Linear {
             input_features: config.input_features,
             output_features: config.output_features,
         };
-        let marlin = (tokens <= 8 && MarlinNvFp4Bf16Linear::supported(config))
-            .then(|| MarlinNvFp4Bf16Linear::new(backend, tokens, &weight))
-            .transpose()?;
+        let marlin = (tokens <= marlin::MAX_DENSE_MARLIN_TOKENS
+            && MarlinNvFp4Bf16Linear::supported(config))
+        .then(|| MarlinNvFp4Bf16Linear::new(backend, tokens, &weight))
+        .transpose()?;
         Ok(Self {
             compressed: NvFp4WeightOnly::compile(&backend.inner.compiler, spec, tokens)?,
             tensor_core: NvFp4WeightOnlyTensorCore::compile(&backend.inner.compiler, spec, tokens)?,

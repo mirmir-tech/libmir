@@ -18,8 +18,16 @@ impl GenerationExecution for Runner {
         self.0
     }
 
+    fn terminal_cache_checkpoint(&self, request: &PrefillRequest) -> Option<usize> {
+        request.terminal_cache_checkpoint()
+    }
+
+    fn splits_at_terminal_checkpoint(&self) -> bool {
+        self.0 != CudaPrefillSchedule::CompletionFirst
+    }
+
     fn prefill_chunk_len(&self, remaining: usize) -> usize {
-        remaining.min(1024)
+        remaining.min(2048)
     }
 
     fn prefill_chunk(
@@ -90,5 +98,37 @@ fn other_runners_keep_rotation_and_fair_budget() -> Result<()> {
         chunks.iter().map(|c| (c.row, c.count)).collect::<Vec<_>>(),
         [(1, 512), (0, 512)]
     );
+    Ok(())
+}
+#[test]
+fn inline_terminal_checkpoint_keeps_the_prompt_tail_in_the_last_chunk() -> Result<()> {
+    let mut rows = [row(1000)];
+    let inline = Runner(CudaPrefillSchedule::CompletionFirst);
+    let chunks = schedule(&inline, &mut rows, 0, 1024, ScheduleMode::PrefillOnly)?;
+    assert_eq!(
+        chunks.iter().map(|c| (c.count, c.final_chunk)).collect::<Vec<_>>(),
+        [(1000, true)]
+    );
+    let mut rows = [row(1000)];
+    let split = Runner(CudaPrefillSchedule::RoundRobin);
+    let chunks = schedule(&split, &mut rows, 0, 1024, ScheduleMode::PrefillOnly)?;
+    assert_eq!(
+        chunks.iter().map(|c| (c.count, c.final_chunk)).collect::<Vec<_>>(),
+        [(976, false)]
+    );
+    Ok(())
+}
+#[test]
+fn short_remainder_joins_the_chunk_before_it() -> Result<()> {
+    let runner = Runner(CudaPrefillSchedule::CompletionFirst);
+    let counts = |rows: &mut [Sequence]| -> Result<Vec<(usize, bool)>> {
+        let chunks = schedule(&runner, rows, 0, 1024, ScheduleMode::PrefillOnly)?;
+        Ok(chunks.iter().map(|c| (c.count, c.final_chunk)).collect())
+    };
+    assert_eq!(counts(&mut [row(1024 + 15)])?, [(1039, true)]);
+    assert_eq!(counts(&mut [row(1024 + 65)])?, [(1024, false)]);
+    let mut declared = [row(1024 + 15)];
+    declared[0].request.cache_checkpoints = vec![1030];
+    assert_eq!(counts(&mut declared)?, [(1024, false)]);
     Ok(())
 }

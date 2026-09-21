@@ -56,7 +56,8 @@ pub struct CudaGatedDeltaState {
     offset: usize,
     identity: u64,
     revision: u64,
-    resident: Option<residency::GatedDeltaResidency>,
+    resident: Option<Box<residency::GatedDeltaResidency>>,
+    inline: Option<Box<checkpoint::InlineCheckpoint>>,
 }
 
 static NEXT_STATE_IDENTITY: AtomicU64 = AtomicU64::new(1);
@@ -98,6 +99,7 @@ impl CudaBackend {
             identity: NEXT_STATE_IDENTITY.fetch_add(1, Ordering::Relaxed),
             revision: 0,
             resident: None,
+            inline: None,
         })
     }
 }
@@ -162,6 +164,7 @@ impl CudaGatedDeltaState {
 
     pub fn reset(&mut self) -> Result<()> {
         self.resident = None;
+        self.inline = None;
         self.state = self
             .backend
             .inner

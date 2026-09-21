@@ -47,32 +47,12 @@ impl MixedMixerExecution {
             combined: combined::CombinedBatches::default(),
         })
     }
-
-    fn checkpoint_prefix(&mut self, request: &runtime::backend::PrefillRequest) -> Result<()> {
-        let session = required(&mut self.sessions, request.session_id)?;
-        let position = session.position();
-        let declared = request.cache_checkpoints.binary_search(&position).is_ok();
-        if !declared && request.terminal_cache_checkpoint() != Some(position) {
-            return Ok(());
-        }
-        let checkpoint = session.checkpoint()?;
-        let bytes = checkpoint.bytes();
-        self.checkpoints
-            .insert(&request.model.id, &request.prompt_tokens, position, checkpoint);
-        tracing::debug!(
-            backend = "cuda",
-            session = %request.session_id,
-            prefix_checkpoint_tokens = position,
-            checkpoint_bytes = bytes,
-            "retained CUDA mixed-mixer prefix checkpoint"
-        );
-        Ok(())
-    }
 }
 
 impl GenerationExecution for MixedMixerExecution {
     fn prefill_schedule(&self) -> crate::CudaPrefillSchedule {
-        // Routed runners qualify once their rows can join combined ragged steps.
+        // Routed runners qualify once their rows can join combined ragged
+        // steps.
         if self.template.decoder().num_experts.is_none()
             || self.template.supports_combined_generation()
         {
@@ -124,6 +104,10 @@ impl GenerationExecution for MixedMixerExecution {
         })
     }
 
+    fn splits_at_terminal_checkpoint(&self) -> bool {
+        false
+    }
+
     fn prefill_chunk_len(&self, remaining: usize) -> usize {
         remaining.min(self.prefill_chunk_tokens)
     }
@@ -145,6 +129,7 @@ impl GenerationExecution for MixedMixerExecution {
             let session = self.template.instantiate_with_caches(&self.caches)?;
             self.sessions.insert(request.session_id, session);
         }
+        self.arm_terminal_checkpoint(request, offset, tokens.len())?;
         let session = required(&mut self.sessions, request.session_id)?;
         session.prefill(request.session_id, tokens, table)?;
         self.checkpoint_prefix(request)?;

@@ -45,6 +45,12 @@ pub(in crate::engine) trait GenerationExecution: Send {
         None
     }
 
+    /// Whether prefill chunks must end at the terminal checkpoint. Executions
+    /// that capture it inside a pass let the prompt tail join the last chunk.
+    fn splits_at_terminal_checkpoint(&self) -> bool {
+        true
+    }
+
     fn prefill_chunk_len(&self, remaining: usize) -> usize;
     fn interleaved_prefill_budget(&self, budget: usize) -> usize {
         budget

@@ -5,8 +5,28 @@ pub(super) fn round_rows_from_pending(pending: &[bool], cursor: usize) -> Vec<us
         .collect()
 }
 
+/// A prompt remainder this short would cost a memory-bound forward pass of
+/// its own, far more than its tokens cost inside the chunk before it.
+pub(super) const ABSORBED_REMAINDER_TOKENS: usize = 64;
+
 pub(super) const fn valid_chunk(count: usize, remaining: usize, budget: usize) -> bool {
-    count > 0 && count <= remaining && count <= budget
+    count > 0
+        && count <= remaining
+        && (count <= budget || (count == remaining && count - budget <= ABSORBED_REMAINDER_TOKENS))
+}
+
+/// Extends a budget-limited chunk over the rest of the prompt when only a
+/// short remainder would be left. Checkpoint boundaries still end a chunk.
+pub(super) const fn absorb_remainder(limit: usize, remaining: usize, boundary: usize) -> usize {
+    if limit > 0
+        && limit < remaining
+        && remaining - limit <= ABSORBED_REMAINDER_TOKENS
+        && boundary >= remaining
+    {
+        remaining
+    } else {
+        limit
+    }
 }
 
 pub(super) fn checkpoint_distance(

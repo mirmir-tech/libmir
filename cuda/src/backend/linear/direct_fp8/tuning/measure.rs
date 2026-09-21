@@ -106,6 +106,15 @@ pub(super) fn select(
             backend, candidate, input, weight, identity_scale, output, &eviction, warmup,
             iterations,
         )?;
+        tracing::debug!(
+            target: "libmir::cuda::tuning",
+            tokens = spec.tokens,
+            input_features = spec.input_features,
+            output_features = spec.output_features,
+            execution = ?candidate.execution,
+            average_us = average.as_secs_f64() * 1_000_000.0,
+            "measured CUDA direct FP8 candidate"
+        );
         elapsed = elapsed.saturating_add(average.saturating_mul(iterations + warmup));
         timings.push(average);
     }

@@ -5,14 +5,59 @@ use runtime::backend::{PrefillOutput, SamplingLogits};
 use crate::PreparedVisionPrompt;
 use crate::{Model, PreparedPrompt, ProgressEvent, PromptPreparationTimings, Result, Session};
 
-pub(super) enum PreparedGeneration {
+enum Prepared {
     Text(PreparedPrompt),
     #[cfg(any(feature = "cuda", feature = "metal"))]
     Vision(PreparedVisionPrompt),
 }
 
+/// Prepared prompt, counted as in preparation until its prefill returns.
+pub(super) struct PreparedGeneration {
+    prompt: Prepared,
+    preparation: std::cell::Cell<Option<crate::scheduler::PreparationGuard>>,
+}
+
 impl PreparedGeneration {
     pub(super) fn new(
+        model: &Model,
+        request: &super::GenerationRequest,
+        settings: GenerationSettings,
+        encoded_image: Option<&[u8]>,
+    ) -> Result<Self> {
+        let preparation = std::cell::Cell::new(model.announce_preparation());
+        let prompt = Prepared::new(model, request, settings, encoded_image)?;
+        Ok(Self { prompt, preparation })
+    }
+
+    pub(super) fn token_ids(&self) -> &[u32] {
+        self.prompt.token_ids()
+    }
+
+    pub(super) fn prompt_text(&self) -> &str {
+        self.prompt.prompt_text()
+    }
+
+    pub(super) fn preparation_timings(&self) -> PromptPreparationTimings {
+        self.prompt.preparation_timings()
+    }
+
+    pub(super) fn prefill(
+        &self,
+        session: &mut Session,
+        reserved_tokens: usize,
+        sampling: SamplingLogits,
+        cancellation: &crate::CancellationToken,
+        progress: &mut dyn FnMut(ProgressEvent),
+    ) -> Result<PrefillOutput> {
+        let output =
+            self.prompt.prefill(session, reserved_tokens, sampling, cancellation, progress);
+        drop(self.preparation.take());
+        output
+    }
+}
+
+impl Prepared {
+    fn new(
         model: &Model,
         request: &super::GenerationRequest,
         settings: GenerationSettings,
@@ -49,7 +94,7 @@ impl PreparedGeneration {
         }
     }
 
-    pub(super) fn token_ids(&self) -> &[u32] {
+    fn token_ids(&self) -> &[u32] {
         match self {
             Self::Text(prepared) => &prepared.tokens.token_ids,
             #[cfg(any(feature = "cuda", feature = "metal"))]
@@ -59,7 +104,7 @@ impl PreparedGeneration {
         }
     }
 
-    pub(super) fn prompt_text(&self) -> &str {
+    fn prompt_text(&self) -> &str {
         match self {
             Self::Text(prepared) => &prepared.prompt.text,
             #[cfg(any(feature = "cuda", feature = "metal"))]
@@ -70,7 +115,7 @@ impl PreparedGeneration {
         }
     }
 
-    pub(super) fn preparation_timings(&self) -> PromptPreparationTimings {
+    fn preparation_timings(&self) -> PromptPreparationTimings {
         match self {
             Self::Text(prepared) => prepared.timings,
             #[cfg(any(feature = "cuda", feature = "metal"))]
@@ -78,7 +123,7 @@ impl PreparedGeneration {
         }
     }
 
-    pub(super) fn prefill(
+    fn prefill(
         &self,
         session: &mut Session,
         reserved_tokens: usize,

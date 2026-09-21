@@ -44,11 +44,13 @@ impl CudaBackend {
         Ok(Self {
             inner: Arc::new(CudaRuntime {
                 dense_scratch: super::feed_forward::DenseScratchPool::default(),
+                layer_scratch: super::layer_scratch::LayerScratchPool::default(),
                 device: info,
                 context,
                 stream,
                 auxiliary_stream,
                 pool,
+                pool_release_slack: memory_pool_release_threshold,
                 compiler,
                 mxfp8_scratch: std::sync::Mutex::new(std::collections::HashMap::new()),
                 nvfp4_bucket_scratch: std::sync::Mutex::new(std::collections::HashMap::new()),
@@ -100,11 +102,13 @@ impl CudaBackend {
         Self {
             inner: Arc::new(CudaRuntime {
                 dense_scratch: super::feed_forward::DenseScratchPool::default(),
+                layer_scratch: super::layer_scratch::LayerScratchPool::default(),
                 device: self.inner.device.clone(),
                 context: self.inner.context.clone(),
                 stream: self.inner.auxiliary_stream.clone(),
                 auxiliary_stream: self.inner.auxiliary_stream.clone(),
                 pool: self.inner.pool.clone(),
+                pool_release_slack: self.inner.pool_release_slack,
                 compiler: self.inner.compiler.clone(),
                 mxfp8_scratch: std::sync::Mutex::new(std::collections::HashMap::new()),
                 nvfp4_bucket_scratch: std::sync::Mutex::new(std::collections::HashMap::new()),

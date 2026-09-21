@@ -8,6 +8,11 @@ use crate::{Error, Result};
 
 mod pair;
 
+/// The kernel serves at most one sixteen-row block per launch; longer batches
+/// run as consecutive groups of rows over the same weights.
+const GROUP_ROWS: usize = 16;
+pub(in crate::backend) const MAX_DENSE_MARLIN_TOKENS: usize = 64;
+
 #[derive(Debug)]
 pub(in crate::backend) struct MarlinNvFp4Bf16Linear {
     weight: MarlinNvFp4Weight,
@@ -38,7 +43,7 @@ impl MarlinNvFp4Bf16Linear {
         source: &NvFp4WeightOnlyWeight,
     ) -> Result<Self> {
         let config = source.config;
-        if !Self::supported(config) || tokens == 0 || tokens > 8 {
+        if !Self::supported(config) || tokens == 0 || tokens > MAX_DENSE_MARLIN_TOKENS {
             return Err(Error::InvalidNvFp4("unsupported dense Marlin geometry"));
         }
         Self::from_weight(backend, tokens, config, source.marlin(backend)?, false)
@@ -70,34 +75,41 @@ impl MarlinNvFp4Bf16Linear {
         })
     }
 
+    #[expect(
+        clippy::needless_pass_by_ref_mut,
+        reason = "row groups are written through views of the exclusively borrowed output"
+    )]
     pub(in crate::backend) fn execute(
         &mut self,
         input: &DeviceBuffer<bf16>,
         output: &mut DeviceBuffer<bf16>,
         thread_config: MarlinNvFp4ThreadConfig,
     ) -> Result<()> {
-        let spec = MarlinNvFp4MoeSpec::new(
-            1,
-            self.tokens,
-            1,
-            self.config.output_features,
-            self.config.input_features,
-            thread_config,
-        )?;
-        Ok(self.context.marlin_nvfp4_dense(
-            &self.stream,
-            spec,
-            &MarlinNvFp4DenseOperands {
-                input,
-                weight: &self.weight.weight,
-                scales: &self.weight.scales,
-                global_scale: &self.weight.global_scales,
-                temporary: &mut self.temporary,
-                locks: &mut self.locks,
-                output,
-                atomic_reduce: self.atomic_reduce,
-            },
-        )?)
+        let (inputs, outputs) = (self.config.input_features, self.config.output_features);
+        let mut row = 0;
+        while row < self.tokens {
+            let rows = (self.tokens - row).min(GROUP_ROWS);
+            let spec = MarlinNvFp4MoeSpec::new(1, rows, 1, outputs, inputs, thread_config)?;
+            let group_input = input.slice(product(row, inputs)?..product(row + rows, inputs)?)?;
+            let mut group_output =
+                output.slice(product(row, outputs)?..product(row + rows, outputs)?)?;
+            self.context.marlin_nvfp4_dense(
+                &self.stream,
+                spec,
+                &MarlinNvFp4DenseOperands {
+                    input: &group_input,
+                    weight: &self.weight.weight,
+                    scales: &self.weight.scales,
+                    global_scale: &self.weight.global_scales,
+                    temporary: &mut self.temporary,
+                    locks: &mut self.locks,
+                    output: &mut group_output,
+                    atomic_reduce: self.atomic_reduce,
+                },
+            )?;
+            row += rows;
+        }
+        Ok(())
     }
 }
 
@@ -147,3 +159,6 @@ fn matrix_elements(config: NvFp4Config) -> Result<usize> {
 fn product(left: usize, right: usize) -> Result<usize> {
     left.checked_mul(right).ok_or(Error::InvalidNvFp4("dense Marlin size overflow"))
 }
+
+#[cfg(test)]
+mod tests;

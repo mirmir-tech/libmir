@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use models::generation::{GenerationToken, OutputNormalizer};
+use models::generation::GenerationToken;
 use runtime::{metrics::GenerationMetricsRecorder, sampling::Sampler};
 
 use crate::{CancellationToken, Model, ProgressEvent, Result};
@@ -15,7 +15,9 @@ mod telemetry;
 use cycle::CycleRecovery;
 use input::PreparedGeneration;
 pub use output::GenerationOutput;
-use output::{append_delta, finalize_output, finish_metrics, missing_decoder, should_stop};
+use output::{
+    TokenStream, append_delta, finalize_output, finish_metrics, missing_decoder, should_stop,
+};
 pub use request::{GenerationRequest, ReasoningCyclePolicy};
 use sampling::{choose_prefill, request_sampling, sampler_config};
 use telemetry::{record_prefill_metrics, record_publish};
@@ -79,8 +81,7 @@ impl Model {
         let output_setup_started = Instant::now();
         let tokenizer = descriptor.tokenizer();
         let stop_token_ids = tokenizer.stop_token_ids();
-        let mut normalizer = OutputNormalizer::new(tokenizer, prepared.prompt_text());
-        let mut text_decoder = tokenizer.decoder();
+        let mut stream = TokenStream::new(tokenizer, prepared.prompt_text());
         let decoder = descriptor.decoder().ok_or_else(missing_decoder)?;
         let vocab_size = tokenizer.vocab_size().min(decoder.vocab_size);
         let output_setup = output_setup_started.elapsed();
@@ -118,8 +119,7 @@ impl Model {
             if let Some(history) = history.as_mut() {
                 history.push(next);
             }
-            let piece = text_decoder.step(next)?.unwrap_or_default();
-            let delta = normalizer.push(next, piece);
+            let delta = stream.step(next)?;
             if let Some(delta) = delta.as_ref() {
                 append_delta(delta, &mut text, &mut reasoning, &mut tool_calls);
             }
@@ -159,6 +159,10 @@ impl Model {
                 history.as_deref().unwrap_or_default(),
                 &mut sampler,
             )?;
+        }
+        if let Some(delta) = stream.finish()? {
+            append_delta(&delta, &mut text, &mut reasoning, &mut tool_calls);
+            token(delta);
         }
         let metrics = finish_metrics(&mut metrics, token_ids.len(), &session);
         Ok(finalize_output(

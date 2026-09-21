@@ -1,6 +1,9 @@
 use runtime::kv::BlockHash;
 
-use crate::backend::SharedRoutedCheckpoint;
+use super::{MixedMixerExecution, required};
+use crate::{
+    Result, backend::SharedRoutedCheckpoint, engine::model::generation::GenerationExecution,
+};
 
 #[derive(Debug)]
 struct Entry {
@@ -99,4 +102,54 @@ impl PrefixCheckpoints {
 
 fn key(model: &str, prompt: &[u32], tokens: usize) -> BlockHash {
     BlockHash::from_tokens(model, None, &prompt[..tokens])
+}
+
+impl MixedMixerExecution {
+    /// Arms the terminal checkpoint when the coming chunk runs through it, so
+    /// the short prompt tail behind it needs no forward pass of its own.
+    pub(super) fn arm_terminal_checkpoint(
+        &mut self,
+        request: &runtime::backend::PrefillRequest,
+        offset: usize,
+        count: usize,
+    ) -> Result<()> {
+        let Some(terminal) = self.terminal_cache_checkpoint(request) else {
+            return Ok(());
+        };
+        if terminal > offset && terminal - offset < count {
+            required(&mut self.sessions, request.session_id)?.arm_checkpoint(terminal - offset);
+        }
+        Ok(())
+    }
+
+    pub(super) fn checkpoint_prefix(
+        &mut self,
+        request: &runtime::backend::PrefillRequest,
+    ) -> Result<()> {
+        let terminal = request.terminal_cache_checkpoint();
+        let session = required(&mut self.sessions, request.session_id)?;
+        let position = session.position();
+        let staged = session.take_staged_checkpoint(terminal.unwrap_or_default())?;
+        let declared = request.cache_checkpoints.binary_search(&position).is_ok();
+        let reached = (declared || terminal == Some(position))
+            .then(|| session.checkpoint().map(|checkpoint| (position, checkpoint)))
+            .transpose()?;
+        for (position, checkpoint) in terminal.zip(staged).into_iter().chain(reached) {
+            let bytes = checkpoint.bytes();
+            self.checkpoints.insert(
+                &request.model.id,
+                &request.prompt_tokens,
+                position,
+                checkpoint,
+            );
+            tracing::debug!(
+                backend = "cuda",
+                session = %request.session_id,
+                prefix_checkpoint_tokens = position,
+                checkpoint_bytes = bytes,
+                "retained CUDA mixed-mixer prefix checkpoint"
+            );
+        }
+        Ok(())
+    }
 }
