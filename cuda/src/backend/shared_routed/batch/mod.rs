@@ -38,6 +38,21 @@ impl CudaSharedRoutedDecodeBatch {
         })
     }
 
+    /// Follows a K/V resize to `block_count` blocks: the captured graph goes,
+    /// since it bakes page addresses, and the resources stay for direct
+    /// execution and a later capture, taking pages from sessions at every
+    /// step.
+    pub(crate) fn follow_cache_blocks(&mut self, block_count: u32) {
+        self.state = self.state.take().map(|state| {
+            let mut resources = match state {
+                DecodeState::Captured { graph, .. } => graph.into_resources(),
+                DecodeState::Direct(resources) => resources,
+            };
+            resources.follow_cache_blocks(block_count);
+            DecodeState::Direct(resources)
+        });
+    }
+
     pub(crate) fn execute(
         &mut self,
         sessions: &mut [&mut CudaSharedRoutedModelSession],

@@ -33,6 +33,8 @@ impl GatedFullAttentionPrefill {
 }
 
 impl CudaAffineGatedFullAttentionExecution {
+    // The scratch guard is used by the last statement; the lint cannot see it.
+    #[allow(clippy::significant_drop_tightening)]
     pub(crate) fn execute_packed_prefill(
         &mut self,
         input: &DeviceBuffer<bf16>,
@@ -54,11 +56,12 @@ impl CudaAffineGatedFullAttentionExecution {
         if states.iter().any(|state| state.storage_spec() != storage) {
             return Err(Error::InvalidPagedKv("gated packed prefill cache geometry differs"));
         }
-        self.project_and_transform(input, positions)?;
+        let shared = self.scratch.clone_handle();
+        let mut guard = shared.lock()?;
+        let scratch = &mut *guard;
+        self.project_and_transform(scratch, input, positions)?;
         let state = &mut *states[0];
-        state
-            .cache
-            .store_prefill_batch(batch, &self.scratch.rotated_key, &self.scratch.value)?;
+        state.cache.store_prefill_batch(batch, &scratch.rotated_key, &scratch.value)?;
         if self.prefill.is_none() {
             self.prefill = Some(GatedFullAttentionPrefill::new(&self.backend, self)?);
         }
@@ -69,10 +72,10 @@ impl CudaAffineGatedFullAttentionExecution {
         let active_query = super::checked(batch.tokens(), self.config.query_width()?)?;
         prefill.attention.execute_paged_varlen(
             &self.backend.inner.stream,
-            &self.scratch.rotated_query.slice(0..active_query)?,
+            &scratch.rotated_query.slice(0..active_query)?,
             state.cache.key_pages(),
             state.cache.value_pages(),
-            &mut self.scratch.attended.slice(0..active_query)?,
+            &mut scratch.attended.slice(0..active_query)?,
             batch.query_starts(),
             batch.token_counts(),
             batch.context_starts(),
@@ -88,10 +91,10 @@ impl CudaAffineGatedFullAttentionExecution {
         )?;
         self.gate.execute(
             &self.backend.inner.stream,
-            &self.scratch.attended,
-            &self.scratch.gate,
-            &mut self.scratch.gated,
+            &scratch.attended,
+            &scratch.gate,
+            &mut scratch.gated,
         )?;
-        self.output.execute(&self.scratch.gated, output)
+        self.output.execute(&scratch.gated, output)
     }
 }

@@ -3,8 +3,11 @@ use runtime::kv::{BlockTable, KvBackendStorage, KvWritePlan};
 
 use super::{
     AffineGatedFullAttentionConfig, AffineGatedFullAttentionWeights,
-    CudaAffineGatedFullAttentionState, batch::GatedFullAttentionBatch, checked,
-    prefill::GatedFullAttentionPrefill, scratch::GatedAttentionScratch,
+    CudaAffineGatedFullAttentionState,
+    batch::GatedFullAttentionBatch,
+    checked,
+    prefill::GatedFullAttentionPrefill,
+    scratch::{GatedAttentionScratch, GatedAttentionScratchKey},
     validation::validate_execution,
 };
 use crate::{
@@ -35,7 +38,7 @@ pub struct CudaAffineGatedFullAttentionExecution {
     transform: AttentionTransform,
     pub(super) gate: SigmoidElementwiseBf16,
     weights: AffineGatedFullAttentionWeights,
-    pub(super) scratch: GatedAttentionScratch,
+    pub(super) scratch: crate::backend::scratch_pool::SharedScratch<GatedAttentionScratch>,
     pub(super) batch: Option<GatedFullAttentionBatch>,
     pub(super) batch_workspace: Option<BatchedSplitAttentionWorkspace>,
     pub(super) prefill: Option<GatedFullAttentionPrefill>,
@@ -123,7 +126,10 @@ impl CudaAffineGatedFullAttentionExecution {
                 checked(tokens, query_width)?,
             )?,
             weights: weights.clone(),
-            scratch: GatedAttentionScratch::new(backend, config, tokens, packed_qkv.is_some())?,
+            scratch: backend.inner.gated_attention_scratch.acquire(
+                GatedAttentionScratchKey::new(config, tokens, packed_qkv.is_some())?,
+                || GatedAttentionScratch::new(backend, config, tokens, packed_qkv.is_some()),
+            )?,
             batch: None,
             batch_workspace: None,
             prefill: None,
@@ -148,6 +154,8 @@ impl CudaAffineGatedFullAttentionExecution {
     }
 
     #[allow(clippy::too_many_arguments)]
+    // The scratch guard is used by the last statement; the lint cannot see it.
+    #[allow(clippy::significant_drop_tightening)]
     pub fn execute_with_image_span(
         &mut self,
         input: &DeviceBuffer<bf16>,
@@ -164,27 +172,29 @@ impl CudaAffineGatedFullAttentionExecution {
             self.config, self.tokens, input, positions, state, write_plan, table, start_position,
             output,
         )?;
-        self.project_and_transform(input, positions)?;
-        let written =
-            state.cache.store(write_plan, &self.scratch.rotated_key, &self.scratch.value)?;
+        let shared = self.scratch.clone_handle();
+        let mut guard = shared.lock()?;
+        let scratch = &mut *guard;
+        self.project_and_transform(scratch, input, positions)?;
+        let written = state.cache.store(write_plan, &scratch.rotated_key, &scratch.value)?;
         if written != self.tokens {
             return Err(Error::InvalidPagedKv("gated attention KV write is incomplete"));
         }
         if self.tokens == 1 {
             state.attention.execute(
-                &self.scratch.rotated_query,
+                &scratch.rotated_query,
                 &state.cache,
                 table,
-                &mut self.scratch.attended,
+                &mut scratch.attended,
                 window,
                 self.config.attention_scale,
             )?;
         } else {
             state.attention.execute_prefill_masked(
-                &self.scratch.rotated_query,
+                &scratch.rotated_query,
                 &state.cache,
                 table,
-                &mut self.scratch.attended,
+                &mut scratch.attended,
                 self.tokens,
                 start_position,
                 window,
@@ -194,10 +204,10 @@ impl CudaAffineGatedFullAttentionExecution {
         }
         self.gate.execute(
             &self.backend.inner.stream,
-            &self.scratch.attended,
-            &self.scratch.gate,
-            &mut self.scratch.gated,
+            &scratch.attended,
+            &scratch.gate,
+            &mut scratch.gated,
         )?;
-        self.output.execute(&self.scratch.gated, output)
+        self.output.execute(&scratch.gated, output)
     }
 }

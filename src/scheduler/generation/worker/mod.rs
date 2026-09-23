@@ -137,6 +137,10 @@ impl Worker {
                 self.resolve_prefill_handoff(session);
                 self.active_decode.remove(&session);
             },
+            Command::Reprofile(profile) => {
+                self.prefill_profile =
+                    profile.with_decode_policy(self.config.prefill_decode_policy);
+            },
             Command::Cancellation => {},
             Command::Stop => self.stopping = true,
         }

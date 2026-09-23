@@ -2,6 +2,7 @@ use mircuda::{DeviceBuffer, bf16};
 
 use super::{
     AffineGatedDeltaLayerConfig, AffineGatedDeltaLayerWeights, CudaAffineGatedDeltaExecution,
+    scratch::GatedDeltaScratch,
 };
 use crate::{
     Bf16LinearPair, Bf16LinearPairWeights, CudaBackend, CudaTensor, Error, ExecutionPhase, Result,
@@ -65,8 +66,12 @@ pub(super) fn prepare_dense_alpha_beta(
 }
 
 impl CudaAffineGatedDeltaExecution {
-    pub(super) fn project_qkv_gate(&mut self, input: &DeviceBuffer<bf16>) -> Result<bool> {
-        match (&mut self.packed_qkv_gate, &mut self.scratch.packed_qkv_gate) {
+    pub(super) fn project_qkv_gate(
+        &mut self,
+        scratch: &mut GatedDeltaScratch,
+        input: &DeviceBuffer<bf16>,
+    ) -> Result<bool> {
+        match (&mut self.packed_qkv_gate, &mut scratch.packed_qkv_gate) {
             (Some(projection), Some(packed)) => {
                 projection.execute(input, packed)?;
                 Ok(true)
@@ -75,11 +80,11 @@ impl CudaAffineGatedDeltaExecution {
                 self.qkv
                     .as_mut()
                     .ok_or(Error::InvalidExecutionPlan("Gated Delta QKV projection is missing"))?
-                    .execute(input, &mut self.scratch.mixed)?;
+                    .execute(input, &mut scratch.mixed)?;
                 self.gate
                     .as_mut()
                     .ok_or(Error::InvalidExecutionPlan("Gated Delta gate projection is missing"))?
-                    .execute(input, &mut self.scratch.gate)?;
+                    .execute(input, &mut scratch.gate)?;
                 Ok(false)
             },
             _ => Err(Error::InvalidExecutionPlan(
@@ -88,37 +93,41 @@ impl CudaAffineGatedDeltaExecution {
         }
     }
 
-    pub(super) fn project_alpha_beta(&mut self, input: &DeviceBuffer<bf16>) -> Result<()> {
+    pub(super) fn project_alpha_beta(
+        &mut self,
+        scratch: &mut GatedDeltaScratch,
+        input: &DeviceBuffer<bf16>,
+    ) -> Result<()> {
         match &mut self.dense_alpha_beta {
             Some(DenseAlphaBeta::Direct(operation)) => operation.execute(
                 &self.backend.inner.stream,
                 input,
                 bf16(self.weights.alpha.dense_bf16())?,
                 bf16(self.weights.beta.dense_bf16())?,
-                &mut self.scratch.alpha,
-                &mut self.scratch.beta,
+                &mut scratch.alpha,
+                &mut scratch.beta,
             ),
             Some(DenseAlphaBeta::Paired { projection, weights, split }) => {
-                let packed = self.scratch.packed_alpha_beta.as_mut().ok_or(
+                let packed = scratch.packed_alpha_beta.as_mut().ok_or(
                     Error::InvalidExecutionPlan("packed Gated Delta alpha/beta output is missing"),
                 )?;
                 projection.execute(input, weights, packed)?;
                 split.execute(
                     &self.backend.inner.stream,
                     packed,
-                    &mut self.scratch.alpha,
-                    &mut self.scratch.beta,
+                    &mut scratch.alpha,
+                    &mut scratch.beta,
                 )
             },
             None => {
                 self.alpha
                     .as_mut()
                     .ok_or(Error::InvalidExecutionPlan("Gated Delta alpha projection is missing"))?
-                    .execute(input, &mut self.scratch.alpha)?;
+                    .execute(input, &mut scratch.alpha)?;
                 self.beta
                     .as_mut()
                     .ok_or(Error::InvalidExecutionPlan("Gated Delta beta projection is missing"))?
-                    .execute(input, &mut self.scratch.beta)
+                    .execute(input, &mut scratch.beta)
             },
         }
     }

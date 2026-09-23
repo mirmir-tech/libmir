@@ -35,4 +35,6 @@ pub struct ModelMemoryEstimate {
     pub cache_capacity_tokens: u64,
     /// Maximum context length declared by the model.
     pub model_context_tokens: u64,
+    /// Recurrent (linear-attention) state one session holds on the device.
+    pub session_state_bytes: u64,
 }

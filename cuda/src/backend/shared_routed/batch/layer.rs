@@ -14,20 +14,32 @@ pub(super) enum SharedRoutedBatchLayer {
 }
 
 impl SharedRoutedBatchLayer {
+    /// `capacity` is the row count the linear layers' shared packed states
+    /// are allocated for, so every batch up to it reuses one allocation.
     pub(super) fn new(
         template: &SharedRoutedLayerTemplate,
         rows: usize,
+        capacity: usize,
         phase: ExecutionPhase,
         workspace: Option<BatchedSplitAttentionWorkspace>,
     ) -> Result<Self> {
         match template {
             SharedRoutedLayerTemplate::Linear(layer) => {
-                layer.prepare_phase(rows, phase).map(Box::new).map(Self::Linear)
+                let mut execution = layer.prepare_phase(rows, phase)?;
+                execution.set_batch_capacity(capacity);
+                Ok(Self::Linear(Box::new(execution)))
             },
             SharedRoutedLayerTemplate::Full(layer) => layer
                 .prepare_phase_with_workspace(rows, phase, workspace)
                 .map(Box::new)
                 .map(Self::Full),
+        }
+    }
+
+    /// Follows a K/V resize to `block_count` blocks.
+    pub(super) fn follow_cache_blocks(&mut self, block_count: u32) {
+        if let Self::Full(execution) = self {
+            execution.follow_cache_blocks(block_count);
         }
     }
 

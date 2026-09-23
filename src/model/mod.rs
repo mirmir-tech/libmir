@@ -5,6 +5,7 @@ mod cache_cohort;
 mod decode;
 mod descriptor;
 mod helpers;
+mod kv_sizing;
 mod library;
 mod lifecycle;
 mod memory;
@@ -72,6 +73,7 @@ pub struct Library {
     state: Arc<Mutex<library::LibraryState>>,
     memory: memory_admission::ModelMemoryManager,
     caches: cache::KvCachePools,
+    registry: kv_sizing::ModelRegistry,
     config: RuntimeConfig,
 }
 
@@ -89,7 +91,9 @@ struct ModelInner {
     cache: Arc<cache::SharedKvCache>,
     cache_cohort: cache_cohort::CacheCohort,
     coordinator: ModelCoordinator,
-    _memory: memory_admission::ModelMemoryLease,
+    kv_sizing: Mutex<kv_sizing::KvSizing>,
+    registry: kv_sizing::ModelRegistry,
+    memory: memory_admission::ModelMemoryLease,
 }
 
 impl ModelDescriptor {

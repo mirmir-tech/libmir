@@ -12,8 +12,11 @@ use crate::{
 mod batch;
 mod checkpoint;
 mod combined;
+mod memory;
 mod prefill_budget;
+mod warm;
 use checkpoint::PrefixCheckpoints;
+use memory::kv_bytes;
 use prefill_budget::reusable_prefill_budget;
 
 pub(in crate::engine) struct MixedMixerExecution {
@@ -25,6 +28,8 @@ pub(in crate::engine) struct MixedMixerExecution {
     prefill_batches: HashMap<(usize, usize), CudaSharedRoutedPrefillBatch>,
     checkpoints: PrefixCheckpoints,
     combined: combined::CombinedBatches,
+    /// Pool bytes one live session cost during concurrency warm-up.
+    session_bytes: Option<u64>,
 }
 
 impl MixedMixerExecution {
@@ -36,6 +41,7 @@ impl MixedMixerExecution {
             return Err(Error::InvalidDecoderKernel("shared-routed prefill chunk is empty"));
         }
         let caches = template.allocate_shared_kv()?;
+        let checkpoints = PrefixCheckpoints::new(128, kv_bytes(&caches));
         Ok(Self {
             template,
             caches,
@@ -43,8 +49,9 @@ impl MixedMixerExecution {
             sessions: HashMap::new(),
             decode_batches: HashMap::new(),
             prefill_batches: HashMap::new(),
-            checkpoints: PrefixCheckpoints::new(128),
+            checkpoints,
             combined: combined::CombinedBatches::default(),
+            session_bytes: None,
         })
     }
 }
@@ -183,6 +190,28 @@ impl GenerationExecution for MixedMixerExecution {
         self.decode_batches.clear();
         self.prefill_batches.clear();
         self.checkpoints.clear();
+    }
+
+    fn retention_headroom_bytes(&self) -> Result<u64> {
+        memory::retention_headroom_bytes(self)
+    }
+
+    fn warm_concurrency(&mut self, backend: &CudaBackend, rows: usize) -> Result<()> {
+        warm::warm_concurrency(self, backend, rows)
+    }
+
+    fn session_bytes(&self) -> Option<u64> {
+        self.session_bytes
+    }
+
+    fn retained_shape_bytes(&self) -> Result<u64> {
+        // Freed shapes are kept below the threshold on purpose: a lower anchor
+        // released them and left less host memory, not more (2026-09-22).
+        Ok(0)
+    }
+
+    fn resize_kv_cache(&mut self, cache: runtime::kv::CacheConfig) -> Result<bool> {
+        memory::resize_kv_cache(self, cache)
     }
 
     fn release_session(&mut self, session: Uuid) {

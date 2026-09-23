@@ -32,6 +32,17 @@ impl CudaEngine {
         manifest: &ModelManifest,
         progress: &mut dyn FnMut(ProgressEvent),
     ) -> Result<ModelHandle> {
+        self.load_model_with_sequence_capacity(manifest, None, progress)
+    }
+
+    /// Loads with one sequence's block table sized for `capacity_blocks`
+    /// rather than the cache configured now, which may be provisional.
+    pub fn load_model_with_sequence_capacity(
+        &self,
+        manifest: &ModelManifest,
+        capacity_blocks: Option<u32>,
+        progress: &mut dyn FnMut(ProgressEvent),
+    ) -> Result<ModelHandle> {
         let layout = ModelLayout::inspect(Path::new(&manifest.path))?;
         let total = layout.weights.iter().map(|weight| weight.bytes).sum();
         progress(ProgressEvent::load_weights(0, total, "inspecting checkpoint"));
@@ -51,7 +62,11 @@ impl CudaEngine {
         let vision_readiness = vision
             .as_ref()
             .map(|config| VisionTensorSchema::discover(config).readiness(&catalog));
-        let blocks = max_sequence_blocks(manifest.context_len, self.cache)?;
+        let capacity = ::runtime::kv::CacheConfig {
+            block_count: capacity_blocks.unwrap_or(self.cache.block_count),
+            ..self.cache
+        };
+        let blocks = max_sequence_blocks(manifest.context_len, capacity)?;
         let mut report = |current: u64, detail: String| {
             progress(ProgressEvent::load_weights(current.min(total), total, detail));
         };
@@ -140,7 +155,7 @@ impl CudaEngine {
                     report,
                 )?;
                 Ok(generation(MixedMixerExecution::new(
-                    template,
+                    template.with_decode_rows(self.scheduler.max_batch_requests),
                     self.session_config.prefill_chunk_tokens,
                 )?))
             },

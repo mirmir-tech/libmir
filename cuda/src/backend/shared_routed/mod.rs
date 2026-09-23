@@ -2,6 +2,7 @@ mod batch;
 mod boundary;
 mod checkpoint;
 mod load;
+mod memory;
 mod plan;
 mod position;
 mod session;
@@ -54,6 +55,8 @@ pub struct CudaSharedRoutedModelTemplate {
     layers: Vec<SharedRoutedLayerTemplate>,
     cache: CacheConfig,
     max_sequence_blocks: usize,
+    /// Rows the decode batches' shared packed states are allocated for.
+    decode_rows: usize,
     norm_shift: f32,
     plans: Arc<Mutex<SharedRoutedExecutionPlanCache>>,
 }
@@ -108,6 +111,7 @@ impl CudaSharedRoutedModelTemplate {
             layers,
             cache,
             max_sequence_blocks,
+            decode_rows: 1,
             norm_shift,
             plans: Arc::new(Mutex::new(SharedRoutedExecutionPlanCache::new())),
         })
@@ -201,6 +205,11 @@ impl CudaSharedRoutedModelTemplate {
                     .map(CudaSharedRoutedLayerState::Full),
             })
             .collect()
+    }
+
+    #[must_use]
+    pub const fn cache_config(&self) -> CacheConfig {
+        self.cache
     }
 
     pub fn instantiate(&self) -> Result<CudaSharedRoutedModelSession> {

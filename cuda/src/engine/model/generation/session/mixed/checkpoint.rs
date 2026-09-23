@@ -13,19 +13,41 @@ struct Entry {
     used: u64,
 }
 
+/// Retained prefix states, bounded by entry count and by device bytes. A
+/// checkpoint holds the recurrent state of every linear layer, 63 MiB for
+/// Qwen3.6-35B-A3B but 151 MiB for Qwen3.8-27B, so a count alone let the
+/// cache grow past the host memory left beside a large model.
 pub(super) struct PrefixCheckpoints {
     entries: Vec<Entry>,
     capacity: usize,
+    byte_budget: usize,
+    bytes: usize,
     clock: u64,
 }
 
 impl PrefixCheckpoints {
-    pub(super) fn new(capacity: usize) -> Self {
+    pub(super) fn new(capacity: usize, byte_budget: usize) -> Self {
         Self {
             entries: Vec::with_capacity(capacity),
             capacity,
+            byte_budget,
+            bytes: 0,
             clock: 0,
         }
+    }
+
+    fn evict_oldest(&mut self) {
+        let Some(oldest) = self
+            .entries
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, entry)| entry.used)
+            .map(|(index, _)| index)
+        else {
+            return;
+        };
+        let removed = self.entries.swap_remove(oldest);
+        self.bytes = self.bytes.saturating_sub(removed.checkpoint.bytes());
     }
 
     pub(super) fn lookup(
@@ -59,7 +81,8 @@ impl PrefixCheckpoints {
         tokens: usize,
         checkpoint: SharedRoutedCheckpoint,
     ) {
-        if self.capacity == 0 || tokens == 0 || tokens > prompt.len() {
+        let bytes = checkpoint.bytes();
+        if self.capacity == 0 || bytes > self.byte_budget || tokens == 0 || tokens > prompt.len() {
             return;
         }
         let hash = key(model, prompt, tokens);
@@ -69,6 +92,7 @@ impl PrefixCheckpoints {
             .iter_mut()
             .find(|entry| entry.tokens == tokens && entry.hash == hash)
         {
+            self.bytes = self.bytes.saturating_sub(entry.checkpoint.bytes()).saturating_add(bytes);
             *entry = Entry {
                 hash,
                 tokens,
@@ -77,16 +101,12 @@ impl PrefixCheckpoints {
             };
             return;
         }
-        if self.entries.len() == self.capacity {
-            let oldest = self
-                .entries
-                .iter()
-                .enumerate()
-                .min_by_key(|(_, entry)| entry.used)
-                .map(|(index, _)| index)
-                .unwrap_or_default();
-            self.entries.swap_remove(oldest);
+        while self.entries.len() >= self.capacity
+            || self.bytes.saturating_add(bytes) > self.byte_budget
+        {
+            self.evict_oldest();
         }
+        self.bytes = self.bytes.saturating_add(bytes);
         self.entries.push(Entry {
             hash,
             tokens,
@@ -97,6 +117,7 @@ impl PrefixCheckpoints {
 
     pub(super) fn clear(&mut self) {
         self.entries.clear();
+        self.bytes = 0;
     }
 }
 

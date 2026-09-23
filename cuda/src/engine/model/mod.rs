@@ -84,6 +84,67 @@ impl LoadedModel {
         Ok(())
     }
 
+    /// Pool bytes the model's retained execution shapes may still grow by.
+    pub fn retention_headroom_bytes(&self) -> Result<u64> {
+        let runner = self.prefill_runner()?;
+        let bytes = match &runner.execution {
+            ModelExecution::Generation(generation) => generation.retention_headroom_bytes()?,
+            ModelExecution::Embedding(_) | ModelExecution::SequenceScoring(_) => 0,
+        };
+        drop(runner);
+        Ok(bytes)
+    }
+
+    /// Pool bytes one live session cost during concurrency warm-up, where
+    /// the backend measured it.
+    pub fn session_bytes(&self) -> Result<Option<u64>> {
+        let runner = self.prefill_runner()?;
+        let bytes = match &runner.execution {
+            ModelExecution::Generation(generation) => generation.session_bytes(),
+            ModelExecution::Embedding(_) | ModelExecution::SequenceScoring(_) => None,
+        };
+        drop(runner);
+        Ok(bytes)
+    }
+
+    /// Exercises the decode batches of one to `rows` sessions once.
+    pub fn warm_concurrency(&self, backend: &crate::CudaBackend, rows: usize) -> Result<()> {
+        let mut runner = self.prefill_runner()?;
+        if let ModelExecution::Generation(generation) = &mut runner.execution {
+            generation.warm_concurrency(backend, rows)?;
+        }
+        runner.selected = None;
+        drop(runner);
+        Ok(())
+    }
+
+    /// Pool bytes held by the model's retained execution shapes.
+    pub fn retained_shape_bytes(&self) -> Result<u64> {
+        let runner = self.prefill_runner()?;
+        let bytes = match &runner.execution {
+            ModelExecution::Generation(generation) => generation.retained_shape_bytes()?,
+            ModelExecution::Embedding(_) | ModelExecution::SequenceScoring(_) => 0,
+        };
+        drop(runner);
+        Ok(bytes)
+    }
+
+    /// Resizes the K/V cache of an idle model; `Ok(false)` when the runner
+    /// does not support resizing.
+    pub fn resize_kv_cache(&self, cache: runtime::kv::CacheConfig) -> Result<bool> {
+        let mut runner = self.prefill_runner()?;
+        if !self.sessions()?.is_empty() {
+            return Err(Error::State("K/V cache resize needs an idle model".into()));
+        }
+        let resized = match &mut runner.execution {
+            ModelExecution::Generation(generation) => generation.resize_kv_cache(cache)?,
+            ModelExecution::Embedding(_) | ModelExecution::SequenceScoring(_) => false,
+        };
+        runner.selected = None;
+        drop(runner);
+        Ok(resized)
+    }
+
     pub(super) fn register_session(&self, session: Uuid) -> Result<()> {
         self.sessions()?.insert(session);
         Ok(())

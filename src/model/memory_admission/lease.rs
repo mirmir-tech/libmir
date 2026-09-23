@@ -34,6 +34,21 @@ impl ModelMemoryLease {
     }
 }
 
+impl ModelMemoryLease {
+    /// Records the residency of a model whose K/V cache was resized.
+    pub(in crate::model) fn resize(&self, estimate: crate::ModelMemoryEstimate) -> Result<()> {
+        let Ok(mut ledger) = self.ledger.lock() else {
+            return Err(poisoned("model memory ledger"));
+        };
+        let reservation = ledger.entries.get_mut(&self.id).ok_or_else(|| {
+            runtime::RuntimeError::Config("model memory reservation is missing".into())
+        })?;
+        // CUDA models never share pages, so the estimate is the residency.
+        reservation.bytes = estimate.required_bytes;
+        Ok(())
+    }
+}
+
 impl Drop for ModelMemoryLease {
     fn drop(&mut self) {
         let Ok(mut ledger) = self.ledger.lock() else {

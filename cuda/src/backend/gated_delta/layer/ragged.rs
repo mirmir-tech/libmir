@@ -8,6 +8,8 @@ use super::{
 use crate::{Error, GatedDeltaInputs, Result};
 
 impl CudaAffineGatedDeltaExecution {
+    // The scratch guard is used by the last statement; the lint cannot see it.
+    #[allow(clippy::significant_drop_tightening)]
     pub(crate) fn execute_ragged(
         &mut self,
         input: &DeviceBuffer<bf16>,
@@ -26,8 +28,11 @@ impl CudaAffineGatedDeltaExecution {
         for state in states.iter() {
             self.validate(input, state, output)?;
         }
-        let packed = self.project_qkv_gate(input)?;
-        self.project_alpha_beta(input)?;
+        let shared = self.scratch.clone_handle();
+        let mut guard = shared.lock()?;
+        let scratch = &mut *guard;
+        let packed = self.project_qkv_gate(scratch, input)?;
+        self.project_alpha_beta(scratch, input)?;
         let mixed = self.config.mixed_width()?;
         let key = self.config.key_width()?;
         let value = self.config.value_width()?;
@@ -38,12 +43,12 @@ impl CudaAffineGatedDeltaExecution {
             mixed
         };
         let source = if packed {
-            self.scratch
+            scratch
                 .packed_qkv_gate
                 .as_ref()
                 .ok_or(Error::InvalidExecutionPlan("packed Gated Delta output is missing"))?
         } else {
-            &self.scratch.mixed
+            &scratch.mixed
         };
         let segments = row_segments(states, counts)?;
         for RowSegment { row, offset, count, checkpoint } in segments.iter().copied() {
@@ -53,12 +58,9 @@ impl CudaAffineGatedDeltaExecution {
                     count,
                     &source.slice(offset * stride..(offset + count) * stride)?,
                     bf16(&self.weights.convolution)?,
-                    &mut self
-                        .scratch
-                        .normalized_query
-                        .slice(offset * key..(offset + count) * key)?,
-                    &mut self.scratch.normalized_key.slice(offset * key..(offset + count) * key)?,
-                    &mut self.scratch.value.slice(offset * value..(offset + count) * value)?,
+                    &mut scratch.normalized_query.slice(offset * key..(offset + count) * key)?,
+                    &mut scratch.normalized_key.slice(offset * key..(offset + count) * key)?,
+                    &mut scratch.value.slice(offset * value..(offset + count) * value)?,
                     stride,
                     0,
                 )?;
@@ -67,7 +69,7 @@ impl CudaAffineGatedDeltaExecution {
                     count,
                     &source.slice(offset * stride..(offset + count) * stride)?,
                     bf16(&self.weights.convolution)?,
-                    &mut self.scratch.convolved.slice(offset * mixed..(offset + count) * mixed)?,
+                    &mut scratch.convolved.slice(offset * mixed..(offset + count) * mixed)?,
                     stride,
                     0,
                 )?;
@@ -79,10 +81,10 @@ impl CudaAffineGatedDeltaExecution {
         if self.config.key_dim != 128 {
             self.transforms.split_normalize(
                 &self.backend.inner.stream,
-                &self.scratch.convolved,
-                &mut self.scratch.normalized_query,
-                &mut self.scratch.normalized_key,
-                &mut self.scratch.value,
+                &scratch.convolved,
+                &mut scratch.normalized_query,
+                &mut scratch.normalized_key,
+                &mut scratch.value,
             )?;
         }
         for RowSegment { row, offset, count, checkpoint } in segments {
@@ -90,26 +92,20 @@ impl CudaAffineGatedDeltaExecution {
             state.execute(
                 count,
                 GatedDeltaInputs {
-                    query: &self
-                        .scratch
-                        .normalized_query
-                        .slice(offset * key..(offset + count) * key)?,
-                    key: &self
-                        .scratch
-                        .normalized_key
-                        .slice(offset * key..(offset + count) * key)?,
-                    value: &self.scratch.value.slice(offset * value..(offset + count) * value)?,
-                    alpha: &self.scratch.alpha.slice(offset * heads..(offset + count) * heads)?,
-                    beta: &self.scratch.beta.slice(offset * heads..(offset + count) * heads)?,
+                    query: &scratch.normalized_query.slice(offset * key..(offset + count) * key)?,
+                    key: &scratch.normalized_key.slice(offset * key..(offset + count) * key)?,
+                    value: &scratch.value.slice(offset * value..(offset + count) * value)?,
+                    alpha: &scratch.alpha.slice(offset * heads..(offset + count) * heads)?,
+                    beta: &scratch.beta.slice(offset * heads..(offset + count) * heads)?,
                     a_log: bf16(&self.weights.a_log)?,
                     dt_bias: bf16(&self.weights.dt_bias)?,
                 },
-                &mut self.scratch.recurrent.slice(offset * value..(offset + count) * value)?,
+                &mut scratch.recurrent.slice(offset * value..(offset + count) * value)?,
             )?;
             if checkpoint {
                 state.stage_state()?;
             }
         }
-        self.finish_projected(packed, output)
+        self.finish_projected(scratch, packed, output)
     }
 }

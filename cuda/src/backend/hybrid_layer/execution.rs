@@ -103,6 +103,11 @@ impl CudaAffineGatedDeltaMoeExecution {
         self.commit_packed(states)
     }
 
+    /// Rows the layer's shared packed states are allocated for on first use.
+    pub(crate) fn set_batch_capacity(&mut self, rows: usize) {
+        self.attention.set_batch_capacity(rows);
+    }
+
     pub(crate) fn prepare_packed(
         &mut self,
         input: &DeviceBuffer<bf16>,
@@ -183,7 +188,7 @@ impl CudaAffineGatedDeltaMoeExecution {
         Ok(())
     }
 
-    pub(crate) fn commit_packed(&mut self, states: &mut [&mut CudaGatedDeltaState]) -> Result<()> {
+    pub(crate) fn commit_packed(&self, states: &mut [&mut CudaGatedDeltaState]) -> Result<()> {
         self.attention.commit_packed(states)
     }
 

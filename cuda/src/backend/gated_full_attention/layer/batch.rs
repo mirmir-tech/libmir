@@ -4,6 +4,11 @@ use super::{CudaAffineGatedFullAttentionMoeExecution, CudaAffineGatedFullAttenti
 use crate::{Error, PagedDecodeBatch, Result};
 
 impl CudaAffineGatedFullAttentionMoeExecution {
+    /// Follows a K/V resize to `block_count` blocks.
+    pub(crate) fn follow_cache_blocks(&mut self, block_count: u32) {
+        self.attention.follow_cache_blocks(block_count);
+    }
+
     pub(crate) fn prepare_packed(
         &mut self,
         input: &DeviceBuffer<bf16>,

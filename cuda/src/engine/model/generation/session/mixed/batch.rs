@@ -61,7 +61,14 @@ fn decode_ordered(
         let batch = match execution.decode_batches.entry(sequences.len()) {
             std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
             std::collections::hash_map::Entry::Vacant(entry) => {
-                entry.insert(execution.template.prepare_decode_batch(sequences.len())?)
+                let used_before = execution.template.pool_used_bytes()?;
+                let batch = execution.template.prepare_decode_batch(sequences.len())?;
+                tracing::debug!(
+                    rows = sequences.len(),
+                    bytes = execution.template.pool_used_bytes()?.saturating_sub(used_before),
+                    "prepared CUDA decode batch"
+                );
+                entry.insert(batch)
             },
         };
         let mut sessions = owned.iter_mut().map(|(_, session)| session).collect::<Vec<_>>();

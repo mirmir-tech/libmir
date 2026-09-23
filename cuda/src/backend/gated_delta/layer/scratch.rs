@@ -3,8 +3,39 @@ use mircuda::{DeviceBuffer, bf16};
 use super::{AffineGatedDeltaLayerConfig, checked};
 use crate::{CudaBackend, Result};
 
+/// Shape of one Gated Delta scratch set; layers with equal shapes share it.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(in crate::backend) struct GatedDeltaScratchKey {
+    tokens: usize,
+    mixed: usize,
+    key: usize,
+    value: usize,
+    heads: usize,
+    packed_qkv_gate: bool,
+    packed_alpha_beta: bool,
+}
+
+impl GatedDeltaScratchKey {
+    pub(super) fn new(
+        config: AffineGatedDeltaLayerConfig,
+        tokens: usize,
+        packed_qkv_gate: bool,
+        packed_alpha_beta: bool,
+    ) -> Result<Self> {
+        Ok(Self {
+            tokens,
+            mixed: config.mixed_width()?,
+            key: config.key_width()?,
+            value: config.value_width()?,
+            heads: config.value_heads,
+            packed_qkv_gate,
+            packed_alpha_beta,
+        })
+    }
+}
+
 #[derive(Debug)]
-pub(super) struct GatedDeltaScratch {
+pub(in crate::backend) struct GatedDeltaScratch {
     pub(super) packed_qkv_gate: Option<DeviceBuffer<bf16>>,
     pub(super) mixed: DeviceBuffer<bf16>,
     pub(super) convolved: DeviceBuffer<bf16>,

@@ -45,6 +45,12 @@ impl BatchedPagedAttentionBf16 {
         Self::new_with_workspace(backend, cache, query_heads, max_blocks, max_batch, None)
     }
 
+    /// Follows a K/V resize: `block_count` bounds page indices only, the
+    /// compiled operations depend on the rest of the storage geometry.
+    pub(in crate::backend) const fn follow_cache_blocks(&mut self, block_count: u32) {
+        self.storage.cache.block_count = block_count;
+    }
+
     pub(in crate::backend) fn workspace_lengths(
         backend: &CudaBackend,
         cache: &PagedKvCache,

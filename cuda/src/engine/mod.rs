@@ -116,6 +116,27 @@ impl CudaEngine {
         Ok(models)
     }
 
+    /// Pool bytes a model's retained execution shapes may still grow by.
+    pub fn model_retention_headroom_bytes(&self, model_id: &str) -> Result<u64> {
+        self.model(model_id)?.retention_headroom_bytes()
+    }
+
+    /// Pool bytes one live session of a model cost during concurrency
+    /// warm-up, where the backend measured it.
+    pub fn model_session_bytes(&self, model_id: &str) -> Result<Option<u64>> {
+        self.model(model_id)?.session_bytes()
+    }
+
+    /// Resizes the K/V pages of a loaded, idle model. Sequence capacity and
+    /// dtype are fixed at load; only the block count changes.
+    pub fn resize_model_kv_cache(
+        &self,
+        model_id: &str,
+        cache: ::runtime::kv::CacheConfig,
+    ) -> Result<bool> {
+        self.model(model_id)?.resize_kv_cache(cache)
+    }
+
     pub fn clear_model_sessions(&self, model_id: &str) -> Result<()> {
         self.model(model_id)?.clear_sessions()
     }
@@ -142,6 +163,18 @@ impl CudaEngine {
 
     pub fn clear_memory_cache(&self) -> Result<()> {
         self.backend.trim_memory_pool(0)
+    }
+
+    /// Trims the memory pool and re-anchors its release threshold after a
+    /// model's resident allocations changed.
+    pub fn settle_resident_memory(&self, model_id: &str) -> Result<()> {
+        let reclaimable = self.model(model_id)?.retained_shape_bytes()?;
+        self.backend.settle_resident_memory(reclaimable)
+    }
+
+    /// Runs decode steps over one to `rows` throwaway sessions of `model_id`.
+    pub fn warm_concurrency(&self, model_id: &str, rows: usize) -> Result<()> {
+        self.model(model_id)?.warm_concurrency(&self.backend, rows)
     }
 
     pub fn finish_startup_tuning(&self) {

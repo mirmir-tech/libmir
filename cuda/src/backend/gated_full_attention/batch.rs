@@ -11,7 +11,8 @@ use crate::{
 
 #[derive(Debug)]
 pub(super) struct GatedFullAttentionBatch {
-    cache: PagedKvCache,
+    /// The sessions' pages, rebound after a K/V resize replaces them.
+    cache: Option<PagedKvCache>,
     attention: BatchedPagedAttentionBf16,
     rows: usize,
 }
@@ -41,6 +42,8 @@ impl CudaAffineGatedFullAttentionExecution {
             .prepare(states, paging)
     }
 
+    // The scratch guard is used by the last statement; the lint cannot see it.
+    #[allow(clippy::significant_drop_tightening)]
     pub(crate) fn execute_prepared_packed(
         &mut self,
         input: &DeviceBuffer<bf16>,
@@ -54,29 +57,41 @@ impl CudaAffineGatedFullAttentionExecution {
         {
             return Err(Error::InvalidDecoderKernel("gated attention packed shape mismatch"));
         }
-        self.project_and_transform(input, positions)?;
+        let shared = self.scratch.clone_handle();
+        let mut guard = shared.lock()?;
+        let scratch = &mut *guard;
+        self.project_and_transform(scratch, input, positions)?;
         self.batch
             .as_mut()
             .ok_or(Error::InvalidDecoderKernel("gated attention batch was not prepared"))?
             .execute_prepared(
-                &self.scratch.rotated_query,
-                &self.scratch.rotated_key,
-                &self.scratch.value,
+                &scratch.rotated_query,
+                &scratch.rotated_key,
+                &scratch.value,
                 paging,
-                &mut self.scratch.attended,
+                &mut scratch.attended,
                 self.config.attention_scale,
             )?;
         self.gate.execute(
             &self.backend.inner.stream,
-            &self.scratch.attended,
-            &self.scratch.gate,
-            &mut self.scratch.gated,
+            &scratch.attended,
+            &scratch.gate,
+            &mut scratch.gated,
         )?;
-        self.output.execute(&self.scratch.gated, output)
+        self.output.execute(&scratch.gated, output)
     }
 
     pub(crate) fn packed_capture_partitions(&self, paging: &PagedDecodeBatch) -> usize {
         self.batch.as_ref().map_or(0, |batch| batch.capture_partitions(paging))
+    }
+
+    /// Follows a K/V resize to `block_count` blocks; the next prepare binds
+    /// the sessions' new pages.
+    pub(crate) fn follow_cache_blocks(&mut self, block_count: u32) {
+        if let Some(batch) = &mut self.batch {
+            batch.cache = None;
+            batch.attention.follow_cache_blocks(block_count);
+        }
     }
 }
 
@@ -90,7 +105,7 @@ impl GatedFullAttentionBatch {
         workspace: Option<BatchedSplitAttentionWorkspace>,
     ) -> Result<Self> {
         Ok(Self {
-            cache: state.cache.clone(),
+            cache: Some(state.cache.clone()),
             attention: BatchedPagedAttentionBf16::new_with_workspace(
                 backend,
                 &state.cache,
@@ -104,7 +119,7 @@ impl GatedFullAttentionBatch {
     }
 
     pub(super) fn prepare(
-        &self,
+        &mut self,
         states: &[&mut CudaAffineGatedFullAttentionState],
         paging: &PagedDecodeBatch,
     ) -> Result<()> {
@@ -118,6 +133,9 @@ impl GatedFullAttentionBatch {
         if paging.cache_config() != storage.cache {
             return Err(Error::InvalidPagedKv("gated attention paging geometry differs"));
         }
+        if self.cache.as_ref().is_none_or(|cache| cache.storage_spec() != storage) {
+            self.cache = Some(states[0].cache.clone());
+        }
         Ok(())
     }
 
@@ -130,8 +148,12 @@ impl GatedFullAttentionBatch {
         output: &mut DeviceBuffer<bf16>,
         scale: f32,
     ) -> Result<()> {
-        self.cache.store_batch(paging, key, value)?;
-        self.attention.execute(query, &self.cache, paging, output, None, scale)
+        let cache = self
+            .cache
+            .as_mut()
+            .ok_or(Error::InvalidPagedKv("gated attention batch has no pages bound"))?;
+        cache.store_batch(paging, key, value)?;
+        self.attention.execute(query, cache, paging, output, None, scale)
     }
 
     fn capture_partitions(&self, paging: &PagedDecodeBatch) -> usize {

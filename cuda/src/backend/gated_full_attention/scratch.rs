@@ -3,8 +3,32 @@ use mircuda::{DeviceBuffer, bf16};
 use super::{AffineGatedFullAttentionConfig, checked};
 use crate::{CudaBackend, Result};
 
+/// Shape of one gated attention scratch set; layers with equal shapes share it.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(in crate::backend) struct GatedAttentionScratchKey {
+    tokens: usize,
+    query: usize,
+    key_value: usize,
+    packed_qkv: bool,
+}
+
+impl GatedAttentionScratchKey {
+    pub(super) fn new(
+        config: AffineGatedFullAttentionConfig,
+        tokens: usize,
+        packed_qkv: bool,
+    ) -> Result<Self> {
+        Ok(Self {
+            tokens,
+            query: config.query_width()?,
+            key_value: config.key_value_width()?,
+            packed_qkv,
+        })
+    }
+}
+
 #[derive(Debug)]
-pub(super) struct GatedAttentionScratch {
+pub(in crate::backend) struct GatedAttentionScratch {
     pub(super) packed_qkv: Option<DeviceBuffer<bf16>>,
     pub(super) query_projected: DeviceBuffer<bf16>,
     pub(super) gate: DeviceBuffer<bf16>,

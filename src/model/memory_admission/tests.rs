@@ -132,6 +132,7 @@ fn charges_shared_metal_cache_once_until_the_last_model_unloads() -> Result<()> 
         kv_bytes_per_token: 1,
         cache_capacity_tokens: 4 * GIB,
         model_context_tokens: 0,
+        session_state_bytes: 0,
     };
     let first = manager.reserve(
         "model-a".into(),
@@ -174,6 +175,7 @@ fn estimate(required_bytes: u64) -> ModelMemoryEstimate {
         kv_bytes_per_token: 0,
         cache_capacity_tokens: 0,
         model_context_tokens: 0,
+        session_state_bytes: 0,
     }
 }
 

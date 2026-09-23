@@ -141,6 +141,27 @@ impl ModelCoordinator {
         }
     }
 
+    /// Rebuilds the generation worker's prefill profile for a resized K/V
+    /// cache; split coordinators derive their limits per request.
+    pub(crate) fn reprofile(
+        &self,
+        engine: &Engine,
+        model: &ModelHandle,
+        config: &SchedulerConfig,
+        cache: CacheConfig,
+    ) -> Result<()> {
+        match &self.inner {
+            #[cfg(any(feature = "cuda", feature = "metal"))]
+            Coordinator::Generation(coordinator) => {
+                coordinator.reprofile(engine, model, config, cache)
+            },
+            Coordinator::Split { .. } => {
+                let _ = (engine, model, config, cache);
+                Ok(())
+            },
+        }
+    }
+
     pub(crate) fn release(&self, session_id: uuid::Uuid) {
         match &self.inner {
             #[cfg(any(feature = "cuda", feature = "metal"))]

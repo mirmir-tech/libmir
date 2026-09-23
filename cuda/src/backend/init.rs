@@ -45,6 +45,9 @@ impl CudaBackend {
             inner: Arc::new(CudaRuntime {
                 dense_scratch: super::feed_forward::DenseScratchPool::default(),
                 layer_scratch: super::layer_scratch::LayerScratchPool::default(),
+                gated_delta_scratch: super::scratch_pool::ScratchPool::default(),
+                gated_attention_scratch: super::scratch_pool::ScratchPool::default(),
+                gated_delta_batches: super::scratch_pool::ScratchPool::default(),
                 device: info,
                 context,
                 stream,
@@ -103,6 +106,9 @@ impl CudaBackend {
             inner: Arc::new(CudaRuntime {
                 dense_scratch: super::feed_forward::DenseScratchPool::default(),
                 layer_scratch: super::layer_scratch::LayerScratchPool::default(),
+                gated_delta_scratch: super::scratch_pool::ScratchPool::default(),
+                gated_attention_scratch: super::scratch_pool::ScratchPool::default(),
+                gated_delta_batches: super::scratch_pool::ScratchPool::default(),
                 device: self.inner.device.clone(),
                 context: self.inner.context.clone(),
                 stream: self.inner.auxiliary_stream.clone(),

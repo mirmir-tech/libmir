@@ -1,4 +1,7 @@
-use std::{path::Path, sync::Arc};
+use std::{
+    path::Path,
+    sync::{Arc, Mutex},
+};
 
 use foundation::model::BackendTarget;
 use models::generation::GenerationOverrides;
@@ -29,12 +32,10 @@ impl Library {
     #[must_use]
     pub fn new(config: RuntimeConfig) -> Self {
         Self {
-            state: Arc::new(std::sync::Mutex::new(LibraryState {
-                engine: None,
-                model_config: None,
-            })),
+            state: Arc::new(Mutex::new(LibraryState { engine: None, model_config: None })),
             memory: ModelMemoryManager::default(),
             caches: super::cache::KvCachePools::default(),
+            registry: super::kv_sizing::ModelRegistry::default(),
             config,
         }
     }
@@ -59,7 +60,7 @@ impl Library {
     ) -> Result<Model> {
         let descriptor = ModelDescriptor::inspect(path, overrides)?;
         let _load = self.memory.serialize_load()?;
-        let (engine, mut config) = self.model_runtime(&descriptor)?;
+        let (engine, mut config, kv_sizing) = self.model_runtime(&descriptor)?;
         let manifest = descriptor.manifest_for(engine.target())?;
         let target = engine.target();
         let initial_estimate = descriptor.memory_estimate_for(&config, &target);
@@ -80,6 +81,7 @@ impl Library {
             &manifest,
             post_load_reserve,
             resolved_metal_cache(&target, &config),
+            kv_sizing.sequence_capacity_blocks(),
             progress,
         )?;
         progress(ProgressEvent::initialize_runtime(0, 1, "initializing model runtime"));
@@ -112,10 +114,13 @@ impl Library {
                     config.kv_cache.block_size,
                 ),
                 coordinator,
-                _memory: reservation,
+                kv_sizing: Mutex::new(kv_sizing),
+                registry: self.registry.clone(),
+                memory: reservation,
                 config,
             }),
         };
+        self.registry.register(&model.inner)?;
         progress(ProgressEvent::initialize_runtime(1, 1, "model runtime initialized"));
         Ok(model)
     }
@@ -134,7 +139,19 @@ impl Library {
 
     /// Resolves the effective runtime configuration for a model.
     pub fn model_config(&self, descriptor: &ModelDescriptor) -> Result<RuntimeConfig> {
-        self.model_runtime(descriptor).map(|(_, config)| config)
+        self.model_runtime(descriptor).map(|(_, config, _)| config)
+    }
+
+    /// Lets idle models with measured K/V caches grow into memory that
+    /// another model released.
+    pub fn rebalance_kv_caches(&self) -> Result<usize> {
+        let mut grown = 0;
+        for model in self.registry.all()? {
+            if model.regrow_kv_cache()? {
+                grown += 1;
+            }
+        }
+        Ok(grown)
     }
 
     pub(super) fn engine(&self) -> Result<Engine> {
@@ -149,7 +166,10 @@ impl Library {
         Ok(initialized)
     }
 
-    fn model_runtime(&self, descriptor: &ModelDescriptor) -> Result<(Engine, RuntimeConfig)> {
+    fn model_runtime(
+        &self,
+        descriptor: &ModelDescriptor,
+    ) -> Result<(Engine, RuntimeConfig, super::kv_sizing::KvSizing)> {
         let mut state = self.lock_state()?;
         let engine_config = state.model_config.as_ref().unwrap_or(&self.config).clone();
         let probe = match state.engine.take() {
@@ -160,7 +180,9 @@ impl Library {
         let estimate = descriptor.memory_estimate_for(&self.config, &target);
         let memory = probe.memory_snapshot()?;
         let committed = self.memory.committed_bytes()?;
-        let config = automatic_cache::resolve(&self.config, estimate, &memory, committed);
+        let mut config = automatic_cache::resolve(&self.config, estimate, &memory, committed);
+        let kv_sizing =
+            super::kv_sizing::KvSizing::for_load(&self.config, &mut config, estimate, &target);
         let resolved_estimate = descriptor.memory_estimate_for(&config, &target);
         let engine = if engine_cache_compatible(&target, config.kv_cache, engine_config.kv_cache) {
             probe
@@ -169,6 +191,7 @@ impl Library {
         };
         tracing::info!(
             automatic = self.config.automatic_kv_cache,
+            sizing = ?kv_sizing,
             blocks = config.kv_cache.block_count,
             block_size = config.kv_cache.block_size,
             capacity_tokens = u64::from(config.kv_cache.block_count)
@@ -184,7 +207,7 @@ impl Library {
         state.model_config = Some(config.clone());
         state.engine = Some(engine.clone());
         drop(state);
-        Ok((engine, config))
+        Ok((engine, config, kv_sizing))
     }
 
     fn lock_state(&self) -> Result<std::sync::MutexGuard<'_, LibraryState>> {

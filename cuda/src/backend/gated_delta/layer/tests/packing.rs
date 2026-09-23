@@ -46,6 +46,7 @@ pub(super) fn dense_weights(
         norm: tensor("norm", vec![128], 13)?,
         a_log: tensor("a", vec![2], 15)?,
         dt_bias: tensor("dt", vec![2], 17)?,
+        identity: super::super::weights::next_layer_identity(),
     };
     Ok((config, weights))
 }

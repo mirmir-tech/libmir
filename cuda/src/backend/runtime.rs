@@ -26,9 +26,19 @@ impl CudaBackend {
 
     pub(crate) fn finish_startup_tuning(&self) {
         self.inner.tuner.finish_startup();
-        if let Err(error) = self.retain_resident_memory() {
+        if let Err(error) = self.retain_resident_memory(0) {
             tracing::warn!(%error, "CUDA memory pool keeps its startup release threshold");
         }
+    }
+
+    /// Releases cached pool memory and counts the release threshold from the
+    /// memory in use, after resident allocations changed. `reclaimable` is
+    /// what retained execution shapes hold: they are evicted and rebuilt at
+    /// other sizes under traffic, and a freed shape below the threshold would
+    /// stay cached without fitting the next one.
+    pub(crate) fn settle_resident_memory(&self, reclaimable: u64) -> Result<()> {
+        self.trim_memory_pool(0)?;
+        self.retain_resident_memory(reclaimable)
     }
 
     /// Counts the release threshold from the memory in use once a model is
@@ -36,10 +46,15 @@ impl CudaBackend {
     /// fixed value below the model size returns every freed scratch buffer to
     /// the driver at the next synchronization and reserves it again for the
     /// next execution shape.
-    fn retain_resident_memory(&self) -> Result<()> {
-        let resident = self.inner.pool.stats()?.used;
+    fn retain_resident_memory(&self, reclaimable: u64) -> Result<()> {
+        let resident = self.inner.pool.stats()?.used.saturating_sub(reclaimable);
         let threshold = resident.saturating_add(self.inner.pool_release_slack);
-        tracing::debug!(resident, threshold, "raised CUDA memory pool release threshold");
+        tracing::debug!(
+            resident,
+            reclaimable,
+            threshold,
+            "raised CUDA memory pool release threshold"
+        );
         Ok(self.inner.pool.set_release_threshold(threshold)?)
     }
 

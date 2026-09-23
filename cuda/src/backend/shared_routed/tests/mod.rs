@@ -2,6 +2,7 @@ mod dense_mixed;
 mod fixture;
 mod inline_checkpoint;
 mod ragged;
+mod resize;
 mod retained_plans;
 
 use mircuda::{DeviceElement, bf16};

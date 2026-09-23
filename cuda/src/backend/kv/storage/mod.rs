@@ -101,6 +101,11 @@ impl PagedKvCache {
         self.layer
     }
 
+    /// Device bytes held by the key and value pages of this layer.
+    pub(crate) fn bytes(&self) -> usize {
+        self.key_pages.bytes().saturating_add(self.value_pages.bytes())
+    }
+
     pub(crate) const fn key_pages(&self) -> &DeviceBuffer<u8> {
         &self.key_pages
     }

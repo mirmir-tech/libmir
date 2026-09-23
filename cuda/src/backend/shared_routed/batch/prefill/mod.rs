@@ -67,7 +67,9 @@ impl CudaSharedRoutedPrefillBatch {
         let layers = template
             .layers
             .iter()
-            .map(|layer| SharedRoutedBatchLayer::new(layer, tokens, ExecutionPhase::Prefill, None))
+            .map(|layer| {
+                SharedRoutedBatchLayer::new(layer, tokens, rows, ExecutionPhase::Prefill, None)
+            })
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             backend: backend.clone(),
@@ -119,6 +121,11 @@ impl CudaSharedRoutedPrefillBatch {
         }
         self.counts = counts.to_vec();
         Ok(())
+    }
+
+    /// Keeps this batch usable after the model's K/V cache was resized.
+    pub(crate) const fn follow_cache_blocks(&mut self, block_count: u32) {
+        self.paging.follow_cache_blocks(block_count);
     }
 
     pub(crate) fn execute(

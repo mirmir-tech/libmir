@@ -215,6 +215,12 @@ impl PagedPrefillBatch {
         &self.tables.device
     }
 
+    /// Follows a resized K/V cache: block tables may then address up to
+    /// `block_count` blocks. Row capacity and page geometry do not change.
+    pub(crate) const fn follow_cache_blocks(&mut self, block_count: u32) {
+        self.cache.block_count = block_count;
+    }
+
     pub(crate) const fn block_counts(&self) -> &DeviceBuffer<u32> {
         &self.block_counts.device
     }

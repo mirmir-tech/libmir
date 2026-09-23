@@ -1,3 +1,5 @@
+mod measured;
+
 use super::*;
 
 const GIB: u64 = 1024 * 1024 * 1024;
@@ -99,7 +101,7 @@ fn windowed_gx10_geometry_spends_only_full_layer_bytes_per_token() {
     assert_eq!(cache_tokens(&resolved), 1_778_480);
 }
 
-const fn estimate(
+pub(super) const fn estimate(
     weight_bytes: u64,
     workspace_bytes: u64,
     kv_bytes_per_token: u64,
@@ -113,10 +115,11 @@ const fn estimate(
         kv_bytes_per_token,
         cache_capacity_tokens: 0,
         model_context_tokens,
+        session_state_bytes: 0,
     }
 }
 
-fn memory(total: u64, available: u64, reserve: u64, unified: bool) -> MemorySnapshot {
+pub(super) fn memory(total: u64, available: u64, reserve: u64, unified: bool) -> MemorySnapshot {
     MemorySnapshot {
         total_bytes: Some(total),
         available_bytes: Some(available),

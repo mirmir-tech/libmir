@@ -12,23 +12,32 @@ impl Engine {
         manifest: &ModelManifest,
         progress: &mut dyn FnMut(ProgressEvent),
     ) -> RuntimeResult<ModelHandle> {
-        self.load_model_with_progress_and_reservation(manifest, None, None, progress)
+        self.load_model_with_progress_and_reservation(manifest, None, None, None, progress)
     }
 
+    /// `sequence_capacity_blocks` bounds one sequence's block table where the
+    /// cache loaded now is provisional and grows after warm-up.
     pub(crate) fn load_model_with_progress_and_reservation(
         &self,
         manifest: &ModelManifest,
         reserved_bytes: Option<usize>,
         cache: Option<CacheConfig>,
+        sequence_capacity_blocks: Option<u32>,
         progress: &mut dyn FnMut(ProgressEvent),
     ) -> RuntimeResult<ModelHandle> {
         #[cfg(not(any(feature = "cuda", feature = "metal")))]
         let _ = (&manifest, &mut *progress);
         #[cfg(not(feature = "metal"))]
         let _ = (&reserved_bytes, &cache);
+        #[cfg(not(feature = "cuda"))]
+        let _ = sequence_capacity_blocks;
         match &self.inner {
             #[cfg(feature = "cuda")]
-            EngineInner::Cuda(cuda) => Ok(cuda.load_model_with_progress(manifest, progress)?),
+            EngineInner::Cuda(cuda) => Ok(cuda.load_model_with_sequence_capacity(
+                manifest,
+                sequence_capacity_blocks,
+                progress,
+            )?),
             #[cfg(feature = "metal")]
             EngineInner::Metal(metal) => match (reserved_bytes, cache) {
                 (Some(bytes), Some(cache)) => {

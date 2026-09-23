@@ -17,9 +17,19 @@ impl Model {
     /// Backends may additionally warm exact full and interleaved prefill shapes
     /// before startup tuning is sealed.
     pub fn warm_execution_profiles(&self, progress: &mut dyn FnMut(ProgressEvent)) -> Result<()> {
-        let result = self.warm_execution_profiles_inner(progress);
+        let result = self.warm_execution_profiles_inner(progress).and_then(|()| {
+            // The widest decode batch allocates on first use; build it before
+            // startup tuning seals and memory is measured.
+            let rows = self.inner.config.scheduler.max_batch_requests.max(1);
+            Ok(self.engine().warm_concurrency(self.handle(), rows)?)
+        });
         let finish = self.engine().finish_startup_tuning(self.handle());
-        result.and(finish)
+        // Startup tuning is sealed and its scratch is resident: measure now,
+        // even after a failed warm-up, so the model never serves on the
+        // provisional cache.
+        let finalized = self.finalize_kv_cache();
+        result.and(finish)?;
+        finalized
     }
 
     fn warm_execution_profiles_inner(&self, progress: &mut dyn FnMut(ProgressEvent)) -> Result<()> {
@@ -80,9 +90,10 @@ impl Model {
             }
         }
         for (index, (shape, tokens)) in profiles.into_iter().enumerate() {
-            // Each shape needs a distinct prefix: otherwise the preceding profile
-            // can satisfy it from cache without executing the intended projection.
-            // A checkpoint preserves the exact shape with other KV block sizes.
+            // Each shape needs a distinct prefix: otherwise the preceding
+            // profile can satisfy it from cache without executing
+            // the intended projection. A checkpoint preserves the
+            // exact shape with other KV block sizes.
             let seed = self
                 .descriptor()
                 .tokenizer()

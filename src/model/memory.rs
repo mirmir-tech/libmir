@@ -57,6 +57,7 @@ impl ModelDescriptor {
             kv_bytes_per_token,
             cache_capacity_tokens,
             model_context_tokens: u64::try_from(self.metadata.context_len).unwrap_or(u64::MAX),
+            session_state_bytes: generation_decoder.map_or(0, session_state_bytes),
         }
     }
 }
@@ -121,6 +122,23 @@ fn sliding_cache(
 
 const fn bounded_sliding(decoder: &DecoderConfig) -> bool {
     decoder.swiglu_limit.is_some() && decoder.num_experts.is_some()
+}
+
+/// Float32 recurrent state plus convolution history of every linear layer.
+fn session_state_bytes(decoder: &DecoderConfig) -> u64 {
+    let Some(linear) = decoder.linear_attention.as_ref() else {
+        return 0;
+    };
+    let layers = decoder
+        .layer_types
+        .iter()
+        .filter(|layer| **layer == AttentionLayerType::Linear)
+        .count();
+    let state = linear.value_heads * linear.value_head_dim * linear.key_head_dim * 4;
+    let channels =
+        2 * linear.key_heads * linear.key_head_dim + linear.value_heads * linear.value_head_dim;
+    let history = channels * linear.convolution_kernel_size.saturating_sub(1) * 2;
+    u64::try_from(layers * (state + history)).unwrap_or(u64::MAX)
 }
 
 const fn workspace(weights: u64) -> u64 {

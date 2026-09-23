@@ -49,7 +49,15 @@ impl CudaEngine {
             && let Some(outputs) = generation.decode_batch(&self.backend, request.sequences())?
         {
             runner.selected = None;
-            tracing::debug!(rows = outputs.len(), "executed lowered CUDA generation decode batch");
+            if tracing::enabled!(tracing::Level::DEBUG) {
+                let pool = self.backend.memory_pool_stats()?;
+                tracing::debug!(
+                    rows = outputs.len(),
+                    pool_used = pool.used,
+                    pool_reserved = pool.reserved,
+                    "executed lowered CUDA generation decode batch"
+                );
+            }
             return Ok(outputs.into_iter().map(decode_output).collect());
         }
         let mut outputs = Vec::with_capacity(request.sequences().len());

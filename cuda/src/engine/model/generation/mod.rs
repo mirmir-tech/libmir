@@ -112,6 +112,35 @@ pub(in crate::engine) trait GenerationExecution: Send {
 
     fn clear_sessions(&mut self);
 
+    /// Pool bytes the runner's retained execution shapes may still grow by
+    /// under traffic, beyond what warm-up built.
+    fn retention_headroom_bytes(&self) -> Result<u64> {
+        Ok(0)
+    }
+
+    /// Runs one decode step over `rows` throwaway sessions, so the batch shape
+    /// and its lazily allocated resources exist before memory is measured.
+    fn warm_concurrency(&mut self, _backend: &CudaBackend, _rows: usize) -> Result<()> {
+        Ok(())
+    }
+
+    /// Pool bytes one live session cost when concurrency was warmed, where
+    /// the backend measured it.
+    fn session_bytes(&self) -> Option<u64> {
+        None
+    }
+
+    /// Pool bytes held by retained execution shapes right now.
+    fn retained_shape_bytes(&self) -> Result<u64> {
+        Ok(0)
+    }
+
+    /// Reallocates the K/V pages for `cache`, dropping every session and
+    /// retained prefix state. `Ok(false)` when this runner keeps its pages.
+    fn resize_kv_cache(&mut self, _cache: runtime::kv::CacheConfig) -> Result<bool> {
+        Ok(false)
+    }
+
     fn release_session(&mut self, session: Uuid);
 
     fn prefill_pooled_vision(

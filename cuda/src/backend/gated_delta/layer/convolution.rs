@@ -1,9 +1,12 @@
-use super::{CudaAffineGatedDeltaExecution, CudaGatedDeltaState, execution::bf16};
+use super::{
+    CudaAffineGatedDeltaExecution, CudaGatedDeltaState, execution::bf16, scratch::GatedDeltaScratch,
+};
 use crate::{Error, Result};
 
 impl CudaAffineGatedDeltaExecution {
     pub(super) fn convolve_projected(
-        &mut self,
+        &self,
+        scratch: &mut GatedDeltaScratch,
         state: &mut CudaGatedDeltaState,
         packed: bool,
     ) -> Result<()> {
@@ -13,21 +16,21 @@ impl CudaAffineGatedDeltaExecution {
             self.config.mixed_width()?
         };
         let source = if packed {
-            self.scratch
+            scratch
                 .packed_qkv_gate
                 .as_ref()
                 .ok_or(Error::InvalidExecutionPlan("packed Gated Delta output is missing"))?
         } else {
-            &self.scratch.mixed
+            &scratch.mixed
         };
         if self.config.key_dim == 128 {
             return state.convolve_silu_split_normalize_strided(
                 self.tokens,
                 source,
                 bf16(&self.weights.convolution)?,
-                &mut self.scratch.normalized_query,
-                &mut self.scratch.normalized_key,
-                &mut self.scratch.value,
+                &mut scratch.normalized_query,
+                &mut scratch.normalized_key,
+                &mut scratch.value,
                 stride,
                 0,
             );
@@ -36,16 +39,16 @@ impl CudaAffineGatedDeltaExecution {
             self.tokens,
             source,
             bf16(&self.weights.convolution)?,
-            &mut self.scratch.convolved,
+            &mut scratch.convolved,
             stride,
             0,
         )?;
         self.transforms.split_normalize(
             &self.backend.inner.stream,
-            &self.scratch.convolved,
-            &mut self.scratch.normalized_query,
-            &mut self.scratch.normalized_key,
-            &mut self.scratch.value,
+            &scratch.convolved,
+            &mut scratch.normalized_query,
+            &mut scratch.normalized_key,
+            &mut scratch.value,
         )
     }
 }

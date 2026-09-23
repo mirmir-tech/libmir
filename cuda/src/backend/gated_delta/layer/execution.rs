@@ -4,13 +4,14 @@ use super::{
     AffineGatedDeltaLayerConfig, AffineGatedDeltaLayerWeights, CudaGatedDeltaState,
     gates::{DenseAlphaBeta, prepare_dense_alpha_beta},
     require_exact,
-    scratch::GatedDeltaScratch,
+    scratch::{GatedDeltaScratch, GatedDeltaScratchKey},
 };
 use crate::{
     CudaBackend, DenseRole, Error, GatedDeltaInputs, Result,
     backend::{
         gated_delta::CudaGatedDeltaBatchState,
         linear::{Bf16LinearPairWeights, CheckpointProjection, CheckpointProjectionWeight},
+        scratch_pool::SharedScratch,
     },
     kernels::{GatedDeltaTransformSpec, GatedDeltaTransforms},
 };
@@ -29,8 +30,10 @@ pub struct CudaAffineGatedDeltaExecution {
     pub(super) output: CheckpointProjection,
     pub(super) transforms: GatedDeltaTransforms,
     pub(super) weights: AffineGatedDeltaLayerWeights,
-    pub(super) scratch: GatedDeltaScratch,
-    pub(super) batch_state: Option<CudaGatedDeltaBatchState>,
+    pub(super) scratch: SharedScratch<GatedDeltaScratch>,
+    pub(super) batch_state: Option<SharedScratch<CudaGatedDeltaBatchState>>,
+    /// Rows the shared packed states are allocated for on first use.
+    pub(super) batch_capacity: usize,
 }
 
 impl CudaAffineGatedDeltaExecution {
@@ -117,17 +120,36 @@ impl CudaAffineGatedDeltaExecution {
                 },
             )?,
             weights: weights.clone(),
-            scratch: GatedDeltaScratch::new(
-                backend,
-                config,
-                tokens,
-                packed_qkv_gate.is_some(),
-                paired_alpha_beta,
+            scratch: backend.inner.gated_delta_scratch.acquire(
+                GatedDeltaScratchKey::new(
+                    config,
+                    tokens,
+                    packed_qkv_gate.is_some(),
+                    paired_alpha_beta,
+                )?,
+                || {
+                    GatedDeltaScratch::new(
+                        backend,
+                        config,
+                        tokens,
+                        packed_qkv_gate.is_some(),
+                        paired_alpha_beta,
+                    )
+                },
             )?,
             batch_state: None,
+            batch_capacity: 1,
         })
     }
 
+    /// Rows the packed batch states should hold when first allocated, so
+    /// batches of every count up to it share one allocation per layer.
+    pub(crate) fn set_batch_capacity(&mut self, rows: usize) {
+        self.batch_capacity = rows.max(1);
+    }
+
+    // The scratch guard is used by the last statement; the lint cannot see it.
+    #[allow(clippy::significant_drop_tightening)]
     pub fn execute(
         &mut self,
         input: &DeviceBuffer<bf16>,
@@ -139,23 +161,26 @@ impl CudaAffineGatedDeltaExecution {
             return self.execute_ragged(input, &mut [state], &[self.tokens], output);
         }
         self.validate(input, state, output)?;
-        let packed = self.project_qkv_gate(input)?;
-        self.project_alpha_beta(input)?;
-        self.convolve_projected(state, packed)?;
+        let shared = self.scratch.clone_handle();
+        let mut guard = shared.lock()?;
+        let scratch = &mut *guard;
+        let packed = self.project_qkv_gate(scratch, input)?;
+        self.project_alpha_beta(scratch, input)?;
+        self.convolve_projected(scratch, state, packed)?;
         state.execute(
             self.tokens,
             GatedDeltaInputs {
-                query: &self.scratch.normalized_query,
-                key: &self.scratch.normalized_key,
-                value: &self.scratch.value,
-                alpha: &self.scratch.alpha,
-                beta: &self.scratch.beta,
+                query: &scratch.normalized_query,
+                key: &scratch.normalized_key,
+                value: &scratch.value,
+                alpha: &scratch.alpha,
+                beta: &scratch.beta,
                 a_log: bf16(&self.weights.a_log)?,
                 dt_bias: bf16(&self.weights.dt_bias)?,
             },
-            &mut self.scratch.recurrent,
+            &mut scratch.recurrent,
         )?;
-        self.finish_projected(packed, output)
+        self.finish_projected(scratch, packed, output)
     }
 
     pub(super) fn validate(

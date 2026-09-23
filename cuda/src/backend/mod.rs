@@ -20,6 +20,7 @@ mod profile;
 mod router;
 mod runtime;
 mod sampling;
+mod scratch_pool;
 mod shared_moe;
 mod shared_routed;
 mod task;
@@ -130,6 +131,18 @@ pub struct CudaBackend {
 struct CudaRuntime {
     dense_scratch: feed_forward::DenseScratchPool,
     layer_scratch: layer_scratch::LayerScratchPool,
+    gated_delta_scratch: scratch_pool::ScratchPool<
+        gated_delta::GatedDeltaScratchKey,
+        gated_delta::GatedDeltaScratch,
+    >,
+    gated_attention_scratch: scratch_pool::ScratchPool<
+        gated_full_attention::GatedAttentionScratchKey,
+        gated_full_attention::GatedAttentionScratch,
+    >,
+    gated_delta_batches: scratch_pool::ScratchPool<
+        gated_delta::GatedDeltaBatchKey,
+        gated_delta::CudaGatedDeltaBatchState,
+    >,
     device: DeviceInfo,
     context: Context,
     stream: Stream,

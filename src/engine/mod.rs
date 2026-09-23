@@ -31,7 +31,7 @@ use runtime::backend::DecodeRequest;
 use runtime::{
     Result as RuntimeResult,
     backend::{DecodeOutput, ModelHandle, SamplingLogits},
-    kv::BlockTable,
+    kv::{BlockTable, CacheConfig},
 };
 use uuid::Uuid;
 
@@ -139,6 +139,81 @@ impl Engine {
             EngineInner::Cuda(cuda) => Ok(cuda.clear_memory_cache()?),
             #[cfg(feature = "metal")]
             EngineInner::Metal(metal) => metal.clear_memory_cache(),
+            #[cfg(not(any(feature = "cuda", feature = "metal")))]
+            EngineInner::Unavailable => unavailable(),
+        }
+    }
+
+    /// Exercises the decode batches of one to `rows` sessions once, where
+    /// the backend allocates per batch shape on first use.
+    pub fn warm_concurrency(&self, model: &ModelHandle, rows: usize) -> RuntimeResult<()> {
+        #[cfg(not(feature = "cuda"))]
+        let _ = (model, rows);
+        match &self.inner {
+            #[cfg(feature = "cuda")]
+            EngineInner::Cuda(cuda) => Ok(cuda.warm_concurrency(&model.id, rows)?),
+            #[cfg(feature = "metal")]
+            EngineInner::Metal(_) => Ok(()),
+            #[cfg(not(any(feature = "cuda", feature = "metal")))]
+            EngineInner::Unavailable => unavailable(),
+        }
+    }
+
+    /// Trims cached backend memory and re-anchors its retention after resident
+    /// allocations changed; a no-op where the backend keeps no such policy.
+    pub fn settle_resident_memory(&self, model: &ModelHandle) -> RuntimeResult<()> {
+        #[cfg(not(feature = "cuda"))]
+        let _ = model;
+        match &self.inner {
+            #[cfg(feature = "cuda")]
+            EngineInner::Cuda(cuda) => Ok(cuda.settle_resident_memory(&model.id)?),
+            #[cfg(feature = "metal")]
+            EngineInner::Metal(_) => Ok(()),
+            #[cfg(not(any(feature = "cuda", feature = "metal")))]
+            EngineInner::Unavailable => unavailable(),
+        }
+    }
+
+    /// Bytes a model's retained execution shapes may still grow by under
+    /// traffic; zero where the backend does not retain shapes this way.
+    pub fn retention_headroom_bytes(&self, model: &ModelHandle) -> RuntimeResult<u64> {
+        #[cfg(not(feature = "cuda"))]
+        let _ = model;
+        match &self.inner {
+            #[cfg(feature = "cuda")]
+            EngineInner::Cuda(cuda) => Ok(cuda.model_retention_headroom_bytes(&model.id)?),
+            #[cfg(feature = "metal")]
+            EngineInner::Metal(_) => Ok(0),
+            #[cfg(not(any(feature = "cuda", feature = "metal")))]
+            EngineInner::Unavailable => unavailable(),
+        }
+    }
+
+    /// Bytes one live session of a model cost when its concurrency was
+    /// warmed; `None` where the backend estimates instead of measuring.
+    pub fn session_bytes(&self, model: &ModelHandle) -> RuntimeResult<Option<u64>> {
+        #[cfg(not(feature = "cuda"))]
+        let _ = model;
+        match &self.inner {
+            #[cfg(feature = "cuda")]
+            EngineInner::Cuda(cuda) => Ok(cuda.model_session_bytes(&model.id)?),
+            #[cfg(feature = "metal")]
+            EngineInner::Metal(_) => Ok(None),
+            #[cfg(not(any(feature = "cuda", feature = "metal")))]
+            EngineInner::Unavailable => unavailable(),
+        }
+    }
+
+    /// Reallocates the K/V pages of an idle model for `cache`; `Ok(false)`
+    /// when the backend keeps the pages it allocated at load.
+    pub fn resize_kv_cache(&self, model: &ModelHandle, cache: CacheConfig) -> RuntimeResult<bool> {
+        #[cfg(not(feature = "cuda"))]
+        let _ = (model, cache);
+        match &self.inner {
+            #[cfg(feature = "cuda")]
+            EngineInner::Cuda(cuda) => Ok(cuda.resize_model_kv_cache(&model.id, cache)?),
+            #[cfg(feature = "metal")]
+            EngineInner::Metal(_) => Ok(false),
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
             EngineInner::Unavailable => unavailable(),
         }

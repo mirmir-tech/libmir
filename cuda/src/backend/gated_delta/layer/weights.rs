@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use super::AffineGatedDeltaLayerConfig;
 use crate::{
     AffineQuantizedWeight, CudaTensor, CudaTensorDType, CudaTensorSet, Error, Result,
@@ -15,6 +17,15 @@ pub struct AffineGatedDeltaLayerWeights {
     pub norm: CudaTensor,
     pub a_log: CudaTensor,
     pub dt_bias: CudaTensor,
+    /// Distinguishes this layer's packed batch states from every other
+    /// layer's, including a second model's layer of the same name.
+    pub(in crate::backend) identity: u64,
+}
+
+static NEXT_LAYER_IDENTITY: AtomicU64 = AtomicU64::new(1);
+
+pub(in crate::backend) fn next_layer_identity() -> u64 {
+    NEXT_LAYER_IDENTITY.fetch_add(1, Ordering::Relaxed)
 }
 
 impl AffineGatedDeltaLayerWeights {
@@ -29,6 +40,7 @@ impl AffineGatedDeltaLayerWeights {
             norm: required(tensors, &format!("{prefix}.norm.weight"))?,
             a_log: required(tensors, &format!("{prefix}.A_log"))?,
             dt_bias: required(tensors, &format!("{prefix}.dt_bias"))?,
+            identity: next_layer_identity(),
         })
     }
 
@@ -46,6 +58,7 @@ impl AffineGatedDeltaLayerWeights {
             norm: required(tensors, &bindings.norm.source)?,
             a_log: required(tensors, &bindings.decay_log.source)?,
             dt_bias: required(tensors, &bindings.time_bias.source)?,
+            identity: next_layer_identity(),
         })
     }
 

@@ -88,6 +88,7 @@ mod tests {
             kv_bytes_per_token: 0,
             cache_capacity_tokens: 0,
             model_context_tokens: 0,
+            session_state_bytes: 0,
         }
     }
 }

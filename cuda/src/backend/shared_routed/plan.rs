@@ -20,6 +20,8 @@ enum SharedRoutedLayerExecution {
 }
 
 const RETAINED_PLAN_SHAPES: usize = 8;
+/// Plans at least this long price the retention headroom per token.
+const PRICED_PLAN_TOKENS: usize = 256;
 
 #[derive(Debug)]
 struct CachedExecutionPlan {
@@ -31,11 +33,37 @@ struct CachedExecutionPlan {
 pub(super) struct SharedRoutedExecutionPlanCache {
     plans: HashMap<usize, CachedExecutionPlan>,
     clock: u64,
+    /// Pool bytes one plan token cost so far, weighted over built plans.
+    bytes_per_token: u64,
+    plan_bytes: u64,
+    plan_tokens: u64,
 }
 
 impl SharedRoutedExecutionPlanCache {
     pub(super) fn new() -> Self {
-        Self { plans: HashMap::new(), clock: 0 }
+        Self {
+            plans: HashMap::new(),
+            clock: 0,
+            bytes_per_token: 0,
+            plan_bytes: 0,
+            plan_tokens: 0,
+        }
+    }
+
+    /// Pool bytes shape churn may take beyond the plans held now: an evicted
+    /// plan's memory stays cached in the pool but seldom fits the next shape,
+    /// so under traffic the whole budget can be held twice.
+    pub(super) fn headroom_bytes(&self) -> u64 {
+        let budget = u64::try_from(
+            crate::backend::model::DEFAULT_PREFILL_CHUNK_TOKENS
+                .saturating_add(crate::backend::model::RETAINED_CHUNK_SLACK_TOKENS),
+        )
+        .unwrap_or(u64::MAX);
+        budget.saturating_mul(self.bytes_per_token)
+    }
+
+    pub(super) const fn bytes_per_token(&self) -> u64 {
+        self.bytes_per_token
     }
 
     pub(super) fn get_mut(&mut self, tokens: usize) -> Option<&mut SharedRoutedExecutionPlan> {
@@ -93,6 +121,20 @@ impl SharedRoutedExecutionPlanCache {
     pub(super) fn insert(&mut self, tokens: usize, plan: SharedRoutedExecutionPlan) {
         self.reserve(tokens);
         self.clock = self.clock.wrapping_add(1);
+        // Only chunk-sized plans price a token; a one-token decode plan is
+        // all per-plan overhead.
+        if tokens >= PRICED_PLAN_TOKENS {
+            self.plan_bytes = self.plan_bytes.saturating_add(plan.bytes);
+            self.plan_tokens =
+                self.plan_tokens.saturating_add(u64::try_from(tokens).unwrap_or(u64::MAX));
+            self.bytes_per_token = self.plan_bytes / self.plan_tokens.max(1);
+        }
+        tracing::debug!(
+            tokens,
+            bytes = plan.bytes,
+            retained_tokens = self.retained_tokens(),
+            "retained CUDA mixed-mixer execution plan"
+        );
         self.plans.insert(tokens, CachedExecutionPlan { plan, last_used: self.clock });
     }
 
@@ -109,6 +151,8 @@ impl SharedRoutedExecutionPlanCache {
 #[derive(Debug)]
 pub(super) struct SharedRoutedExecutionPlan {
     tokens: usize,
+    /// Pool bytes this plan took at construction.
+    bytes: u64,
     token_staging: PinnedBuffer<u32>,
     token_ids: DeviceBuffer<u32>,
     position_staging: PinnedBuffer<u32>,
@@ -124,6 +168,7 @@ impl SharedRoutedExecutionPlan {
             return Err(Error::InvalidDecoderKernel("empty shared-routed execution plan"));
         }
         let backend = &template.backend;
+        let used_before = backend.pool().stats()?.used;
         let elements = tokens
             .checked_mul(template.decoder.hidden_size)
             .ok_or(Error::InvalidDecoderKernel("shared-routed activation size overflow"))?;
@@ -142,8 +187,9 @@ impl SharedRoutedExecutionPlan {
                 },
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(Self {
+        let mut plan = Self {
             tokens,
+            bytes: 0,
             token_staging: backend.inner.context.allocate_pinned(tokens)?,
             token_ids: backend.inner.pool.allocate(&backend.inner.stream, tokens)?,
             position_staging: backend.inner.context.allocate_pinned(position_elements)?,
@@ -151,7 +197,9 @@ impl SharedRoutedExecutionPlan {
             first: backend.inner.pool.allocate(&backend.inner.stream, elements)?,
             second: backend.inner.pool.allocate(&backend.inner.stream, elements)?,
             layers,
-        })
+        };
+        plan.bytes = backend.pool().stats()?.used.saturating_sub(used_before);
+        Ok(plan)
     }
 
     pub(super) fn upload(

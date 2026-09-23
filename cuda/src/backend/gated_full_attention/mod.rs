@@ -3,6 +3,7 @@ mod execution;
 mod layer;
 mod prefill;
 mod scratch;
+pub(in crate::backend) use scratch::{GatedAttentionScratch, GatedAttentionScratchKey};
 #[cfg(test)]
 mod tests;
 mod validation;

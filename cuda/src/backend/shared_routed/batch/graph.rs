@@ -67,6 +67,7 @@ impl DecodeResources {
                     SharedRoutedBatchLayer::new(
                         layer,
                         rows,
+                        rows.max(template.decode_rows),
                         ExecutionPhase::Decode,
                         Some(attention_workspace.clone()),
                     )
@@ -149,6 +150,13 @@ impl DecodeResources {
             &mut self.normalized,
         )?;
         self.output.execute(&self.normalized, &mut self.logits)
+    }
+
+    pub(super) fn follow_cache_blocks(&mut self, block_count: u32) {
+        self.paging.follow_cache_blocks(block_count);
+        for layer in &mut self.layers {
+            layer.follow_cache_blocks(block_count);
+        }
     }
 
     pub(super) fn capture_partitions(&self) -> usize {

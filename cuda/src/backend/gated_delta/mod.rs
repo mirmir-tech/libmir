@@ -18,13 +18,15 @@ mod layer;
 mod residency;
 pub(super) mod workspace;
 pub use batch::CudaGatedDeltaBatchState;
+pub(in crate::backend) use batch::GatedDeltaBatchKey;
 pub use checkpoint::CudaGatedDeltaCheckpoint;
 pub use layer::{
     AffineGatedDeltaLayerConfig, AffineGatedDeltaLayerWeights, CudaAffineGatedDeltaExecution,
     CudaAffineGatedDeltaLayer,
 };
+pub(in crate::backend) use layer::{GatedDeltaScratch, GatedDeltaScratchKey};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct GatedDeltaStateConfig {
     pub key_heads: usize,
     pub value_heads: usize,

@@ -21,7 +21,10 @@ use runtime::{
 use super::{
     PreparationGuard, PreparingRequests, prefill::PrefillResponse, response::DecodeResponse,
 };
-use crate::{Engine, Result, engine::EnginePrefillBatch};
+use crate::{
+    Engine, Result,
+    engine::{EnginePrefillBatch, PrefillExecutionProfile},
+};
 
 pub(super) struct GenerationCoordinator {
     commands: Sender<Command>,
@@ -36,6 +39,8 @@ pub(super) enum Command {
     Decode(PendingDecode),
     Prefill(PendingPrefill),
     Release(uuid::Uuid),
+    /// Replaces the prefill profile after the K/V cache changed size.
+    Reprofile(Box<PrefillExecutionProfile>),
     Cancellation,
     Stop,
 }
@@ -113,6 +118,23 @@ impl GenerationCoordinator {
             decode_round_trip_us: AtomicU64::new(0),
             preparing,
         })
+    }
+
+    /// Rebuilds the worker's prefill profile for a resized K/V cache.
+    pub(super) fn reprofile(
+        &self,
+        engine: &Engine,
+        model: &ModelHandle,
+        config: &SchedulerConfig,
+        cache: CacheConfig,
+    ) -> Result<()> {
+        let profile = engine.generation_prefill_profile(
+            model,
+            config.max_batch_tokens,
+            cache,
+            config.prefill_refill_policy,
+        )?;
+        self.send(Command::Reprofile(Box::new(profile)))
     }
 
     pub(super) fn announce_preparation(&self) -> PreparationGuard {

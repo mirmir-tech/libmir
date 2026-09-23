@@ -188,6 +188,12 @@ impl PagedDecodeBatch {
         Ok(sample)
     }
 
+    /// Follows a K/V resize: the pages are addressed through the sessions,
+    /// only the block count of the geometry changes.
+    pub(crate) const fn follow_cache_blocks(&mut self, block_count: u32) {
+        self.cache.block_count = block_count;
+    }
+
     pub(crate) const fn cache_config(&self) -> CacheConfig {
         self.cache
     }

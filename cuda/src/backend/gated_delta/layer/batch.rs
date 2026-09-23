@@ -1,7 +1,13 @@
 use mircuda::{DeviceBuffer, bf16};
 
 use super::{CudaAffineGatedDeltaExecution, CudaGatedDeltaState};
-use crate::{Error, GatedDeltaInputs, Result, backend::gated_delta::CudaGatedDeltaBatchState};
+use crate::{
+    Error, GatedDeltaInputs, Result,
+    backend::{
+        gated_delta::{CudaGatedDeltaBatchState, GatedDeltaBatchKey},
+        scratch_pool::SharedScratch,
+    },
+};
 
 impl CudaAffineGatedDeltaExecution {
     pub(crate) fn prepare_packed(
@@ -18,41 +24,76 @@ impl CudaAffineGatedDeltaExecution {
         }
         let row_tokens = self.tokens / states.len();
         self.validate(input, first, output)?;
-        if !self
-            .batch_state
-            .as_ref()
-            .is_some_and(|batch| batch.supports(states.len(), row_tokens))
-        {
-            self.batch_state = Some(CudaGatedDeltaBatchState::new(
-                &self.backend,
-                self.config.state()?,
-                states.len(),
-                row_tokens,
-            )?);
+        let supported = match &self.batch_state {
+            Some(batch) => batch.lock()?.supports(states.len(), row_tokens),
+            None => false,
+        };
+        if !supported {
+            self.batch_state = Some(self.acquire_batch_state(states.len(), row_tokens)?);
         }
-        self.batch()?.pack(states)
+        let shared = self.batch()?.clone_handle();
+        let mut batch = shared.lock()?;
+        batch.pack(states)
     }
 
+    /// The layer's packed states shared by its batches of every row count,
+    /// allocated for `batch_capacity` rows on first use; a batch wider than
+    /// the shared allocation gets states of its own.
+    fn acquire_batch_state(
+        &self,
+        rows: usize,
+        row_tokens: usize,
+    ) -> Result<SharedScratch<CudaGatedDeltaBatchState>> {
+        let config = self.config.state()?;
+        let capacity = self.batch_capacity.max(rows);
+        let key = GatedDeltaBatchKey {
+            layer: self.weights.identity,
+            config,
+            tokens: row_tokens,
+        };
+        let shared = self.backend.inner.gated_delta_batches.acquire(key, || {
+            CudaGatedDeltaBatchState::new(&self.backend, config, capacity, row_tokens)
+        })?;
+        if shared.lock()?.supports(rows, row_tokens) {
+            return Ok(shared);
+        }
+        tracing::debug!(
+            rows,
+            capacity,
+            "Gated Delta batch exceeds the shared packed states; allocating its own"
+        );
+        Ok(SharedScratch::new(CudaGatedDeltaBatchState::new(
+            &self.backend, config, rows, row_tokens,
+        )?))
+    }
+
+    // The scratch guard is used by the last statement; the lint cannot see it.
+    #[allow(clippy::significant_drop_tightening)]
     pub(crate) fn execute_prepared_packed(
         &mut self,
         input: &DeviceBuffer<bf16>,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
-        let packed = self.project_qkv_gate(input)?;
-        self.project_alpha_beta(input)?;
+        let shared = self.scratch.clone_handle();
+        let mut guard = shared.lock()?;
+        let scratch = &mut *guard;
+        let packed = self.project_qkv_gate(scratch, input)?;
+        self.project_alpha_beta(scratch, input)?;
         let Self {
             backend,
             output: projection,
             transforms,
             weights,
-            scratch,
             batch_state,
             config,
             ..
         } = self;
-        let batch = batch_state
-            .as_mut()
-            .ok_or(Error::InvalidDecoderKernel("Gated Delta packed state was not prepared"))?;
+        let shared = batch_state
+            .as_ref()
+            .ok_or(Error::InvalidDecoderKernel("Gated Delta packed state was not prepared"))?
+            .clone_handle();
+        let mut batch_guard = shared.lock()?;
+        let batch = &mut *batch_guard;
         let stream = &backend.inner.stream;
         if packed {
             batch.convolve_strided(
@@ -116,16 +157,15 @@ impl CudaAffineGatedDeltaExecution {
         projection.execute(&scratch.gated, output)
     }
 
-    pub(crate) fn commit_packed(&mut self, states: &mut [&mut CudaGatedDeltaState]) -> Result<()> {
-        self.batch_state
-            .as_mut()
-            .ok_or(Error::InvalidDecoderKernel("Gated Delta packed state was not prepared"))?
-            .commit(states)
+    pub(crate) fn commit_packed(&self, states: &mut [&mut CudaGatedDeltaState]) -> Result<()> {
+        let shared = self.batch()?.clone_handle();
+        let mut batch = shared.lock()?;
+        batch.commit(states)
     }
 
-    fn batch(&mut self) -> Result<&mut CudaGatedDeltaBatchState> {
+    fn batch(&self) -> Result<&SharedScratch<CudaGatedDeltaBatchState>> {
         self.batch_state
-            .as_mut()
+            .as_ref()
             .ok_or(Error::InvalidDecoderKernel("Gated Delta packed state was not prepared"))
     }
 }

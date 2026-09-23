@@ -5,6 +5,7 @@ mod finish;
 mod gates;
 mod ragged;
 mod scratch;
+pub(in crate::backend) use scratch::{GatedDeltaScratch, GatedDeltaScratchKey};
 mod segments;
 #[cfg(all(test, target_os = "linux"))]
 mod tests;
