@@ -41,39 +41,37 @@
 | Driver | 580.173.02 |
 | mirmir | 0.3.1 (2026-09-23) |
 | Reference | vLLM 0.29.0 |
-| K/V cache | BF16 on both engines; mirmir 13,425 blocks of 16 tokens sized from measured memory (AD-027, AD-028) |
+| K/V cache | BF16 on both engines; mirmir 24,936 blocks of 16 tokens sized from measured memory (AD-027, AD-028) |
 | Token budget | mirmir 1,024 / vLLM 2,096 |
 | mirmir cells | 36 |
 | Reference cells | 36 |
 
 | Metric | mirmir | vLLM | Ratio | Cell wins |
 |:---|---:|---:|---:|---:|
-| PP tok/s | 1,162.4 | 1,067.3 | 108.9% | 35/36 |
-| TG tok/s | 8.65 | 8.99 | 96.2% | 18/36 |
-| TTFT ms | 8,582 | 10,218 | 0.840× | 35/36 |
+| PP tok/s | 1,249.1 | 1,067.3 | 117.0% | 36/36 |
+| TG tok/s | 9.02 | 8.99 | 100.3% | 20/36 |
+| TTFT ms | 8,001 | 10,218 | 0.783× | 36/36 |
 
 | Depth | Phase | PP mirmir | PP vLLM | PP % | TG mirmir | TG vLLM | TG % | TTFT mirmir ms | TTFT vLLM ms | TTFT × |
 |---:|:---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 0 | plain | 1,402.9 | 1,281.5 | 109.5% | 11.58 | 11.96 | 96.8% | 3,248 | 4,215 | 0.770× |
-| 4,096 | load | 1,392.9 | 1,228.7 | 113.4% | 10.40 | 10.50 | 99.0% | 6,851 | 8,320 | 0.823× |
-| 4,096 | reuse | 1,243.7 | 1,116.7 | 111.4% | 11.33 | 11.37 | 99.7% | 3,746 | 4,570 | 0.820× |
-| 8,192 | load | 1,394.4 | 1,242.1 | 112.3% | 8.62 | 8.48 | 101.7% | 13,363 | 15,361 | 0.870× |
-| 8,192 | reuse | 1,194.8 | 972.7 | 122.8% | 11.11 | 11.28 | 98.5% | 3,894 | 5,514 | 0.706× |
-| 16,384 | load | 1,347.6 | 1,193.9 | 112.9% | 6.49 | 6.24 | 104.1% | 27,210 | 30,889 | 0.881× |
-| 16,384 | reuse | 1,114.9 | 839.7 | 132.8% | 10.69 | 10.70 | 99.9% | 4,165 | 6,332 | 0.658× |
-| 32,768 | load | 1,236.6 | 1,113.3 | 111.1% | 4.38 | 4.22 | 104.0% | 58,526 | 65,520 | 0.893× |
-| 32,768 | reuse | 515.0 | 758.3 | 67.9% | 6.81 | 9.99 | 68.1% | 8,779 | 6,981 | 1.257× |
+| 0 | plain | 1,407.5 | 1,281.5 | 109.8% | 11.57 | 11.96 | 96.8% | 3,236 | 4,215 | 0.768× |
+| 4,096 | load | 1,399.0 | 1,228.7 | 113.9% | 10.40 | 10.50 | 99.0% | 6,821 | 8,320 | 0.820× |
+| 4,096 | reuse | 1,246.7 | 1,116.7 | 111.6% | 11.35 | 11.37 | 99.8% | 3,735 | 4,570 | 0.817× |
+| 8,192 | load | 1,399.1 | 1,242.1 | 112.6% | 8.62 | 8.48 | 101.7% | 13,317 | 15,361 | 0.867× |
+| 8,192 | reuse | 1,196.8 | 972.7 | 123.0% | 11.11 | 11.28 | 98.5% | 3,888 | 5,514 | 0.705× |
+| 16,384 | load | 1,351.6 | 1,193.9 | 113.2% | 6.50 | 6.24 | 104.3% | 27,124 | 30,889 | 0.878× |
+| 16,384 | reuse | 1,117.0 | 839.7 | 133.0% | 10.68 | 10.70 | 99.8% | 4,158 | 6,332 | 0.657× |
+| 32,768 | load | 1,248.3 | 1,113.3 | 112.1% | 4.41 | 4.22 | 104.6% | 57,954 | 65,520 | 0.885× |
+| 32,768 | reuse | 955.7 | 758.3 | 126.0% | 9.84 | 9.99 | 98.5% | 4,812 | 6,981 | 0.689× |
 
 Both engines serve ten sequences with prefix caching enabled; every one of the
 486 measured responses per engine contains exactly 128 tokens. mirmir sizes its
-K/V cache from memory measured after warm-up (AD-027) once its layer scratch
-and packed decode states are shared per shape (AD-028): on this 121 GiB device
-that leaves 215k tokens of pages and an equal prefix-checkpoint budget, while
-vLLM reserves 80% of memory for itself. mirmir leads prompt processing in 35
-of 36 cells and first-token latency in 35; decode is within 4% overall and
-ahead in every load cell from 8,192 tokens up. The one loss is reuse at
-32,768 tokens with ten requests: ten 34,842-token sessions need 348k tokens of
-pages, more than the cache holds, so requests wait for pages and re-prefill
-the prefix. Sharing the pages of a common prefix between sessions is the next
-target.
+K/V cache from memory measured after warm-up (AD-027) once its layer scratch,
+packed decode states and decode attention workspace are shared per shape and
+prefix checkpoints are bounded by a quarter of the pages (AD-028): on this
+121 GiB device that leaves 399k tokens of pages, while vLLM reserves 80% of
+memory for itself. mirmir leads prompt processing and first-token latency in
+every cell; decode is at parity overall, ahead in every load cell from 8,192
+tokens up and within 3.5% elsewhere. The host stayed above 19.6 GiB free
+throughout.
 

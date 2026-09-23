@@ -27,9 +27,10 @@ fn measured_budget_splits_pages_and_checkpoints_after_the_reserve() -> crate::Re
     let available = 39 * GIB + 512 * 16 * 65_536;
 
     assert_eq!(budget.budget_bytes, available - reserve - slack);
-    assert_eq!(budget.checkpoint_bytes, budget.page_bytes);
-    assert!(budget.page_bytes <= budget.budget_bytes / 2);
-    assert!(budget.page_bytes + 16 * 65_536 > budget.budget_bytes / 2);
+    // Pages take four fifths of the budget; checkpoints a quarter of the pages.
+    assert_eq!(budget.checkpoint_bytes, budget.page_bytes / 4);
+    assert!(budget.page_bytes <= budget.budget_bytes / 5 * 4);
+    assert!(budget.page_bytes + 16 * 65_536 > budget.budget_bytes / 5 * 4);
     assert_eq!(u64::from(budget.blocks) * 16 * 65_536, budget.page_bytes);
     Ok(())
 }

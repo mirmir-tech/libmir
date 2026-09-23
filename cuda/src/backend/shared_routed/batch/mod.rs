@@ -10,9 +10,11 @@ mod output;
 mod prefill;
 mod states;
 mod template;
+mod workspace;
 
 use graph::DecodeResources;
 pub use prefill::CudaSharedRoutedPrefillBatch;
+pub(in crate::backend) use workspace::DecodeWorkspaceKey;
 
 #[derive(Debug)]
 enum DecodeState {

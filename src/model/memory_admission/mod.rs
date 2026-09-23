@@ -60,7 +60,7 @@ impl ModelMemoryManager {
         shared_memory: Option<SharedCacheMemory>,
         memory: &MemorySnapshot,
         policy: MemoryRuntimeConfig,
-        allow_overcommit: bool,
+        terms: AdmissionTerms,
     ) -> Result<ModelMemoryLease> {
         let Ok(mut ledger) = self.ledger.lock() else {
             return Err(poisoned("model memory ledger"));
@@ -75,8 +75,9 @@ impl ModelMemoryManager {
             Some(_) | None => 0,
         };
         let planned = model_bytes.saturating_add(new_shared_bytes);
-        if !allow_overcommit
-            && let Some(available) = available_budget(memory, policy, committed)
+        if !terms.allow_overcommit
+            && let Some(available) =
+                available_budget(memory, policy, committed, terms.reclaimable_bytes)
             && planned > available
         {
             return Err(Error::MemoryAdmission {
@@ -131,6 +132,15 @@ impl ModelMemoryManager {
     }
 }
 
+/// What a load may count on beyond the free memory.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct AdmissionTerms {
+    /// Bytes resident models' measured K/V caches give back to this load.
+    pub(super) reclaimable_bytes: u64,
+    /// Load even when the planned residency exceeds the budget.
+    pub(super) allow_overcommit: bool,
+}
+
 fn committed(ledger: &MemoryLedger) -> u64 {
     ledger
         .entries
@@ -140,17 +150,34 @@ fn committed(ledger: &MemoryLedger) -> u64 {
         .fold(0_u64, u64::saturating_add)
 }
 
+impl MemoryLedger {
+    /// Bytes every reservation but `id` holds.
+    fn others_bytes(&self, id: u64) -> u64 {
+        let own = self.entries.get(&id).map_or(0, |entry| entry.bytes);
+        committed(self).saturating_sub(own)
+    }
+}
+
+/// Memory a load may take: what is free plus what resident models' measured
+/// K/V caches give back (`reclaimable`), less the platform reserve, bounded
+/// by what the ledger has not committed.
 fn available_budget(
     memory: &MemorySnapshot,
     policy: MemoryRuntimeConfig,
     committed: u64,
+    reclaimable: u64,
 ) -> Option<u64> {
-    let available = memory.available_bytes?.saturating_add(memory.cached_bytes);
+    let available = memory
+        .available_bytes?
+        .saturating_add(memory.cached_bytes)
+        .saturating_add(reclaimable);
     let reserve = memory_policy::platform_reserve(policy, memory);
     let physical = available.saturating_sub(reserve);
-    let logical = memory
-        .total_bytes
-        .map(|total| total.saturating_sub(reserve).saturating_sub(committed));
+    let logical = memory.total_bytes.map(|total| {
+        total
+            .saturating_sub(reserve)
+            .saturating_sub(committed.saturating_sub(reclaimable))
+    });
     Some(logical.map_or(physical, |logical| physical.min(logical)))
 }
 

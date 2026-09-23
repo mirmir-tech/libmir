@@ -16,7 +16,6 @@ mod memory;
 mod prefill_budget;
 mod warm;
 use checkpoint::PrefixCheckpoints;
-use memory::kv_bytes;
 use prefill_budget::reusable_prefill_budget;
 
 pub(in crate::engine) struct MixedMixerExecution {
@@ -41,7 +40,7 @@ impl MixedMixerExecution {
             return Err(Error::InvalidDecoderKernel("shared-routed prefill chunk is empty"));
         }
         let caches = template.allocate_shared_kv()?;
-        let checkpoints = PrefixCheckpoints::new(128, kv_bytes(&caches));
+        let checkpoints = memory::prefix_checkpoints(&caches);
         Ok(Self {
             template,
             caches,

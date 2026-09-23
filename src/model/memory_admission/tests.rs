@@ -13,7 +13,10 @@ fn tracks_loading_and_resident_reservations_until_release() -> Result<()> {
         None,
         &memory(16 * GIB),
         MemoryRuntimeConfig::default(),
-        false,
+        AdmissionTerms {
+            allow_overcommit: false,
+            ..Default::default()
+        },
     )?;
     {
         let ledger = lock_ledger(&manager)?;
@@ -50,7 +53,10 @@ fn rejects_loads_that_exceed_the_remaining_safe_budget() -> Result<()> {
         None,
         &memory(16 * GIB),
         MemoryRuntimeConfig::default(),
-        false,
+        AdmissionTerms {
+            allow_overcommit: false,
+            ..Default::default()
+        },
     )?;
     first.mark_resident()?;
 
@@ -61,7 +67,10 @@ fn rejects_loads_that_exceed_the_remaining_safe_budget() -> Result<()> {
             None,
             &memory(16 * GIB),
             MemoryRuntimeConfig::default(),
-            false,
+            AdmissionTerms {
+                allow_overcommit: false,
+                ..Default::default()
+            },
         )
         .err()
         .ok_or_else(|| runtime::RuntimeError::Config("second load was admitted".into()))?;
@@ -86,7 +95,10 @@ fn explicit_overcommit_preserves_forced_load_semantics() -> Result<()> {
         None,
         &memory(8 * GIB),
         MemoryRuntimeConfig::default(),
-        true,
+        AdmissionTerms {
+            allow_overcommit: true,
+            ..Default::default()
+        },
     )?;
 
     drop(lease);
@@ -140,7 +152,10 @@ fn charges_shared_metal_cache_once_until_the_last_model_unloads() -> Result<()> 
         Some(shared),
         &memory(32 * GIB),
         MemoryRuntimeConfig::default(),
-        false,
+        AdmissionTerms {
+            allow_overcommit: false,
+            ..Default::default()
+        },
     )?;
     let second = manager.reserve(
         "model-b".into(),
@@ -148,7 +163,10 @@ fn charges_shared_metal_cache_once_until_the_last_model_unloads() -> Result<()> 
         Some(shared),
         &memory(32 * GIB),
         MemoryRuntimeConfig::default(),
-        false,
+        AdmissionTerms {
+            allow_overcommit: false,
+            ..Default::default()
+        },
     )?;
 
     assert_eq!(manager.committed_bytes()?, 8 * GIB);

@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex, Weak};
 
-use super::{KvSizing, Model, ModelInner};
+use super::{KvSizing, Model, ModelInner, automatic_cache::MeasuredKvBudget};
 use crate::{Result, RuntimeError};
 
 /// Tokens a model should be able to serve in one request before other
@@ -51,10 +51,10 @@ fn poisoned() -> crate::Error {
 }
 
 impl Model {
-    /// Page bytes of a measured cache; `None` for fixed or provisional ones.
-    pub(super) fn measured_page_bytes(&self) -> Result<Option<u64>> {
+    /// The measured budget; `None` for fixed or provisional caches.
+    pub(super) fn measured_budget(&self) -> Result<Option<MeasuredKvBudget>> {
         Ok(match self.kv_sizing()? {
-            KvSizing::Measured(budget) => Some(budget.page_bytes),
+            KvSizing::Measured(budget) => Some(budget),
             KvSizing::Fixed | KvSizing::Provisional { .. } => None,
         })
     }

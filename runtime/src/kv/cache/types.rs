@@ -9,6 +9,21 @@ pub struct CacheConfig {
     pub dtype: KvCacheDType,
 }
 
+/// Divisor of the page bytes that bounds retained prefix checkpoints.
+///
+/// A checkpoint holds recurrent state only; the pages of its prefix already
+/// live in the cache, and the prefixes the cache can hold bound how many
+/// checkpoints are useful.
+pub const PREFIX_CHECKPOINT_PAGE_DIVISOR: usize = 4;
+
+impl CacheConfig {
+    /// Prefix checkpoint budget for `page_bytes` of K/V pages.
+    #[must_use]
+    pub const fn prefix_checkpoint_bytes(page_bytes: usize) -> usize {
+        page_bytes / PREFIX_CHECKPOINT_PAGE_DIVISOR
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CacheCounters {

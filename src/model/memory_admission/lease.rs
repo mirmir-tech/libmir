@@ -36,6 +36,15 @@ impl ModelMemoryLease {
 
 impl ModelMemoryLease {
     /// Records the residency of a model whose K/V cache was resized.
+    /// Bytes every other reservation in the ledger holds: what other loaded
+    /// models take beside this one.
+    pub(in crate::model) fn others_bytes(&self) -> Result<u64> {
+        let Ok(ledger) = self.ledger.lock() else {
+            return Err(poisoned("model memory ledger"));
+        };
+        Ok(ledger.others_bytes(self.id))
+    }
+
     pub(in crate::model) fn resize(&self, estimate: crate::ModelMemoryEstimate) -> Result<()> {
         let Ok(mut ledger) = self.ledger.lock() else {
             return Err(poisoned("model memory ledger"));

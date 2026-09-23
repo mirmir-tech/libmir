@@ -15,8 +15,8 @@ pub(super) fn shrink_others(model: &Model, measured: MeasuredKvBudget) -> Result
     let others = model.inner.registry.others(&model.inner)?;
     let mut sized = Vec::with_capacity(others.len());
     for other in others {
-        if let Some(bytes) = other.measured_page_bytes()? {
-            sized.push((other, bytes));
+        if let Some(budget) = other.measured_budget()? {
+            sized.push((other, budget));
         }
     }
     if sized.is_empty() {
@@ -24,16 +24,18 @@ pub(super) fn shrink_others(model: &Model, measured: MeasuredKvBudget) -> Result
     }
     let total = sized
         .iter()
-        .fold(measured.page_bytes, |sum, (_, bytes)| sum.saturating_add(*bytes));
+        .fold(measured.page_bytes, |sum, (_, budget)| sum.saturating_add(budget.page_bytes));
     let share = total / (u64::try_from(sized.len()).unwrap_or(u64::MAX).saturating_add(1));
     let mut shrank = false;
-    for (other, bytes) in sized {
+    for (other, budget) in sized {
+        let bytes = budget.page_bytes;
         if bytes <= share {
             continue;
         }
-        let Some(target) = other.page_target(share) else {
+        let Some(mut target) = Model::page_target(share, budget) else {
             continue;
         };
+        target.others_bytes = other.inner.memory.others_bytes()?;
         match other.resize_to(target.blocks) {
             Ok(true) => {
                 other.set_kv_sizing(KvSizing::Measured(target))?;
@@ -57,38 +59,70 @@ pub(super) fn shrink_others(model: &Model, measured: MeasuredKvBudget) -> Result
 }
 
 impl Model {
-    /// The measured budget of this model at `page_bytes` of pages, keeping
-    /// the checkpoint budget equal to the pages.
-    fn page_target(&self, page_bytes: u64) -> Option<MeasuredKvBudget> {
-        let target = self.inner.engine.target();
-        let estimate = self.inner.descriptor.memory_estimate_for(&self.inner.config, &target);
-        let block_size = u64::try_from(self.inner.config.kv_cache.block_size).unwrap_or(u64::MAX);
-        let block_bytes = estimate.kv_bytes_per_token.saturating_mul(block_size);
+    /// This model's budget at `page_bytes` of pages, within the block cap
+    /// of `current`, with the checkpoint share that follows the pages.
+    fn page_target(page_bytes: u64, current: MeasuredKvBudget) -> Option<MeasuredKvBudget> {
+        let block_bytes = current.page_bytes / u64::from(current.blocks.max(1));
         if block_bytes == 0 {
             return None;
         }
-        let blocks = (page_bytes / block_bytes).max(1).min(u64::from(u32::MAX));
+        let blocks = (page_bytes / block_bytes).max(1).min(u64::from(current.max_blocks.max(1)));
         let page_bytes = block_bytes.saturating_mul(blocks);
+        let checkpoint_bytes = super::checkpoint_bytes(page_bytes);
         Some(MeasuredKvBudget {
             blocks: u32::try_from(blocks).unwrap_or(u32::MAX),
             page_bytes,
-            checkpoint_bytes: page_bytes,
-            budget_bytes: page_bytes.saturating_mul(2),
-            available_bytes: 0,
+            checkpoint_bytes,
+            budget_bytes: page_bytes.saturating_add(checkpoint_bytes),
+            ..current
         })
     }
 
-    /// Grows an idle, measured model up to what memory now allows, for
-    /// example after another model was unloaded.
-    pub(in crate::model) fn regrow_kv_cache(&self) -> Result<bool> {
+    /// Bytes this model's measured cache could give back to another load:
+    /// its pages and checkpoints above the minimum share.
+    pub(in crate::model) fn reclaimable_kv_bytes(&self) -> Result<u64> {
+        let KvSizing::Measured(current) = self.kv_sizing()? else {
+            return Ok(0);
+        };
+        let held = current.page_bytes.saturating_add(current.checkpoint_bytes);
+        let block_size = u64::try_from(self.inner.config.kv_cache.block_size).unwrap_or(u64::MAX);
+        let block_bytes = current.page_bytes / u64::from(current.blocks.max(1));
+        let minimum_pages =
+            MINIMUM_SHARE_TOKENS.div_ceil(block_size.max(1)).saturating_mul(block_bytes);
+        let minimum = minimum_pages.saturating_add(super::checkpoint_bytes(minimum_pages));
+        Ok(held.saturating_sub(minimum))
+    }
+
+    /// Resizes an idle, measured model as other models' memory changes: its
+    /// pages follow their reservations one for one (keeping the checkpoint
+    /// share), so it shrinks after a load and grows back after an unload.
+    /// The measurement taken at sizing stays the anchor; measuring again
+    /// under traffic would follow retained shapes and checkpoints instead.
+    pub(in crate::model) fn rebalance_kv_cache(&self) -> Result<bool> {
         let KvSizing::Measured(current) = self.kv_sizing()? else {
             return Ok(false);
         };
-        let Some(measured) = self.measure_kv_budget(current.blocks)? else {
+        let others = self.inner.memory.others_bytes()?;
+        if others == current.others_bytes {
+            return Ok(false);
+        }
+        let divisor =
+            u64::try_from(runtime::kv::PREFIX_CHECKPOINT_PAGE_DIVISOR).unwrap_or(u64::MAX);
+        let follow = |delta: u64| delta / divisor.saturating_add(1) * divisor;
+        let pages = if others > current.others_bytes {
+            current.page_bytes.saturating_sub(follow(others - current.others_bytes))
+        } else {
+            current.page_bytes.saturating_add(follow(current.others_bytes - others))
+        };
+        let Some(mut measured) = Self::page_target(pages, current) else {
             return Ok(false);
         };
-        // Reallocation drops retained prefixes; only a clear gain is worth it.
-        if measured.blocks <= current.blocks.saturating_add(current.blocks / 8) {
+        measured.others_bytes = others;
+        // Reallocation drops retained prefixes; only a clear change is worth
+        // it. A smaller change is remembered against the next one.
+        let clear = measured.blocks > current.blocks.saturating_add(current.blocks / 8)
+            || measured.blocks < current.blocks.saturating_sub(current.blocks / 8);
+        if !clear {
             return Ok(false);
         }
         match self.resize_to(measured.blocks) {
@@ -98,7 +132,8 @@ impl Model {
                     model = %self.inner.handle.id,
                     from_blocks = current.blocks,
                     to_blocks = measured.blocks,
-                    "grew K/V cache into memory released by another model"
+                    others_bytes = others,
+                    "resized K/V cache to follow other models' memory"
                 );
                 Ok(true)
             },

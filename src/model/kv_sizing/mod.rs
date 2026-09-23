@@ -91,12 +91,14 @@ impl Model {
             measured = again;
         }
         // Sequence tables were sized for `capacity` at load.
+        measured.max_blocks = measured.max_blocks.min(capacity);
         if measured.blocks > capacity {
             let block_bytes = measured.page_bytes / u64::from(measured.blocks.max(1));
             measured.blocks = capacity;
             measured.page_bytes = block_bytes.saturating_mul(u64::from(capacity));
-            measured.checkpoint_bytes = measured.page_bytes;
+            measured.checkpoint_bytes = checkpoint_bytes(measured.page_bytes);
         }
+        measured.others_bytes = self.inner.memory.others_bytes()?;
         if measured.blocks != provisional && !self.resize_to(measured.blocks)? {
             return self.set_kv_sizing(KvSizing::Fixed);
         }
@@ -215,4 +217,11 @@ impl Model {
             },
         )
     }
+}
+
+/// The backend's prefix checkpoint budget for `page_bytes` of pages.
+pub(super) fn checkpoint_bytes(page_bytes: u64) -> u64 {
+    usize::try_from(page_bytes).map_or(page_bytes / 4, |bytes| {
+        u64::try_from(CacheConfig::prefix_checkpoint_bytes(bytes)).unwrap_or(u64::MAX)
+    })
 }

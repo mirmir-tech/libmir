@@ -7,6 +7,8 @@
 //! profiles, and then measuring what is left makes those costs part of the
 //! measurement instead of a guess.
 
+use runtime::kv::PREFIX_CHECKPOINT_PAGE_DIVISOR;
+
 use super::{ADMISSION_SNAPSHOT_HEADROOM_BYTES, memory_policy, unified_limit, useful_blocks};
 use crate::{MemorySnapshot, ModelMemoryEstimate, RuntimeConfig};
 
@@ -40,6 +42,12 @@ pub struct MeasuredKvBudget {
     pub(crate) budget_bytes: u64,
     /// Host memory available at measurement, with the provisional pages added.
     pub(crate) available_bytes: u64,
+    /// Blocks the cache may grow to: the useful tokens and the sequence
+    /// capacity the tables were sized for.
+    pub(crate) max_blocks: u32,
+    /// Bytes other loaded models held when this budget was set; rebalancing
+    /// follows their changes one for one.
+    pub(crate) others_bytes: u64,
 }
 
 /// Blocks for loading and warming a model whose final cache is measured
@@ -84,9 +92,9 @@ fn measured_reserve(config: &RuntimeConfig, memory: &MemorySnapshot) -> u64 {
 
 /// Sizes the cache from `memory` measured while `provisional_blocks` pages
 /// are still allocated. `slack` is what traffic still adds: retained shapes
-/// growing and one session's cost for every admissible request. Pages and
-/// prefix checkpoints split the budget evenly, because the backend bounds
-/// checkpoints by the page bytes.
+/// growing and one session's cost for every admissible request. The budget
+/// covers the pages and the prefix checkpoints the backend bounds by a
+/// share of them (`CacheConfig::prefix_checkpoint_bytes`).
 pub(in crate::model) fn measured(
     config: &RuntimeConfig,
     estimate: ModelMemoryEstimate,
@@ -114,17 +122,18 @@ pub(in crate::model) fn measured(
     if let Some(limit) = unified_limit(memory) {
         budget = budget.min(limit);
     }
-    let pages = budget / 2;
-    let blocks = (pages / block_bytes)
-        .min(useful_blocks(config, estimate))
-        .max(1)
-        .min(u64::from(u32::MAX));
+    let checkpoint_divisor = u64::try_from(PREFIX_CHECKPOINT_PAGE_DIVISOR).unwrap_or(u64::MAX);
+    let pages = budget / (checkpoint_divisor + 1) * checkpoint_divisor;
+    let max_blocks = useful_blocks(config, estimate).max(1).min(u64::from(u32::MAX));
+    let blocks = (pages / block_bytes).min(max_blocks).max(1);
     let page_bytes = block_bytes.saturating_mul(blocks);
     Some(MeasuredKvBudget {
         blocks: u32::try_from(blocks).unwrap_or(u32::MAX),
         page_bytes,
-        checkpoint_bytes: page_bytes,
+        checkpoint_bytes: page_bytes / checkpoint_divisor,
         budget_bytes: budget,
         available_bytes: available,
+        max_blocks: u32::try_from(max_blocks).unwrap_or(u32::MAX),
+        others_bytes: 0,
     })
 }

@@ -8,8 +8,10 @@ use models::generation::GenerationOverrides;
 use runtime::kv::CacheConfig;
 
 use super::{
-    Library, Model, ModelDescriptor, ModelInner, automatic_cache, cache_cohort::CacheCohort,
-    memory_admission::ModelMemoryManager, memory_policy,
+    Library, Model, ModelDescriptor, ModelInner, automatic_cache,
+    cache_cohort::CacheCohort,
+    memory_admission::{AdmissionTerms, ModelMemoryManager},
+    memory_policy,
 };
 use crate::{Engine, ProgressEvent, Result, RuntimeConfig, scheduler::ModelCoordinator};
 
@@ -74,7 +76,10 @@ impl Library {
             cache.shared_memory,
             &memory,
             config.memory,
-            options.allow_memory_overcommit,
+            AdmissionTerms {
+                reclaimable_bytes: self.reclaimable_kv_bytes()?,
+                allow_overcommit: options.allow_memory_overcommit,
+            },
         )?;
         let post_load_reserve = resolved_post_load_reserve(&target, &config, &memory, estimate);
         let handle = engine.load_model_with_progress_and_reservation(
@@ -142,16 +147,27 @@ impl Library {
         self.model_runtime(descriptor).map(|(_, config, _)| config)
     }
 
-    /// Lets idle models with measured K/V caches grow into memory that
-    /// another model released.
+    /// Resizes idle models with measured K/V caches to the memory other
+    /// models leave: they grow after an unload and shrink after a load.
+    /// Returns how many caches changed.
     pub fn rebalance_kv_caches(&self) -> Result<usize> {
-        let mut grown = 0;
+        let mut resized = 0;
         for model in self.registry.all()? {
-            if model.regrow_kv_cache()? {
-                grown += 1;
+            if model.rebalance_kv_cache()? {
+                resized += 1;
             }
         }
-        Ok(grown)
+        Ok(resized)
+    }
+
+    /// Bytes the loaded models' measured K/V caches would give back to a
+    /// new model: what they hold above the minimum share each keeps.
+    pub fn reclaimable_kv_bytes(&self) -> Result<u64> {
+        let mut bytes = 0_u64;
+        for model in self.registry.all()? {
+            bytes = bytes.saturating_add(model.reclaimable_kv_bytes()?);
+        }
+        Ok(bytes)
     }
 
     pub(super) fn engine(&self) -> Result<Engine> {

@@ -1,16 +1,17 @@
 use mircuda::{DeviceBuffer, PinnedBuffer, bf16};
-use runtime::{backend::DecodeSequence, kv::KvStorageSpec};
+use runtime::backend::DecodeSequence;
 
 use super::{
     super::{
-        CudaSharedRoutedModelSession, CudaSharedRoutedModelTemplate, SharedRoutedLayerTemplate,
+        CudaSharedRoutedModelSession, CudaSharedRoutedModelTemplate,
         boundary::{SharedRoutedEmbedding, SharedRoutedOutputHead},
     },
     layer::SharedRoutedBatchLayer,
+    workspace,
 };
 use crate::{
-    BatchedPagedAttentionBf16, CudaBackend, DeviceBatchSamplerBf16, Error, ExecutionPhase,
-    PagedDecodeBatch, Result,
+    CudaBackend, DeviceBatchSamplerBf16, Error, ExecutionPhase, PagedDecodeBatch, Result,
+    backend::scratch_pool::SharedScratch,
     kernels::{BatchedSplitAttentionWorkspace, ShiftedRmsNorm},
 };
 
@@ -18,6 +19,9 @@ use crate::{
 pub(super) struct DecodeResources {
     pub(super) backend: CudaBackend,
     rows: usize,
+    /// Keeps the shared split-attention workspace registered while this
+    /// batch uses it.
+    _workspace: SharedScratch<BatchedSplitAttentionWorkspace>,
     pub(super) token_staging: PinnedBuffer<u32>,
     token_ids: DeviceBuffer<u32>,
     position_staging: PinnedBuffer<u32>,
@@ -44,10 +48,12 @@ impl DecodeResources {
         let hidden = template.decoder.hidden_size;
         let elements = checked(rows, hidden)?;
         let allocate = |count| backend.inner.pool.allocate(&backend.inner.stream, count);
-        let attention_workspace = attention_workspace(template, rows)?;
+        let (workspace_handle, attention_workspace) =
+            workspace::attention_workspace(template, rows)?;
         Ok(Self {
             backend: backend.clone(),
             rows,
+            _workspace: workspace_handle,
             token_staging: backend.inner.context.allocate_pinned(rows)?,
             token_ids: backend.inner.pool.allocate(&backend.inner.stream, rows)?,
             position_staging: backend.inner.context.allocate_pinned(checked(3, rows)?)?,
@@ -185,44 +191,6 @@ impl DecodeResources {
         }
         Ok(())
     }
-}
-
-fn attention_workspace(
-    template: &CudaSharedRoutedModelTemplate,
-    rows: usize,
-) -> Result<BatchedSplitAttentionWorkspace> {
-    let (values, statistics) = template.layers.iter().enumerate().try_fold(
-        (0_usize, 0_usize),
-        |(values, statistics), (layer, template_layer)| match template_layer {
-            SharedRoutedLayerTemplate::Linear(_) => Ok((values, statistics)),
-            SharedRoutedLayerTemplate::Full(_) => {
-                let storage = KvStorageSpec::new(
-                    template.cache,
-                    template.decoder.layer_key_value_heads(layer),
-                    template.decoder.layer_head_dim(layer),
-                );
-                let required = BatchedPagedAttentionBf16::workspace_lengths_for_storage(
-                    &template.backend,
-                    storage,
-                    template.decoder.num_attention_heads,
-                    template.max_sequence_blocks,
-                    rows,
-                )?;
-                Ok::<_, Error>((values.max(required.0), statistics.max(required.1)))
-            },
-        },
-    )?;
-    if values == 0 || statistics == 0 {
-        return Err(Error::InvalidDecoderKernel(
-            "shared-routed CUDA batch has no attention workspace",
-        ));
-    }
-    let backend = &template.backend;
-    Ok(BatchedSplitAttentionWorkspace::new(
-        backend.inner.pool.allocate(&backend.inner.stream, values)?,
-        backend.inner.pool.allocate(&backend.inner.stream, statistics)?,
-        backend.inner.pool.allocate(&backend.inner.stream, statistics)?,
-    ))
 }
 
 pub(super) fn checked(left: usize, right: usize) -> Result<usize> {

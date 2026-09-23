@@ -9,7 +9,9 @@ mod probe;
 mod tests;
 mod types;
 
-pub use types::{BlockAllocation, CacheConfig, CacheCounters, CacheStats};
+pub use types::{
+    BlockAllocation, CacheConfig, CacheCounters, CacheStats, PREFIX_CHECKPOINT_PAGE_DIVISOR,
+};
 
 #[derive(Debug)]
 pub struct KvCache {

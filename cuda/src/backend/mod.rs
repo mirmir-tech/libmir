@@ -143,6 +143,10 @@ struct CudaRuntime {
         gated_delta::GatedDeltaBatchKey,
         gated_delta::CudaGatedDeltaBatchState,
     >,
+    decode_workspaces: scratch_pool::ScratchPool<
+        shared_routed::DecodeWorkspaceKey,
+        crate::kernels::BatchedSplitAttentionWorkspace,
+    >,
     device: DeviceInfo,
     context: Context,
     stream: Stream,

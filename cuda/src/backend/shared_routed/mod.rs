@@ -9,7 +9,10 @@ mod session;
 #[cfg(all(test, target_os = "linux"))]
 mod tests;
 
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicU64, Ordering},
+};
 
 use models::{
     layout::DecoderConfig,
@@ -18,6 +21,7 @@ use models::{
 };
 use runtime::kv::{CacheConfig, KvStorageSpec};
 
+pub(in crate::backend) use self::batch::DecodeWorkspaceKey;
 pub use self::{
     batch::{CudaSharedRoutedDecodeBatch, CudaSharedRoutedPrefillBatch},
     checkpoint::SharedRoutedCheckpoint,
@@ -55,11 +59,17 @@ pub struct CudaSharedRoutedModelTemplate {
     layers: Vec<SharedRoutedLayerTemplate>,
     cache: CacheConfig,
     max_sequence_blocks: usize,
-    /// Rows the decode batches' shared packed states are allocated for.
+    /// Rows the decode batches' shared packed states and attention
+    /// workspace are allocated for.
     decode_rows: usize,
+    /// Distinguishes this model's shared decode resources from another
+    /// model's in the runtime pools.
+    identity: u64,
     norm_shift: f32,
     plans: Arc<Mutex<SharedRoutedExecutionPlanCache>>,
 }
+
+static NEXT_TEMPLATE_IDENTITY: AtomicU64 = AtomicU64::new(1);
 
 impl CudaSharedRoutedModelTemplate {
     #[allow(clippy::too_many_arguments)]
@@ -112,6 +122,7 @@ impl CudaSharedRoutedModelTemplate {
             cache,
             max_sequence_blocks,
             decode_rows: 1,
+            identity: NEXT_TEMPLATE_IDENTITY.fetch_add(1, Ordering::Relaxed),
             norm_shift,
             plans: Arc::new(Mutex::new(SharedRoutedExecutionPlanCache::new())),
         })

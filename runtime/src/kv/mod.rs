@@ -8,7 +8,9 @@ mod table;
 mod write;
 
 pub use block::{BlockHash, BlockId, KvBlock};
-pub use cache::{BlockAllocation, CacheConfig, CacheStats, KvCache};
+pub use cache::{
+    BlockAllocation, CacheConfig, CacheStats, KvCache, PREFIX_CHECKPOINT_PAGE_DIVISOR,
+};
 pub use dtype::{
     KvCacheDType, KvCacheDTypeParseError, KvElementBits, KvQuantMode, KvScaleGranularity,
 };

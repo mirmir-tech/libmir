@@ -4,8 +4,14 @@
 use super::{MixedMixerExecution, PrefixCheckpoints};
 use crate::{Error, Result};
 
-/// Retained prefix states may use as much device memory as the K/V pages.
-pub(super) fn kv_bytes(caches: &[Option<crate::PagedKvCache>]) -> usize {
+/// The prefix checkpoint store bounded by a share of the K/V page bytes
+/// (`CacheConfig::prefix_checkpoint_bytes`).
+pub(super) fn prefix_checkpoints(caches: &[Option<crate::PagedKvCache>]) -> PrefixCheckpoints {
+    PrefixCheckpoints::new(128, runtime::kv::CacheConfig::prefix_checkpoint_bytes(kv_bytes(caches)))
+}
+
+/// Bytes of the K/V pages.
+fn kv_bytes(caches: &[Option<crate::PagedKvCache>]) -> usize {
     caches
         .iter()
         .flatten()
@@ -35,8 +41,11 @@ pub(super) fn resize_kv_cache(
         batch.follow_cache_blocks(cache.block_count);
     }
     execution.template = execution.template.with_cache_blocks(cache.block_count);
+    // The old pages go before the new ones are allocated: holding both at
+    // once would spike memory by a whole cache.
+    execution.caches = Vec::new();
     execution.caches = execution.template.allocate_shared_kv()?;
-    execution.checkpoints = PrefixCheckpoints::new(128, kv_bytes(&execution.caches));
+    execution.checkpoints = prefix_checkpoints(&execution.caches);
     execution.combined.follow_cache_blocks(cache.block_count);
     for batch in execution.prefill_batches.values_mut() {
         batch.follow_cache_blocks(cache.block_count);
