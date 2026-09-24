@@ -15,6 +15,25 @@ pub(super) const fn valid_chunk(count: usize, remaining: usize, budget: usize) -
         && (count <= budget || (count == remaining && count - budget <= ABSORBED_REMAINDER_TOKENS))
 }
 
+/// Tokens a chunk's start is aligned to: K/V blocks, so a fair share does
+/// not leave a row's next chunk straddling one.
+pub(super) const CHUNK_ALIGNMENT_TOKENS: usize = 16;
+
+/// A row's chunk within `limit`: the whole remainder when it fits, else the
+/// limit rounded down to the block alignment (at least one block).
+pub(super) const fn aligned_chunk(limit: usize, remaining: usize) -> usize {
+    if limit >= remaining {
+        remaining
+    } else {
+        let aligned = limit / CHUNK_ALIGNMENT_TOKENS * CHUNK_ALIGNMENT_TOKENS;
+        if aligned == 0 {
+            limit
+        } else {
+            aligned
+        }
+    }
+}
+
 /// Extends a budget-limited chunk over the rest of the prompt when only a
 /// short remainder would be left. Checkpoint boundaries still end a chunk.
 pub(super) const fn absorb_remainder(limit: usize, remaining: usize, boundary: usize) -> usize {

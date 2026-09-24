@@ -37,28 +37,44 @@
 | Property | Value |
 |:---|:---|
 | Machine | NVIDIA GX10 (GB10) |
-| Driver | 580.159.03 |
-| Reference | vLLM 0.25.1 |
+| Driver | 580.173.02 |
+| mirmir | 0.3.1 (2026-09-24) |
+| Reference | vLLM 0.29.0 |
+| K/V cache | BF16 on both engines; mirmir blocks of 16 tokens sized from the memory estimate (the graph runtime keeps its pages) |
+| Token budget | mirmir 1,024 / vLLM 2,096 |
 | mirmir cells | 36 |
 | Reference cells | 36 |
 
 | Metric | mirmir | vLLM | Ratio | Cell wins |
 |:---|---:|---:|---:|---:|
-| PP tok/s | 4,556.7 | 4,720.7 | 96.5% | 8/36 |
-| TG tok/s | 58.70 | 34.07 | 172.3% | 33/36 |
-| TTFT ms | 2,953 | 2,191 | 1.347× | 0/36 |
+| PP tok/s | 4,538.6 | 4,782.4 | 94.9% | 6/36 |
+| TG tok/s | 34.14 | 32.84 | 103.9% | 26/36 |
+| TTFT ms | 2,424 | 2,015 | 1.203× | 1/36 |
 
 | Depth | Phase | PP mirmir | PP vLLM | PP % | TG mirmir | TG vLLM | TG % | TTFT mirmir ms | TTFT vLLM ms | TTFT × |
 |---:|:---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 0 | plain | 6,759.8 | 7,885.1 | 85.7% | 72.48 | 61.51 | 117.8% | 1,001 | 621 | 1.611× |
-| 4,096 | load | 7,124.6 | 7,295.6 | 97.7% | 69.07 | 51.61 | 133.8% | 1,788 | 1,343 | 1.331× |
-| 4,096 | reuse | 5,254.6 | 5,716.5 | 91.9% | 68.27 | 51.16 | 133.4% | 1,199 | 886 | 1.354× |
-| 8,192 | load | 6,582.1 | 6,471.9 | 101.7% | 62.53 | 37.65 | 166.1% | 3,751 | 2,873 | 1.306× |
-| 8,192 | reuse | 4,067.3 | 4,690.1 | 86.7% | 65.74 | 43.90 | 149.7% | 1,539 | 1,110 | 1.386× |
-| 16,384 | load | 5,333.1 | 5,057.0 | 105.5% | 51.12 | 23.68 | 215.9% | 9,048 | 7,081 | 1.278× |
-| 16,384 | reuse | 3,126.2 | 3,247.0 | 96.3% | 62.42 | 33.13 | 188.4% | 2,022 | 1,484 | 1.362× |
-| 32,768 | load | 3,835.0 | 3,494.4 | 109.8% | 35.61 | 12.53 | 284.2% | 24,821 | 20,018 | 1.240× |
-| 32,768 | reuse | 1,955.0 | 2,032.7 | 96.2% | 51.86 | 23.44 | 221.2% | 3,035 | 2,352 | 1.291× |
+| 0 | plain | 7,881.7 | 8,234.5 | 95.7% | 66.26 | 62.07 | 106.7% | 695 | 561 | 1.239× |
+| 4,096 | load | 7,273.8 | 7,697.6 | 94.5% | 53.83 | 50.66 | 106.3% | 1,422 | 1,195 | 1.189× |
+| 4,096 | reuse | 5,426.4 | 6,209.3 | 87.4% | 53.01 | 50.03 | 105.9% | 1,007 | 735 | 1.369× |
+| 8,192 | load | 6,464.1 | 6,629.2 | 97.5% | 38.20 | 36.96 | 103.4% | 2,974 | 2,729 | 1.090× |
+| 8,192 | reuse | 4,306.1 | 4,918.5 | 87.5% | 44.25 | 42.22 | 104.8% | 1,267 | 924 | 1.372× |
+| 16,384 | load | 4,980.2 | 5,071.7 | 98.2% | 23.01 | 23.03 | 99.9% | 7,299 | 6,949 | 1.050× |
+| 16,384 | reuse | 3,048.7 | 3,311.8 | 92.1% | 33.44 | 32.10 | 104.1% | 1,776 | 1,335 | 1.331× |
+| 32,768 | load | 3,360.2 | 3,220.1 | 104.4% | 11.48 | 11.32 | 101.5% | 20,962 | 20,847 | 1.006× |
+| 32,768 | reuse | 1,849.5 | 1,885.4 | 98.1% | 22.30 | 21.65 | 103.0% | 2,839 | 2,274 | 1.248× |
+
+Both engines serve ten sequences with prefix caching enabled; every one of the
+486 measured responses per engine contains exactly 128 tokens. The graph
+runtime now completes prefill rows in arrival order and runs decode rows in
+the same packed forward as prefill chunks (AD-031), as vLLM does: first
+tokens arrive request by request instead of for the whole cohort at once, so
+TTFT fell from 1.70× to 1.20× of vLLM and prompt processing rose from 86% to
+95%. Decode now overlaps other requests' prefill, which lowers the aggregate
+decode rate at concurrency (the table published earlier the same day showed
+TG at 133% of vLLM with every request waiting for the slowest prefill);
+estimated request completion time is shorter in every measured cell. mirmir
+matches vLLM on load rows (95–104% PP) and trails on reuse prompt processing
+(87–98%). A CUDA prefill wave holds every admitted row (AD-030).
 
 ## Metal — Apple M3 Max, 40-core GPU, 64 GiB
 
@@ -86,3 +102,6 @@
 | 8,192 | reuse | 4 | 403.2 | 482.8 | 83.5% | 18.44 | 26.67 | 69.2% | 16,102 | 13,347 | 1.206× |
 | 16,384 | load | 3 | 507.2 | 530.8 | 95.5% | 13.46 | 18.46 | 73.0% | 69,636 | 66,510 | 1.047× |
 | 16,384 | reuse | 3 | 283.7 | 328.6 | 86.3% | 12.37 | 18.68 | 66.2% | 15,573 | 13,436 | 1.159× |
+
+
+

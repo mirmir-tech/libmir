@@ -35,6 +35,25 @@ impl CudaEngine {
         self.load_model_with_sequence_capacity(manifest, None, progress)
     }
 
+    /// Whether the runtime this checkpoint lowers to can reallocate its K/V
+    /// pages after loading (`resize_kv_cache`), so a provisional cache and a
+    /// measured resize are possible. Inspects the layout only.
+    pub(crate) fn kv_cache_resizable_from_layout(manifest: &ModelManifest) -> Result<bool> {
+        let layout = ModelLayout::inspect(Path::new(&manifest.path))?;
+        let catalog = TensorCatalog::from_layout(&layout)?;
+        let task_plan = TaskExecutionPlan::discover(&layout, &catalog)?;
+        let TaskExecutionPlan::Generation { decoder } = &task_plan else {
+            return Ok(false);
+        };
+        let contract = DecoderExecutionContract::discover(&layout, decoder, &catalog)?;
+        Ok(matches!(
+            crate::admit_architecture(&task_plan, Some(&contract.semantic))?,
+            CudaArchitecture::Generation(
+                CudaDecoderRuntime::SharedRouted | CudaDecoderRuntime::DenseMixed
+            )
+        ))
+    }
+
     /// Loads with one sequence's block table sized for `capacity_blocks`
     /// rather than the cache configured now, which may be provisional.
     pub fn load_model_with_sequence_capacity(

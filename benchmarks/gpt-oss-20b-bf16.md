@@ -37,29 +37,46 @@
 | Property | Value |
 |:---|:---|
 | Machine | NVIDIA GX10 (GB10) |
-| Driver | 580.159.03 |
-| Reference | vLLM 0.25.1 |
+| Driver | 580.173.02 |
+| mirmir | 0.3.1 (2026-09-24) |
+| Reference | vLLM 0.29.0 |
+| K/V cache | BF16 on both engines; mirmir blocks of 16 tokens sized from the memory estimate (the sink-attention runtime keeps its pages) |
+| Token budget | mirmir 1,024 / vLLM 2,096 |
 | mirmir cells | 52 |
 | Reference cells | 52 |
 
 | Metric | mirmir | vLLM | Ratio | Cell wins |
 |:---|---:|---:|---:|---:|
-| PP tok/s | 2,827.2 | 2,254.3 | 125.4% | 43/52 |
-| TG tok/s | 27.74 | 25.53 | 108.7% | 26/52 |
-| TTFT ms | 6,088 | 7,422 | 0.820× | 44/52 |
+| PP tok/s | 2,315.1 | 1,159.8 | 199.6% | 34/52 |
+| TG tok/s | 36.64 | 19.49 | 188.0% | 49/52 |
+| TTFT ms | 8,285 | 13,525 | 0.613× | 27/52 |
 
 | Depth | Phase | PP mirmir | PP vLLM | PP % | TG mirmir | TG vLLM | TG % | TTFT mirmir ms | TTFT vLLM ms | TTFT × |
 |---:|:---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 0 | plain | 3,502.7 | 3,924.3 | 89.3% | 46.51 | 47.27 | 98.4% | 1,763 | 1,578 | 1.117× |
-| 4,096 | load | 3,516.2 | 3,858.9 | 91.1% | 37.97 | 41.52 | 91.5% | 3,045 | 2,923 | 1.042× |
-| 4,096 | reuse | 3,240.7 | 3,016.3 | 107.4% | 45.39 | 46.26 | 98.1% | 1,914 | 2,070 | 0.925× |
-| 8,192 | load | 4,098.2 | 3,701.1 | 110.7% | 34.37 | 33.88 | 101.4% | 5,219 | 5,657 | 0.923× |
-| 8,192 | reuse | 3,090.1 | 2,723.6 | 113.5% | 44.62 | 45.07 | 99.0% | 2,024 | 2,299 | 0.880× |
-| 16,384 | load | 4,026.1 | 3,261.5 | 123.4% | 27.25 | 22.91 | 119.0% | 10,925 | 11,886 | 0.919× |
-| 16,384 | reuse | 2,754.8 | 2,247.5 | 122.6% | 42.15 | 42.44 | 99.3% | 2,310 | 2,770 | 0.834× |
-| 32,768 | load | 3,671.1 | 2,658.9 | 138.1% | 18.70 | 14.01 | 133.5% | 22,912 | 28,141 | 0.814× |
-| 32,768 | reuse | 2,196.5 | 1,690.7 | 129.9% | 38.80 | 38.43 | 101.0% | 2,874 | 3,672 | 0.783× |
-| 65,535 | load | 3,112.1 | 1,923.7 | 161.8% | 9.98 | 7.01 | 142.4% | 50,426 | 76,623 | 0.658× |
-| 65,535 | reuse | 1,619.4 | 1,107.9 | 146.2% | 32.08 | 32.22 | 99.6% | 3,900 | 5,555 | 0.702× |
-| 100,000 | load | 2,631.8 | 1,481.7 | 177.6% | 6.37 | 4.19 | 152.1% | 87,476 | 151,142 | 0.579× |
-| 100,000 | reuse | 1,229.5 | 810.1 | 151.8% | 27.53 | 28.47 | 96.7% | 5,090 | 7,637 | 0.666× |
+| 0 | plain | 3,112.5 | 3,992.2 | 78.0% | 52.02 | 51.29 | 101.4% | 2,169 | 1,560 | 1.390× |
+| 4,096 | load | 3,064.1 | 3,948.7 | 77.6% | 51.14 | 44.19 | 115.7% | 4,314 | 2,878 | 1.499× |
+| 4,096 | reuse | 2,758.9 | 1,307.0 | 211.1% | 50.47 | 40.22 | 125.5% | 2,432 | 4,166 | 0.584× |
+| 8,192 | load | 3,095.3 | 3,760.7 | 82.3% | 48.93 | 35.39 | 138.2% | 8,459 | 5,591 | 1.513× |
+| 8,192 | reuse | 2,584.6 | 774.2 | 333.8% | 48.41 | 32.96 | 146.9% | 2,580 | 6,635 | 0.389× |
+| 16,384 | load | 3,016.8 | 3,382.0 | 89.2% | 46.54 | 24.45 | 190.3% | 17,267 | 11,563 | 1.493× |
+| 16,384 | reuse | 2,331.1 | 372.3 | 626.2% | 45.62 | 22.98 | 198.6% | 2,847 | 13,131 | 0.217× |
+| 32,768 | load | 2,802.2 | 2,797.2 | 100.2% | 37.51 | 14.60 | 256.9% | 36,060 | 26,866 | 1.342× |
+| 32,768 | reuse | 1,945.2 | 240.3 | 809.5% | 41.43 | 14.10 | 293.9% | 3,431 | 26,323 | 0.130× |
+| 65,535 | load | 2,396.3 | 2,064.7 | 116.1% | 19.68 | 7.33 | 268.6% | 77,819 | 71,517 | 1.088× |
+| 65,535 | reuse | 1,318.6 | 1,238.0 | 106.5% | 33.49 | 32.59 | 102.8% | 4,804 | 4,881 | 0.984× |
+| 100,000 | load | 2,082.3 | 1,605.7 | 129.7% | 11.38 | 4.44 | 256.1% | 132,240 | 139,435 | 0.948× |
+| 100,000 | reuse | 1,033.6 | 33.0 | 3136.1% | 27.27 | 4.49 | 607.7% | 5,806 | 139,701 | 0.042× |
+
+Both engines serve ten sequences with prefix caching enabled; every one of the
+702 measured responses per engine contains exactly 128 tokens. vLLM 0.29.0
+runs this model on its Triton attention backend, because its FlashInfer
+decode kernel for attention sinks has no build for this GPU, and it reported a
+prefix cache hit rate of under 3% throughout: its reuse cells are cold
+prefills, so the reuse rows and the headline overstate mirmir's lead. The
+load rows are the fair comparison: mirmir is at 78–100% of vLLM's prompt
+processing up to 32,768 tokens of depth and 116–130% at 65,535 and 100,000,
+and leads decode on every load row (116–269%). A CUDA prefill wave now holds
+every admitted row (AD-030); the table published earlier the same day had
+concurrent prompts prefilling one after another, at PP 70–98% and TG 84–95%
+on the load rows up to 32,768 tokens.
+

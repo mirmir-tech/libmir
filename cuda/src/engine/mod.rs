@@ -172,6 +172,12 @@ impl CudaEngine {
         self.backend.settle_resident_memory(reclaimable)
     }
 
+    /// Whether a checkpoint lowers to a runtime whose K/V pages can be
+    /// reallocated after loading.
+    pub fn kv_cache_resizable(manifest: &foundation::model::ModelManifest) -> Result<bool> {
+        Self::kv_cache_resizable_from_layout(manifest)
+    }
+
     /// Runs decode steps over one to `rows` throwaway sessions of `model_id`.
     pub fn warm_concurrency(&self, model_id: &str, rows: usize) -> Result<()> {
         self.model(model_id)?.warm_concurrency(&self.backend, rows)

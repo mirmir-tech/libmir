@@ -163,8 +163,22 @@ pub(super) fn schedule(
         let alignment = generation.cache_checkpoint_alignment();
         let boundary = sequence.checkpoint_distance(terminal, alignment);
         let limit = remaining.min(row_budget).min(context_budget).min(boundary);
-        let count =
-            generation.prefill_chunk_len(plan::absorb_remainder(limit, remaining, boundary));
+        // Only a fair share is rounded to blocks; a row given the rest of the
+        // budget keeps it whole, or completion-first steps lose their shape.
+        let fair_share = row_budget < remaining_budget && limit == row_budget;
+        let limit = if fair_share {
+            plan::aligned_chunk(limit, remaining)
+        } else {
+            limit
+        };
+        let absorbed = plan::absorb_remainder(limit, remaining, boundary);
+        let mut count = generation.prefill_chunk_len(absorbed);
+        // A backend that rounds chunks to its own shapes may hand back
+        // neither the whole remainder nor a chunk within the budget; the
+        // remainder then stays a chunk of its own.
+        if absorbed != limit && count != remaining {
+            count = generation.prefill_chunk_len(limit);
+        }
         if !plan::valid_chunk(count, remaining, remaining_budget) {
             return Err(Error::InvalidDecoderKernel(
                 "CUDA lowering returned an invalid prefill chunk",

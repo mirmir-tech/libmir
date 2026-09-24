@@ -197,8 +197,10 @@ impl Library {
         let memory = probe.memory_snapshot()?;
         let committed = self.memory.committed_bytes()?;
         let mut config = automatic_cache::resolve(&self.config, estimate, &memory, committed);
-        let kv_sizing =
-            super::kv_sizing::KvSizing::for_load(&self.config, &mut config, estimate, &target);
+        let resizable = probe.kv_cache_resizable(&descriptor.manifest_for(target.clone())?)?;
+        let kv_sizing = super::kv_sizing::KvSizing::for_load(
+            &self.config, &mut config, estimate, &target, resizable,
+        );
         let resolved_estimate = descriptor.memory_estimate_for(&config, &target);
         let engine = if engine_cache_compatible(&target, config.kv_cache, engine_config.kv_cache) {
             probe

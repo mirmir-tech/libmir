@@ -34,10 +34,10 @@ matrix coverage, and per-depth results.
 
 | Model | Device | PP tok/s ↑<br>mirmir / vLLM | TG tok/s ↑<br>mirmir / vLLM | TTFT ms ↓<br>mirmir / vLLM |
 |:---|:---|---:|---:|---:|
-| [Qwen3-4B BF16](qwen3-4b.md) | NVIDIA GX10 (GB10) | 4,556.7 / 4,720.7<br>96.5% · 8/36 wins | 58.70 / 34.07<br>172.3% · 33/36 wins | 2,953 / 2,191<br>1.347× · 0/36 wins |
+| [Qwen3-4B BF16](qwen3-4b.md) | NVIDIA GX10 (GB10) | 4,538.6 / 4,782.4<br>94.9% · 6/36 wins | 34.14 / 32.84<br>103.9% · 26/36 wins | 2,424 / 2,015<br>1.203× · 1/36 wins |
 | [Qwen3.6-35B-A3B NVFP4](qwen3.6-35b-a3b-nvfp4.md) | NVIDIA GX10 (GB10) | 4,681.9 / 4,562.6<br>102.6% · 19/36 wins | 75.60 / 79.25<br>95.4% · 7/36 wins | 2,159 / 2,305<br>0.937× · 22/36 wins |
 | [Qwen3.8-27B BF16](qwen3.8-27b.md) | NVIDIA GX10 (GB10) | 1,249.1 / 1,067.3<br>117.0% · 36/36 wins | 9.02 / 8.99<br>100.3% · 20/36 wins | 8,001 / 10,218<br>0.783× · 36/36 wins |
-| [GPT-OSS-20B BF16](gpt-oss-20b-bf16.md) | NVIDIA GX10 (GB10) | 2,827.2 / 2,254.3<br>125.4% · 43/52 wins | 27.74 / 25.53<br>108.7% · 26/52 wins | 6,088 / 7,422<br>0.820× · 44/52 wins |
+| [GPT-OSS-20B BF16](gpt-oss-20b-bf16.md) | NVIDIA GX10 (GB10) | 2,315.1 / 1,159.8<br>199.6% · 34/52 wins | 36.64 / 19.49<br>188.0% · 49/52 wins | 8,285 / 13,525<br>0.613× · 27/52 wins |
 
 ## Metal
 

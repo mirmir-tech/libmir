@@ -69,10 +69,21 @@ impl AutoNvFp4Experts {
         let reference = read(&context, &stream, output)?;
         let mut accepted = Vec::with_capacity(self.candidates.len());
         for (index, candidate) in self.candidates.iter_mut().enumerate() {
+            // A candidate built for a shape it rejects at launch (a Marlin
+            // tile wider than the intermediate size) leaves the others to be
+            // measured instead of abandoning the tuning.
             let compatible = if index == self.fallback {
                 true
+            } else if let Err(error) = candidate.plan.execute(input, selected, routing, output) {
+                tracing::debug!(
+                    ?self.request,
+                    execution = ?candidate.execution,
+                    %error,
+                    "discarded CUDA MoE tuning candidate that rejects this shape"
+                );
+                accepted.push(false);
+                continue;
             } else {
-                candidate.plan.execute(input, selected, routing, output)?;
                 equivalent(&reference, &read(&context, &stream, output)?)
             };
             if !compatible {

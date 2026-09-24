@@ -1,6 +1,6 @@
 use uuid::Uuid;
 
-use super::{GenerationExecution, PooledVisionPrefill, PrefillChunk};
+use super::{CombinedOutputs, GenerationExecution, PooledVisionPrefill, PrefillChunk};
 use crate::{
     CudaBackend, CudaMoeModelSession, Result,
     engine::execution::{Output, device_sampling, generation_output},
@@ -17,6 +17,15 @@ impl GraphExecution {
 }
 
 impl GenerationExecution for GraphExecution {
+    /// Rows complete in arrival order: the step budget goes to the oldest
+    /// pending row and the rest fill what is left, so first tokens arrive
+    /// one request after another instead of all at the end of the cohort.
+    /// Decode rides in the same forward (`prefill_decode_batch`), so the
+    /// rows already decoding do not stall the ones still prefilling.
+    fn prefill_schedule(&self) -> crate::CudaPrefillSchedule {
+        crate::CudaPrefillSchedule::CompletionFirst
+    }
+
     fn prefix_replay_tokens(&self) -> Option<usize> {
         Some(0)
     }
@@ -76,6 +85,53 @@ impl GenerationExecution for GraphExecution {
                     .map(Some)
             })
             .collect()
+    }
+
+    /// One packed forward over the prefill chunks and the decode rows, each
+    /// decode row a one-token chunk at its position. Only device-sampled
+    /// policies qualify; a row that needs logits leaves the step to the
+    /// separate paths.
+    fn prefill_decode_batch(
+        &mut self,
+        _backend: &CudaBackend,
+        chunks: &[PrefillChunk<'_>],
+        decode: &[runtime::backend::DecodeSequence],
+    ) -> Result<Option<CombinedOutputs>> {
+        if chunks.is_empty() || decode.is_empty() {
+            return Ok(None);
+        }
+        let policies_ok = chunks
+            .iter()
+            .filter(|chunk| chunk.final_chunk)
+            .map(|chunk| chunk.request.sampling_logits)
+            .chain(decode.iter().map(|sequence| sequence.sampling_logits))
+            .all(device_sampling);
+        if !policies_ok {
+            return Ok(None);
+        }
+        let mut tokens =
+            chunks.iter().flat_map(|chunk| chunk.tokens.iter().copied()).collect::<Vec<_>>();
+        tokens.extend(decode.iter().map(|sequence| sequence.token_id));
+        let mut tables = chunks.iter().map(|chunk| chunk.table).collect::<Vec<_>>();
+        tables.extend(decode.iter().map(|sequence| &sequence.block_table));
+        let mut starts = chunks.iter().map(|chunk| chunk.offset).collect::<Vec<_>>();
+        starts.extend(decode.iter().map(|sequence| sequence.block_table.token_len() - 1));
+        let mut counts = chunks.iter().map(|chunk| chunk.tokens.len()).collect::<Vec<_>>();
+        counts.extend(std::iter::repeat_n(1, decode.len()));
+        self.session.prefill_packed_chunk(&tokens, &tables, &starts, &counts)?;
+        let total = tokens.len();
+        let (mut rows, mut policies) = packed_output_rows(chunks);
+        let prefill_rows = rows.len();
+        let prefill_tokens = total - decode.len();
+        rows.extend((0..decode.len()).map(|index| prefill_tokens + index));
+        policies.extend(decode.iter().map(|sequence| sequence.sampling_logits));
+        let sampled = self.session.finish_packed_prefill_rows(&rows, total, &policies)?;
+        let prefill = device_outputs(chunks, &sampled[..prefill_rows])?;
+        let decode = sampled[prefill_rows..]
+            .iter()
+            .map(|token| Output { token: Some(*token), logits: None })
+            .collect();
+        Ok(Some(CombinedOutputs { prefill, decode }))
     }
 
     fn decode(

@@ -119,6 +119,54 @@ fn inline_terminal_checkpoint_keeps_the_prompt_tail_in_the_last_chunk() -> Resul
     Ok(())
 }
 #[test]
+fn rounded_chunks_keep_a_short_remainder_separate() -> Result<()> {
+    /// The graph runtime rounds a chunk below its capacity down to a power
+    /// of two, so an absorbed 160-token remainder would come back as 128.
+    struct Rounding;
+    impl GenerationExecution for Rounding {
+        fn prefill_chunk_len(&self, remaining: usize) -> usize {
+            if remaining >= 1024 {
+                1024
+            } else {
+                1 << (usize::BITS - 1 - remaining.leading_zeros())
+            }
+        }
+
+        fn prefill_chunk(
+            &mut self,
+            _: &CudaBackend,
+            _: &PrefillRequest,
+            _: &[u32],
+            _: usize,
+            _: &BlockTable,
+            _: bool,
+        ) -> Result<Option<Output>> {
+            unreachable!()
+        }
+
+        fn decode(&mut self, _: &CudaBackend, _: &DecodeRequest, _: bool) -> Result<Output> {
+            unreachable!()
+        }
+
+        fn clear_sessions(&mut self) {}
+
+        fn release_session(&mut self, _: uuid::Uuid) {}
+    }
+    // A 40-token budget would absorb a 100-token remainder, which rounds to
+    // 64: neither the remainder nor within the budget. The chunk keeps to
+    // the budget instead of failing the round.
+    let chunks = schedule(&Rounding, &mut [row(100)], 0, 40, ScheduleMode::PrefillOnly)?;
+    assert_eq!(chunks.iter().map(|chunk| chunk.count).collect::<Vec<_>>(), [32]);
+    // A remainder that rounds to itself still joins the chunk before it.
+    let chunks = schedule(&Rounding, &mut [row(128)], 0, 100, ScheduleMode::PrefillOnly)?;
+    assert_eq!(
+        chunks.iter().map(|chunk| (chunk.count, chunk.final_chunk)).collect::<Vec<_>>(),
+        [(128, true)]
+    );
+    Ok(())
+}
+
+#[test]
 fn short_remainder_joins_the_chunk_before_it() -> Result<()> {
     let runner = Runner(CudaPrefillSchedule::CompletionFirst);
     let counts = |rows: &mut [Sequence]| -> Result<Vec<(usize, bool)>> {
@@ -130,5 +178,24 @@ fn short_remainder_joins_the_chunk_before_it() -> Result<()> {
     let mut declared = [row(1024 + 15)];
     declared[0].request.cache_checkpoints = vec![1030];
     assert_eq!(counts(&mut declared)?, [(1024, false)]);
+    Ok(())
+}
+
+#[test]
+fn fair_rounds_align_chunks_to_blocks_and_fill_the_budget() -> Result<()> {
+    let runner = Runner(CudaPrefillSchedule::RoundRobin);
+    let mut rows: Vec<Sequence> = (0..10).map(|_| row(4_097)).collect();
+    let chunks = schedule(&runner, &mut rows, 0, 1_024, ScheduleMode::PrefillOnly)?;
+    let total: usize = chunks.iter().map(|chunk| chunk.count).sum();
+    assert_eq!(chunks.len(), 10);
+    let counts = chunks.iter().map(|chunk| chunk.count).collect::<Vec<_>>();
+    assert!(counts.iter().all(|count| count % 16 == 0), "{counts:?}");
+    assert!((1_024 - 16 * 10..=1_024).contains(&total), "{total}");
+    // A whole remainder is one chunk, however short.
+    let chunks = schedule(&runner, &mut [row(15)], 0, 1_024, ScheduleMode::PrefillOnly)?;
+    assert_eq!(
+        chunks.iter().map(|chunk| (chunk.count, chunk.final_chunk)).collect::<Vec<_>>(),
+        [(15, true)]
+    );
     Ok(())
 }

@@ -175,11 +175,16 @@ impl CudaMoeModelSession {
     }
 }
 
-pub(super) fn chunk_len(remaining: usize, capacity: usize) -> usize {
+/// A chunk takes what the scheduler offers up to the token capacity. Packed
+/// plans are keyed by the round's total, which the step budget fixes, so
+/// rounding rows to powers of two only left budget unused in fair rounds
+/// (ten rows of 103 became 640 of 1,024 tokens) and split a prompt's tail
+/// into one chunk per generation step (15 tokens as 8, 4, 2, 1).
+pub(super) const fn chunk_len(remaining: usize, capacity: usize) -> usize {
     if remaining >= capacity {
         capacity
     } else {
-        1 << (usize::BITS - 1 - remaining.leading_zeros())
+        remaining
     }
 }
 
@@ -188,10 +193,10 @@ mod tests {
     use super::chunk_len;
 
     #[test]
-    fn decomposes_tail_into_canonical_powers_of_two() {
+    fn takes_the_offered_chunk_up_to_capacity() {
         assert_eq!(chunk_len(257, 256), 256);
-        assert_eq!(chunk_len(255, 256), 128);
-        assert_eq!(chunk_len(127, 256), 64);
+        assert_eq!(chunk_len(255, 256), 255);
+        assert_eq!(chunk_len(103, 256), 103);
         assert_eq!(chunk_len(1, 256), 1);
     }
 }

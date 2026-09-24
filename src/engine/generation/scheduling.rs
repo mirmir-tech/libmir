@@ -114,13 +114,16 @@ impl Engine {
         #[cfg(not(feature = "cuda"))]
         let _ = admission;
         match &self.inner {
+            // A CUDA prefill wave holds every admitted row whatever its
+            // length: rows share the step budget in rounds and pack into one
+            // forward. Sizing waves by rows that finish inside one budget
+            // left graph and sink-attention runtimes with one row per wave
+            // for any prompt beyond the budget, so ten concurrent prompts
+            // prefilled one after another while the others waited.
             #[cfg(feature = "cuda")]
             EngineInner::Cuda(_) => {
-                if matches!(admission, PrefillAdmissionPolicy::ShortPrompt) {
-                    1
-                } else {
-                    max_batch_tokens
-                }
+                let _ = (admission, max_batch_tokens);
+                1
             },
             #[cfg(feature = "metal")]
             EngineInner::Metal(_) => max_batch_tokens.div_ceil(METAL_COMPLETION_ROUND_ROWS),

@@ -15,6 +15,21 @@ impl Engine {
         self.load_model_with_progress_and_reservation(manifest, None, None, None, progress)
     }
 
+    /// Whether `manifest` loads into a runtime that can reallocate its K/V
+    /// pages afterwards, so the cache may start provisional and be measured.
+    pub(crate) fn kv_cache_resizable(&self, manifest: &ModelManifest) -> RuntimeResult<bool> {
+        #[cfg(not(feature = "cuda"))]
+        let _ = manifest;
+        match &self.inner {
+            #[cfg(feature = "cuda")]
+            EngineInner::Cuda(_) => Ok(cuda::CudaEngine::kv_cache_resizable(manifest)?),
+            #[cfg(feature = "metal")]
+            EngineInner::Metal(_) => Ok(false),
+            #[cfg(not(any(feature = "cuda", feature = "metal")))]
+            EngineInner::Unavailable => unavailable(),
+        }
+    }
+
     /// `sequence_capacity_blocks` bounds one sequence's block table where the
     /// cache loaded now is provisional and grows after warm-up.
     pub(crate) fn load_model_with_progress_and_reservation(

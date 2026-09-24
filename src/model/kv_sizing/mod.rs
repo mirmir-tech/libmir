@@ -30,15 +30,19 @@ pub(super) enum KvSizing {
 impl KvSizing {
     /// Replaces an automatic estimate with a provisional cache where the
     /// backend can resize after warm-up.
+    /// `resizable` says whether the backend can reallocate this model's pages
+    /// after loading; otherwise the estimate-based size is final.
     pub(super) fn for_load(
         library: &RuntimeConfig,
         resolved: &mut RuntimeConfig,
         estimate: ModelMemoryEstimate,
         target: &BackendTarget,
+        resizable: bool,
     ) -> Self {
         if !library.automatic_kv_cache
             || *target != BackendTarget::Cuda
             || estimate.kv_bytes_per_token == 0
+            || !resizable
         {
             return Self::Fixed;
         }
