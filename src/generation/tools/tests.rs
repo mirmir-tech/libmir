@@ -57,3 +57,19 @@ fn never_accepts_truncated_or_ambiguous_xml() {
         assert!(normalize(input, &conversation()).is_err());
     }
 }
+
+#[test]
+fn malformed_nested_argument_reports_local_context_without_repairing_output() -> Result<()> {
+    let input = "<tool_call><function=emit><parameter=name>valid</parameter><parameter=year>2023</parameter><parameter=items>[{\"value\":1 \"other\":2}]</parameter></function></tool_call>";
+    let error = normalize(input, &conversation())
+        .err()
+        .ok_or_else(|| invalid("malformed JSON was accepted"))?;
+    let Error::InvalidToolCall(message) = error else {
+        return Err(error);
+    };
+    assert!(message.contains("expected `,` or `}`"));
+    assert!(message.contains("untrusted"));
+    assert!(message.contains("other"));
+    assert!(!message.contains("<parameter=name>"));
+    Ok(())
+}

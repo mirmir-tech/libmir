@@ -1,7 +1,7 @@
 use foundation::conversation::{FunctionCall, Tool, ToolCall};
 use serde_json::{Map, Value};
 
-use super::invalid;
+use super::{diagnostic::json_error, invalid};
 use crate::Result;
 
 pub(super) fn parse(mut input: &str, tools: &[Tool]) -> Result<Vec<ToolCall>> {
@@ -13,7 +13,7 @@ pub(super) fn parse(mut input: &str, tools: &[Tool]) -> Result<Vec<ToolCall>> {
             .ok_or_else(|| invalid("unterminated tool_call"))?;
         let function = if body.trim_start().starts_with('{') {
             serde_json::from_str::<FunctionCall>(body)
-                .map_err(|error| invalid(format!("invalid tool JSON: {error}")))?
+                .map_err(|error| json_error("invalid tool JSON", body, &error))?
         } else {
             function(body, tools)?
         };
@@ -79,7 +79,7 @@ fn argument(input: &str, schema: &Value) -> Result<Value> {
             .map_or_else(|_| Value::String(input.into()), Value::String));
     }
     let parsed: Value = serde_json::from_str(input)
-        .map_err(|error| invalid(format!("non-string parameter must contain JSON: {error}")))?;
+        .map_err(|error| json_error("non-string parameter must contain JSON", input, &error))?;
     let accepts = |kind: &str| match kind {
         "null" => parsed.is_null(),
         "string" => parsed.is_string(),

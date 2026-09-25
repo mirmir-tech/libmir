@@ -1,3 +1,4 @@
+mod diagnostic;
 #[cfg(test)]
 mod tests;
 mod xml;
