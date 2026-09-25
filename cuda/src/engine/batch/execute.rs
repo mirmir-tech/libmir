@@ -16,6 +16,8 @@ use crate::{
 };
 
 impl CudaEngine {
+    // Profiling uses the same stream after the runner operation; keep its lease.
+    #[allow(clippy::significant_drop_tightening)]
     pub fn decode_batch_tokens(&self, request: &DecodeBatchRequest) -> Result<DecodeBatchOutput> {
         let loaded = self.model(&request.model().id)?;
         for sequence in request.sequences() {
@@ -32,7 +34,6 @@ impl CudaEngine {
             self.profile_decode(),
         )?;
         let mut outputs = self.decode_batch_with_runner(&mut runner, request)?;
-        drop(runner);
         if let Some(profile) = profile {
             profile.finish(&self.backend, &mut outputs)?;
         }

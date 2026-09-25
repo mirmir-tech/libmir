@@ -1,14 +1,14 @@
 use std::{
     ops::{Deref, DerefMut},
-    sync::{Condvar, Mutex, MutexGuard},
+    sync::{Arc, Condvar, Mutex, MutexGuard},
     time::Instant,
 };
 
 use crate::{Error, Result};
 
 pub(super) struct RunnerQueue<T> {
-    state: Mutex<QueueState>,
-    ready: Condvar,
+    state: Arc<Mutex<QueueState>>,
+    ready: Arc<Condvar>,
     runner: Mutex<T>,
     decode_burst: usize,
 }
@@ -39,10 +39,21 @@ struct QueueState {
 impl<T> RunnerQueue<T> {
     pub(super) fn new(runner: T, decode_burst: usize) -> Self {
         Self {
-            state: Mutex::new(QueueState::default()),
-            ready: Condvar::new(),
+            state: Arc::new(Mutex::new(QueueState::default())),
+            ready: Arc::new(Condvar::new()),
             runner: Mutex::new(runner),
             decode_burst: decode_burst.max(1),
+        }
+    }
+
+    /// Models share one CUDA stream, so admission must be shared too. A model
+    /// mutex alone cannot prevent another model from entering graph capture.
+    pub(super) fn shared(runner: T, lane: &RunnerQueue<()>) -> Self {
+        Self {
+            state: lane.state.clone(),
+            ready: lane.ready.clone(),
+            runner: Mutex::new(runner),
+            decode_burst: lane.decode_burst,
         }
     }
 

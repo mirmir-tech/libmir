@@ -18,6 +18,8 @@ pub use prefill::CudaPrefillBatch;
 pub use step::CudaGenerationStepOutput;
 
 impl CudaEngine {
+    // Profiling uses the same stream after the runner operation; keep its lease.
+    #[allow(clippy::significant_drop_tightening)]
     pub fn decode_token(&self, request: &DecodeRequest) -> Result<DecodeOutput> {
         let loaded = self.model(&request.model.id)?;
         let waiting = Instant::now();
@@ -26,7 +28,6 @@ impl CudaEngine {
         loaded.require_session(request.session_id)?;
         let profile = DecodeProfile::begin(&self.backend, wait, 1, self.profile_decode())?;
         let mut output = self.decode_with_runner(&mut runner, request)?;
-        drop(runner);
         if let Some(profile) = profile {
             profile.finish(&self.backend, std::slice::from_mut(&mut output))?;
         }

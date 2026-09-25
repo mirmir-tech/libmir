@@ -80,6 +80,7 @@ impl CudaEngine {
         let mut report = |current: u64, detail: String| {
             progress(ProgressEvent::load_weights(current.min(total), total, detail));
         };
+        let _execution = self.execution.acquire_prefill()?;
         let runner = self.load_task_runner(
             manifest,
             &task_plan,
@@ -106,7 +107,7 @@ impl CudaEngine {
             vision_readiness,
             vision_model,
             sessions: Mutex::new(HashSet::new()),
-            runner: RunnerQueue::new(runner, self.scheduler.decode_priority_burst),
+            runner: RunnerQueue::shared(runner, &self.execution),
         };
         self.models()?.insert(manifest.id.clone(), std::sync::Arc::new(loaded));
         progress(ProgressEvent::load_weights(total, total, "checkpoint resident on CUDA"));

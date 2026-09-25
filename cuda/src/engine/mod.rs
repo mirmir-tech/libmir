@@ -8,6 +8,7 @@ mod profile;
 pub use prefill_schedule::CudaPrefillSchedule;
 mod runner;
 mod runtime;
+mod task;
 mod trace;
 mod vision;
 
@@ -29,6 +30,7 @@ use crate::{CudaBackend, CudaConfig, Error, Result, backend::ProfilerCapture};
 #[derive(Clone)]
 pub struct CudaEngine {
     backend: CudaBackend,
+    execution: Arc<runner::RunnerQueue<()>>,
     cache: CacheConfig,
     session_config: crate::CudaModelSessionConfig,
     scheduler: SchedulerConfig,
@@ -60,6 +62,7 @@ impl CudaEngine {
         let session_config = config.model_session;
         Ok(Self {
             backend: CudaBackend::new(config)?,
+            execution: Arc::new(runner::RunnerQueue::new((), scheduler.decode_priority_burst)),
             cache,
             session_config,
             scheduler,
@@ -152,6 +155,7 @@ impl CudaEngine {
     }
 
     pub fn unload_model(&self, model_id: &str) -> Result<bool> {
+        let _execution = self.execution.acquire_prefill()?;
         let removed = self.models()?.remove(model_id);
         let unloaded = removed.is_some();
         drop(removed);
@@ -162,6 +166,7 @@ impl CudaEngine {
     }
 
     pub fn clear_memory_cache(&self) -> Result<()> {
+        let _execution = self.execution.acquire_prefill()?;
         self.backend.trim_memory_pool(0)
     }
 
@@ -169,6 +174,7 @@ impl CudaEngine {
     /// model's resident allocations changed.
     pub fn settle_resident_memory(&self, model_id: &str) -> Result<()> {
         let reclaimable = self.model(model_id)?.retained_shape_bytes()?;
+        let _execution = self.execution.acquire_prefill()?;
         self.backend.settle_resident_memory(reclaimable)
     }
 
@@ -205,44 +211,6 @@ impl CudaEngine {
     #[must_use]
     pub fn device_info(&self) -> &mircuda::DeviceInfo {
         self.backend.device_info()
-    }
-
-    pub fn embed_tokens(
-        &self,
-        model: &::runtime::backend::ModelHandle,
-        inputs: &[Vec<u32>],
-        dimensions: usize,
-    ) -> Result<Vec<Vec<f32>>> {
-        let loaded = self.model(&model.id)?;
-        if !matches!(loaded.task_plan, models::execution::TaskExecutionPlan::Embedding { .. }) {
-            return Err(Error::State("loaded CUDA task is not an embedding model".into()));
-        }
-        let mut runner = loaded.prefill_runner()?;
-        let model::ModelExecution::Embedding(task) = &mut runner.execution else {
-            return Err(Error::State("loaded CUDA task does not expose embeddings".into()));
-        };
-        let result = inputs.iter().map(|tokens| task.embed(tokens, dimensions)).collect();
-        drop(runner);
-        result
-    }
-
-    pub fn score_tokens(
-        &self,
-        model: &::runtime::backend::ModelHandle,
-        inputs: &[Vec<u32>],
-    ) -> Result<Vec<f32>> {
-        let loaded = self.model(&model.id)?;
-        if !matches!(loaded.task_plan, models::execution::TaskExecutionPlan::SequenceScoring { .. })
-        {
-            return Err(Error::State("loaded CUDA task is not a sequence-scoring model".into()));
-        }
-        let mut runner = loaded.prefill_runner()?;
-        let model::ModelExecution::SequenceScoring(task) = &mut runner.execution else {
-            return Err(Error::State("loaded CUDA task does not expose sequence scores".into()));
-        };
-        let result = inputs.iter().map(|tokens| task.score(tokens)).collect();
-        drop(runner);
-        result
     }
 }
 

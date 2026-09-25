@@ -9,7 +9,11 @@ impl CudaEngine {
         sessions: &[uuid::Uuid],
     ) -> Result<()> {
         let loaded = self.model(&batch.model_id)?;
+        // Synchronizing a stream while another model captures a graph is invalid.
+        // Release admission before release_session acquires its model runner.
+        let execution = self.execution.acquire_prefill()?;
         self.backend.synchronize()?;
+        drop(execution);
         for session in sessions {
             loaded.release_session(*session)?;
         }

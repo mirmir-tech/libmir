@@ -70,3 +70,33 @@ fn wait_for_decode<T>(queue: &RunnerQueue<T>) -> Result<()> {
     }
     Err(Error::State("decode did not enter the runner queue".into()))
 }
+
+#[test]
+fn separate_models_share_stream_admission_and_release_it_after_each_step() -> Result<()> {
+    let lane = RunnerQueue::new((), 2);
+    let generation = RunnerQueue::shared((), &lane);
+    let embedding = Arc::new(RunnerQueue::shared(Vec::new(), &lane));
+    let first = generation.acquire_prefill()?;
+    let other = embedding.clone();
+    let worker = thread::spawn(move || -> Result<()> {
+        other.acquire_decode()?.push("embedding");
+        Ok(())
+    });
+    wait_for_decode(&embedding)?;
+    // Different model values, but one admission state protects stream capture.
+    assert!(Arc::ptr_eq(&generation.state, &embedding.state));
+    drop(first);
+    let second = generation.acquire_prefill()?;
+    let Ok(events) = embedding.runner.lock() else {
+        return Err(Error::State("embedding test lock is poisoned".into()));
+    };
+    assert_eq!(*events, ["embedding"]);
+    drop(events);
+    drop(second);
+    worker
+        .join()
+        .map_err(|_| Error::State("embedding test thread panicked".into()))??;
+    // Model loading/unloading uses the same lane without acquiring a model.
+    drop(lane.acquire_prefill()?);
+    Ok(())
+}

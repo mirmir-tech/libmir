@@ -17,6 +17,8 @@ pub struct CudaGenerationStepOutput {
 }
 
 impl CudaEngine {
+    // Profiling uses the same stream after the runner operation; keep its lease.
+    #[allow(clippy::significant_drop_tightening)]
     pub fn execute_generation_step(
         &self,
         decode: Option<&DecodeBatchRequest>,
@@ -45,7 +47,6 @@ impl CudaEngine {
                 &mut runner, batch, request, prefill_budget, progress, wait,
             )?
         {
-            drop(runner);
             if let Some(profile) = profile {
                 profile.finish(&self.backend, &mut output.decode)?;
             }
@@ -71,7 +72,6 @@ impl CudaEngine {
                 )
             },
         );
-        drop(runner);
         if let Some(profile) = profile {
             profile.finish(&self.backend, &mut outputs)?;
         }
