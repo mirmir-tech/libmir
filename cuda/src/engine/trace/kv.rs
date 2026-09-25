@@ -4,7 +4,10 @@ use runtime::{kv::CacheConfig, trace::TraceKvCache};
 use super::LoadedModel;
 
 pub(super) fn build(model: &LoadedModel, cache: CacheConfig, sessions: usize) -> TraceKvCache {
-    if !matches!(&model.task_plan, TaskExecutionPlan::Generation { .. }) {
+    if !matches!(
+        &model.task_plan,
+        TaskExecutionPlan::Generation { .. } | TaskExecutionPlan::CausalScoring { .. }
+    ) {
         return TraceKvCache {
             dtype: cache.dtype,
             quant_mode: cache.dtype.quant_mode(),

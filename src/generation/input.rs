@@ -18,6 +18,42 @@ pub(super) struct PreparedGeneration {
 }
 
 impl PreparedGeneration {
+    pub(super) fn normalizer(
+        &self,
+        tokenizer: &models::tokenizer::TextTokenizer,
+        conversation: &foundation::conversation::Conversation,
+    ) -> models::generation::OutputNormalizer {
+        let normalizer = self.tool_prefix().map_or_else(
+            || models::generation::OutputNormalizer::new(tokenizer, self.prompt_text()),
+            |prefix| {
+                models::generation::OutputNormalizer::with_tool_prefix(
+                    tokenizer,
+                    self.prompt_text(),
+                    prefix,
+                )
+            },
+        );
+        if conversation.tools.is_empty()
+            || matches!(conversation.tool_choice, foundation::conversation::ToolChoice::None)
+        {
+            normalizer.without_tool_protocol()
+        } else {
+            normalizer
+        }
+    }
+
+    pub(super) fn initial_tool_calls(&self) -> String {
+        self.tool_prefix().map_or_else(String::new, models::chat::ToolCallPrefix::text)
+    }
+
+    pub(super) fn tool_prefix(&self) -> Option<&models::chat::ToolCallPrefix> {
+        match &self.prompt {
+            Prepared::Text(prepared) => prepared.prompt.tool_prefix.as_ref(),
+            #[cfg(any(feature = "cuda", feature = "metal"))]
+            Prepared::Vision(_) => None,
+        }
+    }
+
     pub(super) fn new(
         model: &Model,
         request: &super::GenerationRequest,

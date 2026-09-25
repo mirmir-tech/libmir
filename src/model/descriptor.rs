@@ -45,9 +45,9 @@ impl ModelDescriptor {
                 TaskExecutionPlan::SequenceScoring { bindings, .. } => {
                     super::CheckpointEncoding::from_encoder_bindings(bindings)
                 },
-                TaskExecutionPlan::Generation { .. } | TaskExecutionPlan::Embedding { .. } => {
-                    super::CheckpointEncoding::default()
-                },
+                TaskExecutionPlan::Generation { .. }
+                | TaskExecutionPlan::CausalScoring { .. }
+                | TaskExecutionPlan::Embedding { .. } => super::CheckpointEncoding::default(),
             },
             |execution| super::CheckpointEncoding::from_bindings(&execution.bindings),
         );
@@ -173,6 +173,7 @@ pub(super) fn validate_tokenizer(
 ) -> Result<TokenizerValidation> {
     let vocabulary = match task {
         TaskExecutionPlan::Generation { decoder }
+        | TaskExecutionPlan::CausalScoring { decoder, .. }
         | TaskExecutionPlan::Embedding { decoder, .. } => decoder.vocab_size,
         TaskExecutionPlan::SequenceScoring { encoder, .. } => encoder.vocab_size,
     };

@@ -1,4 +1,5 @@
 mod reasoning;
+mod rerank;
 
 use foundation::conversation::Message;
 

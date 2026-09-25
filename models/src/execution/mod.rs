@@ -4,7 +4,10 @@ mod task;
 
 pub use capability::{ArchitectureCapability, ArchitectureRequirements};
 pub use contract::DecoderExecutionContract;
-pub use task::{EmbeddingTask, ModelTask, PoolingMode, SequenceScoringTask, TaskExecutionPlan};
+pub use task::{
+    CausalScoringTask, EmbeddingTask, ModelTask, PoolingMode, SequenceScoringTask,
+    TaskExecutionPlan,
+};
 
 #[cfg(test)]
 #[allow(clippy::self_named_module_files)]

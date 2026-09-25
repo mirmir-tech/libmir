@@ -101,11 +101,8 @@ pub(super) struct TokenStream<'a> {
 }
 
 impl<'a> TokenStream<'a> {
-    pub(super) fn new(tokenizer: &'a TextTokenizer, prompt: &str) -> Self {
-        Self {
-            decoder: tokenizer.decoder(),
-            normalizer: OutputNormalizer::new(tokenizer, prompt),
-        }
+    pub(super) fn new(tokenizer: &'a TextTokenizer, normalizer: OutputNormalizer) -> Self {
+        Self { decoder: tokenizer.decoder(), normalizer }
     }
 
     pub(super) fn step(&mut self, token: u32) -> crate::Result<Option<GenerationToken>> {
@@ -116,5 +113,19 @@ impl<'a> TokenStream<'a> {
     /// Releases text withheld as a partial UTF-8 sequence with its ids.
     pub(super) fn finish(&mut self) -> crate::Result<Option<GenerationToken>> {
         Ok(self.decoder.finish()?.and_then(|piece| self.normalizer.finish(piece)))
+    }
+
+    pub(super) fn finish_into(
+        &mut self,
+        text: &mut String,
+        reasoning: &mut String,
+        tool_calls: &mut String,
+        token: &mut dyn FnMut(GenerationToken),
+    ) -> crate::Result<()> {
+        if let Some(delta) = self.finish()? {
+            append_delta(&delta, text, reasoning, tool_calls);
+            token(delta);
+        }
+        Ok(())
     }
 }

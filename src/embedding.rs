@@ -84,6 +84,7 @@ impl Model {
 fn task_name(task: &ModelTask) -> &'static str {
     match task {
         ModelTask::Generation => "generation",
+        ModelTask::CausalScoring(_) => "rerank",
         ModelTask::Embedding(_) => "embedding",
         ModelTask::SequenceScoring(_) => "sequence scoring",
     }

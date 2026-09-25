@@ -143,6 +143,7 @@ impl ModelCoordinator {
 
     /// Rebuilds the generation worker's prefill profile for a resized K/V
     /// cache; split coordinators derive their limits per request.
+    #[cfg_attr(not(any(feature = "cuda", feature = "metal")), allow(clippy::unnecessary_wraps))]
     pub(crate) fn reprofile(
         &self,
         engine: &Engine,

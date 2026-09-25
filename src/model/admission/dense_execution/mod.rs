@@ -1,6 +1,8 @@
+mod metal;
 use std::collections::BTreeSet;
 
 use foundation::model::BackendTarget;
+use metal::metal_generation_supported;
 use models::{
     execution::{DecoderExecutionContract, TaskExecutionPlan},
     semantic::FeedForwardSpec,
@@ -47,9 +49,9 @@ fn dense_dtypes<'a>(
             TaskExecutionPlan::SequenceScoring { bindings, .. } => {
                 Box::new(bindings.tensors.iter().map(|item| &item.storage))
             },
-            TaskExecutionPlan::Generation { .. } | TaskExecutionPlan::Embedding { .. } => {
-                Box::new(std::iter::empty())
-            },
+            TaskExecutionPlan::Generation { .. }
+            | TaskExecutionPlan::CausalScoring { .. }
+            | TaskExecutionPlan::Embedding { .. } => Box::new(std::iter::empty()),
         },
     };
     storage
@@ -73,8 +75,10 @@ fn metal(
         );
     }
 
-    if matches!(task, TaskExecutionPlan::Generation { .. })
-        && !execution.is_some_and(metal_generation_supported)
+    if matches!(
+        task,
+        TaskExecutionPlan::Generation { .. } | TaskExecutionPlan::CausalScoring { .. }
+    ) && !execution.is_some_and(metal_generation_supported)
     {
         return (
             AdmissionStatus::Unsupported,
@@ -87,39 +91,6 @@ fn metal(
         AdmissionStatus::Supported,
         format!("Metal preserves admitted dense storage on load ({actual})"),
     )
-}
-
-fn metal_generation_supported(contract: &DecoderExecutionContract) -> bool {
-    contract.semantic.decoder.layers.iter().all(|layer| match &layer.feed_forward {
-        FeedForwardSpec::Dense { .. } => true,
-        FeedForwardSpec::DenseAndRouted { .. } => contract
-            .bindings
-            .hybrid_moe_layer(layer.index)
-            .is_ok_and(|bindings| metal_hybrid_experts_supported(&bindings.experts)),
-        FeedForwardSpec::Routed { shared: Some(_), .. } => {
-            contract.bindings.hybrid_decoder_layer(layer.index).is_ok()
-        },
-        FeedForwardSpec::Routed { shared: None, .. } => {
-            contract.bindings.routed_decoder_layer(layer.index).is_ok()
-        },
-    })
-}
-
-fn metal_hybrid_experts_supported(experts: &HybridMoeExpertBindings<'_>) -> bool {
-    match experts {
-        HybridMoeExpertBindings::Stacked(_) | HybridMoeExpertBindings::FusedStacked { .. } => true,
-        HybridMoeExpertBindings::Individual { gate, up, down } => {
-            gate.iter().chain(up).chain(down).all(|binding| {
-                matches!(
-                    binding.storage,
-                    TensorStorage::BlockQuantized {
-                        format: models::weights::BlockQuantization::NVFP4,
-                        ..
-                    }
-                )
-            })
-        },
-    }
 }
 
 fn cuda(
@@ -138,11 +109,16 @@ fn cuda(
     }
     let (required, path) = match task {
         TaskExecutionPlan::SequenceScoring { .. } => ("F16", "sequence scoring"),
-        TaskExecutionPlan::Generation { .. } | TaskExecutionPlan::Embedding { .. } => {
+        TaskExecutionPlan::Generation { .. }
+        | TaskExecutionPlan::CausalScoring { .. }
+        | TaskExecutionPlan::Embedding { .. } => {
             let convertible =
                 matches!(task, TaskExecutionPlan::Embedding { .. }) || execution.is_some();
             if convertible && dtypes.iter().all(|dtype| matches!(*dtype, "BF16" | "F16" | "F32")) {
-                let path = if matches!(task, TaskExecutionPlan::Generation { .. }) {
+                let path = if matches!(
+                    task,
+                    TaskExecutionPlan::Generation { .. } | TaskExecutionPlan::CausalScoring { .. }
+                ) {
                     "generation"
                 } else {
                     "text embedding"

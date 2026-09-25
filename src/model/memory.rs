@@ -32,7 +32,8 @@ impl ModelDescriptor {
     ) -> ModelMemoryEstimate {
         let weight_bytes = self.layout.weights.iter().map(|weight| weight.bytes).sum::<u64>();
         let generation_decoder = match &self.task_plan {
-            TaskExecutionPlan::Generation { decoder } => Some(decoder),
+            TaskExecutionPlan::Generation { decoder }
+            | TaskExecutionPlan::CausalScoring { decoder, .. } => Some(decoder),
             TaskExecutionPlan::Embedding { .. } | TaskExecutionPlan::SequenceScoring { .. } => None,
         };
         let cache_capacity_tokens = generation_decoder.map_or(0, |_| {

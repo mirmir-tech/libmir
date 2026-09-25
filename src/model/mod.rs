@@ -107,6 +107,7 @@ impl ModelDescriptor {
         let task_plan = TaskExecutionPlan::discover(&layout, &catalog)?;
         let decoder = match &task_plan {
             TaskExecutionPlan::Generation { decoder }
+            | TaskExecutionPlan::CausalScoring { decoder, .. }
             | TaskExecutionPlan::Embedding { decoder, .. } => Some(decoder.clone()),
             TaskExecutionPlan::SequenceScoring { .. } => None,
         };
@@ -174,6 +175,7 @@ impl ModelDescriptor {
 fn task_mismatch(requested: &'static str, task: &TaskExecutionPlan) -> Error {
     let actual = match task.task() {
         ModelTask::Generation => "generation",
+        ModelTask::CausalScoring(_) => "rerank",
         ModelTask::Embedding(_) => "embedding",
         ModelTask::SequenceScoring(_) => "sequence scoring",
     };

@@ -32,6 +32,9 @@ impl ModelDescriptor {
         generation: GenerationSettings,
         reasoning: crate::ReasoningMode,
     ) -> Result<PreparedPrompt> {
+        if !matches!(self.task_plan.task(), ModelTask::Generation) {
+            return Err(task_mismatch("generation", &self.task_plan));
+        }
         let render_started = Instant::now();
         let prompt = self.template.render_with_reasoning(conversation, reasoning)?;
         let render = render_started.elapsed();

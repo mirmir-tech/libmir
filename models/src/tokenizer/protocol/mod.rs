@@ -11,6 +11,8 @@ pub struct OutputMarkerIds {
     pub channel_body: Vec<u32>,
     pub channel_end: Vec<u32>,
     pub tool_calls: Vec<u32>,
+    pub xml_tool_start: Vec<u32>,
+    pub xml_tool_end: Vec<u32>,
 }
 
 pub(super) struct ProtocolTokenIds {
@@ -39,6 +41,8 @@ impl ProtocolTokenIds {
                 channel_body: ids(tokenizer, added, &["<|message|>"]),
                 channel_end: ids(tokenizer, added, &["<channel|>", "<|end|>", "<|return|>"]),
                 tool_calls: ids(tokenizer, added, &["[TOOL_CALLS]"]),
+                xml_tool_start: ids(tokenizer, added, &["<tool_call>"]),
+                xml_tool_end: ids(tokenizer, added, &["</tool_call>"]),
             },
         }
     }

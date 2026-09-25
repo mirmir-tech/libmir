@@ -110,3 +110,61 @@ fn finish_attaches_released_text_to_withheld_ids() {
     assert_eq!(token.map(|token| token.text), Some("\u{fffd}".into()));
     assert!(normalizer.finish(String::new()).is_none());
 }
+
+#[test]
+fn routes_xml_markers_and_body_outside_visible_content() {
+    let mut normalizer = normalizer(Markers {
+        xml_tool_start: vec![20],
+        xml_tool_end: vec![21],
+        ..Default::default()
+    });
+    for (id, text) in
+        [(20, "<tool_call>"), (22, "<function=emit>"), (23, "</function>"), (21, "</tool_call>")]
+    {
+        let token = normalizer.push(id, text.into());
+        assert_eq!(token.as_ref().map(|token| token.channel), Some(GenerationChannel::ToolCalls));
+        assert_eq!(token.map(|token| token.text), Some(text.into()));
+    }
+    assert_eq!(
+        normalizer.push(24, "after".into()).map(|token| token.channel),
+        Some(GenerationChannel::Content)
+    );
+}
+
+#[test]
+fn tool_markup_inside_reasoning_is_not_executed() {
+    let mut normalizer = normalizer(Markers {
+        reasoning: vec![1],
+        content: vec![2],
+        xml_tool_start: vec![20],
+        xml_tool_end: vec![21],
+        ..Default::default()
+    });
+    assert!(normalizer.push(1, String::new()).is_none());
+    for (id, text) in [(20, "<tool_call>"), (22, "example"), (21, "</tool_call>")] {
+        assert_eq!(
+            normalizer.push(id, text.into()).map(|token| token.channel),
+            Some(GenerationChannel::Reasoning)
+        );
+    }
+    assert!(normalizer.push(2, String::new()).is_none());
+    assert_eq!(
+        normalizer.push(20, "<tool_call>".into()).map(|token| token.channel),
+        Some(GenerationChannel::ToolCalls)
+    );
+}
+
+#[test]
+fn literal_xml_without_tools_stays_visible_text() {
+    let mut normalizer = normalizer(Markers {
+        xml_tool_start: vec![20],
+        xml_tool_end: vec![21],
+        ..Default::default()
+    })
+    .without_tool_protocol();
+    for (id, text) in [(20, "<tool_call>"), (22, "example"), (21, "</tool_call>")] {
+        let token = normalizer.push(id, text.into());
+        assert_eq!(token.as_ref().map(|token| token.channel), Some(GenerationChannel::Content));
+        assert_eq!(token.map(|token| token.text), Some(text.into()));
+    }
+}

@@ -1,3 +1,5 @@
+mod causal;
+
 use std::cmp::Ordering;
 
 use models::execution::{ModelTask, TaskExecutionPlan};
@@ -42,12 +44,6 @@ impl Model {
     /// contract.
     pub fn rerank(&self, request: RerankRequest) -> Result<RerankOutput> {
         let descriptor = self.descriptor();
-        if !matches!(descriptor.task_plan(), TaskExecutionPlan::SequenceScoring { .. }) {
-            return Err(Error::TaskMismatch {
-                requested: "sequence scoring",
-                actual: task_name(&descriptor.task()),
-            });
-        }
         if request.query.is_empty() || request.documents.is_empty() {
             return Err(Error::EmptyPrompt);
         }
@@ -64,15 +60,35 @@ impl Model {
             )
             .into());
         }
-        let pairs: Vec<Vec<u32>> = request
-            .documents
-            .iter()
-            .map(|document| {
-                Ok(tokenizer.encode_pair(&request.query, document, max_length)?.token_ids)
-            })
-            .collect::<Result<_>>()?;
-        let prompt_tokens = pairs.iter().map(Vec::len).sum();
-        let scores = self.engine().score_tokens(self.handle(), &pairs)?;
+        let (scores, prompt_tokens) = match descriptor.task_plan() {
+            TaskExecutionPlan::SequenceScoring { .. } => {
+                let pairs: Vec<Vec<u32>> = request
+                    .documents
+                    .iter()
+                    .map(|document| {
+                        Ok(tokenizer.encode_pair(&request.query, document, max_length)?.token_ids)
+                    })
+                    .collect::<Result<_>>()?;
+                let prompt_tokens = pairs.iter().map(Vec::len).sum();
+                (self.engine().score_tokens(self.handle(), &pairs)?, prompt_tokens)
+            },
+            TaskExecutionPlan::CausalScoring { decoder, task } => {
+                causal::score(self, &request, task, decoder.vocab_size, max_length)?
+            },
+            _ => {
+                return Err(Error::TaskMismatch {
+                    requested: "reranking",
+                    actual: task_name(&descriptor.task()),
+                });
+            },
+        };
+        if scores.len() != request.documents.len() || scores.iter().any(|score| !score.is_finite())
+        {
+            return Err(models::ModelsError::InvalidConfig(
+                "reranker returned incomplete or non-finite scores".into(),
+            )
+            .into());
+        }
         let mut results: Vec<_> = request
             .documents
             .into_iter()
@@ -106,6 +122,7 @@ fn sigmoid(value: f32) -> f32 {
 fn task_name(task: &ModelTask) -> &'static str {
     match task {
         ModelTask::Generation => "generation",
+        ModelTask::CausalScoring(_) => "causal scoring",
         ModelTask::Embedding(_) => "embedding",
         ModelTask::SequenceScoring(_) => "sequence scoring",
     }

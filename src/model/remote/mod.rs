@@ -1,7 +1,8 @@
 use foundation::model::BackendTarget;
 use models::{
     execution::{
-        ArchitectureRequirements, DecoderExecutionContract, EmbeddingTask, TaskExecutionPlan,
+        ArchitectureRequirements, CausalScoringTask, DecoderExecutionContract, EmbeddingTask,
+        TaskExecutionPlan,
     },
     layout::{DecoderConfig, ImageProcessorConfig, VisionConfig},
     semantic::SemanticModelSpec,
@@ -20,6 +21,8 @@ pub struct RemoteTaskMetadata<'a> {
     pub modules: Option<&'a serde_json::Value>,
     /// Configuration of the Pooling module referenced by `modules.json`.
     pub pooling: Option<&'a serde_json::Value>,
+    /// Configuration of the `LogitScore` module referenced by `modules.json`.
+    pub logit_score: Option<&'a serde_json::Value>,
     /// Optional `config_sentence_transformers.json` value.
     pub sentence_transformers: Option<&'a serde_json::Value>,
     /// Optional `processor_config.json` or `preprocessor_config.json` value.
@@ -72,6 +75,24 @@ impl RemoteModelContract {
                 vision,
             }));
         }
+        if let Some(modules) = metadata.modules
+            && CausalScoringTask::config_path(modules)?.is_some()
+        {
+            let config_value = metadata.logit_score.ok_or_else(|| {
+                models::ModelsError::InvalidConfig("LogitScore configuration is missing".into())
+            })?;
+            let decoder = DecoderConfig::from_value(config)?;
+            let task = CausalScoringTask::from_values(
+                config_value,
+                metadata.sentence_transformers,
+                decoder.vocab_size,
+            )?;
+            return Ok(Some(Self {
+                execution: Some(decoder_execution(&decoder, catalog)?),
+                task: TaskExecutionPlan::CausalScoring { decoder, task },
+                vision,
+            }));
+        }
         if let Some(task) = TaskExecutionPlan::discover_remote_sequence_scoring(config, catalog)? {
             return Ok(Some(Self { execution: None, task, vision }));
         }
@@ -109,9 +130,9 @@ impl RemoteModelContract {
                 TaskExecutionPlan::SequenceScoring { bindings, .. } => {
                     CheckpointEncoding::from_encoder_bindings(bindings)
                 },
-                TaskExecutionPlan::Generation { .. } | TaskExecutionPlan::Embedding { .. } => {
-                    CheckpointEncoding::default()
-                },
+                TaskExecutionPlan::Generation { .. }
+                | TaskExecutionPlan::CausalScoring { .. }
+                | TaskExecutionPlan::Embedding { .. } => CheckpointEncoding::default(),
             },
             |execution| CheckpointEncoding::from_bindings(&execution.bindings),
         );

@@ -1,9 +1,11 @@
 mod discovery;
+mod logit_score;
 mod sentence_transformers;
 
 use std::collections::BTreeMap;
 
 pub use discovery::TaskExecutionPlan;
+pub use logit_score::CausalScoringTask;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PoolingMode {
@@ -33,4 +35,5 @@ pub enum ModelTask {
     Generation,
     Embedding(EmbeddingTask),
     SequenceScoring(SequenceScoringTask),
+    CausalScoring(CausalScoringTask),
 }

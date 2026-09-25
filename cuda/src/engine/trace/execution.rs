@@ -10,7 +10,10 @@ use super::LoadedModel;
 use crate::engine::lowering::CudaDecoderPlan;
 
 pub(super) fn acceleration(model: &LoadedModel) -> Vec<String> {
-    if !matches!(&model.task_plan, TaskExecutionPlan::Generation { .. }) {
+    if !matches!(
+        &model.task_plan,
+        TaskExecutionPlan::Generation { .. } | TaskExecutionPlan::CausalScoring { .. }
+    ) {
         return vec![
             "safe Rust mircuda execution gateway".into(),
             "one explicit CUDA stream".into(),
@@ -69,7 +72,10 @@ pub(super) fn warnings(model: &LoadedModel) -> Vec<String> {
 }
 
 pub(super) fn actions(model: &LoadedModel, cache: CacheConfig) -> Vec<TraceAction> {
-    if !matches!(&model.task_plan, TaskExecutionPlan::Generation { .. }) {
+    if !matches!(
+        &model.task_plan,
+        TaskExecutionPlan::Generation { .. } | TaskExecutionPlan::CausalScoring { .. }
+    ) {
         return vec![
             TraceAction::new("inspect", "compiled task semantics from config and tensor schema"),
             TraceAction::new(

@@ -8,6 +8,10 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug, Error)]
 /// Error produced while inspecting, loading, or running a model.
 pub enum Error {
+    #[error("invalid model tool call: {0}")]
+    /// Generated tool output was malformed or violated the requested tool
+    /// choice.
+    InvalidToolCall(String),
     #[error("generation was cancelled")]
     /// Generation stopped after its cancellation token was signalled.
     Cancelled,

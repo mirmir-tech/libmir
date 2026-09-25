@@ -26,7 +26,7 @@ impl Engine {
             #[cfg(feature = "metal")]
             EngineInner::Metal(_) => Ok(false),
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => unavailable(),
+            EngineInner::Unavailable => super::unavailable(),
         }
     }
 

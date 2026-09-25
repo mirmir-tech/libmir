@@ -39,8 +39,8 @@ pub use model::{
 pub use models::{
     chat::{ReasoningMode, TemplateKind},
     execution::{
-        ArchitectureCapability, ArchitectureRequirements, EmbeddingTask, ModelTask, PoolingMode,
-        TaskExecutionPlan,
+        ArchitectureCapability, ArchitectureRequirements, CausalScoringTask, EmbeddingTask,
+        ModelTask, PoolingMode, TaskExecutionPlan,
     },
     generation::{GenerationChannel, GenerationOverrides, GenerationSettings, GenerationToken},
     tokenizer::{TokenizerAssets, TokenizerKind},

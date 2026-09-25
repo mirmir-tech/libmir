@@ -13,6 +13,7 @@ pub(super) fn execution_metadata(
 ) -> Result<(Option<DecoderConfig>, Option<EncoderConfig>, Option<DecoderExecutionContract>)> {
     match task {
         TaskExecutionPlan::Generation { decoder }
+        | TaskExecutionPlan::CausalScoring { decoder, .. }
         | TaskExecutionPlan::Embedding { decoder, .. } => {
             let contract = DecoderExecutionContract::discover(layout, decoder, catalog)?;
             Ok((Some(decoder.clone()), None, Some(contract)))

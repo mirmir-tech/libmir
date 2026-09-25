@@ -15,7 +15,9 @@ pub fn admit(
     semantic: Option<&SemanticModelSpec>,
 ) -> Result<CudaArchitecture> {
     match task {
-        TaskExecutionPlan::Generation { .. } => generation(semantic),
+        TaskExecutionPlan::Generation { .. } | TaskExecutionPlan::CausalScoring { .. } => {
+            generation(semantic)
+        },
         TaskExecutionPlan::Embedding { .. } => Ok(CudaArchitecture::Embedding),
         TaskExecutionPlan::SequenceScoring { encoder, .. } => sequence_scoring(encoder),
     }

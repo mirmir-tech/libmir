@@ -11,6 +11,7 @@ mod output;
 mod request;
 mod sampling;
 mod telemetry;
+mod tools;
 
 use cycle::CycleRecovery;
 use input::PreparedGeneration;
@@ -81,7 +82,8 @@ impl Model {
         let output_setup_started = Instant::now();
         let tokenizer = descriptor.tokenizer();
         let stop_token_ids = tokenizer.stop_token_ids();
-        let mut stream = TokenStream::new(tokenizer, prepared.prompt_text());
+        let mut stream =
+            TokenStream::new(tokenizer, prepared.normalizer(tokenizer, &request.conversation));
         let decoder = descriptor.decoder().ok_or_else(missing_decoder)?;
         let vocab_size = tokenizer.vocab_size().min(decoder.vocab_size);
         let output_setup = output_setup_started.elapsed();
@@ -111,7 +113,7 @@ impl Model {
         let mut next = choose_prefill(&prefill, history.as_deref(), &mut sampler, &mut metrics)?;
         let mut token_ids = Vec::with_capacity(settings.max_tokens);
         let (mut text, mut reasoning, mut tool_calls) =
-            (String::new(), String::new(), String::new());
+            (String::new(), String::new(), prepared.initial_tool_calls());
         let mut finish_reason = "max_tokens";
         while token_ids.len() < settings.max_tokens {
             cancellation.check()?;
@@ -160,10 +162,8 @@ impl Model {
                 &mut sampler,
             )?;
         }
-        if let Some(delta) = stream.finish()? {
-            append_delta(&delta, &mut text, &mut reasoning, &mut tool_calls);
-            token(delta);
-        }
+        stream.finish_into(&mut text, &mut reasoning, &mut tool_calls, token)?;
+        let tool_calls = tools::normalize(&tool_calls, &request.conversation)?;
         let metrics = finish_metrics(&mut metrics, token_ids.len(), &session);
         Ok(finalize_output(
             text, reasoning, tool_calls, token_ids, prompt_tokens, finish_reason, metrics,

@@ -26,10 +26,31 @@ enum State {
     Reasoning,
     ToolCalls,
     RoleName,
+    XmlToolCalls,
     ChannelName(String),
 }
 
 impl OutputNormalizer {
+    #[must_use]
+    pub fn without_tool_protocol(mut self) -> Self {
+        self.markers.tool_calls.clear();
+        self.markers.xml_tool_start.clear();
+        self.markers.xml_tool_end.clear();
+        self
+    }
+
+    pub fn with_tool_prefix(
+        tokenizer: &TextTokenizer,
+        prompt: &str,
+        prefix: &crate::chat::ToolCallPrefix,
+    ) -> Self {
+        let mut normalizer = Self::new(tokenizer, prompt);
+        normalizer.state = match prefix {
+            crate::chat::ToolCallPrefix::XmlFunction(_) => State::XmlToolCalls,
+        };
+        normalizer
+    }
+
     #[must_use]
     pub fn new(tokenizer: &TextTokenizer, prompt: &str) -> Self {
         Self {
@@ -46,6 +67,14 @@ impl OutputNormalizer {
     #[must_use]
     pub fn push(&mut self, id: u32, text: String) -> Option<GenerationToken> {
         self.pending_ids.push(id);
+        if self.markers.xml_tool_start.contains(&id) && !matches!(self.state, State::Reasoning) {
+            self.state = State::XmlToolCalls;
+            return self.nonempty("<tool_call>".into(), GenerationChannel::ToolCalls);
+        }
+        if self.markers.xml_tool_end.contains(&id) && matches!(self.state, State::XmlToolCalls) {
+            self.state = State::Content;
+            return self.nonempty("</tool_call>".into(), GenerationChannel::ToolCalls);
+        }
         if self.markers.turn_start.contains(&id) {
             self.state = State::RoleName;
             return None;
@@ -130,7 +159,7 @@ fn unmatched(text: &str, start: &str, end: &str) -> bool {
 const fn channel(state: &State) -> GenerationChannel {
     match state {
         State::Reasoning => GenerationChannel::Reasoning,
-        State::ToolCalls => GenerationChannel::ToolCalls,
+        State::ToolCalls | State::XmlToolCalls => GenerationChannel::ToolCalls,
         State::Content | State::RoleName | State::ChannelName(_) => GenerationChannel::Content,
     }
 }

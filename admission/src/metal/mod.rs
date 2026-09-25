@@ -50,7 +50,7 @@ pub fn admit(
     semantic: Option<&SemanticModelSpec>,
 ) -> Result<MetalArchitecture> {
     match task {
-        TaskExecutionPlan::Generation { .. } => {
+        TaskExecutionPlan::Generation { .. } | TaskExecutionPlan::CausalScoring { .. } => {
             let semantic = semantic.ok_or_else(|| {
                 ArchitectureError::invalid("Metal generation semantic contract is missing")
             })?;

@@ -60,17 +60,23 @@ impl LoadedModel {
         let catalog = TensorCatalog::from_layout(&layout)?;
         let task_plan = TaskExecutionPlan::discover(&layout, &catalog)?;
         let (decoder, encoder, contract) = execution_metadata(&task_plan, &layout, &catalog)?;
-        let decoder_lowering = matches!(task_plan, TaskExecutionPlan::Generation { .. })
-            .then(|| {
-                contract
-                    .as_ref()
-                    .ok_or_else(|| Error::UnsupportedModel("generation contract is missing".into()))
-                    .and_then(|contract| Ok(lowering::plan(&contract.semantic)?))
-            })
-            .transpose()?;
+        let decoder_lowering = matches!(
+            task_plan,
+            TaskExecutionPlan::Generation { .. } | TaskExecutionPlan::CausalScoring { .. }
+        )
+        .then(|| {
+            contract
+                .as_ref()
+                .ok_or_else(|| Error::UnsupportedModel("generation contract is missing".into()))
+                .and_then(|contract| Ok(lowering::plan(&contract.semantic)?))
+        })
+        .transpose()?;
         let vision = VisionConfig::from_layout(&layout)?;
         if let Some(decoder) = decoder.as_ref()
-            && matches!(task_plan, TaskExecutionPlan::Generation { .. })
+            && matches!(
+                task_plan,
+                TaskExecutionPlan::Generation { .. } | TaskExecutionPlan::CausalScoring { .. }
+            )
         {
             let lowering = decoder_lowering
                 .as_ref()
@@ -102,7 +108,7 @@ impl LoadedModel {
                     &tensors, decoder, tensor_layout, &stream,
                 )?)
             },
-            TaskExecutionPlan::Generation { .. } => {
+            TaskExecutionPlan::Generation { .. } | TaskExecutionPlan::CausalScoring { .. } => {
                 let decoder = decoder.as_ref().ok_or_else(|| {
                     Error::UnsupportedModel("generation decoder config is missing".into())
                 })?;

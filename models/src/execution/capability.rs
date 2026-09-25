@@ -12,6 +12,7 @@ pub enum ArchitectureCapability {
     GenerationTask,
     EmbeddingTask,
     SequenceScoringTask,
+    CausalScoringTask,
     ClsPooling,
     LastTokenPooling,
     MeanPooling,
@@ -67,6 +68,9 @@ fn task_capabilities(
     capabilities: &mut BTreeSet<ArchitectureCapability>,
 ) {
     match task {
+        TaskExecutionPlan::CausalScoring { .. } => {
+            capabilities.insert(ArchitectureCapability::CausalScoringTask);
+        },
         TaskExecutionPlan::Generation { .. } => {
             capabilities.insert(ArchitectureCapability::GenerationTask);
         },

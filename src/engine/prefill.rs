@@ -38,6 +38,10 @@ impl Engine {
         )
     }
 
+    #[cfg_attr(
+        not(any(feature = "cuda", feature = "metal")),
+        allow(clippy::needless_pass_by_ref_mut)
+    )]
     pub(crate) fn prefill_request_with_progress(
         &self,
         request: &PrefillRequest,

@@ -3,8 +3,10 @@ mod fallback;
 mod protocol;
 mod reasoning;
 mod render;
+mod tools;
 use foundation::conversation::Conversation;
 pub use reasoning::ReasoningMode;
+pub use tools::ToolCallPrefix;
 
 use self::{
     config::{ModelTemplateConfig, TemplateTokens},
@@ -18,6 +20,7 @@ pub struct ChatPrompt {
     pub text: String,
     pub source: TemplateSource,
     pub add_special_tokens: bool,
+    pub tool_prefix: Option<ToolCallPrefix>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,11 +88,16 @@ impl ChatTemplate {
         {
             return Err(crate::ModelsError::UnsupportedReasoningControl);
         }
-        let text = self.template.as_deref().map_or_else(
+        let mut text = self.template.as_deref().map_or_else(
             || Ok(render_builtin(conversation, self.kind, &self.tokens, reasoning)),
             |template| render_model_template(template, conversation, &self.tokens, reasoning),
         )?;
+        let tool_prefix = tools::prefix(self.template.as_deref(), conversation, reasoning)?;
+        if let Some(prefix) = &tool_prefix {
+            text.push_str(&prefix.text());
+        }
         Ok(ChatPrompt {
+            tool_prefix,
             add_special_tokens: self.tokens.requires_automatic_bos(&text),
             text,
             source: self.source.clone(),

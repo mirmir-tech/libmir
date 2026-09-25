@@ -103,3 +103,45 @@ fn generic_fallback_rejects_an_explicit_thinking_switch() {
         Err(crate::ModelsError::UnsupportedReasoningControl)
     ));
 }
+
+#[test]
+fn named_xml_tools_prefill_only_in_explicit_no_thinking_mode() -> Result<()> {
+    use foundation::conversation::{FunctionDefinition, Tool, ToolChoice};
+    let template = ChatTemplate {
+        kind: TemplateKind::ModelJinja,
+        source: TemplateSource::ChatTemplateFile,
+        tokens: TemplateTokens::new("", "<|im_end|>"),
+        template: Some(
+            "{# <tool_call><function= #}{{ enable_thinking }}<|im_start|>assistant\n".into(),
+        ),
+    };
+    let mut conversation = request("extract");
+    conversation.tool_choice = ToolChoice::Function("emit".into());
+    conversation.tools = vec![Tool {
+        kind: "function".into(),
+        function: FunctionDefinition {
+            name: "emit".into(),
+            description: None,
+            parameters: serde_json::json!({"type":"object"}),
+        },
+    }];
+    let disabled = template.render_with_reasoning(&conversation, ReasoningMode::Disabled)?;
+    assert!(disabled.text.ends_with("<tool_call>\n<function=emit>\n"));
+    assert!(disabled.tool_prefix.is_some());
+    assert!(
+        template
+            .render_with_reasoning(&conversation, ReasoningMode::Enabled)?
+            .tool_prefix
+            .is_none()
+    );
+    conversation.tool_choice = ToolChoice::Auto;
+    assert!(
+        template
+            .render_with_reasoning(&conversation, ReasoningMode::Disabled)?
+            .tool_prefix
+            .is_none()
+    );
+    conversation.tool_choice = ToolChoice::Function("missing".into());
+    assert!(template.render_with_reasoning(&conversation, ReasoningMode::Disabled).is_err());
+    Ok(())
+}

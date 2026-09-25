@@ -35,9 +35,9 @@ pub(super) fn inspect(
             TaskExecutionPlan::SequenceScoring { bindings, .. } => {
                 CheckpointEncoding::from_encoder_bindings(bindings)
             },
-            TaskExecutionPlan::Generation { .. } | TaskExecutionPlan::Embedding { .. } => {
-                CheckpointEncoding::default()
-            },
+            TaskExecutionPlan::Generation { .. }
+            | TaskExecutionPlan::CausalScoring { .. }
+            | TaskExecutionPlan::Embedding { .. } => CheckpointEncoding::default(),
         },
         |execution| CheckpointEncoding::from_bindings(&execution.bindings),
     );

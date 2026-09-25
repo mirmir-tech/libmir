@@ -1,4 +1,6 @@
-use super::{ModelTask, PoolingMode, SequenceScoringTask, sentence_transformers};
+use super::{
+    CausalScoringTask, ModelTask, PoolingMode, SequenceScoringTask, sentence_transformers,
+};
 use crate::{
     error::{ModelsError, Result},
     layout::{DecoderConfig, EncoderConfig, ModelLayout},
@@ -7,6 +9,10 @@ use crate::{
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TaskExecutionPlan {
+    CausalScoring {
+        decoder: DecoderConfig,
+        task: CausalScoringTask,
+    },
     Generation {
         decoder: DecoderConfig,
     },
@@ -36,9 +42,11 @@ impl TaskExecutionPlan {
         if sequence_scoring_layout(catalog) {
             return sequence_scoring(EncoderConfig::from_layout(layout)?, catalog);
         }
-        Ok(Self::Generation {
-            decoder: DecoderConfig::from_layout(layout)?,
-        })
+        let decoder = DecoderConfig::from_layout(layout)?;
+        if let Some(task) = CausalScoringTask::discover(layout, decoder.vocab_size)? {
+            return Ok(Self::CausalScoring { decoder, task });
+        }
+        Ok(Self::Generation { decoder })
     }
 
     pub fn discover_remote_sequence_scoring(
@@ -57,6 +65,7 @@ impl TaskExecutionPlan {
             Self::Generation { .. } => ModelTask::Generation,
             Self::Embedding { task, .. } => ModelTask::Embedding(task.clone()),
             Self::SequenceScoring { task, .. } => ModelTask::SequenceScoring(*task),
+            Self::CausalScoring { task, .. } => ModelTask::CausalScoring(task.clone()),
         }
     }
 }
