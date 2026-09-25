@@ -21,6 +21,8 @@ pub enum RuntimeError {
     Scheduler(String),
     #[error("kv cache error: {0}")]
     KvCache(String),
+    #[error("request needs {requested} KV blocks but the arena contains {capacity}")]
+    KvCapacity { requested: usize, capacity: usize },
     #[error("kv cache is waiting for active sessions to release blocks")]
     KvCachePressure,
 }

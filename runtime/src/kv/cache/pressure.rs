@@ -4,10 +4,10 @@ use crate::error::{Result, RuntimeError};
 impl KvCache {
     pub(super) fn ensure_free_blocks(&mut self, count: usize) -> Result<()> {
         if count > self.blocks.len() {
-            return Err(RuntimeError::KvCache(format!(
-                "request needs {count} KV blocks but the arena contains {}",
-                self.blocks.len()
-            )));
+            return Err(RuntimeError::KvCapacity {
+                requested: count,
+                capacity: self.blocks.len(),
+            });
         }
         if count <= self.free.len() {
             return Ok(());

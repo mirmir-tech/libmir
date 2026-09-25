@@ -120,8 +120,28 @@ fn allocation_pressure_preserves_prefixes_used_by_sessions() -> Result<()> {
     cache.commit_prefix_block("gemma", None, block, &[1, 2])?;
     cache.retain(block)?;
 
-    assert!(cache.allocate().is_err());
+    assert!(matches!(cache.allocate(), Err(RuntimeError::KvCachePressure)));
     assert_eq!(cache.block_ref_count(block)?, 3);
     assert_eq!(cache.stats().counters.protected_prefix_skips, 1);
+    Ok(())
+}
+
+#[test]
+fn impossible_allocation_is_typed_and_preserves_cached_prefix() -> Result<()> {
+    let mut cache = KvCache::with_config(CacheConfig {
+        block_size: 2,
+        block_count: 1,
+        dtype: KvCacheDType::Auto,
+    });
+    let block = cache.allocate()?;
+    cache.commit_prefix_block("model", None, block, &[1, 2])?;
+    cache.release(block)?;
+    assert!(matches!(
+        cache.allocate_for_tokens(3),
+        Err(RuntimeError::KvCapacity { requested: 2, capacity: 1 })
+    ));
+    assert_eq!(cache.stats().counters.evictions, 0);
+    assert_eq!(cache.probe_prefix("model", &[1, 2]).cached_blocks, [block]);
+    assert_eq!(cache.allocate_for_tokens(2)?.table.blocks(), &[block]);
     Ok(())
 }
