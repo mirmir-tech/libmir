@@ -30,7 +30,7 @@ fn executes_mxfp4_output_head_without_dense_weights() -> Result<()> {
         ModelOutputHeadTemplate::prepare(&backend, weight, 32, 2)?.instantiate(&backend)?;
     let input = copy(&backend, &[bf16::ONE; 32])?;
     let mut logits = backend.inner.pool.allocate_zeroed(&backend.inner.stream, 2)?;
-    output.execute(&input, &mut logits, SamplingLogits::Full)?;
+    output.execute(&input, &mut logits, &SamplingLogits::Full)?;
     assert_eq!(read(&backend, &logits)?, [33.0_f32, 94.0].map(bf16::from_f32));
     fs::remove_file(path)?;
     Ok(())

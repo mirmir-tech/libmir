@@ -47,7 +47,7 @@ fn executes_packed_int8_model_boundaries_without_dense_weights() -> Result<()> {
         ModelOutputHeadTemplate::prepare(&backend, weight, 16, 2)?.instantiate(&backend)?;
     let input = copy(&backend, &[bf16::from_f32(1.0); 16])?;
     let mut logits = backend.inner.pool.allocate_zeroed(&backend.inner.stream, 2)?;
-    output.execute(&input, &mut logits, SamplingLogits::Full)?;
+    output.execute(&input, &mut logits, &SamplingLogits::Full)?;
     assert_eq!(read(&backend, &logits)?, [bf16::from_f32(-4.0), bf16::from_f32(8.0)]);
     fs::remove_file(path)?;
     Ok(())
@@ -94,7 +94,7 @@ fn executes_unscaled_e5m2_output_head_without_dense_weights() -> Result<()> {
         ModelOutputHeadTemplate::prepare(&backend, weight, 8, 2)?.instantiate(&backend)?;
     let input = copy(&backend, &[bf16::from_f32(1.0); 8])?;
     let mut logits = backend.inner.pool.allocate_zeroed(&backend.inner.stream, 2)?;
-    output.execute(&input, &mut logits, SamplingLogits::Full)?;
+    output.execute(&input, &mut logits, &SamplingLogits::Full)?;
     assert_eq!(read(&backend, &logits)?, [bf16::from_f32(8.0), bf16::from_f32(0.5)]);
     fs::remove_file(path)?;
     Ok(())

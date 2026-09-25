@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use mircuda::{Context, DeviceBuffer, FmhaBf16Plan, FmhaBf16Spec, Stream, bf16};
 use runtime::kv::{KvCacheDType, KvStorageSpec};
 
@@ -16,7 +18,7 @@ pub(super) struct PagedFmhaDecode {
     block_size: usize,
     query_heads: usize,
     head_dim: usize,
-    tuned_band: usize,
+    tuned_splits: BTreeMap<(usize, usize), usize>,
     num_splits: usize,
 }
 
@@ -65,7 +67,7 @@ impl PagedFmhaDecode {
             block_size: storage.cache.block_size,
             query_heads,
             head_dim: storage.key_head_dim,
-            tuned_band: 0,
+            tuned_splits: BTreeMap::new(),
             num_splits: 1,
         }))
     }
@@ -78,10 +80,16 @@ impl PagedFmhaDecode {
         output: &mut DeviceBuffer<bf16>,
         scale: f32,
     ) -> Result<()> {
-        let band = context_band(batch.maximum_tokens());
-        if self.tuned_band != band {
+        // Interleaved requests can alternate context bands at every decode
+        // step. Retain each measured shape instead of synchronizing the GPU
+        // to retune every layer whenever the previous band changes. Geometry
+        // and device are fixed by this plan; active rows also affect the choice.
+        let shape = (batch.active(), context_band(batch.maximum_tokens()));
+        if let Some(&selected) = self.tuned_splits.get(&shape) {
+            self.num_splits = selected;
+        } else {
             self.tune(query, cache, batch, output, scale)?;
-            self.tuned_band = band;
+            self.tuned_splits.insert(shape, self.num_splits);
         }
         self.execute_with_splits(query, cache, batch, output, scale, self.num_splits)
     }
