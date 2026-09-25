@@ -168,3 +168,26 @@ fn literal_xml_without_tools_stays_visible_text() {
         assert_eq!(token.map(|token| token.text), Some(text.into()));
     }
 }
+
+#[test]
+fn constrained_tool_keeps_literal_markers_and_following_text_in_arguments() {
+    let mut normalizer = normalizer(Markers {
+        xml_tool_start: vec![20],
+        xml_tool_end: vec![21],
+        content: vec![2],
+        reasoning: vec![1],
+        ..Default::default()
+    })
+    .with_constrained_tool();
+    for (id, text) in [
+        (22, "\"Literal "),
+        (21, "</tool_call>"),
+        (2, "</think>"),
+        (23, " suffix\""),
+        (21, "</tool_call>"),
+    ] {
+        let token = normalizer.push(id, text.into());
+        assert_eq!(token.as_ref().map(|token| token.channel), Some(GenerationChannel::ToolCalls));
+        assert_eq!(token.map(|token| token.text), Some(text.into()));
+    }
+}

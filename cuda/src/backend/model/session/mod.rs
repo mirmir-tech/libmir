@@ -118,7 +118,7 @@ impl CudaMoeModelSession {
         token: u32,
         table: &BlockTable,
     ) -> Result<&DeviceBuffer<bf16>> {
-        self.decode_for_sampling(session_id, token, table, SamplingLogits::Full)
+        self.decode_for_sampling(session_id, token, table, &SamplingLogits::Full)
     }
 
     pub(crate) fn decode_for_sampling(
@@ -126,7 +126,7 @@ impl CudaMoeModelSession {
         session_id: Uuid,
         token: u32,
         table: &BlockTable,
-        sampling: SamplingLogits,
+        sampling: &SamplingLogits,
     ) -> Result<&DeviceBuffer<bf16>> {
         self.embedding.validate_token(token)?;
         self.token_staging.copy_from_slice(&[token])?;
@@ -146,14 +146,14 @@ impl CudaMoeModelSession {
         session_id: Uuid,
         table: &BlockTable,
     ) -> Result<&DeviceBuffer<bf16>> {
-        self.decode_sampled_for_sampling(session_id, table, SamplingLogits::Full)
+        self.decode_sampled_for_sampling(session_id, table, &SamplingLogits::Full)
     }
 
     pub(crate) fn decode_sampled_for_sampling(
         &mut self,
         session_id: Uuid,
         table: &BlockTable,
-        sampling: SamplingLogits,
+        sampling: &SamplingLogits,
     ) -> Result<&DeviceBuffer<bf16>> {
         self.embedding.execute(self.sampler.selected(), 0, &mut self.first)?;
         self.forward(session_id, table, sampling)
@@ -163,13 +163,13 @@ impl CudaMoeModelSession {
         &mut self,
         session_id: Uuid,
         table: &BlockTable,
-        sampling: SamplingLogits,
+        sampling: &SamplingLogits,
     ) -> Result<&DeviceBuffer<bf16>> {
         execute_layers(&mut self.decode_graph, &mut self.layers, &self.stream, session_id, table)?;
         self.project_logits(sampling)
     }
 
-    fn project_logits(&mut self, sampling: SamplingLogits) -> Result<&DeviceBuffer<bf16>> {
+    fn project_logits(&mut self, sampling: &SamplingLogits) -> Result<&DeviceBuffer<bf16>> {
         if self.layers.len().is_multiple_of(2) {
             self.final_norm
                 .execute(&self.first, &self.final_norm_weight, &mut self.second)?;
@@ -179,7 +179,7 @@ impl CudaMoeModelSession {
                 .execute(&self.second, &self.final_norm_weight, &mut self.first)?;
             self.output_projection.execute(&self.first, &mut self.logits, sampling)?;
         }
-        if !matches!(sampling, SamplingLogits::None)
+        if !matches!(*sampling, SamplingLogits::None)
             && let Some(softcap) = &self.logit_softcap
         {
             softcap.execute(&self.stream, &mut self.logits)?;

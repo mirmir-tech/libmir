@@ -45,7 +45,7 @@ impl MetalBackend {
         let lookup = request.model.id.clone();
         let request = request.clone();
         let execution_sampling = execution_sampling(
-            request.sampling_logits,
+            request.sampling_logits.clone(),
             self.config.fusion.device_token_pipeline.enabled(),
         );
         self.with_model_progress(
@@ -70,8 +70,10 @@ impl MetalBackend {
         let model_id = lookup.clone();
         let table = block_table.clone();
         let profile = self.profile_decode.load(std::sync::atomic::Ordering::Relaxed);
-        let execution_sampling =
-            execution_sampling(sampling_logits, self.config.fusion.device_token_pipeline.enabled());
+        let execution_sampling = execution_sampling(
+            sampling_logits.clone(),
+            self.config.fusion.device_token_pipeline.enabled(),
+        );
         self.with_model(&lookup, move |loaded| {
             execute_decode(
                 loaded,
@@ -113,7 +115,7 @@ fn execute_prefill(
         request.session_id,
         &request.prompt_tokens,
         request.block_table.blocks().len(),
-        request.sampling_logits,
+        request.sampling_logits.clone(),
         native,
         timing,
     );
@@ -133,7 +135,7 @@ pub(super) fn execute_decode(
     started: Instant,
 ) -> Result<DecodeOutput> {
     let executing = Instant::now();
-    let native = loaded.decode(session_id, token_id, execution_sampling)?;
+    let native = loaded.decode(session_id, token_id, execution_sampling.clone())?;
     let output = output::materialize(loaded, native, sampling_logits);
     let output = loaded.finish_decode(
         &[crate::native::model::DecodeInput {
@@ -178,7 +180,10 @@ pub(super) fn execution_sampling(
     sampling: SamplingLogits,
     device_pipeline_enabled: bool,
 ) -> SamplingLogits {
-    if device_pipeline(sampling, device_pipeline_enabled) {
+    if matches!(sampling, SamplingLogits::Masked { .. }) {
+        return sampling;
+    }
+    if device_pipeline(sampling.clone(), device_pipeline_enabled) {
         sampling
     } else {
         SamplingLogits::Full

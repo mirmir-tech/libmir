@@ -8,15 +8,18 @@ pub(super) fn parse(mut input: &str, tools: &[Tool]) -> Result<Vec<ToolCall>> {
     let mut calls = Vec::new();
     while !input.trim().is_empty() {
         input = strip(input, "<tool_call>")?;
-        let (body, remainder) = input
-            .split_once("</tool_call>")
-            .ok_or_else(|| invalid("unterminated tool_call"))?;
-        let function = if body.trim_start().starts_with('{') {
-            serde_json::from_str::<FunctionCall>(body)
-                .map_err(|error| json_error("invalid tool JSON", body, &error))?
+        let (function, remainder) = if input.trim_start().starts_with('{') {
+            let input = input.trim_start();
+            let mut values = serde_json::Deserializer::from_str(input).into_iter::<FunctionCall>();
+            let function = values
+                .next()
+                .ok_or_else(|| invalid("missing tool JSON"))?
+                .map_err(|error| json_error("invalid tool JSON", input, &error))?;
+            (function, &input[values.byte_offset()..])
         } else {
-            function(body, tools)?
+            function(input, tools)?
         };
+        let remainder = strip(remainder, "</tool_call>")?;
         calls.push(ToolCall {
             id: format!("call{:05}", calls.len()),
             kind: "function".into(),
@@ -27,7 +30,7 @@ pub(super) fn parse(mut input: &str, tools: &[Tool]) -> Result<Vec<ToolCall>> {
     Ok(calls)
 }
 
-fn function(input: &str, tools: &[Tool]) -> Result<FunctionCall> {
+fn function<'a>(input: &'a str, tools: &[Tool]) -> Result<(FunctionCall, &'a str)> {
     let input = strip(input, "<function=")?;
     let (name, mut input) =
         input.split_once('>').ok_or_else(|| invalid("unterminated function name"))?;
@@ -39,20 +42,28 @@ fn function(input: &str, tools: &[Tool]) -> Result<FunctionCall> {
     let mut arguments = Map::new();
     loop {
         if input.trim_start().starts_with("</function>") {
-            if !strip(input, "</function>")?.trim().is_empty() {
-                return Err(invalid("unexpected text after function"));
-            }
+            input = strip(input, "</function>")?;
             break;
         }
         input = strip(input, "<parameter=")?;
         let (name, body) =
             input.split_once('>').ok_or_else(|| invalid("unterminated parameter name"))?;
-        let (value, remainder) = body
-            .split_once("</parameter>")
-            .ok_or_else(|| invalid("unterminated parameter"))?;
         let schema = properties
             .and_then(|properties| properties.get(name))
             .ok_or_else(|| invalid("unknown XML parameter"))?;
+        let body = body.trim_start();
+        let mut values = serde_json::Deserializer::from_str(body).into_iter::<Value>();
+        // Structured values may contain literal XML tags inside JSON strings.
+        // Only a complete JSON value followed by the delimiter owns that delimiter.
+        let parsed = values.next().and_then(std::result::Result::ok);
+        let boundary = values.byte_offset();
+        let (value, remainder) =
+            if parsed.is_some() && body[boundary..].trim_start().starts_with("</parameter>") {
+                (&body[..boundary], strip(&body[boundary..], "</parameter>")?)
+            } else {
+                body.split_once("</parameter>")
+                    .ok_or_else(|| invalid("unterminated parameter"))?
+            };
         let value = argument(value.trim(), schema)?;
         if arguments.insert(name.to_owned(), value).is_some() {
             return Err(invalid("duplicate XML parameter"));
@@ -66,10 +77,13 @@ fn function(input: &str, tools: &[Tool]) -> Result<FunctionCall> {
             }
         }
     }
-    Ok(FunctionCall {
-        name: name.into(),
-        arguments: Value::Object(arguments),
-    })
+    Ok((
+        FunctionCall {
+            name: name.into(),
+            arguments: Value::Object(arguments),
+        },
+        input,
+    ))
 }
 
 fn argument(input: &str, schema: &Value) -> Result<Value> {

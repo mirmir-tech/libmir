@@ -2,6 +2,7 @@ use std::time::{Duration, Instant};
 
 use runtime::backend::{
     DecodeBatchOutput, DecodeBatchRequest, DecodeOutput, DecodeRequest, DecodeSequence,
+    SamplingLogits,
 };
 
 use super::{build_outputs, sample_policies};
@@ -88,14 +89,15 @@ impl CudaEngine {
         let rows = sequences.len();
         let tokens = sequences.iter().map(|item| item.token_id).collect::<Vec<_>>();
         let tables = sequences.iter().map(|item| &item.block_table).collect::<Vec<_>>();
-        let policies = sequences.iter().map(|item| item.sampling_logits).collect::<Vec<_>>();
+        let policies =
+            sequences.iter().map(|item| item.sampling_logits.clone()).collect::<Vec<_>>();
         let bucket = runner
             .batches
             .as_mut()
             .ok_or(Error::InvalidDecoderKernel("CUDA model has no decode batches"))?
             .get_mut(rows)?;
         bucket.decode(&tokens, &tables)?;
-        let history = policies.iter().any(|policy| policy.requires_history());
+        let history = policies.iter().any(SamplingLogits::requires_history);
         let logits = history.then(|| self.backend.read_logits(bucket.logits()?)).transpose()?;
         let sampled = sample_policies(&policies);
         let selected = if sampled.is_empty() {
@@ -124,7 +126,7 @@ impl CudaEngine {
                 session_id: sequence.session_id,
                 token_id: sequence.token_id,
                 block_table: sequence.block_table.clone(),
-                sampling_logits: sequence.sampling_logits,
+                sampling_logits: sequence.sampling_logits.clone(),
             },
         )
     }

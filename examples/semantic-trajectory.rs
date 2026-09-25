@@ -90,8 +90,11 @@ fn run_case(
         SamplingLogits::None
     };
     let started = Instant::now();
-    let output =
-        session.prefill(&prepared.tokens.token_ids[..prompt_tokens], sampling, &mut |_| {})?;
+    let output = session.prefill(
+        &prepared.tokens.token_ids[..prompt_tokens],
+        sampling.clone(),
+        &mut |_| {},
+    )?;
     let mut next = selected(output.next_token, output.logits.as_ref())?;
     let mut decoder = tokenizer.decoder();
     let mut normalizer = OutputNormalizer::new(tokenizer, prompt);
@@ -116,7 +119,7 @@ fn run_case(
             finish_reason = "stop";
             break;
         }
-        let output = session.decode(next, sampling)?;
+        let output = session.decode(next, sampling.clone())?;
         next = selected(output.event.token_id, output.logits.as_ref())?;
     }
     Ok(ResultRecord {

@@ -47,8 +47,8 @@ impl GenerationExecution for GraphExecution {
         if !final_chunk {
             return Ok(None);
         }
-        self.session.finish_prefill(tokens.len(), request.sampling_logits)?;
-        generation_output(backend, &mut self.session, request.sampling_logits).map(Some)
+        self.session.finish_prefill(tokens.len(), &request.sampling_logits)?;
+        generation_output(backend, &mut self.session, request.sampling_logits.clone()).map(Some)
     }
 
     fn prefill_batch_chunk(
@@ -64,7 +64,7 @@ impl GenerationExecution for GraphExecution {
         self.session.prefill_packed_chunk(&tokens, &tables, &starts, &counts)?;
         let total = tokens.len();
         let (rows, policies) = packed_output_rows(chunks);
-        if rows.len() > 1 && policies.iter().copied().all(device_sampling) {
+        if rows.len() > 1 && policies.iter().all(device_sampling) {
             let tokens = self.session.finish_packed_prefill_rows(&rows, total, &policies)?;
             return device_outputs(chunks, &tokens);
         }
@@ -79,9 +79,9 @@ impl GenerationExecution for GraphExecution {
                 self.session.finish_packed_prefill_row(
                     packed - 1,
                     total,
-                    chunk.request.sampling_logits,
+                    &chunk.request.sampling_logits,
                 )?;
-                generation_output(backend, &mut self.session, chunk.request.sampling_logits)
+                generation_output(backend, &mut self.session, chunk.request.sampling_logits.clone())
                     .map(Some)
             })
             .collect()
@@ -103,8 +103,8 @@ impl GenerationExecution for GraphExecution {
         let policies_ok = chunks
             .iter()
             .filter(|chunk| chunk.final_chunk)
-            .map(|chunk| chunk.request.sampling_logits)
-            .chain(decode.iter().map(|sequence| sequence.sampling_logits))
+            .map(|chunk| &chunk.request.sampling_logits)
+            .chain(decode.iter().map(|sequence| &sequence.sampling_logits))
             .all(device_sampling);
         if !policies_ok {
             return Ok(None);
@@ -124,7 +124,7 @@ impl GenerationExecution for GraphExecution {
         let prefill_rows = rows.len();
         let prefill_tokens = total - decode.len();
         rows.extend((0..decode.len()).map(|index| prefill_tokens + index));
-        policies.extend(decode.iter().map(|sequence| sequence.sampling_logits));
+        policies.extend(decode.iter().map(|sequence| sequence.sampling_logits.clone()));
         let sampled = self.session.finish_packed_prefill_rows(&rows, total, &policies)?;
         let prefill = device_outputs(chunks, &sampled[..prefill_rows])?;
         let decode = sampled[prefill_rows..]
@@ -144,17 +144,17 @@ impl GenerationExecution for GraphExecution {
             self.session.decode_sampled_for_sampling(
                 request.session_id,
                 &request.block_table,
-                request.sampling_logits,
+                &request.sampling_logits,
             )?;
         } else {
             self.session.decode_for_sampling(
                 request.session_id,
                 request.token_id,
                 &request.block_table,
-                request.sampling_logits,
+                &request.sampling_logits,
             )?;
         }
-        generation_output(backend, &mut self.session, request.sampling_logits)
+        generation_output(backend, &mut self.session, request.sampling_logits.clone())
     }
 
     fn clear_sessions(&mut self) {}
@@ -174,7 +174,7 @@ impl GenerationExecution for GraphExecution {
             input.image_span.1,
             input.bidirectional,
             input.table,
-            input.sampling,
+            &input.sampling,
         )?;
         generation_output(backend, &mut self.session, input.sampling)
     }
@@ -190,7 +190,7 @@ fn packed_output_rows(
         packed += chunk.tokens.len();
         if chunk.final_chunk {
             rows.push(packed - 1);
-            policies.push(chunk.request.sampling_logits);
+            policies.push(chunk.request.sampling_logits.clone());
         }
     }
     (rows, policies)

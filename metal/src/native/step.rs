@@ -92,7 +92,10 @@ pub(super) fn output(
     logits: Array,
     sampling: SamplingLogits,
 ) -> Result<NativeOutput> {
-    if !supports_device_token(sampling) {
+    if matches!(sampling, SamplingLogits::Masked { .. }) {
+        return Err(Error::InvalidDecodeBatch("schema masking is unsupported by Metal".into()));
+    }
+    if !supports_device_token(sampling.clone()) {
         return Ok(NativeOutput::Logits(logits));
     }
     let deferred = deferred_token(model, stream, state, &logits, sampling)?;
@@ -106,7 +109,7 @@ fn deferred_token(
     logits: &Array,
     sampling: SamplingLogits,
 ) -> Result<DeferredToken> {
-    let sampled = device_token(logits, sampling, stream)?.ok_or_else(|| {
+    let sampled = device_token(logits, sampling.clone(), stream)?.ok_or_else(|| {
         Error::InvalidDecodeBatch("batch row does not use device token sampling".into())
     })?;
     sampled.async_eval(stream)?;
@@ -149,11 +152,11 @@ pub(super) fn take_pending(state: &mut SessionState, token: u32) -> Result<Array
     Ok(pending.logits)
 }
 
-pub(super) const fn supports_device_token(sampling: SamplingLogits) -> bool {
+pub(super) fn supports_device_token(sampling: SamplingLogits) -> bool {
     match sampling {
         SamplingLogits::None | SamplingLogits::SampleTopK { .. } => true,
         SamplingLogits::Sample { top_k, top_p, .. } => top_k > 0 || top_p >= 1.0,
-        SamplingLogits::Full | SamplingLogits::TopK { .. } => false,
+        SamplingLogits::Masked { .. } | SamplingLogits::Full | SamplingLogits::TopK { .. } => false,
     }
 }
 
@@ -163,6 +166,11 @@ pub(super) fn device_token(
     stream: &Stream,
 ) -> Result<Option<Array>> {
     let parameters = match sampling {
+        SamplingLogits::Masked { .. } => {
+            return Err(Error::InvalidPrefillBatch(
+                "schema masking is not supported by Metal".into(),
+            ));
+        },
         SamplingLogits::None => return Ok(Some(logits.argmax(stream)?)),
         SamplingLogits::SampleTopK { k, vocab_size, temperature, draw } => DeviceSampling {
             vocab_size,

@@ -47,14 +47,14 @@ impl CycleRecovery {
         _settings: GenerationSettings,
         seed: Option<u64>,
         vocab_size: usize,
-        sampling: SamplingLogits,
+        sampling: &SamplingLogits,
         reasoning_exit: Option<(usize, Vec<u32>)>,
     ) -> Result<Self> {
         let detector =
             reasoning_exit.as_ref().map_or_else(CycleDetector::default, |(min_tokens, _)| {
                 CycleDetector::reasoning_exit(*min_tokens)
             });
-        let state = if sampling == SamplingLogits::None {
+        let state = if *sampling == SamplingLogits::None {
             RecoveryState::Watching {
                 sampler: recovery_sampler(seed, vocab_size)?,
                 detector,
@@ -114,7 +114,7 @@ impl CycleRecovery {
         });
     }
 
-    pub(super) const fn sampling(&self, normal: SamplingLogits) -> SamplingLogits {
+    pub(super) fn sampling(&self, normal: SamplingLogits) -> SamplingLogits {
         match self.state {
             RecoveryState::Active(_) => SamplingLogits::Full,
             RecoveryState::Exiting(_) => SamplingLogits::None,

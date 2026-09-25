@@ -7,7 +7,7 @@ impl Sequence {
         loaded: &mut LoadedModel,
         logits: crate::engine::Array,
     ) -> Result<()> {
-        let tokens = &self.request.prompt_tokens;
+        let tokens = &self.request.prompt_tokens.clone();
         let state = self
             .state
             .as_mut()
@@ -35,7 +35,7 @@ impl Sequence {
                 &loaded.stream,
                 state,
                 logits,
-                self.execution_sampling,
+                self.execution_sampling.clone(),
             )
         })?;
         let state = self

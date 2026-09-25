@@ -35,13 +35,13 @@ impl LoadedModel {
         for group in groups {
             match group {
                 Group::Scalar(row) => {
-                    let input = inputs[row];
+                    let input = inputs[row].clone();
                     let output =
                         self.decode_admitted(input.session, input.token, input.sampling)?;
                     outputs.push((row, (output, DecodeExecution::Scalar)));
                 },
                 Group::Packed(rows) => {
-                    let selected = rows.iter().map(|row| inputs[*row]).collect::<Vec<_>>();
+                    let selected = rows.iter().map(|row| inputs[*row].clone()).collect::<Vec<_>>();
                     let execution = DecodeExecution::Packed { rows: rows.len() };
                     for (row, output) in rows.into_iter().zip(self.decode_batch_admitted(
                         &selected,

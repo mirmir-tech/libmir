@@ -32,8 +32,10 @@ impl MetalBackend {
         let prompt = prompt.clone();
         let image = image.clone();
         let blocks = block_table.blocks().len();
-        let execution_sampling =
-            execution_sampling(sampling_logits, self.config.fusion.device_token_pipeline.enabled());
+        let execution_sampling = execution_sampling(
+            sampling_logits.clone(),
+            self.config.fusion.device_token_pipeline.enabled(),
+        );
         Ok(self.with_model_progress(
             &lookup,
             move |loaded, worker_progress| {

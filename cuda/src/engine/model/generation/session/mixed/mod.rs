@@ -141,7 +141,7 @@ impl GenerationExecution for MixedMixerExecution {
         self.checkpoint_prefix(request)?;
         if final_chunk {
             let session = required(&mut self.sessions, request.session_id)?;
-            generation_output(backend, session, request.sampling_logits).map(Some)
+            generation_output(backend, session, request.sampling_logits.clone()).map(Some)
         } else {
             Ok(None)
         }
@@ -163,7 +163,7 @@ impl GenerationExecution for MixedMixerExecution {
     ) -> Result<Output> {
         let session = required(&mut self.sessions, request.session_id)?;
         session.decode(request.session_id, request.token_id, &request.block_table)?;
-        generation_output(backend, session, request.sampling_logits)
+        generation_output(backend, session, request.sampling_logits.clone())
     }
 
     fn decode_batch(

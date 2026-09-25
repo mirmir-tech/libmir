@@ -13,7 +13,7 @@ fn injects_reasoning_exit_once_after_a_cycle() -> Result<()> {
         settings,
         Some(7),
         256,
-        SamplingLogits::None,
+        &SamplingLogits::None,
         Some((192, vec![91, 92])),
     )?;
     let mut generated = (0..168).collect::<Vec<_>>();

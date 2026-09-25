@@ -94,7 +94,7 @@ impl ClampedRoutedOutput {
         &mut self,
         input: &DeviceBuffer<bf16>,
         output: &mut DeviceBuffer<bf16>,
-        sampling: runtime::backend::SamplingLogits,
+        sampling: &runtime::backend::SamplingLogits,
     ) -> Result<()> {
         match self {
             Self::Native(operation) => operation.execute(input, output, sampling),

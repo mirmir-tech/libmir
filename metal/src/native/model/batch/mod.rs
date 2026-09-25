@@ -21,7 +21,7 @@ use crate::{
     },
 };
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct DecodeInput {
     pub session: Uuid,
     pub token: u32,
@@ -40,7 +40,7 @@ impl LoadedModel {
     }
 
     fn can_decode_packed_row(&self, input: &DecodeInput) -> bool {
-        step::supports_device_token(input.sampling)
+        step::supports_device_token(input.sampling.clone())
             && self.sessions.get(&input.session).is_some_and(|state| state.pending.is_some())
     }
 
@@ -212,7 +212,7 @@ fn sample_batch(
         .iter()
         .zip(&logits)
         .map(|(input, logits)| {
-            step::device_token(logits, input.sampling, stream)?.ok_or_else(|| {
+            step::device_token(logits, input.sampling.clone(), stream)?.ok_or_else(|| {
                 Error::InvalidDecodeBatch("packed row does not use device sampling".into())
             })
         })

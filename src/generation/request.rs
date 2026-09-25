@@ -34,6 +34,8 @@ pub struct GenerationRequest {
     /// Controls the prompt thinking mode; output limits still count all
     /// channels.
     pub reasoning: crate::ReasoningMode,
+    /// Opt-in schema-constrained native tool decoding.
+    pub tool_constraints: ToolConstraints,
 }
 
 #[cfg(test)]
@@ -47,4 +49,15 @@ mod tests {
             ReasoningCyclePolicy::ExitReasoning { min_tokens: 64 }
         );
     }
+}
+
+/// Explicit request-scoped native tool output constraints.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolConstraints {
+    /// Preserve ordinary model decoding.
+    #[default]
+    None,
+    /// Enforce the named tool's schema while sampling its native XML arguments.
+    Schema,
 }

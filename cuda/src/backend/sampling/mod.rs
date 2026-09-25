@@ -8,12 +8,15 @@ use crate::{
 };
 
 mod batch;
+mod mask;
 
 pub use batch::DeviceBatchSamplerBf16;
 
 /// Prepared bounded sampler retaining its selected token on the device.
 #[derive(Debug)]
 pub struct DeviceSamplerBf16 {
+    backend: CudaBackend,
+    mask: Option<mask::Workspace>,
     operation: Sampling,
     stream: Stream,
     selected: DeviceBuffer<u32>,
@@ -29,6 +32,8 @@ impl CudaBackend {
         let workspace = Sampling::workspace_elements(vocab)?;
         let block_mass = Sampling::block_mass_elements(vocab)?;
         Ok(DeviceSamplerBf16 {
+            backend: self.clone(),
+            mask: None,
             operation: Sampling::compile(&self.inner.compiler, vocab)?,
             stream: self.inner.stream.clone(),
             selected: self.inner.pool.allocate::<u32>(&self.inner.stream, 1)?,
@@ -48,7 +53,9 @@ impl DeviceSamplerBf16 {
         logits: &DeviceBuffer<bf16>,
         policy: SamplingLogits,
     ) -> Result<&DeviceBuffer<u32>> {
-        let spec = spec(self.vocab, policy)?;
+        let policies = [policy];
+        let spec = spec(self.vocab, &policies[0])?;
+        let logits = mask::apply(&self.backend, &mut self.mask, logits, &policies, self.vocab)?;
         self.operation.execute(
             &self.stream,
             logits,
@@ -70,8 +77,14 @@ impl DeviceSamplerBf16 {
     }
 }
 
-fn spec(vocab: usize, policy: SamplingLogits) -> Result<SamplingSpec> {
-    let (top_k, top_p, temperature, draw) = match policy {
+fn spec(vocab: usize, policy: &SamplingLogits) -> Result<SamplingSpec> {
+    let (top_k, top_p, temperature, draw) = match *policy {
+        SamplingLogits::Masked { ref mask, sampling } if mask.vocab() <= vocab => match sampling {
+            runtime::backend::DeviceSampling::Greedy => (1, 1.0, 1.0, 0.0),
+            runtime::backend::DeviceSampling::Random { top_k, top_p, temperature, draw } => {
+                (top_k, top_p, temperature, draw)
+            },
+        },
         SamplingLogits::None => (1, 1.0, 1.0, 0.0),
         SamplingLogits::SampleTopK { k, vocab_size, temperature, draw } if vocab_size <= vocab => {
             (k, 1.0, temperature, draw)
@@ -85,7 +98,8 @@ fn spec(vocab: usize, policy: SamplingLogits) -> Result<SamplingSpec> {
         } if vocab_size <= vocab && (top_k > 0 || top_p >= 1.0) => {
             (top_k, top_p, temperature, draw)
         },
-        SamplingLogits::Full
+        SamplingLogits::Masked { .. }
+        | SamplingLogits::Full
         | SamplingLogits::TopK { .. }
         | SamplingLogits::SampleTopK { .. }
         | SamplingLogits::Sample { .. } => {

@@ -25,7 +25,7 @@ pub use foundation::{
     },
     model::BackendTarget,
 };
-pub use generation::{GenerationOutput, GenerationRequest, ReasoningCyclePolicy};
+pub use generation::{GenerationOutput, GenerationRequest, ReasoningCyclePolicy, ToolConstraints};
 pub use memory::{MemorySnapshot, ModelMemoryEstimate};
 #[cfg(feature = "metal")]
 pub use metal::DecodeReservation as MetalDecodeReservation;

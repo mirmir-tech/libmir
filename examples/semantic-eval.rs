@@ -83,6 +83,7 @@ fn result_writer(path: Option<PathBuf>) -> std::io::Result<BufWriter<Box<dyn Wri
 
 fn request(case: &Case) -> GenerationRequest {
     GenerationRequest {
+        tool_constraints: libmir::ToolConstraints::None,
         conversation: Conversation {
             messages: vec![Message {
                 role: "user".into(),

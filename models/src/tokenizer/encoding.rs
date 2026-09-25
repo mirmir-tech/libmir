@@ -11,6 +11,11 @@ pub(super) fn tokenized(encoding: &tokenizers::Encoding, bytes: usize) -> Tokeni
 }
 
 impl TextTokenizer {
+    /// Serializes the effective tokenizer, including configured added tokens.
+    pub fn serialized(&self) -> Result<String> {
+        Ok(self.inner.to_string(false)?)
+    }
+
     /// Encodes `text` and also returns the end byte offset of every token, so
     /// callers can locate text boundaries without encoding prefixes again.
     pub fn encode_with_token_ends(

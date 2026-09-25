@@ -73,3 +73,20 @@ fn malformed_nested_argument_reports_local_context_without_repairing_output() ->
     assert!(!message.contains("<parameter=name>"));
     Ok(())
 }
+
+#[test]
+fn json_string_tags_do_not_terminate_tool_envelopes() -> Result<()> {
+    let expected = json!({"name":"x </parameter> </function> </tool_call>","year":2023,"items":[{"text":"</tool_call>"}]});
+    let xml = format!(
+        "<tool_call><function=emit><parameter=name>{}</parameter><parameter=year>2023</parameter><parameter=items>{}</parameter></function></tool_call>",
+        expected["name"], expected["items"]
+    );
+    let json_call =
+        format!("<tool_call>{}</tool_call>", json!({"name":"emit","arguments":expected}));
+    for text in [xml, json_call] {
+        let parsed = normalize(&text, &conversation())?;
+        let calls = ToolCall::parse_mistral(&parsed).map_err(Error::InvalidToolCall)?;
+        assert_eq!(calls[0].function.arguments, expected);
+    }
+    Ok(())
+}

@@ -46,10 +46,13 @@ impl DeviceLogitsSession for CudaClampedRoutedModelSession {
     }
 }
 
-pub(in crate::engine) const fn device_sampling(policy: SamplingLogits) -> bool {
+pub(in crate::engine) fn device_sampling(policy: &SamplingLogits) -> bool {
     matches!(
         policy,
-        SamplingLogits::None | SamplingLogits::SampleTopK { .. } | SamplingLogits::Sample { .. }
+        SamplingLogits::Masked { .. }
+            | SamplingLogits::None
+            | SamplingLogits::SampleTopK { .. }
+            | SamplingLogits::Sample { .. }
     )
 }
 
@@ -58,7 +61,7 @@ pub(in crate::engine) fn generation_output(
     session: &mut impl DeviceLogitsSession,
     policy: SamplingLogits,
 ) -> Result<Output> {
-    if device_sampling(policy) {
+    if device_sampling(&policy) {
         let selected = session.sample(policy)?;
         return Ok(Output {
             token: Some(backend.read_token(selected)?),

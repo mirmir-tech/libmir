@@ -79,7 +79,7 @@ impl CudaClampedRoutedModelSession {
         &mut self,
         row: usize,
         total: usize,
-        sampling: SamplingLogits,
+        sampling: &SamplingLogits,
     ) -> Result<()> {
         if row >= total {
             return Err(Error::InvalidDecoderKernel(

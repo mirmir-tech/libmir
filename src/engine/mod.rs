@@ -1,5 +1,6 @@
 mod backend;
 mod batch;
+mod decode;
 #[cfg(any(feature = "cuda", feature = "metal"))]
 mod generation;
 mod lifecycle;
@@ -26,13 +27,7 @@ pub use generation::{PrefillAdmissionPolicy, PrefillExecutionProfile, PrefillRef
 use metal::MetalBackend;
 #[cfg(not(any(feature = "cuda", feature = "metal")))]
 use runtime::RuntimeError;
-#[cfg(feature = "cuda")]
-use runtime::backend::DecodeRequest;
-use runtime::{
-    Result as RuntimeResult,
-    backend::{DecodeOutput, ModelHandle, SamplingLogits},
-    kv::{BlockTable, CacheConfig},
-};
+use runtime::{Result as RuntimeResult, backend::ModelHandle, kv::CacheConfig};
 use uuid::Uuid;
 
 use crate::{Result, RuntimeConfig};
@@ -100,35 +95,6 @@ impl Engine {
             EngineInner::Metal(metal) => Ok(metal.finish_startup_tuning(model)?),
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
             EngineInner::Unavailable => Ok(()),
-        }
-    }
-
-    /// Decodes one token for a session and returns the next-token prediction.
-    pub fn decode_token(
-        &self,
-        model: &ModelHandle,
-        session_id: Uuid,
-        token_id: u32,
-        block_table: &BlockTable,
-        sampling: SamplingLogits,
-    ) -> RuntimeResult<DecodeOutput> {
-        #[cfg(not(any(feature = "cuda", feature = "metal")))]
-        let _ = (&model, session_id, token_id, &block_table, sampling);
-        match &self.inner {
-            #[cfg(feature = "cuda")]
-            EngineInner::Cuda(cuda) => Ok(cuda.decode_token(&DecodeRequest {
-                model: model.clone(),
-                session_id,
-                token_id,
-                block_table: block_table.clone(),
-                sampling_logits: sampling,
-            })?),
-            #[cfg(feature = "metal")]
-            EngineInner::Metal(metal) => {
-                metal.decode_token(model, session_id, token_id, block_table, sampling)
-            },
-            #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => unavailable(),
         }
     }
 

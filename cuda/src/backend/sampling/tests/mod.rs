@@ -1,3 +1,4 @@
+mod mask;
 use mircuda::{DeviceBuffer, bf16};
 use runtime::backend::SamplingLogits;
 

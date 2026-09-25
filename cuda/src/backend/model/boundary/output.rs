@@ -174,7 +174,7 @@ impl ModelOutputHead {
         &mut self,
         input: &DeviceBuffer<bf16>,
         output: &mut DeviceBuffer<bf16>,
-        sampling: SamplingLogits,
+        sampling: &SamplingLogits,
     ) -> Result<()> {
         match self {
             Self::Dense(head) => head.execute(input, output, sampling),

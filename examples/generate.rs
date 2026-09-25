@@ -32,6 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn request() -> GenerationRequest {
     GenerationRequest {
+        tool_constraints: libmir::ToolConstraints::None,
         conversation: Conversation {
             messages: vec![Message {
                 role: "user".into(),

@@ -85,7 +85,7 @@ fn decode_ordered(
             .iter_mut()
             .zip(sequences)
             .map(|((_, session), sequence)| {
-                generation_output(backend, session, sequence.sampling_logits)
+                generation_output(backend, session, sequence.sampling_logits.clone())
             })
             .collect::<Result<Vec<_>>>()
             .map(Some)
@@ -115,7 +115,7 @@ fn prefill_rows(
             execution.checkpoint_prefix(chunk.request)?;
             if chunk.final_chunk {
                 let session = required(&mut execution.sessions, chunk.request.session_id)?;
-                generation_output(backend, session, chunk.request.sampling_logits).map(Some)
+                generation_output(backend, session, chunk.request.sampling_logits.clone()).map(Some)
             } else {
                 Ok(None)
             }
@@ -133,7 +133,7 @@ fn can_pack(chunks: &[PrefillChunk<'_>]) -> bool {
         && chunks.iter().all(|chunk| {
             chunk.tokens.len() == first.tokens.len()
                 && chunk.final_chunk == first.final_chunk
-                && device_sampling(chunk.request.sampling_logits)
+                && device_sampling(&chunk.request.sampling_logits)
         })
 }
 
@@ -163,9 +163,12 @@ fn prefill_packed(
             chunks.iter().flat_map(|chunk| chunk.tokens.iter().copied()).collect::<Vec<_>>();
         let tables = chunks.iter().map(|chunk| chunk.table).collect::<Vec<_>>();
         let starts = chunks.iter().map(|chunk| chunk.offset).collect::<Vec<_>>();
-        let policies = chunks[0]
-            .final_chunk
-            .then(|| chunks.iter().map(|chunk| chunk.request.sampling_logits).collect::<Vec<_>>());
+        let policies = chunks[0].final_chunk.then(|| {
+            chunks
+                .iter()
+                .map(|chunk| chunk.request.sampling_logits.clone())
+                .collect::<Vec<_>>()
+        });
         let mut sessions = owned.iter_mut().map(|(_, session)| session).collect::<Vec<_>>();
         let sampled =
             batch.execute(&mut sessions, &tokens, &tables, &starts, policies.as_deref())?;

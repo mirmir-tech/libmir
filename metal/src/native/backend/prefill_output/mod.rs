@@ -38,7 +38,7 @@ fn materialize_prefill(
         request.session_id,
         &request.prompt_tokens,
         request.block_table.blocks().len(),
-        request.sampling_logits,
+        request.sampling_logits.clone(),
         native,
         timing,
     )

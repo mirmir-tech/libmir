@@ -45,7 +45,7 @@ pub(super) fn execute_loaded_decode(
         .map(|sequence| DecodeInput {
             session: sequence.session_id,
             token: sequence.token_id,
-            sampling: execution_sampling(sequence.sampling_logits, device_pipeline),
+            sampling: execution_sampling(sequence.sampling_logits.clone(), device_pipeline),
         })
         .collect::<Vec<_>>();
     let native = loaded.decode_grouped(&inputs)?;
@@ -57,7 +57,7 @@ pub(super) fn execute_loaded_decode(
         .into_iter()
         .zip(sequences)
         .map(|((native, execution), sequence)| {
-            let output = output::materialize(loaded, native, sequence.sampling_logits)?;
+            let output = output::materialize(loaded, native, sequence.sampling_logits.clone())?;
             Ok(DecodeOutput {
                 event: TokenEvent {
                     token_id: output.next_token,

@@ -16,13 +16,16 @@ pub(super) fn decode(
     let sessions = sequences.iter().map(|sequence| sequence.session_id).collect::<Vec<_>>();
     let tokens = sequences.iter().map(|sequence| sequence.token_id).collect::<Vec<_>>();
     let tables = sequences.iter().map(|sequence| &sequence.block_table).collect::<Vec<_>>();
-    let policies = sequences.iter().map(|sequence| sequence.sampling_logits).collect::<Vec<_>>();
+    let policies = sequences
+        .iter()
+        .map(|sequence| sequence.sampling_logits.clone())
+        .collect::<Vec<_>>();
     session.decode_packed_chunk(&sessions, &tokens, &tables)?;
     let device_policies = policies
         .iter()
-        .copied()
+        .cloned()
         .map(|policy| {
-            if device_sampling(policy) {
+            if device_sampling(&policy) {
                 policy
             } else {
                 SamplingLogits::None
@@ -30,16 +33,16 @@ pub(super) fn decode(
         })
         .collect::<Vec<_>>();
     let rows = (0..sequences.len()).collect::<Vec<_>>();
-    let history = policies.iter().any(|policy| policy.requires_history());
+    let history = policies.iter().any(SamplingLogits::requires_history);
     let Some(result) =
         session.finish_packed_device_rows(&rows, sequences.len(), &device_policies, history)?
     else {
         let outputs = policies
             .iter()
-            .copied()
+            .cloned()
             .enumerate()
             .map(|(row, policy)| {
-                session.finish_packed_prefill_row(row, sequences.len(), policy)?;
+                session.finish_packed_prefill_row(row, sequences.len(), &policy)?;
                 generation_output(backend, session, policy)
             })
             .collect::<Result<Vec<_>>>()?;
@@ -47,10 +50,10 @@ pub(super) fn decode(
     };
     policies
         .iter()
-        .copied()
+        .cloned()
         .enumerate()
         .map(|(row, policy)| {
-            let token = device_sampling(policy).then(|| result.selected[row]);
+            let token = device_sampling(&policy).then(|| result.selected[row]);
             let logits = if policy.requires_history() {
                 let values = result
                     .logits

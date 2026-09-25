@@ -21,7 +21,7 @@ impl CudaMoeModelSession {
         image_end: usize,
         bidirectional: bool,
         table: &BlockTable,
-        sampling: SamplingLogits,
+        sampling: &SamplingLogits,
     ) -> Result<&DeviceBuffer<bf16>> {
         self.validate_prefill(tokens, 0, table)?;
         if image_start >= image_end

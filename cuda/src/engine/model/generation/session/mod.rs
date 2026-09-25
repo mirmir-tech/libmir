@@ -87,7 +87,7 @@ impl GenerationExecution for SinkAttentionExecution {
             tokens,
             table,
             request.cached_tokens,
-            request.sampling_logits,
+            &request.sampling_logits,
         )?;
         self.session.checkpoint_prefix(
             request.session_id,
@@ -96,7 +96,7 @@ impl GenerationExecution for SinkAttentionExecution {
             offset + tokens.len(),
         )?;
         if final_chunk {
-            generation_output(backend, &mut self.session, request.sampling_logits).map(Some)
+            generation_output(backend, &mut self.session, request.sampling_logits.clone()).map(Some)
         } else {
             Ok(None)
         }
@@ -140,9 +140,9 @@ impl GenerationExecution for SinkAttentionExecution {
                 self.session.finish_packed_prefill_row(
                     packed - 1,
                     total,
-                    chunk.request.sampling_logits,
+                    &chunk.request.sampling_logits,
                 )?;
-                generation_output(backend, &mut self.session, chunk.request.sampling_logits)
+                generation_output(backend, &mut self.session, chunk.request.sampling_logits.clone())
                     .map(Some)
             })
             .collect()
@@ -158,9 +158,9 @@ impl GenerationExecution for SinkAttentionExecution {
             request.session_id,
             request.token_id,
             &request.block_table,
-            request.sampling_logits,
+            &request.sampling_logits.clone(),
         )?;
-        generation_output(backend, &mut self.session, request.sampling_logits)
+        generation_output(backend, &mut self.session, request.sampling_logits.clone())
     }
 
     fn decode_batch(

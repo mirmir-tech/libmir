@@ -39,7 +39,7 @@ fn tune(
     recovery: &mut ExecutionRecovery,
 ) -> Result<NativeOutput> {
     let started = Instant::now();
-    let plan = match measure_candidates(model, stream, state, token, sampling, recovery) {
+    let plan = match measure_candidates(model, stream, state, token, sampling.clone(), recovery) {
         Ok(timings) => {
             let fastest = usize::from(timings[1] < timings[0]);
             let selected = select_fastest_candidate(
@@ -85,14 +85,15 @@ fn measure_candidates(
         stream,
         state,
         token,
-        sampling,
+        sampling.clone(),
         DecodePlan::SeparateGateUp,
         false,
         recovery,
     )?;
     for _ in 0..config.warmup_iterations {
         for plan in CANDIDATES {
-            let _ = run_snapshot(model, stream, state, token, sampling, plan, true, recovery)?;
+            let _ =
+                run_snapshot(model, stream, state, token, sampling.clone(), plan, true, recovery)?;
         }
     }
     let mut samples = [Vec::new(), Vec::new()];
@@ -105,7 +106,7 @@ fn measure_candidates(
                 stream,
                 state,
                 token,
-                sampling,
+                sampling.clone(),
                 CANDIDATES[index],
                 true,
                 recovery,

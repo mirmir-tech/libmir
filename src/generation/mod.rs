@@ -5,6 +5,7 @@ use runtime::{metrics::GenerationMetricsRecorder, sampling::Sampler};
 
 use crate::{CancellationToken, Model, ProgressEvent, Result};
 
+mod constraints;
 mod cycle;
 mod input;
 mod output;
@@ -19,9 +20,9 @@ pub use output::GenerationOutput;
 use output::{
     TokenStream, append_delta, finalize_output, finish_metrics, missing_decoder, should_stop,
 };
-pub use request::{GenerationRequest, ReasoningCyclePolicy};
+pub use request::{GenerationRequest, ReasoningCyclePolicy, ToolConstraints};
 use sampling::{choose_prefill, request_sampling, sampler_config};
-use telemetry::{record_prefill_metrics, record_publish};
+use telemetry::record_publish;
 
 impl Model {
     /// Generates and streams a complete normalized response.
@@ -73,17 +74,13 @@ impl Model {
         let mut metrics = GenerationMetricsRecorder::new();
         let descriptor = self.descriptor();
         let settings = descriptor.resolve_generation(request.options)?;
-        let prompt_started = Instant::now();
-        let prepared = PreparedGeneration::new(self, request, settings, encoded_image)?;
+        let prepared =
+            PreparedGeneration::new(self, request, settings, encoded_image, &mut metrics)?;
         let prompt_tokens = prepared.token_ids().len();
-        metrics.record_prompt(prompt_started.elapsed(), prompt_tokens);
-        let prompt_stages = prepared.preparation_timings();
-        metrics.record_prompt_stages(prompt_stages.render, prompt_stages.tokenize);
         let output_setup_started = Instant::now();
         let tokenizer = descriptor.tokenizer();
         let stop_token_ids = tokenizer.stop_token_ids();
-        let mut stream =
-            TokenStream::new(tokenizer, prepared.normalizer(tokenizer, &request.conversation));
+        let mut stream = TokenStream::new(tokenizer, prepared.normalizer(tokenizer, request));
         let decoder = descriptor.decoder().ok_or_else(missing_decoder)?;
         let vocab_size = tokenizer.vocab_size().min(decoder.vocab_size);
         let output_setup = output_setup_started.elapsed();
@@ -92,21 +89,22 @@ impl Model {
         let sampler_setup = sampler_started.elapsed();
         let session_started = Instant::now();
         let mut session = self.session();
+        let mut constraints =
+            constraints::ToolConstraint::prepare(self, request, &prepared, settings)?;
         let sampling = request_sampling(settings, vocab_size, &mut sampler);
+        let sampling = constraints::sampling(&mut constraints, sampling)?;
         let harmony_exit = harmony_exit(request, descriptor)?;
         let mut cycle_recovery =
-            CycleRecovery::new(settings, request.seed, vocab_size, sampling, harmony_exit)?;
+            CycleRecovery::new(settings, request.seed, vocab_size, &sampling, harmony_exit)?;
         metrics.record_setup_stages(output_setup, sampler_setup, session_started.elapsed());
-        let prefill_started = Instant::now();
         let prefill = prepared.prefill(
             &mut session,
             settings.max_tokens,
-            sampling,
+            sampling.clone(),
             cancellation,
             progress,
+            &mut metrics,
         )?;
-        cancellation.check()?;
-        record_prefill_metrics(&mut metrics, prefill_started, prompt_tokens, &prefill);
         let first_started = Instant::now();
         let mut published = false;
         let mut history = sampling.requires_history().then(|| prepared.token_ids().to_vec());
@@ -117,6 +115,7 @@ impl Model {
         let mut finish_reason = "max_tokens";
         while token_ids.len() < settings.max_tokens {
             cancellation.check()?;
+            let constrained_stop = constraints::advance(&mut constraints, next)?;
             token_ids.push(next);
             if let Some(history) = history.as_mut() {
                 history.push(next);
@@ -125,7 +124,8 @@ impl Model {
             if let Some(delta) = delta.as_ref() {
                 append_delta(delta, &mut text, &mut reasoning, &mut tool_calls);
             }
-            let stopped = should_stop(settings, token_ids.len(), next, &stop_token_ids);
+            let stopped =
+                constrained_stop || should_stop(settings, token_ids.len(), next, &stop_token_ids);
             if stopped {
                 finish_reason = "stop";
             }
@@ -137,6 +137,7 @@ impl Model {
                 let started = Instant::now();
                 let sampling = request_sampling(settings, vocab_size, &mut sampler);
                 let sampling = cycle_recovery.sampling(sampling);
+                let sampling = constraints::sampling(&mut constraints, sampling)?;
                 Some((started, session.start_decode(next, sampling)?))
             };
             if token_ids.len() == 1 {
@@ -164,6 +165,7 @@ impl Model {
         }
         stream.finish_into(&mut text, &mut reasoning, &mut tool_calls, token)?;
         let tool_calls = tools::normalize(&tool_calls, &request.conversation)?;
+        constraints::validate(constraints.as_ref(), &tool_calls)?;
         let metrics = finish_metrics(&mut metrics, token_ids.len(), &session);
         Ok(finalize_output(
             text, reasoning, tool_calls, token_ids, prompt_tokens, finish_reason, metrics,

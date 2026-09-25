@@ -92,7 +92,7 @@ impl MetalBackend {
             .iter()
             .cloned()
             .map(|request| {
-                let sampling = execution_sampling(request.sampling_logits, device_pipeline);
+                let sampling = execution_sampling(request.sampling_logits.clone(), device_pipeline);
                 (request, sampling)
             })
             .collect();

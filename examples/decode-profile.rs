@@ -43,16 +43,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     std::thread::sleep(Duration::from_secs(config.prefix_fill_cooldown_seconds));
     let mut session = model.session();
-    let output = session.prefill(&prompt, sampling, &mut |_| {})?;
+    let output = session.prefill(&prompt, sampling.clone(), &mut |_| {})?;
     let mut token = required_token(output.next_token)?;
     for _ in 0..config.warmup_steps {
-        token = required_token(session.decode(token, sampling)?.event.token_id)?;
+        token = required_token(session.decode(token, sampling.clone())?.event.token_id)?;
     }
     model.engine().set_profile_decode(true)?;
     let mut samples = Vec::with_capacity(config.measured_steps);
     for _ in 0..config.measured_steps {
         let started = Instant::now();
-        let output = session.decode(token, sampling)?;
+        let output = session.decode(token, sampling.clone())?;
         let end_to_end = started.elapsed();
         token = required_token(output.event.token_id)?;
         let timings = output

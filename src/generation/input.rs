@@ -21,7 +21,7 @@ impl PreparedGeneration {
     pub(super) fn normalizer(
         &self,
         tokenizer: &models::tokenizer::TextTokenizer,
-        conversation: &foundation::conversation::Conversation,
+        request: &super::GenerationRequest,
     ) -> models::generation::OutputNormalizer {
         let normalizer = self.tool_prefix().map_or_else(
             || models::generation::OutputNormalizer::new(tokenizer, self.prompt_text()),
@@ -33,6 +33,10 @@ impl PreparedGeneration {
                 )
             },
         );
+        if request.tool_constraints == super::ToolConstraints::Schema {
+            return normalizer.with_constrained_tool();
+        }
+        let conversation = &request.conversation;
         if conversation.tools.is_empty()
             || matches!(conversation.tool_choice, foundation::conversation::ToolChoice::None)
         {
@@ -59,9 +63,14 @@ impl PreparedGeneration {
         request: &super::GenerationRequest,
         settings: GenerationSettings,
         encoded_image: Option<&[u8]>,
+        metrics: &mut runtime::metrics::GenerationMetricsRecorder,
     ) -> Result<Self> {
+        let started = std::time::Instant::now();
         let preparation = std::cell::Cell::new(model.announce_preparation());
         let prompt = Prepared::new(model, request, settings, encoded_image)?;
+        metrics.record_prompt(started.elapsed(), prompt.token_ids().len());
+        let stages = prompt.preparation_timings();
+        metrics.record_prompt_stages(stages.render, stages.tokenize);
         Ok(Self { prompt, preparation })
     }
 
@@ -73,10 +82,6 @@ impl PreparedGeneration {
         self.prompt.prompt_text()
     }
 
-    pub(super) fn preparation_timings(&self) -> PromptPreparationTimings {
-        self.prompt.preparation_timings()
-    }
-
     pub(super) fn prefill(
         &self,
         session: &mut Session,
@@ -84,11 +89,16 @@ impl PreparedGeneration {
         sampling: SamplingLogits,
         cancellation: &crate::CancellationToken,
         progress: &mut dyn FnMut(ProgressEvent),
+        metrics: &mut runtime::metrics::GenerationMetricsRecorder,
     ) -> Result<PrefillOutput> {
+        let started = std::time::Instant::now();
         let output =
             self.prompt.prefill(session, reserved_tokens, sampling, cancellation, progress);
         drop(self.preparation.take());
-        output
+        let output = output?;
+        cancellation.check()?;
+        super::telemetry::record_prefill_metrics(metrics, started, self.token_ids().len(), &output);
+        Ok(output)
     }
 }
 

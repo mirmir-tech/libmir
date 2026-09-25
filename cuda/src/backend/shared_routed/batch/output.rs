@@ -9,9 +9,11 @@ impl DecodeResources {
         sessions: &mut [&mut CudaSharedRoutedModelSession],
         sequences: &[DecodeSequence],
     ) -> Result<Option<Vec<u32>>> {
-        let policies =
-            sequences.iter().map(|sequence| sequence.sampling_logits).collect::<Vec<_>>();
-        let device_sampling = policies.iter().copied().all(device_policy);
+        let policies = sequences
+            .iter()
+            .map(|sequence| sequence.sampling_logits.clone())
+            .collect::<Vec<_>>();
+        let device_sampling = policies.iter().all(device_policy);
         if device_sampling {
             self.sampler.sample(&self.logits, &policies)?;
             self.backend
@@ -54,9 +56,12 @@ impl DecodeResources {
     }
 }
 
-const fn device_policy(policy: SamplingLogits) -> bool {
+fn device_policy(policy: &SamplingLogits) -> bool {
     matches!(
         policy,
-        SamplingLogits::None | SamplingLogits::SampleTopK { .. } | SamplingLogits::Sample { .. }
+        SamplingLogits::Masked { .. }
+            | SamplingLogits::None
+            | SamplingLogits::SampleTopK { .. }
+            | SamplingLogits::Sample { .. }
     )
 }

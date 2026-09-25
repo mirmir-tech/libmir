@@ -18,15 +18,15 @@ impl CudaMoeModelSession {
         for tokens in canonical_geometries(capacity) {
             let prompt = vec![0; tokens];
             let table = block_table(tokens, cache)?;
-            self.prefill_from_for_sampling(session_id, &prompt, 0, &table, SamplingLogits::None)?;
+            self.prefill_from_for_sampling(session_id, &prompt, 0, &table, &SamplingLogits::None)?;
         }
         let mut table = block_table(capacity + 2, cache)?;
         table.set_token_len(capacity + 1);
         self.sample(SamplingLogits::None)?;
-        self.decode_sampled_for_sampling(session_id, &table, SamplingLogits::None)?;
+        self.decode_sampled_for_sampling(session_id, &table, &SamplingLogits::None)?;
         table.set_token_len(capacity + 2);
         self.sample(SamplingLogits::None)?;
-        self.decode_sampled_for_sampling(session_id, &table, SamplingLogits::None)?;
+        self.decode_sampled_for_sampling(session_id, &table, &SamplingLogits::None)?;
         self.sample(SamplingLogits::None)?;
         Ok(())
     }

@@ -10,6 +10,8 @@ use crate::{
 /// Fixed-row device sampler with independent policies and no logits readback.
 #[derive(Debug)]
 pub struct DeviceBatchSamplerBf16 {
+    backend: CudaBackend,
+    mask: Option<super::mask::Workspace>,
     operation: Sampling,
     stream: Stream,
     selected: DeviceBuffer<u32>,
@@ -38,6 +40,8 @@ impl CudaBackend {
             .checked_mul(rows)
             .ok_or_else(|| Error::InvalidSampling("sampling mass workspace overflow".into()))?;
         Ok(DeviceBatchSamplerBf16 {
+            backend: self.clone(),
+            mask: None,
             operation: Sampling::compile(&self.inner.compiler, vocab)?,
             stream: self.inner.stream.clone(),
             selected: self.inner.pool.allocate(&self.inner.stream, rows)?,
@@ -60,7 +64,9 @@ impl DeviceBatchSamplerBf16 {
         if policies.len() != self.rows {
             return Err(Error::InvalidSampling("sampling policies differ from batch".into()));
         }
-        for (row, policy) in policies.iter().copied().enumerate() {
+        let logits =
+            super::mask::apply(&self.backend, &mut self.mask, logits, policies, self.vocab)?;
+        for (row, policy) in policies.iter().enumerate() {
             self.operation.execute_row(
                 &self.stream,
                 logits,

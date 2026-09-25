@@ -10,7 +10,7 @@ impl CudaOutputHead {
         &mut self,
         source: &DeviceBuffer<bf16>,
         output: &mut DeviceBuffer<bf16>,
-        sampling: SamplingLogits,
+        sampling: &SamplingLogits,
     ) -> Result<()> {
         match &mut self.projection {
             Projection::Bf16 { operation, weight } => operation.execute(source, weight, output),
@@ -77,14 +77,14 @@ impl CudaOutputHead {
     }
 }
 
-const fn supports_refinement(sampling: SamplingLogits) -> bool {
-    match sampling {
+fn supports_refinement(sampling: &SamplingLogits) -> bool {
+    match *sampling {
         SamplingLogits::None => true,
         SamplingLogits::TopK { k, .. } | SamplingLogits::SampleTopK { k, .. } => {
             k <= crate::kernels::MAX_TOP_K
         },
         SamplingLogits::Sample { top_k, .. } => top_k > 0 && top_k <= crate::kernels::MAX_TOP_K,
-        SamplingLogits::Full => false,
+        SamplingLogits::Full | SamplingLogits::Masked { .. } => false,
     }
 }
 
@@ -96,11 +96,11 @@ mod tests {
 
     #[test]
     fn refinement_requires_bounded_candidate_set() {
-        assert!(supports_refinement(SamplingLogits::None));
-        assert!(supports_refinement(SamplingLogits::TopK { k: 64, vocab_size: 262_144 }));
-        assert!(!supports_refinement(SamplingLogits::TopK { k: 65, vocab_size: 262_144 }));
-        assert!(!supports_refinement(SamplingLogits::Full));
-        assert!(!supports_refinement(SamplingLogits::Sample {
+        assert!(supports_refinement(&SamplingLogits::None));
+        assert!(supports_refinement(&SamplingLogits::TopK { k: 64, vocab_size: 262_144 }));
+        assert!(!supports_refinement(&SamplingLogits::TopK { k: 65, vocab_size: 262_144 }));
+        assert!(!supports_refinement(&SamplingLogits::Full));
+        assert!(!supports_refinement(&SamplingLogits::Sample {
             vocab_size: 262_144,
             temperature: 1.0,
             top_p: 0.95,

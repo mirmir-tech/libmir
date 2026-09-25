@@ -60,6 +60,10 @@ cuda-diagnostics = ["cuda", "cuda/diagnostics"]
 metal = ["dep:macmon", "dep:metal"]
 
 [dependencies]
+llguidance = "=1.8.0"
+jsonschema = { version = "=0.29.0", default-features = false }
+toktrie_hf_tokenizers = "=1.8.0"
+serde.workspace = true
 architecture = { package = "libmir-admission", version = "0.3.0", path = "admission" }
 async-trait.workspace = true
 foundation = { package = "libmir-core", version = "0.3.0", path = "core" }

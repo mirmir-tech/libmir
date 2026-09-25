@@ -43,14 +43,14 @@ impl DecodeBuckets {
 }
 
 fn sample_policies(policies: &[SamplingLogits]) -> Vec<SamplingLogits> {
-    if !policies.iter().copied().any(device_sampling) {
+    if !policies.iter().any(device_sampling) {
         return Vec::new();
     }
     policies
         .iter()
-        .copied()
+        .cloned()
         .map(|policy| {
-            if device_sampling(policy) {
+            if device_sampling(&policy) {
                 policy
             } else {
                 SamplingLogits::None
@@ -67,11 +67,11 @@ fn build_outputs(
 ) -> Result<Vec<DecodeOutput>> {
     policies
         .iter()
-        .copied()
+        .cloned()
         .enumerate()
         .map(|(row, policy)| {
             let token =
-                if device_sampling(policy) {
+                if device_sampling(&policy) {
                     Some(*selected.get(row).ok_or_else(|| {
                         Error::InvalidSampling("missing sampled batch row".into())
                     })?)

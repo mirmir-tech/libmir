@@ -98,7 +98,7 @@ impl CudaClampedRoutedModelSession {
         tokens: &[u32],
         table: &BlockTable,
     ) -> Result<&DeviceBuffer<bf16>> {
-        self.prefill_with_sampling(session, tokens, table, 0, SamplingLogits::Full)
+        self.prefill_with_sampling(session, tokens, table, 0, &SamplingLogits::Full)
     }
 
     pub(crate) fn prefill_with_sampling(
@@ -107,7 +107,7 @@ impl CudaClampedRoutedModelSession {
         tokens: &[u32],
         table: &BlockTable,
         cached_until: usize,
-        sampling: SamplingLogits,
+        sampling: &SamplingLogits,
     ) -> Result<&DeviceBuffer<bf16>> {
         let position = self.positions.get(&session).copied().unwrap_or_default();
         let end = position
@@ -171,7 +171,7 @@ impl CudaClampedRoutedModelSession {
         token: u32,
         table: &BlockTable,
     ) -> Result<&DeviceBuffer<bf16>> {
-        self.decode_with_sampling(session, token, table, SamplingLogits::Full)
+        self.decode_with_sampling(session, token, table, &SamplingLogits::Full)
     }
 
     pub(crate) fn decode_with_sampling(
@@ -179,7 +179,7 @@ impl CudaClampedRoutedModelSession {
         session: Uuid,
         token: u32,
         table: &BlockTable,
-        sampling: SamplingLogits,
+        sampling: &SamplingLogits,
     ) -> Result<&DeviceBuffer<bf16>> {
         self.decode_packed_chunk(&[session], &[token], &[table])?;
         self.finish_packed_prefill_row(0, 1, sampling)?;

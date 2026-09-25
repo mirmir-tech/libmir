@@ -2,6 +2,7 @@ mod admission;
 mod automatic_cache;
 mod cache;
 mod cache_cohort;
+pub mod constraints;
 mod decode;
 mod descriptor;
 mod helpers;
@@ -64,6 +65,8 @@ pub struct ModelDescriptor {
     image_processor: Option<ImageProcessorConfig>,
     template: ChatTemplate,
     tokenizer: TextTokenizer,
+    tool_parser_factory:
+        std::sync::OnceLock<std::result::Result<llguidance::ParserFactory, String>>,
     tokenizer_validation: TokenizerValidation,
 }
 
@@ -138,6 +141,7 @@ impl ModelDescriptor {
             template: ChatTemplate::from_layout(&layout)?,
             tokenizer,
             tokenizer_validation,
+            tool_parser_factory: std::sync::OnceLock::new(),
             layout,
             metadata,
         })

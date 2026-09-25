@@ -24,7 +24,7 @@ impl CudaMoeModelSession {
             tokens,
             write_offset,
             table,
-            SamplingLogits::Full,
+            &SamplingLogits::Full,
         )
     }
 
@@ -34,7 +34,7 @@ impl CudaMoeModelSession {
         tokens: &[u32],
         write_offset: usize,
         table: &BlockTable,
-        sampling: SamplingLogits,
+        sampling: &SamplingLogits,
     ) -> Result<&DeviceBuffer<bf16>> {
         self.validate_prefill(tokens, write_offset, table)?;
         let mut step_table = table.clone();
@@ -81,7 +81,7 @@ impl CudaMoeModelSession {
     pub(crate) fn finish_prefill(
         &mut self,
         tokens: usize,
-        sampling: SamplingLogits,
+        sampling: &SamplingLogits,
     ) -> Result<&DeviceBuffer<bf16>> {
         self.select_prefill_output(tokens)?;
         self.project_logits(sampling)?;
@@ -92,7 +92,7 @@ impl CudaMoeModelSession {
         &mut self,
         row: usize,
         tokens: usize,
-        sampling: SamplingLogits,
+        sampling: &SamplingLogits,
     ) -> Result<&DeviceBuffer<bf16>> {
         self.select_prefill_row(row, tokens)?;
         self.project_logits(sampling)?;

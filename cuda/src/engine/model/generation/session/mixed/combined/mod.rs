@@ -63,12 +63,12 @@ pub(super) fn execute(
             .iter()
             .map(|row| {
                 if row.final_chunk {
-                    row.request.sampling_logits
+                    row.request.sampling_logits.clone()
                 } else {
                     SamplingLogits::None
                 }
             })
-            .chain(decode.iter().map(|row| row.sampling_logits))
+            .chain(decode.iter().map(|row| row.sampling_logits.clone()))
             .collect::<Vec<_>>();
         let mut sessions = owned.iter_mut().map(|(_, session)| session).collect::<Vec<_>>();
         let batch = execution.combined.current()?;
@@ -107,8 +107,8 @@ fn supported(
                 execution.sessions.get(&id).is_some_and(|session| session.position_delta() != 0)
             })
         || chunks.is_empty()
-        || chunks.iter().any(|row| !device_sampling(row.request.sampling_logits))
-        || decode.iter().any(|row| !device_sampling(row.sampling_logits))
+        || chunks.iter().any(|row| !device_sampling(&row.request.sampling_logits))
+        || decode.iter().any(|row| !device_sampling(&row.sampling_logits))
     {
         return Ok(false);
     }

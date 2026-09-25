@@ -1,3 +1,5 @@
+mod constraint;
+pub use constraint::{DeviceSampling, TokenMask};
 mod batch;
 mod capability;
 #[cfg(test)]

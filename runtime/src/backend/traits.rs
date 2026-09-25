@@ -33,9 +33,13 @@ pub struct CandidateLogitsTrace {
     pub scores: Vec<f32>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum SamplingLogits {
     None,
+    Masked {
+        mask: super::TokenMask,
+        sampling: super::DeviceSampling,
+    },
     Full,
     TopK {
         k: usize,
@@ -58,7 +62,7 @@ pub enum SamplingLogits {
 
 impl SamplingLogits {
     #[must_use]
-    pub const fn requires_history(self) -> bool {
+    pub const fn requires_history(&self) -> bool {
         matches!(self, Self::Full | Self::TopK { .. })
     }
 }

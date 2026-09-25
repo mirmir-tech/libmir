@@ -34,7 +34,10 @@ pub(super) fn request_sampling(
         SamplingLogits::SampleTopK { draw, .. } | SamplingLogits::Sample { draw, .. } => {
             *draw = sampler.draw_unit_f32();
         },
-        SamplingLogits::None | SamplingLogits::Full | SamplingLogits::TopK { .. } => {},
+        SamplingLogits::Masked { .. }
+        | SamplingLogits::None
+        | SamplingLogits::Full
+        | SamplingLogits::TopK { .. } => {},
     }
     sampling
 }

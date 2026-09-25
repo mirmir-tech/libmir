@@ -76,7 +76,7 @@ fn staged_checkpoint_continues_like_a_split_prefill() -> Result<()> {
         &[&tokens[..], &tokens[..7]].concat(),
         &tables.iter().collect::<Vec<_>>(),
         &[0, 0],
-        Some(&[SamplingLogits::None; 2]),
+        Some(&[const { SamplingLogits::None }; 2]),
     )?;
     assert!(rows[1].take_staged_checkpoint(0)?.is_none());
     let staged = rows[0]

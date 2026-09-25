@@ -131,6 +131,7 @@ fn decode_preempts_chunked_prefill() -> Result<()> {
 
 fn request() -> GenerationRequest {
     GenerationRequest {
+        tool_constraints: libmir::ToolConstraints::None,
         conversation: Conversation {
             messages: vec![Message {
                 role: "user".into(),
