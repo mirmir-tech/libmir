@@ -110,8 +110,12 @@ impl Prepared {
         encoded_image: Option<&[u8]>,
     ) -> Result<Self> {
         let Some(encoded_image) = encoded_image else {
-            return Ok(Self::Text(model.descriptor().prepare_with_reasoning(
+            let conversation = super::constraints::prompt::conversation(
                 &request.conversation,
+                request.tool_constraints,
+            );
+            return Ok(Self::Text(model.descriptor().prepare_with_reasoning(
+                &conversation,
                 settings,
                 request.reasoning,
             )?));

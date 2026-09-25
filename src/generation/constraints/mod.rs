@@ -1,4 +1,5 @@
 mod grammar;
+pub(super) mod prompt;
 #[cfg(test)]
 mod tests;
 mod validation;
