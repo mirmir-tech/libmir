@@ -1,6 +1,7 @@
 use std::fmt::Write;
 
-use serde_json::Value;
+use llguidance::JsonCompileOptions;
+use serde_json::{Value, json};
 
 use super::invalid;
 use crate::Result;
@@ -45,7 +46,7 @@ pub(super) fn compile(schema: &Value, tool_end: Option<u32>) -> Result<String> {
         return Err(invalid("required tool parameter is undeclared"));
     }
     let mut start = String::from("start: _ws");
-    let mut rules = String::from("_ws: /[ \\t\\r\\n]*/\n");
+    let mut rules = String::from("_ws: /[ \\t\\r\\n]{0,16}/\n");
     for (index, (name, value)) in properties.iter().enumerate() {
         if name.is_empty()
             || !name
@@ -60,7 +61,20 @@ pub(super) fn compile(schema: &Value, tool_end: Option<u32>) -> Result<String> {
             "?"
         };
         write!(start, " param{index}{optional}").map_err(|error| invalid(error.to_string()))?;
-        let mut value = value.clone();
+        // Bound formatting gaps at both grammar layers. Unbounded envelope or
+        // JSON skip whitespace lets greedy decoding spend the entire generation
+        // budget on indentation before a required quoted parameter value.
+        // Whitespace within a JSON string remains ordinary, unconstrained data.
+        let mut value = if value.is_object() {
+            value.clone()
+        } else {
+            json!({"allOf":[value]})
+        };
+        JsonCompileOptions {
+            whitespace_pattern: Some(r"[ \t\r\n]{1,16}".into()),
+            ..JsonCompileOptions::default()
+        }
+        .apply_to(&mut value);
         if let (Some(definitions), Some(object)) = (schema.get("$defs"), value.as_object_mut()) {
             object.insert("$defs".into(), definitions.clone());
         }

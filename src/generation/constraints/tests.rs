@@ -144,3 +144,24 @@ fn envelope_keeps_native_whitespace_before_and_after_json() -> TestResult {
     assert!(!accepts(&schema, &text.replace("offer", "invented"))?);
     Ok(())
 }
+
+#[test]
+fn formatting_gaps_are_bounded_without_truncating_string_data() -> TestResult {
+    let schema = json!({"type":"object","properties":{"review":{"type":"object",
+        "required":["explanation"],"properties":{"explanation":{"type":"string"}}}},"required":["review"]});
+    let spaces = " ".repeat(256);
+    let valid = format!(
+        "<parameter=review>\n{{\"explanation\": \"{spaces}\"}}\n</parameter>\n</function>\n</tool_call>"
+    );
+    assert!(accepts(&schema, &valid)?);
+    for bad in [
+        valid.replacen(">\n{", &format!(">{spaces}{{"), 1),
+        valid.replacen("{\"explanation", &format!("{{{spaces}\"explanation"), 1),
+        valid.replacen(": ", &format!(":{spaces}"), 1),
+        valid.replacen("}\n</parameter>", &format!("}}{spaces}</parameter>"), 1),
+        valid.replace("</function>\n", &format!("</function>{spaces}")),
+    ] {
+        assert!(!accepts(&schema, &bad)?, "accepted an unbounded formatting gap");
+    }
+    Ok(())
+}
