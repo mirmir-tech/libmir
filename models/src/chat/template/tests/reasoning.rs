@@ -128,6 +128,10 @@ fn named_xml_tools_prefill_only_in_explicit_no_thinking_mode() -> Result<()> {
     let disabled = template.render_with_reasoning(&conversation, ReasoningMode::Disabled)?;
     assert!(disabled.text.ends_with("<tool_call>\n<function=emit>\n"));
     assert!(disabled.tool_prefix.is_some());
+    assert_eq!(
+        template.named_tool_prefix(&conversation)?.map(|p| p.text()),
+        Some("<tool_call>\n<function=emit>\n".into())
+    );
     assert!(
         template
             .render_with_reasoning(&conversation, ReasoningMode::Enabled)?
@@ -135,6 +139,7 @@ fn named_xml_tools_prefill_only_in_explicit_no_thinking_mode() -> Result<()> {
             .is_none()
     );
     conversation.tool_choice = ToolChoice::Auto;
+    assert!(template.named_tool_prefix(&conversation)?.is_none());
     assert!(
         template
             .render_with_reasoning(&conversation, ReasoningMode::Disabled)?

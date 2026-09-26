@@ -28,6 +28,7 @@ enum State {
     RoleName,
     XmlToolCalls,
     ConstrainedToolCalls,
+    ConstrainedReasoning(u32),
     ChannelName(String),
 }
 
@@ -38,6 +39,15 @@ impl OutputNormalizer {
     #[must_use]
     pub fn with_constrained_tool(mut self) -> Self {
         self.state = State::ConstrainedToolCalls;
+        self
+    }
+
+    /// Preserve reasoning until its atomic delimiter, then let the named-tool
+    /// grammar own every output byte, including literal markers in JSON
+    /// strings.
+    #[must_use]
+    pub fn with_constrained_reasoning(mut self, end_token: u32) -> Self {
+        self.state = State::ConstrainedReasoning(end_token);
         self
     }
 
@@ -77,6 +87,13 @@ impl OutputNormalizer {
     #[must_use]
     pub fn push(&mut self, id: u32, text: String) -> Option<GenerationToken> {
         self.pending_ids.push(id);
+        if let State::ConstrainedReasoning(end) = self.state {
+            if id == end {
+                self.state = State::ConstrainedToolCalls;
+                return None;
+            }
+            return self.nonempty(text, GenerationChannel::Reasoning);
+        }
         if matches!(self.state, State::ConstrainedToolCalls) {
             return self.nonempty(text, GenerationChannel::ToolCalls);
         }
@@ -171,7 +188,7 @@ fn unmatched(text: &str, start: &str, end: &str) -> bool {
 
 const fn channel(state: &State) -> GenerationChannel {
     match state {
-        State::Reasoning => GenerationChannel::Reasoning,
+        State::Reasoning | State::ConstrainedReasoning(_) => GenerationChannel::Reasoning,
         State::ToolCalls | State::XmlToolCalls | State::ConstrainedToolCalls => {
             GenerationChannel::ToolCalls
         },

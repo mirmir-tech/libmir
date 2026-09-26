@@ -2,6 +2,7 @@ use llguidance::{Matcher, ParserFactory, api::TopLevelGrammar};
 use serde_json::{Value, json};
 
 use super::grammar;
+mod reasoning;
 use crate::model::constraints::tool_tokenizer;
 
 type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;

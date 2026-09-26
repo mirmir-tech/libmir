@@ -56,3 +56,21 @@ fn output(token: u32) -> DecodeOutput {
         timings: None,
     }
 }
+
+#[test]
+fn constrained_tool_phase_disables_pending_exit_and_history_recovery() -> Result<()> {
+    for exit in [None, Some((192, vec![91, 92]))] {
+        let mut recovery =
+            CycleRecovery::new(settings(), Some(7), 256, &SamplingLogits::None, exit)?;
+        let mut generated = (0..168).collect::<Vec<_>>();
+        generated.extend([7, 11, 13, 17, 19, 23, 29, 31].repeat(3));
+        recovery.observe(&[], &generated);
+        recovery.disable();
+        recovery.observe(&[], &generated);
+        assert_eq!(recovery.sampling(SamplingLogits::None), SamplingLogits::None);
+        let mut metrics = GenerationMetricsRecorder::new();
+        let mut sampler = Sampler::new(SamplerConfig::default())?;
+        assert_eq!(recovery.choose(&mut metrics, &output(77), &[], &mut sampler)?, 77);
+    }
+    Ok(())
+}

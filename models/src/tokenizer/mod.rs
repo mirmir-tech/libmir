@@ -8,6 +8,7 @@ mod harmony;
 mod metadata;
 mod policy;
 pub(crate) mod protocol;
+mod reasoning;
 mod sentencepiece;
 mod validation;
 

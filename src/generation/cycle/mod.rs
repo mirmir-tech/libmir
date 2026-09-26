@@ -68,6 +68,11 @@ impl CycleRecovery {
         })
     }
 
+    pub(super) fn disable(&mut self) {
+        self.state = RecoveryState::Disabled;
+        self.reasoning_exit = None;
+    }
+
     pub(super) fn observe(&mut self, prompt: &[u32], generated: &[u32]) {
         if let RecoveryState::Active(recovery) = &mut self.state {
             if let Some(tokens) = generated.get(recovery.observed_tokens..) {

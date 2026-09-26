@@ -17,9 +17,7 @@ mod tools;
 use cycle::CycleRecovery;
 use input::PreparedGeneration;
 pub use output::GenerationOutput;
-use output::{
-    TokenStream, append_delta, finalize_output, finish_metrics, missing_decoder, should_stop,
-};
+use output::{append_delta, finalize_output, finish_metrics, should_stop};
 pub use request::{GenerationRequest, ReasoningCyclePolicy, ToolConstraints};
 use sampling::{choose_prefill, request_sampling, sampler_config};
 use telemetry::record_publish;
@@ -80,9 +78,7 @@ impl Model {
         let output_setup_started = Instant::now();
         let tokenizer = descriptor.tokenizer();
         let stop_token_ids = tokenizer.stop_token_ids();
-        let mut stream = TokenStream::new(tokenizer, prepared.normalizer(tokenizer, request));
-        let decoder = descriptor.decoder().ok_or_else(missing_decoder)?;
-        let vocab_size = tokenizer.vocab_size().min(decoder.vocab_size);
+        let (mut stream, vocab_size) = output::prepare(descriptor, &prepared, request)?;
         let output_setup = output_setup_started.elapsed();
         let sampler_started = Instant::now();
         let mut sampler = Sampler::new(sampler_config(settings, request.seed, vocab_size))?;
@@ -93,8 +89,8 @@ impl Model {
             constraints::ToolConstraint::prepare(self, request, &prepared, settings)?;
         let sampling = request_sampling(settings, vocab_size, &mut sampler);
         let sampling = constraints::sampling(&mut constraints, sampling)?;
-        let harmony_exit = harmony_exit(request, descriptor)?;
-        let mut cycle_recovery =
+        let harmony_exit = reasoning_exit(request, descriptor, constraints.as_ref())?;
+        let mut cycle =
             CycleRecovery::new(settings, request.seed, vocab_size, &sampling, harmony_exit)?;
         metrics.record_setup_stages(output_setup, sampler_setup, session_started.elapsed());
         let prefill = prepared.prefill(
@@ -115,7 +111,8 @@ impl Model {
         let mut finish_reason = "max_tokens";
         while token_ids.len() < settings.max_tokens {
             cancellation.check()?;
-            let constrained_stop = constraints::advance(&mut constraints, next)?;
+            let constrained_stop =
+                constraints::advance_generation(&mut constraints, next, &mut cycle)?;
             token_ids.push(next);
             if let Some(history) = history.as_mut() {
                 history.push(next);
@@ -133,10 +130,10 @@ impl Model {
             let pending = if finished {
                 None
             } else {
-                cycle_recovery.observe(prepared.token_ids(), &token_ids);
+                cycle.observe(prepared.token_ids(), &token_ids);
                 let started = Instant::now();
                 let sampling = request_sampling(settings, vocab_size, &mut sampler);
-                let sampling = cycle_recovery.sampling(sampling);
+                let sampling = cycle.sampling(sampling);
                 let sampling = constraints::sampling(&mut constraints, sampling)?;
                 Some((started, session.start_decode(next, sampling)?))
             };
@@ -156,7 +153,7 @@ impl Model {
             };
             let output = session.finish_decode(pending)?;
             metrics.record_decode(decode_started.elapsed());
-            next = cycle_recovery.choose(
+            next = cycle.choose(
                 &mut metrics,
                 &output,
                 history.as_deref().unwrap_or_default(),
@@ -165,7 +162,7 @@ impl Model {
         }
         stream.finish_into(&mut text, &mut reasoning, &mut tool_calls, token)?;
         let tool_calls = tools::normalize(&tool_calls, &request.conversation)?;
-        constraints::validate(constraints.as_ref(), &tool_calls)?;
+        constraints::validate(constraints.as_mut(), &tool_calls)?;
         let metrics = finish_metrics(&mut metrics, token_ids.len(), &session);
         Ok(finalize_output(
             text, reasoning, tool_calls, token_ids, prompt_tokens, finish_reason, metrics,
@@ -173,10 +170,14 @@ impl Model {
     }
 }
 
-fn harmony_exit(
+fn reasoning_exit(
     request: &GenerationRequest,
     descriptor: &crate::ModelDescriptor,
+    constraint: Option<&constraints::ToolConstraint>,
 ) -> Result<Option<(usize, Vec<u32>)>> {
+    if let Some(exit) = constraint.and_then(|c| c.reasoning_exit(request)) {
+        return Ok(Some(exit));
+    }
     let ReasoningCyclePolicy::ExitReasoning { min_tokens } = request.reasoning_cycle else {
         return Ok(None);
     };

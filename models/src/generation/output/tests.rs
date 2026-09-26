@@ -191,3 +191,31 @@ fn constrained_tool_keeps_literal_markers_and_following_text_in_arguments() {
         assert_eq!(token.map(|token| token.text), Some(text.into()));
     }
 }
+
+#[test]
+fn constrained_reasoning_keeps_channels_and_literal_json_markers_separate() {
+    let mut n = normalizer(Markers {
+        content: vec![2],
+        xml_tool_start: vec![3],
+        xml_tool_end: vec![4],
+        ..Markers::default()
+    })
+    .with_constrained_reasoning(2);
+    assert!(n.push(10, String::new()).is_none());
+    let reasoning = n.push(11, "check evidence".into());
+    assert_eq!(reasoning.as_ref().map(|t| t.channel), Some(GenerationChannel::Reasoning));
+    assert_eq!(reasoning.map(|t| t.preceding_ids), Some(vec![10]));
+    assert!(n.push(2, String::new()).is_none());
+    let first = n.push(3, "<tool_call>".into());
+    assert_eq!(first.as_ref().map(|t| t.channel), Some(GenerationChannel::ToolCalls));
+    assert_eq!(first.map(|t| t.preceding_ids), Some(vec![2]));
+    assert_eq!(
+        n.push(2, "</think>".into()).map(|t| (t.channel, t.text)),
+        Some((GenerationChannel::ToolCalls, "</think>".into()))
+    );
+    assert_eq!(
+        n.push(4, "</tool_call>".into()).map(|t| t.channel),
+        Some(GenerationChannel::ToolCalls)
+    );
+    assert_eq!(n.finish("tail".into()).map(|t| t.channel), None);
+}

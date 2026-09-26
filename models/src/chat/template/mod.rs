@@ -104,6 +104,13 @@ impl ChatTemplate {
         })
     }
 
+    /// Resolves the native header of an explicitly named tool without adding it
+    /// to the prompt. Reasoning generation can emit it after its channel
+    /// closes.
+    pub fn named_tool_prefix(&self, conversation: &Conversation) -> Result<Option<ToolCallPrefix>> {
+        tools::prefix(self.template.as_deref(), conversation, ReasoningMode::Disabled)
+    }
+
     #[must_use]
     pub const fn kind(&self) -> TemplateKind {
         self.kind

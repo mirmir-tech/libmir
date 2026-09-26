@@ -1,4 +1,5 @@
 mod grammar;
+mod phase;
 pub(super) mod prompt;
 #[cfg(test)]
 mod tests;
@@ -13,6 +14,7 @@ use crate::{Model, Result};
 
 pub(super) struct ToolConstraint {
     matcher: Matcher,
+    phase: phase::Phase,
     vocab: usize,
     validator: jsonschema::Validator,
 }
@@ -42,9 +44,8 @@ impl ToolConstraint {
                 "schema mode requires repetition_penalty=1, min_tokens=0 and ignore_eos=false",
             ));
         }
-        let Some(ToolCallPrefix::XmlFunction(name)) = prepared.tool_prefix() else {
-            return Err(invalid("schema mode requires a named XML tool with reasoning disabled"));
-        };
+        let (prefix, phase) = phase::Phase::prepare(model, request, prepared)?;
+        let ToolCallPrefix::XmlFunction(name) = &prefix;
         let tool = request
             .conversation
             .tools
@@ -57,6 +58,11 @@ impl ToolConstraint {
             .map_err(|error| invalid(error.to_string()))?;
         let schema = validation::decoding_schema(tool.function.parameters.clone());
         let grammar = grammar::compile(&schema, tool_end)?;
+        let grammar = if phase.is_reasoning() {
+            grammar::with_prefix(&grammar, &prefix)?
+        } else {
+            grammar
+        };
         let parser = factory
             .create_parser(TopLevelGrammar::from_lark(grammar))
             .map_err(|error| invalid(error.to_string()))?;
@@ -67,16 +73,35 @@ impl ToolConstraint {
         }
         Ok(Some(Self {
             matcher,
+            phase,
             validator,
             vocab: model.descriptor().tokenizer().vocab_size(),
         }))
     }
 
+    pub(super) fn is_tool(&self) -> bool {
+        !self.phase.is_reasoning()
+    }
+
+    pub(super) fn reasoning_exit(&self, request: &GenerationRequest) -> Option<(usize, Vec<u32>)> {
+        let super::ReasoningCyclePolicy::ExitReasoning { min_tokens } = request.reasoning_cycle
+        else {
+            return None;
+        };
+        self.phase.end_token().map(|end| (min_tokens, vec![end]))
+    }
+
     pub(super) fn consume(&mut self, token: u32) -> Result<()> {
+        if self.phase.observe(token) {
+            return Ok(());
+        }
         self.matcher.consume_token(token).map_err(|error| invalid(error.to_string()))
     }
 
     pub(super) fn complete(&mut self) -> Result<bool> {
+        if self.phase.is_reasoning() {
+            return Ok(false);
+        }
         self.matcher.is_accepting().map_err(|error| invalid(error.to_string()))
     }
 }
@@ -88,6 +113,9 @@ pub(super) fn sampling(
     let Some(constraint) = constraint else {
         return Ok(policy);
     };
+    if constraint.phase.is_reasoning() {
+        return Ok(policy);
+    }
     let sampling = match policy {
         SamplingLogits::None => DeviceSampling::Greedy,
         SamplingLogits::SampleTopK { k, temperature, draw, .. } => {
@@ -111,8 +139,27 @@ pub(super) fn advance(constraint: &mut Option<ToolConstraint>, token: u32) -> Re
     constraint.complete()
 }
 
-pub(super) fn validate(constraint: Option<&ToolConstraint>, calls: &str) -> Result<()> {
+/// Once the grammar owns the output, neither history penalties nor injected
+/// reasoning exits may override its device mask.
+pub(super) fn advance_generation(
+    constraint: &mut Option<ToolConstraint>,
+    token: u32,
+    cycle: &mut super::CycleRecovery,
+) -> Result<bool> {
+    let complete = advance(constraint, token)?;
+    if constraint.as_ref().is_some_and(ToolConstraint::is_tool) {
+        cycle.disable();
+    }
+    Ok(complete)
+}
+
+pub(super) fn validate(constraint: Option<&mut ToolConstraint>, calls: &str) -> Result<()> {
     if let Some(constraint) = constraint {
+        if !constraint.complete()? {
+            return Err(crate::Error::InvalidToolCall(
+                "schema-constrained tool generation ended before completion".into(),
+            ));
+        }
         validation::validate(&constraint.validator, calls)?;
     }
     Ok(())

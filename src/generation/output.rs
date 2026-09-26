@@ -7,6 +7,17 @@ use runtime::metrics::{GenerationMetrics, GenerationMetricsRecorder};
 use super::telemetry::trace_latency;
 use crate::{Error, Session};
 
+pub(super) fn prepare<'a>(
+    descriptor: &'a crate::ModelDescriptor,
+    prepared: &super::PreparedGeneration,
+    request: &super::GenerationRequest,
+) -> crate::Result<(TokenStream<'a>, usize)> {
+    let tokenizer = descriptor.tokenizer();
+    let decoder = descriptor.decoder().ok_or_else(missing_decoder)?;
+    let vocab_size = tokenizer.vocab_size().min(decoder.vocab_size);
+    Ok((TokenStream::new(tokenizer, prepared.normalizer(tokenizer, request)), vocab_size))
+}
+
 /// Completed generation with separated output channels, tokens, and timing
 /// metrics.
 #[derive(Debug, Clone)]

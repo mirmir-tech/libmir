@@ -34,7 +34,13 @@ impl PreparedGeneration {
             },
         );
         if request.tool_constraints == super::ToolConstraints::Schema {
-            return normalizer.with_constrained_tool();
+            return tokenizer.xml_reasoning_end_token(self.prompt_text()).map_or_else(
+                || normalizer.with_constrained_tool(),
+                |end| {
+                    models::generation::OutputNormalizer::new(tokenizer, self.prompt_text())
+                        .with_constrained_reasoning(end)
+                },
+            );
         }
         let conversation = &request.conversation;
         if conversation.tools.is_empty()

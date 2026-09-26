@@ -95,3 +95,10 @@ pub(super) fn compile(schema: &Value, tool_end: Option<u32>) -> Result<String> {
     writeln!(start, " {close}").map_err(|error| invalid(error.to_string()))?;
     Ok(format!("{start}{rules}"))
 }
+
+/// Add a named native envelope when it was not prefilled before reasoning.
+pub(super) fn with_prefix(grammar: &str, prefix: &models::chat::ToolCallPrefix) -> Result<String> {
+    let literal =
+        serde_json::to_string(&prefix.text()).map_err(|error| invalid(error.to_string()))?;
+    Ok(grammar.replacen("start: _ws", &format!("start: _ws {literal} _ws"), 1))
+}
