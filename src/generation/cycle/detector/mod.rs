@@ -20,31 +20,32 @@ pub(super) enum CycleKind {
 }
 
 pub(super) struct CycleDetector {
-    phrases: HashMap<[u32; PHRASE_LEN], u8>,
-    seeded: bool,
     min_tokens: usize,
-    consecutive_repeats: usize,
-    phrase_repeats: u8,
+    policy: DetectionPolicy,
+}
+
+enum DetectionPolicy {
+    Recovery {
+        phrases: HashMap<[u32; PHRASE_LEN], u8>,
+        seeded: bool,
+    },
+    ReasoningExit,
 }
 
 impl Default for CycleDetector {
     fn default() -> Self {
-        Self::new(DEFAULT_MIN_TOKENS, CONSECUTIVE_REPEATS, PHRASE_REPEATS)
+        Self {
+            min_tokens: DEFAULT_MIN_TOKENS,
+            policy: DetectionPolicy::Recovery { phrases: HashMap::new(), seeded: false },
+        }
     }
 }
 
 impl CycleDetector {
     pub(super) fn reasoning_exit(min_tokens: usize) -> Self {
-        Self::new(min_tokens, 2, 3)
-    }
-
-    fn new(min_tokens: usize, consecutive_repeats: usize, phrase_repeats: u8) -> Self {
         Self {
-            phrases: HashMap::new(),
-            seeded: false,
             min_tokens: min_tokens.max(PHRASE_LEN),
-            consecutive_repeats,
-            phrase_repeats,
+            policy: DetectionPolicy::ReasoningExit,
         }
     }
 
@@ -52,24 +53,28 @@ impl CycleDetector {
         if tokens.len() < self.min_tokens {
             return None;
         }
-        if let Some(span) = consecutive_cycle(tokens, self.consecutive_repeats) {
+        if let Some(span) = consecutive_cycle(tokens, CONSECUTIVE_REPEATS) {
             return Some(CycleDetection { span, kind: CycleKind::Consecutive });
         }
-        if self.seeded {
-            increment(&mut self.phrases, &tokens[tokens.len() - PHRASE_LEN..], self.phrase_repeats);
+        // Repeating source evidence during a comparison is not a reasoning
+        // loop. Only consecutive cycles justify forcing a channel delimiter;
+        // keep scattered-phrase recovery for the non-exit policy.
+        let DetectionPolicy::Recovery { phrases, seeded } = &mut self.policy else {
+            return None;
+        };
+        if *seeded {
+            increment(phrases, &tokens[tokens.len() - PHRASE_LEN..], PHRASE_REPEATS);
         } else {
             for phrase in tokens.windows(PHRASE_LEN) {
-                increment(&mut self.phrases, phrase, self.phrase_repeats);
+                increment(phrases, phrase, PHRASE_REPEATS);
             }
-            self.seeded = true;
+            *seeded = true;
         }
         let suffix = phrase(&tokens[tokens.len() - PHRASE_LEN..]);
-        (self.phrases.get(&suffix).copied() == Some(self.phrase_repeats)).then_some(
-            CycleDetection {
-                span: PHRASE_LEN,
-                kind: CycleKind::RecurringPhrase,
-            },
-        )
+        (phrases.get(&suffix).copied() == Some(PHRASE_REPEATS)).then_some(CycleDetection {
+            span: PHRASE_LEN,
+            kind: CycleKind::RecurringPhrase,
+        })
     }
 }
 
@@ -94,3 +99,6 @@ fn phrase(tokens: &[u32]) -> [u32; PHRASE_LEN] {
     phrase.copy_from_slice(tokens);
     phrase
 }
+
+#[cfg(test)]
+mod tests;

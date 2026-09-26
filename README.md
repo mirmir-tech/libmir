@@ -99,6 +99,11 @@ Jinja `enable_thinking` input or a supported built-in Qwen/Gemma template;
 unsupported templates and image requests reject explicit modes.
 `GenerationOverrides::max_tokens` counts all generated tokens, including
 reasoning and final content. There is no separate reasoning-token budget.
+The default reasoning-cycle exit requires three consecutive repeated token
+cycles after its minimum-token gate. Nonconsecutive repetitions, such as quoting
+the same source while comparing claims, do not force a reasoning delimiter.
+The total completion limit still bounds reasoning that never reaches an answer.
+The separate repetition-penalty recovery policy retains its phrase detection.
 
 Run it with a local Hugging Face-format model directory:
 

@@ -6,7 +6,9 @@ use models::generation::GenerationOverrides;
 pub enum ReasoningCyclePolicy {
     /// Resume greedy decoding with a repetition penalty.
     Recover,
-    /// Close a supported reasoning channel after the configured token gate.
+    /// Close a supported reasoning channel after three consecutive token cycles
+    /// and the configured token gate. Scattered repeated quotations do not
+    /// trigger an exit. Completion limits still bound unfinished reasoning.
     ExitReasoning {
         /// Earliest generated-token position eligible for cycle detection.
         min_tokens: usize,
