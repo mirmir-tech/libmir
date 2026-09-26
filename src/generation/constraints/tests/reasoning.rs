@@ -148,3 +148,39 @@ fn natural_reasoning_end_cancels_unused_allowance() -> TestResult {
     assert!(c.phase.budget_exit().is_none());
     Ok(())
 }
+
+#[test]
+fn native_stop_closes_reasoning_without_accepting_its_draft_tool() -> TestResult {
+    use super::super::transition_stop;
+
+    let factory = factory(true)?;
+    let mut c = Some(constraint()?);
+    let call = "<tool_call>\n<function=verify>\n<parameter=verdict>\"supported\"</parameter>\n</function>\n</tool_call>";
+    // The real reproducer wrote a complete draft in reasoning, then EOS,
+    // before its allowance. A draft is neither a real call nor an approval.
+    for token in factory.tok_env().tokenize(call) {
+        assert_eq!(transition_stop(c.as_ref(), token, &[256]), token);
+        assert!(!advance(&mut c, token)?);
+    }
+    assert!(!c.as_ref().ok_or("constraint")?.is_tool());
+    assert!(validate(c.as_mut(), "").is_err());
+    let delimiter = transition_stop(c.as_ref(), 256, &[256]);
+    assert_eq!(delimiter, 258);
+    assert!(!advance(&mut c, delimiter)?);
+    assert!(c.as_ref().ok_or("constraint")?.is_tool());
+    assert!(validate(c.as_mut(), "").is_err());
+    assert_eq!(transition_stop(c.as_ref(), 256, &[256]), 256);
+    assert_eq!(transition_stop(None, 256, &[256]), 256);
+    assert!(!c.as_mut().ok_or("constraint")?.matcher.compute_mask()?.is_allowed(256));
+    let tokens = factory.tok_env().tokenize(call);
+    let count = tokens.len();
+    for (index, token) in tokens.into_iter().enumerate() {
+        assert!(c.as_mut().ok_or("constraint")?.matcher.compute_mask()?.is_allowed(token));
+        assert_eq!(advance(&mut c, token)?, index + 1 == count);
+    }
+    validate(
+        c.as_mut(),
+        r#"[{"id":"call","type":"function","function":{"name":"verify","arguments":{"verdict":"supported"}}}]"#,
+    )?;
+    Ok(())
+}

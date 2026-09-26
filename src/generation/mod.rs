@@ -111,6 +111,7 @@ impl Model {
         let mut finish_reason = "max_tokens";
         while token_ids.len() < settings.max_tokens {
             cancellation.check()?;
+            next = constraints::transition_stop(constraints.as_ref(), next, &stop_token_ids);
             let constrained_stop =
                 constraints::advance_generation(&mut constraints, next, &mut cycle)?;
             token_ids.push(next);

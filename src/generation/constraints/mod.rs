@@ -137,6 +137,28 @@ pub(super) fn sampling(
     Ok(SamplingLogits::Masked { mask, sampling })
 }
 
+/// A required schema tool cannot finish on the reasoning channel. Use the
+/// native delimiter when the model requests end-of-turn there, then generate
+/// and validate a fresh tool call. Draft calls inside reasoning stay private.
+/// This uses the already-selected token; it adds no accelerator readback.
+pub(super) fn transition_stop(
+    constraint: Option<&ToolConstraint>,
+    token: u32,
+    stop_tokens: &[u32],
+) -> u32 {
+    if let Some(end) = constraint.and_then(|c| c.phase.end_token())
+        && stop_tokens.contains(&token)
+    {
+        tracing::warn!(
+            stop_token = token,
+            "required tool reasoning stop changed to native delimiter"
+        );
+        end
+    } else {
+        token
+    }
+}
+
 pub(super) fn advance(constraint: &mut Option<ToolConstraint>, token: u32) -> Result<bool> {
     let Some(constraint) = constraint else {
         return Ok(false);
