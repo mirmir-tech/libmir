@@ -98,7 +98,12 @@ The default preserves existing model rendering. Explicit modes require a
 Jinja `enable_thinking` input or a supported built-in Qwen/Gemma template;
 unsupported templates and image requests reject explicit modes.
 `GenerationOverrides::max_tokens` counts all generated tokens, including
-reasoning and final content. There is no separate reasoning-token budget.
+reasoning and final content. For enabled, schema-constrained XML tools on CUDA,
+`GenerationRequest::reasoning_token_budget` optionally caps reasoning inside that
+total. At the cap, a device mask selects only the native reasoning delimiter;
+the tool grammar owns all following tokens. Natural early exits are unchanged.
+The cap must reserve the delimiter and tool output in the total budget. It does
+not guarantee that a large tool result will fit, and unsupported modes reject it.
 The default reasoning-cycle exit requires three consecutive repeated token
 cycles after its minimum-token gate. Nonconsecutive repetitions, such as quoting
 the same source while comparing claims, do not force a reasoning delimiter.

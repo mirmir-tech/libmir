@@ -38,6 +38,10 @@ pub struct GenerationRequest {
     pub reasoning: crate::ReasoningMode,
     /// Opt-in schema-constrained native tool decoding.
     pub tool_constraints: ToolConstraints,
+    /// Optional reasoning-token cap for enabled schema-constrained XML tools.
+    /// The native delimiter is forced after this many reasoning tokens; the
+    /// total completion budget still includes the delimiter and tool output.
+    pub reasoning_token_budget: Option<std::num::NonZeroUsize>,
 }
 
 #[cfg(test)]

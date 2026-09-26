@@ -16,6 +16,7 @@ fn preserves_deepseek_qwen_greedy_digest() -> Result<()> {
     let output = model.generate(
         &GenerationRequest {
             tool_constraints: libmir::ToolConstraints::None,
+            reasoning_token_budget: None,
             conversation: Conversation {
                 messages: vec![Message {
                     role: "user".into(),

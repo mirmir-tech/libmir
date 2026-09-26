@@ -1,3 +1,4 @@
+mod budget;
 mod grammar;
 mod phase;
 pub(super) mod prompt;
@@ -30,6 +31,7 @@ impl ToolConstraint {
         prepared: &PreparedGeneration,
         settings: GenerationSettings,
     ) -> Result<Option<Self>> {
+        budget::validate(request, settings.max_tokens)?;
         if request.tool_constraints == ToolConstraints::None {
             return Ok(None);
         }
@@ -113,6 +115,10 @@ pub(super) fn sampling(
     let Some(constraint) = constraint else {
         return Ok(policy);
     };
+    if let Some(end) = constraint.phase.budget_exit() {
+        tracing::warn!("reasoning token budget exit activated");
+        return budget::sampling(end, constraint.vocab);
+    }
     if constraint.phase.is_reasoning() {
         return Ok(policy);
     }
@@ -139,15 +145,18 @@ pub(super) fn advance(constraint: &mut Option<ToolConstraint>, token: u32) -> Re
     constraint.complete()
 }
 
-/// Once the grammar owns the output, neither history penalties nor injected
-/// reasoning exits may override its device mask.
+/// Neither recovery nor cycle exits may override a budget delimiter or the
+/// tool grammar's device mask.
 pub(super) fn advance_generation(
     constraint: &mut Option<ToolConstraint>,
     token: u32,
     cycle: &mut super::CycleRecovery,
 ) -> Result<bool> {
     let complete = advance(constraint, token)?;
-    if constraint.as_ref().is_some_and(ToolConstraint::is_tool) {
+    if constraint
+        .as_ref()
+        .is_some_and(|c| c.is_tool() || c.phase.budget_exit().is_some())
+    {
         cycle.disable();
     }
     Ok(complete)
