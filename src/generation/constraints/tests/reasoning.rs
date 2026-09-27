@@ -4,7 +4,7 @@ use runtime::backend::SamplingLogits;
 use serde_json::json;
 
 use super::{
-    super::{ToolConstraint, advance, grammar, phase::Phase, sampling, validate},
+    super::{ToolConstraint, advance, grammar, phase::Phase, sampling},
     TestResult, factory,
 };
 
@@ -25,6 +25,23 @@ fn constraint() -> TestResult<ToolConstraint> {
         vocab: 258,
         validator: jsonschema::validator_for(&schema)?,
     })
+}
+
+fn validate(constraint: Option<&mut ToolConstraint>, calls: &str) -> crate::Result<String> {
+    use foundation::conversation::{Conversation, FunctionDefinition, Tool, ToolChoice};
+    let conversation = Conversation {
+        tools: vec![Tool {
+            kind: "function".into(),
+            function: FunctionDefinition {
+                name: "verify".into(),
+                description: None,
+                parameters: json!({"type":"object","properties":{"verdict":{"type":"string"}}}),
+            },
+        }],
+        tool_choice: ToolChoice::Function("verify".into()),
+        ..Conversation::default()
+    };
+    super::super::normalize(constraint, calls, &conversation)
 }
 
 #[test]
@@ -87,6 +104,16 @@ fn truncated_reasoning_or_tool_never_becomes_a_valid_empty_call() -> TestResult 
     assert!(!c.complete()?);
     assert!(!c.matcher.compute_mask()?.is_allowed(256));
     assert!(validate(Some(&mut c), "[]").is_err());
+    let error =
+        validate(Some(&mut c), "<tool_call><function=verify><parameter=verdict>\"unfinished")
+            .err()
+            .ok_or("truncated tool accepted")?;
+    assert!(error.to_string().contains("ended before completion"));
+    // Without a grammar this remains a parser failure, never silent success.
+    let error = validate(None, "<tool_call><function=verify><parameter=verdict>\"unfinished")
+        .err()
+        .ok_or("malformed tool accepted")?;
+    assert!(error.to_string().contains("unterminated parameter"));
     Ok(())
 }
 

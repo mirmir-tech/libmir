@@ -166,3 +166,24 @@ fn formatting_gaps_are_bounded_without_truncating_string_data() -> TestResult {
     }
     Ok(())
 }
+
+#[test]
+fn optional_nested_properties_follow_declared_order_before_extensions() -> TestResult {
+    let schema = json!({"type":"object","required":["items"],"properties":{
+        "items":{"type":"array","items":{"type":"object","required":["payload"],
+            "properties":{"confidence":{"type":"number"},"payload":{"type":"string"}}}}
+    }});
+    let envelope = |object: &str| {
+        format!("<parameter=items>[{object}]</parameter>\n</function>\n</tool_call>")
+    };
+    for valid in [
+        r#"{"confidence":0.95,"payload":"source"}"#,
+        r#"{"payload":"source"}"#,
+        r#"{"payload":"source","extra":"literal \"quote\""}"#,
+    ] {
+        assert!(accepts(&schema, &envelope(valid))?);
+    }
+    // JSON permits this order, but llguidance cannot revisit an omitted key.
+    assert!(!accepts(&schema, &envelope(r#"{"payload":"source","confidence":0.95}"#))?);
+    Ok(())
+}

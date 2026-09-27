@@ -8,7 +8,7 @@ use crate::generation::ToolConstraints;
 // constrains every parameter as JSON, so the rendered prompt must explain that
 // difference before sampling. Otherwise masking can turn a raw-text
 // continuation into whitespace loops or schema-valid but meaningless strings.
-const FORMAT: &str = "SCHEMA CONSTRAINED TOOL FORMAT: Inside every <parameter=name> tag, write exactly one JSON value. String parameters must include JSON double quotes, for example <parameter=message>\"The requested text.\"</parameter>. Arrays and objects use JSON normally. Do not write raw unquoted strings.";
+const FORMAT: &str = "SCHEMA CONSTRAINED TOOL FORMAT: Inside every <parameter=name> tag, write exactly one JSON value. String parameters must include JSON double quotes, for example <parameter=message>\"The requested text.\"</parameter>. Arrays and objects use JSON normally. Do not write raw unquoted strings. The schema decoder emits declared properties in the order listed in each schema's properties object, including nested objects. Include an optional property at its listed position or omit it; never append an earlier property after a later one. Additional properties, when allowed, follow the declared properties. Do not escape a property name to work around this order.";
 
 pub(in crate::generation) fn conversation(
     original: &Conversation,

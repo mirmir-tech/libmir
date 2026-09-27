@@ -162,8 +162,8 @@ impl Model {
             )?;
         }
         stream.finish_into(&mut text, &mut reasoning, &mut tool_calls, token)?;
-        let tool_calls = tools::normalize(&tool_calls, &request.conversation)?;
-        constraints::validate(constraints.as_mut(), &tool_calls)?;
+        let tool_calls =
+            constraints::normalize(constraints.as_mut(), &tool_calls, &request.conversation)?;
         let metrics = finish_metrics(&mut metrics, token_ids.len(), &session);
         Ok(finalize_output(
             text, reasoning, tool_calls, token_ids, prompt_tokens, finish_reason, metrics,

@@ -184,14 +184,24 @@ pub(super) fn advance_generation(
     Ok(complete)
 }
 
-pub(super) fn validate(constraint: Option<&mut ToolConstraint>, calls: &str) -> Result<()> {
-    if let Some(constraint) = constraint {
-        if !constraint.complete()? {
-            return Err(crate::Error::InvalidToolCall(
-                "schema-constrained tool generation ended before completion".into(),
-            ));
-        }
-        validation::validate(&constraint.validator, calls)?;
+/// Check grammar completion before parsing an XML/JSON fragment. A token-limit
+/// exit can leave delimiters inside an unfinished string; parsing that fragment
+/// first misreports a generation truncation as malformed complete arguments.
+pub(super) fn normalize(
+    mut constraint: Option<&mut ToolConstraint>,
+    payload: &str,
+    conversation: &foundation::conversation::Conversation,
+) -> Result<String> {
+    if let Some(constraint) = constraint.as_mut()
+        && !constraint.complete()?
+    {
+        return Err(crate::Error::InvalidToolCall(
+            "schema-constrained tool generation ended before completion".into(),
+        ));
     }
-    Ok(())
+    let calls = super::tools::normalize(payload, conversation)?;
+    if let Some(constraint) = constraint {
+        validation::validate(&constraint.validator, &calls)?;
+    }
+    Ok(calls)
 }
