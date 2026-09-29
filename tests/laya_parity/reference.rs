@@ -1,4 +1,4 @@
-use models::decision::{ChoiceOption, DecisionState, Question, Verdicts};
+use libmir::decision::{ChoiceOption, DecisionState, Question, Verdicts};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 

@@ -3,6 +3,8 @@
 
 mod cancellation;
 mod config;
+#[cfg(any(feature = "cpu", feature = "metal"))]
+pub mod decision;
 mod embedding;
 mod engine;
 mod error;

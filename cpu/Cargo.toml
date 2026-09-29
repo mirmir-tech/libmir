@@ -11,9 +11,5 @@ mircup.workspace = true
 models = { package = "libmir-models", version = "0.4.0", path = "../models" }
 thiserror.workspace = true
 
-[dev-dependencies]
-serde.workspace = true
-serde_json.workspace = true
-
 [lints]
 workspace = true
