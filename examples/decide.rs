@@ -13,7 +13,7 @@ use libmir::decision::{
 };
 use serde_json::json;
 
-const RUNS: usize = 5;
+const RUNS: usize = 20;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut arguments = env::args().skip(1);

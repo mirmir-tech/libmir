@@ -1,4 +1,4 @@
-use mircup::{AttentionWindow, EmbeddingTable, LayerNorm, Linear, Rope, Tensor, attention, gelu};
+use mircup::{AttentionWindow, EmbeddingTable, LayerNorm, Linear, Rope, Tensor, attention, geglu};
 use models::{
     decision::{DecisionTensor, EncoderTensor},
     layout::{ModernBertAttention, ModernBertConfig},
@@ -72,46 +72,34 @@ impl Encoder {
         let mut hidden = self.embeddings.lookup(&batch.tokens)?;
         self.embedding_norm.forward_in_place(&mut hidden)?;
         for layer in &self.layers {
-            let input = match &layer.attention_norm {
-                Some(norm) => norm.forward(&hidden)?,
-                None => hidden.clone(),
+            let mixed = match &layer.attention_norm {
+                Some(norm) => self.attend(layer, &norm.forward(&hidden)?, batch)?,
+                None => self.attend(layer, &hidden, batch)?,
             };
-            hidden.add_assign(&self.attend(layer, &input, batch)?)?;
-            let normalized = layer.mlp_norm.forward(&hidden)?;
-            hidden.add_assign(&feed_forward(layer, &normalized)?)?;
+            layer.output.accumulate(&mixed, &mut hidden)?;
+            let expanded = layer.mlp_input.forward(&layer.mlp_norm.forward(&hidden)?)?;
+            layer.mlp_output.accumulate(&geglu(&expanded)?, &mut hidden)?;
         }
         self.final_norm.forward_in_place(&mut hidden)?;
         Ok(hidden)
     }
 
+    /// Attention output `[rows × length, hidden]` before the output
+    /// projection.
     fn attend(&self, layer: &Layer, input: &Tensor, batch: &PaddedBatch) -> Result<Tensor> {
-        let qkv = layer.qkv.forward(input)?;
-        let hidden = input.width();
-        let shape = vec![batch.lengths.len(), batch.length, self.heads, hidden / self.heads];
-        let [query, key, value] = qkv.split_last::<3>()?;
-        let mut query = query.reshape(shape.clone())?;
-        let mut key = key.reshape(shape.clone())?;
-        let value = value.reshape(shape)?;
+        let rows = batch.lengths.len();
+        let width = 3 * input.width();
+        let mut qkv = layer.qkv.forward(input)?.reshape(vec![rows, batch.length, width])?;
         let (rope, window) = match layer.attention {
             ModernBertAttention::Global => (&self.global_rope, AttentionWindow::Full),
             ModernBertAttention::Local { radius } => {
                 (&self.local_rope, AttentionWindow::Band { radius })
             },
         };
-        rope.apply(&mut query)?;
-        rope.apply(&mut key)?;
-        let mixed = attention(&query, &key, &value, &batch.lengths, window)?;
-        Ok(layer
-            .output
-            .forward(&mixed.reshape(vec![batch.lengths.len() * batch.length, hidden])?)?)
+        rope.apply(&mut qkv, 2 * self.heads)?;
+        let mixed = attention(&qkv, self.heads, &batch.lengths, window)?;
+        Ok(mixed.reshape(vec![rows * batch.length, input.width()])?)
     }
-}
-
-fn feed_forward(layer: &Layer, input: &Tensor) -> Result<Tensor> {
-    let [mut activated, gate] = layer.mlp_input.forward(input)?.split_last::<2>()?;
-    gelu(&mut activated);
-    activated.mul_assign(&gate)?;
-    Ok(layer.mlp_output.forward(&activated)?)
 }
 
 /// Rotary bases are `f32` in the reference runtime's frequency tables.

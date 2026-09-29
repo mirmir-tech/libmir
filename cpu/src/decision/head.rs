@@ -78,10 +78,10 @@ impl Head {
         }
         for layer in &self.layers {
             let normalized = layer.attention_norm.forward(&hidden)?;
-            hidden.add_assign(&self.attend(layer, &normalized, batch)?)?;
+            layer.output.accumulate(&self.attend(layer, &normalized, batch)?, &mut hidden)?;
             let mut expanded = layer.up.forward(&layer.feed_forward_norm.forward(&hidden)?)?;
             relu(&mut expanded);
-            hidden.add_assign(&layer.down.forward(&expanded)?)?;
+            layer.down.accumulate(&expanded, &mut hidden)?;
         }
         let positions: Vec<usize> = batch
             .markers
@@ -104,18 +104,9 @@ impl Head {
     }
 
     fn attend(&self, layer: &Layer, input: &Tensor, batch: &PaddedBatch) -> Result<Tensor> {
-        let hidden = input.width();
-        let shape = vec![batch.lengths.len(), batch.length, self.heads, hidden / self.heads];
-        let [query, key, value] = layer.qkv.forward(input)?.split_last::<3>()?;
-        let mixed = attention(
-            &query.reshape(shape.clone())?,
-            &key.reshape(shape.clone())?,
-            &value.reshape(shape)?,
-            &batch.lengths,
-            AttentionWindow::Full,
-        )?;
-        Ok(layer
-            .output
-            .forward(&mixed.reshape(vec![batch.lengths.len() * batch.length, hidden])?)?)
+        let rows = batch.lengths.len();
+        let qkv = layer.qkv.forward(input)?.reshape(vec![rows, batch.length, 3 * input.width()])?;
+        let mixed = attention(&qkv, self.heads, &batch.lengths, AttentionWindow::Full)?;
+        Ok(mixed.reshape(vec![rows * batch.length, input.width()])?)
     }
 }
