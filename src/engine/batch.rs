@@ -29,7 +29,7 @@ impl Engine {
                         sequence.session_id,
                         sequence.token_id,
                         &sequence.block_table,
-                        sequence.sampling_logits,
+                        sequence.sampling_logits.clone(),
                     )?]);
                 }
                 Ok(metal

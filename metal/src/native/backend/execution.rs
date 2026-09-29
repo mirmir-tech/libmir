@@ -51,7 +51,7 @@ impl MetalBackend {
         self.with_model_progress(
             &lookup,
             move |loaded, worker_progress| {
-                execute_prefill(loaded, &request, execution_sampling, started, worker_progress)
+                execute_prefill(loaded, &request, &execution_sampling, started, worker_progress)
             },
             progress,
         )
@@ -81,7 +81,7 @@ impl MetalBackend {
                 session_id,
                 token_id,
                 &table,
-                sampling_logits,
+                &sampling_logits,
                 execution_sampling,
                 profile,
                 started,
@@ -93,7 +93,7 @@ impl MetalBackend {
 fn execute_prefill(
     loaded: &mut LoadedModel,
     request: &PrefillRequest,
-    execution_sampling: SamplingLogits,
+    execution_sampling: &SamplingLogits,
     started: Instant,
     progress: &mut dyn FnMut(MetalProgressEvent),
 ) -> Result<PrefillOutput> {
@@ -115,7 +115,7 @@ fn execute_prefill(
         request.session_id,
         &request.prompt_tokens,
         request.block_table.blocks().len(),
-        request.sampling_logits.clone(),
+        &request.sampling_logits,
         native,
         timing,
     );
@@ -129,7 +129,7 @@ pub(super) fn execute_decode(
     session_id: Uuid,
     token_id: u32,
     block_table: &BlockTable,
-    sampling_logits: SamplingLogits,
+    sampling_logits: &SamplingLogits,
     execution_sampling: SamplingLogits,
     profile: bool,
     started: Instant,
@@ -169,7 +169,7 @@ pub(super) fn execute_decode(
     })
 }
 
-fn device_pipeline(sampling: SamplingLogits, enabled: bool) -> bool {
+fn device_pipeline(sampling: &SamplingLogits, enabled: bool) -> bool {
     matches!(
         sampling,
         SamplingLogits::None | SamplingLogits::SampleTopK { .. } | SamplingLogits::Sample { .. }
@@ -180,10 +180,12 @@ pub(super) fn execution_sampling(
     sampling: SamplingLogits,
     device_pipeline_enabled: bool,
 ) -> SamplingLogits {
+    // Masked rows keep full device logits; materialization applies the
+    // grammar allowlist before sampling a single token.
     if matches!(sampling, SamplingLogits::Masked { .. }) {
-        return sampling;
+        return SamplingLogits::Full;
     }
-    if device_pipeline(sampling.clone(), device_pipeline_enabled) {
+    if device_pipeline(&sampling, device_pipeline_enabled) {
         sampling
     } else {
         SamplingLogits::Full

@@ -17,6 +17,7 @@ impl Engine {
 
     /// Whether `manifest` loads into a runtime that can reallocate its K/V
     /// pages afterwards, so the cache may start provisional and be measured.
+    #[cfg_attr(not(feature = "cuda"), allow(clippy::unnecessary_wraps))]
     pub(crate) fn kv_cache_resizable(&self, manifest: &ModelManifest) -> RuntimeResult<bool> {
         #[cfg(not(feature = "cuda"))]
         let _ = manifest;

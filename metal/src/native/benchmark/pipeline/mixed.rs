@@ -36,7 +36,7 @@ fn compares_mixed_grouped_decode_against_scalar_fallback() -> Result<()> {
                 .collect::<Result<Vec<_>>>()?;
             let session = Uuid::new_v4();
             let output =
-                model.prefill(session, &prompt, &[], SamplingLogits::None, None, &mut |_| {})?;
+                model.prefill(session, &prompt, &[], &SamplingLogits::None, None, &mut |_| {})?;
             cohort.push(DecodeInput {
                 session,
                 token: output_token(&model, output.output)?,
@@ -72,7 +72,7 @@ fn compares_mixed_grouped_decode_against_scalar_fallback() -> Result<()> {
                     .iter()
                     .map(|input| {
                         Ok((
-                            model.decode(input.session, input.token, input.sampling)?,
+                            model.decode(input.session, input.token, input.sampling.clone())?,
                             DecodeExecution::Scalar,
                         ))
                     })

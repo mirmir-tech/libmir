@@ -28,7 +28,7 @@ fn enforces_qwen_prefix_budget_including_recurrence() -> Result<()> {
                 session,
                 &prompt,
                 &[],
-                SamplingLogits::None,
+                &SamplingLogits::None,
                 Some(16),
                 &mut |_| {},
             )?;
@@ -93,8 +93,14 @@ fn restores_qwen_from_retained_checkpoint() -> Result<()> {
             model.prefixes = PrefixCache::new(0, 0);
         }
         let session = Uuid::new_v4();
-        let result =
-            model.prefill(session, prompt, &[1024], SamplingLogits::None, Some(16), &mut |_| {})?;
+        let result = model.prefill(
+            session,
+            prompt,
+            &[1024],
+            &SamplingLogits::None,
+            Some(16),
+            &mut |_| {},
+        )?;
         assert_eq!(result.prefix_cache_tokens, cached);
         let token = greedy_token(&result.output)?;
         assert_eq!(tokenizer.decode(&[token])?.trim(), expected);

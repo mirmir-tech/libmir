@@ -43,7 +43,7 @@
 | Machine | MacBook Pro `Mac15,8` |
 | GPU | Apple M3 Max, 40 cores |
 | Memory | 64 GiB unified |
-| mirmir | 0.3.1 |
+| mirmir | 0.4.0 |
 | Workmir revision | `27d5621a0a49f07229baeca68a3d598adb41c88a` |
 | libmir base revision | `51d42e30d1c92528531fb36d4c0f50e10d2fd61c` plus benchmarked Metal prefill changes |
 | Reference | MLX-LM 0.31.3, revision `ed1fca4cef15a824c5f1702c80f70b4cffc8e4dd` |

@@ -46,8 +46,8 @@ impl MetalBackend {
                     &prompt,
                     &image,
                     blocks,
-                    sampling_logits,
-                    execution_sampling,
+                    &sampling_logits,
+                    &execution_sampling,
                     started,
                     worker_progress,
                 )
@@ -65,8 +65,8 @@ fn execute(
     prompt: &PooledPromptTokens,
     image: &PooledPreprocessedImage,
     blocks: usize,
-    sampling_logits: SamplingLogits,
-    execution_sampling: SamplingLogits,
+    sampling_logits: &SamplingLogits,
+    execution_sampling: &SamplingLogits,
     started: Instant,
     progress: &mut dyn FnMut(MetalProgressEvent),
 ) -> Result<PrefillOutput> {

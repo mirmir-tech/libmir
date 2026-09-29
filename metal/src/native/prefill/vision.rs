@@ -22,7 +22,7 @@ impl LoadedModel {
         session: Uuid,
         prompt: &PooledPromptTokens,
         image: &PooledPreprocessedImage,
-        sampling: SamplingLogits,
+        sampling: &SamplingLogits,
         progress: &mut dyn FnMut(MetalProgressEvent),
     ) -> Result<NativePrefill> {
         let Some((&last, prefix)) = prompt.token_ids.split_last() else {
@@ -73,7 +73,7 @@ impl LoadedModel {
             &mut state,
             last,
             prefix.len(),
-            sampling == SamplingLogits::None,
+            *sampling == SamplingLogits::None,
         )?;
         evaluation::materialize(self, &state, &logits)?;
         state.position = prompt.token_ids.len();
@@ -91,7 +91,7 @@ impl LoadedModel {
         session: Uuid,
         prompt: &SpatialMergePromptTokens,
         image: &SpatialMergePreprocessedImage,
-        sampling: SamplingLogits,
+        sampling: &SamplingLogits,
         progress: &mut dyn FnMut(MetalProgressEvent),
     ) -> Result<NativePrefill> {
         let Some((&last, prefix)) = prompt.token_ids.split_last() else {
@@ -142,7 +142,7 @@ impl LoadedModel {
             &mut state,
             last,
             model_position,
-            sampling == SamplingLogits::None,
+            *sampling == SamplingLogits::None,
         )?;
         evaluation::materialize(self, &state, &logits)?;
         state.position = prompt.token_ids.len();

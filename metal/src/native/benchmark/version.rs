@@ -87,7 +87,7 @@ fn run(model: &mut LoadedModel, prompts: &[Vec<u32>], steps: usize) -> Result<Sa
         let session = Uuid::new_v4();
         let started = Instant::now();
         let output =
-            model.prefill(session, prompt, &[], SamplingLogits::None, None, &mut |_| {})?;
+            model.prefill(session, prompt, &[], &SamplingLogits::None, None, &mut |_| {})?;
         let token = greedy_token(&output.output)?;
         model.stream().synchronize()?;
         prefill_ms.push(started.elapsed().as_secs_f64() * 1000.0);
@@ -102,8 +102,8 @@ fn run(model: &mut LoadedModel, prompts: &[Vec<u32>], steps: usize) -> Result<Sa
     for _ in 0..steps {
         let started = Instant::now();
         let outputs = if inputs.len() == 1 {
-            let input = inputs[0];
-            vec![model.decode(input.session, input.token, input.sampling)?]
+            let input = &inputs[0].clone();
+            vec![model.decode(input.session, input.token, input.sampling.clone())?]
         } else {
             model.decode_batch(&inputs)?
         };

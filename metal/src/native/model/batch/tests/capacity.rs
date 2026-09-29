@@ -38,11 +38,11 @@ fn exercise(case: Case) -> Result<()> {
         let session = Uuid::new_v4();
         let prompt = (0..31).map(|index| (index + seed) % 63 + 1).collect::<Vec<_>>();
         let output =
-            model.prefill(session, &prompt, &[], SamplingLogits::None, None, &mut |_| {})?;
-        let mut token = choose(&model, output.output, SamplingLogits::None)?;
+            model.prefill(session, &prompt, &[], &SamplingLogits::None, None, &mut |_| {})?;
+        let mut token = choose(&model, output.output, &SamplingLogits::None)?;
         for _ in 0..16 {
             let output = model.decode(session, token, SamplingLogits::None)?;
-            token = choose(&model, output, SamplingLogits::None)?;
+            token = choose(&model, output, &SamplingLogits::None)?;
         }
         assert_eq!(model.sessions[&session].cache.cached_tokens()?, 48);
         inputs.push(DecodeInput {
@@ -74,7 +74,9 @@ fn exercise(case: Case) -> Result<()> {
     pool.eval_with_graph_roots(&[], model.stream())?;
     assert_eq!(pool.available_pages(maximum, 0, 2, 8, KvPageFormat::Native)?, remaining);
     let rejected = if matches!(case, Case::Scalar) {
-        model.decode(inputs[0].session, inputs[0].token, inputs[0].sampling).map(|_| ())
+        model
+            .decode(inputs[0].session, inputs[0].token, inputs[0].sampling.clone())
+            .map(|_| ())
     } else {
         model.decode_grouped(&inputs).map(|_| ())
     };
@@ -103,8 +105,8 @@ fn exercise(case: Case) -> Result<()> {
         assert_eq!(outputs.len(), 2);
         for ((input, reference), (output, _)) in inputs.iter_mut().zip(&references).zip(outputs) {
             let expected = model.decode(*reference, input.token, SamplingLogits::Full)?;
-            let expected = choose(&model, expected, SamplingLogits::Full)?;
-            input.token = choose(&model, output, input.sampling)?;
+            let expected = choose(&model, expected, &SamplingLogits::Full)?;
+            input.token = choose(&model, output, &input.sampling)?;
             assert_eq!(input.token, expected, "retry changed continuation");
             input.sampling = SamplingLogits::None;
         }

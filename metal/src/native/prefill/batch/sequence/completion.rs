@@ -35,7 +35,7 @@ impl Sequence {
                 &loaded.stream,
                 state,
                 logits,
-                self.execution_sampling.clone(),
+                &self.execution_sampling,
             )
         })?;
         let state = self

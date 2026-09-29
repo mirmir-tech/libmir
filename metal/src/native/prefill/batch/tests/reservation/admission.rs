@@ -25,7 +25,7 @@ fn check(model: &mut LoadedModel, family: Family) -> Result<()> {
     for prompt in &prompts {
         let session = Uuid::new_v4();
         let output =
-            model.prefill(session, prompt, &[], SamplingLogits::None, None, &mut |_| {})?;
+            model.prefill(session, prompt, &[], &SamplingLogits::None, None, &mut |_| {})?;
         expected.push(token(model, output.output)?);
         model.release_session(session)?;
     }
@@ -51,7 +51,7 @@ fn check(model: &mut LoadedModel, family: Family) -> Result<()> {
     for (prompt, expected) in prompts.iter().zip(expected) {
         let session = Uuid::new_v4();
         let output =
-            model.prefill(session, prompt, &[], SamplingLogits::None, None, &mut |_| {})?;
+            model.prefill(session, prompt, &[], &SamplingLogits::None, None, &mut |_| {})?;
         assert_eq!(output.prefix_cache_tokens, prompt.len());
         assert_eq!(token(model, output.output)?, expected);
         model.release_session(session)?;
@@ -93,7 +93,7 @@ fn batch(family: Family) -> Result<()> {
 fn check_batch(model: &mut LoadedModel) -> Result<()> {
     let prompt = (0..32).collect::<Vec<u32>>();
     let session = Uuid::new_v4();
-    let output = model.prefill(session, &prompt, &[], SamplingLogits::None, None, &mut |_| {})?;
+    let output = model.prefill(session, &prompt, &[], &SamplingLogits::None, None, &mut |_| {})?;
     let expected = token(model, output.output)?;
     model.release_session(session)?;
     let maximum = DecoderCache::physical_page_capacity(model.stream(), model.info.cache_step);
@@ -130,7 +130,7 @@ fn check_batch(model: &mut LoadedModel) -> Result<()> {
     assert!(model.retained_execution_states().is_none());
     model.stream.set_decode_reservation(crate::config::DecodeReservation::OnePage);
     let session = Uuid::new_v4();
-    let output = model.prefill(session, &prompt, &[], SamplingLogits::None, None, &mut |_| {})?;
+    let output = model.prefill(session, &prompt, &[], &SamplingLogits::None, None, &mut |_| {})?;
     assert_eq!(output.prefix_cache_tokens, prompt.len());
     assert_eq!(token(model, output.output)?, expected);
     model.release_session(session)?;

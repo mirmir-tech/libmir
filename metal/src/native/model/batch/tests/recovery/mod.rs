@@ -71,9 +71,9 @@ fn exercise(case: Case) -> Result<()> {
     let (second, second_reference) = pair(&mut model, 1)?;
     let (survivor, survivor_reference) = pair(&mut model, 2)?;
     let mut inputs = if packed {
-        vec![first, second]
+        vec![first.clone(), second.clone()]
     } else {
-        vec![first]
+        vec![first.clone()]
     };
     if matches!(case, Case::Mixed) {
         inputs[0].sampling = SamplingLogits::Full;
@@ -104,7 +104,7 @@ fn exercise(case: Case) -> Result<()> {
     let failed = if packed {
         model.decode_grouped(&inputs).map(|_| ())
     } else {
-        model.decode(first.session, first.token, first.sampling).map(|_| ())
+        model.decode(first.session, first.token, first.sampling.clone()).map(|_| ())
     };
     assert!(failed.is_err());
     assert_eq!(
@@ -124,26 +124,28 @@ fn exercise(case: Case) -> Result<()> {
         assert!(
             matches!(&model.recovery, crate::native::model::recovery::ExecutionRecovery::NeedsDrain(states) if states.len() == retired)
         );
-        assert!(model.decode(survivor.session, survivor.token, survivor.sampling).is_err());
+        let blocked = model.decode(survivor.session, survivor.token, survivor.sampling.clone());
+        assert!(blocked.is_err());
         assert!(
             model
-                .prefill(Uuid::new_v4(), &[1, 2], &[], SamplingLogits::Full, None, &mut |_| {})
+                .prefill(Uuid::new_v4(), &[1, 2], &[], &SamplingLogits::Full, None, &mut |_| {})
                 .is_err()
         );
         model.recover_execution()?;
     }
     for input in &inputs {
         assert!(!model.sessions.contains_key(&input.session), "partial decode remained reusable");
-        assert!(model.decode(input.session, input.token, input.sampling).is_err());
+        assert!(model.decode(input.session, input.token, input.sampling.clone()).is_err());
         model.release_session(input.session)?;
     }
     let shared = DecodeInput { session: shared_session, ..first };
-    for (mut input, reference) in [(survivor, survivor_reference), (shared, first_reference)] {
+    let continuations = [(survivor.clone(), survivor_reference), (shared, first_reference)];
+    for (mut input, reference) in continuations {
         for _ in 0..3 {
             let expected = model.decode(reference, input.token, SamplingLogits::Full)?;
-            let expected = choose(&model, expected, SamplingLogits::Full)?;
-            let actual = model.decode(input.session, input.token, input.sampling)?;
-            input.token = choose(&model, actual, input.sampling)?;
+            let expected = choose(&model, expected, &SamplingLogits::Full)?;
+            let actual = model.decode(input.session, input.token, input.sampling.clone())?;
+            input.token = choose(&model, actual, &input.sampling)?;
             assert_eq!(input.token, expected);
         }
     }

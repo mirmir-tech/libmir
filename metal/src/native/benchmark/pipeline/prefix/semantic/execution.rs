@@ -108,8 +108,8 @@ pub(super) fn mixed(
                 SamplingLogits::None
             };
         }
-        let outputs =
-            model.decode_grouped(&pending.iter().map(|row| row.input).collect::<Vec<_>>())?;
+        let outputs = model
+            .decode_grouped(&pending.iter().map(|row| row.input.clone()).collect::<Vec<_>>())?;
         assert_eq!(outputs.len(), pending.len());
         for (row, (output, execution)) in pending.iter_mut().zip(outputs) {
             row.input.token = super::super::super::output_token(model, output)?;

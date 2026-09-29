@@ -43,14 +43,14 @@ pub(super) fn generate(
         if pending.is_empty() {
             return Ok(run);
         }
-        let inputs: Vec<DecodeInput> = pending.iter().map(|(_, input)| *input).collect();
+        let inputs: Vec<DecodeInput> = pending.iter().map(|(_, input)| input.clone()).collect();
         let capture = (matches!(observation, Observation::Routes)
             && [0, 1, 2, 4, 8, 16, 24, 32, 48, 63].contains(&step))
         .then(Capture::begin)
         .transpose()?;
         let outputs = if inputs.len() == 1 {
-            let input = inputs[0];
-            vec![model.decode(input.session, input.token, input.sampling)?]
+            let input = &inputs[0].clone();
+            vec![model.decode(input.session, input.token, input.sampling.clone())?]
         } else {
             model.decode_batch(&inputs)?
         };

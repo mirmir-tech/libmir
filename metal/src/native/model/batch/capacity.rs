@@ -11,14 +11,10 @@ impl LoadedModel {
         token: u32,
         sampling: runtime::backend::SamplingLogits,
     ) -> Result<NativeOutput> {
-        let inputs = [DecodeInput {
-            session,
-            token,
-            sampling: sampling.clone(),
-        }];
+        let inputs = [DecodeInput { session, token, sampling }];
         self.validate_decode_inputs(&inputs)?;
         self.validate_decode_capacity(&inputs)?;
-        let result = self.decode_admitted(session, token, sampling);
+        let result = self.decode_admitted(session, token, &inputs[0].sampling);
         self.finish_decode(&inputs, result)
     }
 
@@ -42,7 +38,7 @@ impl LoadedModel {
         for input in inputs {
             let state = self.session(input.session)?;
             let forwards = usize::from(state.pending.is_none())
-                + usize::from(step::supports_device_token(input.sampling.clone()));
+                + usize::from(step::supports_device_token(&input.sampling));
             state.cache.plan_decode_capacity(forwards, threshold, &mut plan)?;
         }
         Ok(())

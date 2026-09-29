@@ -37,7 +37,7 @@ impl LoadedModel {
                 Group::Scalar(row) => {
                     let input = inputs[row].clone();
                     let output =
-                        self.decode_admitted(input.session, input.token, input.sampling)?;
+                        self.decode_admitted(input.session, input.token, &input.sampling)?;
                     outputs.push((row, (output, DecodeExecution::Scalar)));
                 },
                 Group::Packed(rows) => {

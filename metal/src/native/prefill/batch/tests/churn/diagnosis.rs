@@ -22,7 +22,7 @@ fn isolates_retirement_from_scalar_packed_arithmetic()
 fn run(model: &mut LoadedModel, retirement: Retirement) -> Result<(Vec<u32>, Vec<u32>)> {
     let mut rows = wave(model, &[0, 1, 2, 3, 4], false)?;
     model.flush_decode_graphs()?;
-    let expected = reference(model, rows[0])?;
+    let expected = reference(model, &rows[0])?;
     let mut observed = vec![rows[0].token];
     let mut inactive = Vec::new();
     for step in 0..16 {

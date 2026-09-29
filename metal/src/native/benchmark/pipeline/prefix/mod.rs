@@ -81,7 +81,7 @@ fn preserves_shared_prefix_branches_through_mixed_decode() -> Result<()> {
                 SamplingLogits::None
             };
         }
-        let inputs = rows.iter().map(|(input, _, _)| *input).collect::<Vec<_>>();
+        let inputs = rows.iter().map(|(input, _, _)| input.clone()).collect::<Vec<_>>();
         let outputs = model.decode_grouped(&inputs)?;
         assert_eq!(outputs.len(), rows.len());
         for (row, ((input, expected, offset), (output, execution))) in
@@ -122,7 +122,7 @@ fn prefill(
     sampling: SamplingLogits,
 ) -> Result<(DecodeInput, usize)> {
     let session = Uuid::new_v4();
-    let output = model.prefill(session, prompt, &[], sampling, None, &mut |_| {})?;
+    let output = model.prefill(session, prompt, &[], &sampling, None, &mut |_| {})?;
     let token = output_token(model, output.output)?;
     Ok((DecodeInput { session, token, sampling }, output.prefix_cache_tokens))
 }

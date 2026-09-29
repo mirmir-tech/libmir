@@ -33,14 +33,14 @@ fn preserves_batched_pipeline_against_synchronous_logits() -> Result<()> {
         .collect::<Result<Vec<_>>>()?;
     let scalar = prompts
         .iter()
-        .map(|prompt| generate(&mut model, prompt, SamplingLogits::Full))
+        .map(|prompt| generate(&mut model, prompt, &SamplingLogits::Full))
         .collect::<Result<Vec<_>>>()?;
     let expected = synchronous_batch(&mut model, &prompts)?;
     let mut inputs = Vec::new();
     for prompt in &prompts {
         let session = Uuid::new_v4();
         let output =
-            model.prefill(session, prompt, &[], SamplingLogits::None, None, &mut ignored)?;
+            model.prefill(session, prompt, &[], &SamplingLogits::None, None, &mut ignored)?;
         inputs.push(DecodeInput {
             session,
             token: output_token(&model, output.output)?,
@@ -80,7 +80,7 @@ fn synchronous_batch(model: &mut LoadedModel, prompts: &[Vec<u32>]) -> Result<Ve
     for prompt in prompts {
         let session = Uuid::new_v4();
         let output =
-            model.prefill(session, prompt, &[], SamplingLogits::None, None, &mut |_event| {})?;
+            model.prefill(session, prompt, &[], &SamplingLogits::None, None, &mut |_event| {})?;
         tokens.push(output_token(model, output.output)?);
         states.push(model.sessions.remove(&session).ok_or_else(|| {
             crate::native::error::Error::Benchmark("prefilled session is missing".into())

@@ -14,10 +14,10 @@ pub(in crate::native::prefill) fn output(
     stream: &Stream,
     state: &mut SessionState,
     logits: Array,
-    sampling: SamplingLogits,
+    sampling: &SamplingLogits,
 ) -> Result<NativeOutput> {
     if stream.config().cache.decode_reservation == DecodeReservation::GenerationBudget
-        && step::supports_device_token(sampling.clone())
+        && step::supports_device_token(sampling)
     {
         let check = |state: &SessionState| {
             state.cache.plan_decode_capacity(

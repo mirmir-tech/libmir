@@ -25,7 +25,7 @@ fn pressure_releases_optional_history_and_preserves_nonempty_prefix_cache() -> R
             let session = Uuid::new_v4();
             let prompt = (0..32).map(|i| (i + seed) % 64).collect::<Vec<_>>();
             let output =
-                model.prefill(session, &prompt, &[], SamplingLogits::None, None, &mut |_| {})?;
+                model.prefill(session, &prompt, &[], &SamplingLogits::None, None, &mut |_| {})?;
             let next = token(&model, output.output)?;
             if seed == 0 {
                 model.release_session(session)?;

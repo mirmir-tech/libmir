@@ -1156,3 +1156,16 @@ The target shape is:
   Do not select only the favorable final round, relax gates or repeat unchanged
   warm-up loops. Require materially quieter/memory-stable conditions before
   qualification; Persistent remains test-only with C2/C3/C5/churn timing pending.
+
+
+## Schema-constrained masked sampling
+
+- `SamplingLogits::Masked` rows execute as `Full` on Metal (`execution_sampling`)
+  and `output::materialize` applies the allowlist as an additive `-inf` device
+  bias before argmax or the device sampler; logit padding beyond the mask
+  vocabulary is always rejected. Read back only the selected scalar, never the
+  logits. Masked rows cannot join the pipelined device-token lookahead: the
+  grammar needs each token on the host before it can mask the next step.
+- Workmir's `2026-09-29-metal-schema-tools` passes Qwen3.6 greedy/sampled,
+  reasoning, budget, streaming and mixed concurrent schema requests, plus an
+  adversarial prompt the unconstrained model violates. No timing gate was run.

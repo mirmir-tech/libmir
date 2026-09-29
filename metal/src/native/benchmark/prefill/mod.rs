@@ -45,7 +45,7 @@ fn measures_prefill_chunk_candidates() -> Result<()> {
             let session = Uuid::new_v4();
             let started = Instant::now();
             let output =
-                model.prefill(session, &prompt, &[], SamplingLogits::None, None, &mut ignored)?;
+                model.prefill(session, &prompt, &[], &SamplingLogits::None, None, &mut ignored)?;
             let prefill_ms = started.elapsed().as_secs_f64() * 1_000.0;
             let mut tokens = vec![greedy_token(&output.output)?];
             for _ in 0..config.decode_tokens {

@@ -38,7 +38,7 @@ fn materialize_prefill(
         request.session_id,
         &request.prompt_tokens,
         request.block_table.blocks().len(),
-        request.sampling_logits.clone(),
+        &request.sampling_logits,
         native,
         timing,
     )
@@ -51,7 +51,7 @@ pub(super) fn materialize_prefill_parts(
     session_id: Uuid,
     prompt_tokens: &[u32],
     blocks: usize,
-    sampling_logits: SamplingLogits,
+    sampling_logits: &SamplingLogits,
     native: NativePrefill,
     mut timing: PrefillTiming,
 ) -> Result<PrefillOutput> {

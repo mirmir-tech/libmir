@@ -48,7 +48,7 @@ fn compares_complete_decode_with_reused_and_concatenated_gdn_state() -> Result<(
                 .collect::<Result<Vec<_>>>()?;
             let session = Uuid::new_v4();
             let output =
-                model.prefill(session, &prompt, &[], SamplingLogits::None, None, &mut |_| {})?;
+                model.prefill(session, &prompt, &[], &SamplingLogits::None, None, &mut |_| {})?;
             cohort.push(DecodeInput {
                 session,
                 token: greedy_token(&output.output)?,

@@ -1,6 +1,8 @@
 mod graph;
+mod mask;
 
 pub use graph::TopK;
+pub use mask::{MaskedSampling, TokenAllowlist};
 
 use super::{Array, Result, Stream};
 

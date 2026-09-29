@@ -39,7 +39,7 @@
 |:---|:---|
 | Machine | NVIDIA GX10 (GB10) |
 | Driver | 580.173.02 |
-| mirmir | 0.3.1 (2026-09-23) |
+| mirmir | 0.4.0 (2026-09-23) |
 | Reference | vLLM 0.29.0 |
 | K/V cache | BF16 on both engines; mirmir 24,936 blocks of 16 tokens sized from measured memory (AD-027, AD-028) |
 | Token budget | mirmir 1,024 / vLLM 2,096 |

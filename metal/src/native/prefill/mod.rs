@@ -36,7 +36,7 @@ impl LoadedModel {
         session: Uuid,
         tokens: &[u32],
         cache_checkpoints: &[usize],
-        sampling: SamplingLogits,
+        sampling: &SamplingLogits,
         prefix_block_size: Option<usize>,
         progress: &mut dyn FnMut(MetalProgressEvent),
     ) -> Result<NativePrefill> {
@@ -57,7 +57,7 @@ impl LoadedModel {
         session: Uuid,
         tokens: &[u32],
         cache_checkpoints: &[usize],
-        sampling: SamplingLogits,
+        sampling: &SamplingLogits,
         prefix_block_size: Option<usize>,
         generation_tokens: Option<std::num::NonZeroUsize>,
         progress: &mut dyn FnMut(MetalProgressEvent),
@@ -131,7 +131,7 @@ impl LoadedModel {
                 &mut state,
                 last,
                 position,
-                sampling == SamplingLogits::None,
+                *sampling == SamplingLogits::None,
             )?;
             evaluation::materialize(self, &state, &logits)?;
             state.position = tokens.len();

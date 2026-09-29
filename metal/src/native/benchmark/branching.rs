@@ -30,14 +30,14 @@ fn measures_shared_prefix_decode_batch() -> Result<()> {
         .collect::<Result<Vec<_>>>()?;
 
     let seed = Uuid::new_v4();
-    drop(model.prefill(seed, &prompt, &[], SamplingLogits::None, None, &mut ignored)?);
+    drop(model.prefill(seed, &prompt, &[], &SamplingLogits::None, None, &mut ignored)?);
     model.release_session(seed)?;
 
     let mut inputs = (0..batch)
         .map(|_| {
             let session = Uuid::new_v4();
             let output =
-                model.prefill(session, &prompt, &[], SamplingLogits::None, None, &mut ignored)?;
+                model.prefill(session, &prompt, &[], &SamplingLogits::None, None, &mut ignored)?;
             Ok(DecodeInput {
                 session,
                 token: greedy_token(&output.output)?,

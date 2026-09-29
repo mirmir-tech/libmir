@@ -7,7 +7,7 @@ description = "Hardware-free architecture admission contracts for libmir backend
 repository.workspace = true
 
 [dependencies]
-models = { package = "libmir-models", version = "0.3.0", path = "../models" }
+models = { package = "libmir-models", version = "0.4.0", path = "../models" }
 
 [dev-dependencies]
 serde_json.workspace = true

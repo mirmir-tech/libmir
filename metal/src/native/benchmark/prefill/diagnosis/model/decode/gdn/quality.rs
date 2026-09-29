@@ -46,14 +46,14 @@ pub(super) fn check(model: &mut LoadedModel) -> Result<()> {
                         pending.push((row, input));
                     }
                 }
-                let inputs = pending.iter().map(|(_, input)| *input).collect::<Vec<_>>();
+                let inputs = pending.iter().map(|(_, input)| input.clone()).collect::<Vec<_>>();
                 if inputs.is_empty() {
                     active = pending;
                     break;
                 }
                 let outputs = if inputs.len() == 1 {
-                    let i = inputs[0];
-                    vec![model.decode(i.session, i.token, i.sampling)?]
+                    let i = &inputs[0].clone();
+                    vec![model.decode(i.session, i.token, i.sampling.clone())?]
                 } else {
                     model.decode_batch(&inputs)?
                 };

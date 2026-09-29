@@ -51,7 +51,7 @@ fn prompt(seed: u32) -> Vec<u32> {
     (0..32).map(|index| (seed + index) % 64).collect()
 }
 
-fn reference(model: &mut LoadedModel, input: DecodeInput) -> Result<Vec<u32>> {
+fn reference(model: &mut LoadedModel, input: &DecodeInput) -> Result<Vec<u32>> {
     let session = Uuid::new_v4();
     let state = model.sessions[&input.session].snapshot()?;
     model.sessions.insert(session, state);
@@ -121,7 +121,7 @@ fn advance(
     rows: &mut [(DecodeInput, usize, usize)],
     expected: &[Vec<u32>],
 ) -> Result<()> {
-    let inputs = rows.iter().map(|(input, _, _)| *input).collect::<Vec<_>>();
+    let inputs = rows.iter().map(|(input, _, _)| input.clone()).collect::<Vec<_>>();
     let actual = model.decode_grouped(&inputs)?;
     let width = rows.len();
     assert_eq!(actual.len(), width);
@@ -182,7 +182,7 @@ pub(super) fn exercise(model: &mut LoadedModel) -> Result<()> {
         model.flush_decode_graphs()?;
         let expected = rows
             .iter()
-            .map(|(input, _, _)| reference(model, *input))
+            .map(|(input, _, _)| reference(model, input))
             .collect::<Result<Vec<_>>>()?;
         for _ in 0..8 {
             advance(model, &mut rows, &expected)?;

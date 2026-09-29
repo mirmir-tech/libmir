@@ -19,7 +19,7 @@ fn rejects_prefill_when_a_later_layer_has_no_free_pages() -> TestResult<()> {
     let mut progress = 0;
     assert!(
         model
-            .prefill(session, &[1, 2], &[], SamplingLogits::Full, None, &mut |_| {
+            .prefill(session, &[1, 2], &[], &SamplingLogits::Full, None, &mut |_| {
                 progress += 1;
             })
             .is_err()
@@ -29,7 +29,7 @@ fn rejects_prefill_when_a_later_layer_has_no_free_pages() -> TestResult<()> {
     assert_eq!(available(&model, 0, maximum)?, maximum);
     blocker.reset()?;
     model.reserve_prefill_pages(1)?;
-    drop(model.prefill(session, &[1, 2], &[], SamplingLogits::Full, None, &mut |_| {})?);
+    drop(model.prefill(session, &[1, 2], &[], &SamplingLogits::Full, None, &mut |_| {})?);
     model.release_session(session)?;
     model.clear_prefix_cache();
     assert_eq!(model.stream().paged_arenas().resident_arenas()?, 0);
@@ -49,7 +49,7 @@ fn available(model: &LoadedModel, layer: usize, maximum: usize) -> TestResult<us
 fn evicts_prefix_for_a_later_layer_and_rechecks_headroom() -> TestResult<()> {
     let (mut model, directory) = load()?;
     let session = Uuid::new_v4();
-    drop(model.prefill(session, &[1, 2], &[], SamplingLogits::Full, None, &mut |_| {})?);
+    drop(model.prefill(session, &[1, 2], &[], &SamplingLogits::Full, None, &mut |_| {})?);
     model.release_session(session)?;
     assert_eq!(model.prefixes.group_count(), 1);
     let maximum = DecoderCache::physical_page_capacity(model.stream(), model.info.cache_step);

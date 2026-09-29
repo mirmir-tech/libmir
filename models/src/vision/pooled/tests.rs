@@ -38,6 +38,22 @@ fn runtime_patch_limit_reduces_checkpoint_budget() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn decodes_gif_input_like_other_encoded_images() -> Result<()> {
+    let mut encoded = Vec::new();
+    image::codecs::gif::GifEncoder::new(&mut encoded).encode(
+        &[255, 0, 0, 255, 0, 0, 255, 255],
+        2,
+        1,
+        image::ExtendedColorType::Rgba8,
+    )?;
+    let image = config(false).preprocess_encoded(&encoded)?;
+
+    assert_eq!((image.grid_height, image.grid_width), (1, 2));
+    assert_close(&image.patches, &[1.0, 0.0, 0.0, 0.0, 0.0, 1.0]);
+    Ok(())
+}
+
 fn config(do_resize: bool) -> PooledImageProcessorConfig {
     PooledImageProcessorConfig {
         patch_size: 1,

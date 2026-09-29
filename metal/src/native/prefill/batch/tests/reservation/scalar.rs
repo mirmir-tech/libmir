@@ -15,7 +15,7 @@ fn exercise(family: Family) -> Result<()> {
     let (mut model, directory) = load_family(family, 1)?;
     let prompt = (0..32).collect::<Vec<u32>>();
     let session = Uuid::new_v4();
-    let first = model.prefill(session, &prompt, &[], SamplingLogits::Full, None, &mut |_| {})?;
+    let first = model.prefill(session, &prompt, &[], &SamplingLogits::Full, None, &mut |_| {})?;
     let expected = match first.output {
         NativeOutput::Logits(logits) => logits.to_vec_f32(model.stream())?,
         NativeOutput::Greedy(_) => {
@@ -28,7 +28,7 @@ fn exercise(family: Family) -> Result<()> {
     let rejected_session = Uuid::new_v4();
     let mut progressed = false;
     let rejected =
-        model.prefill(rejected_session, &impossible, &[], SamplingLogits::Full, None, &mut |_| {
+        model.prefill(rejected_session, &impossible, &[], &SamplingLogits::Full, None, &mut |_| {
             progressed = true;
         });
     assert!(rejected.is_err());
@@ -40,7 +40,8 @@ fn exercise(family: Family) -> Result<()> {
         "failed scalar prefill evicted a reusable prefix"
     );
     let session = Uuid::new_v4();
-    let restored = model.prefill(session, &prompt, &[], SamplingLogits::Full, None, &mut |_| {})?;
+    let restored =
+        model.prefill(session, &prompt, &[], &SamplingLogits::Full, None, &mut |_| {})?;
     assert_eq!(restored.prefix_cache_tokens, prompt.len());
     let actual = match restored.output {
         NativeOutput::Logits(logits) => logits.to_vec_f32(model.stream())?,

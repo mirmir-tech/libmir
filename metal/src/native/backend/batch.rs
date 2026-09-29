@@ -57,7 +57,7 @@ pub(super) fn execute_loaded_decode(
         .into_iter()
         .zip(sequences)
         .map(|((native, execution), sequence)| {
-            let output = output::materialize(loaded, native, sequence.sampling_logits.clone())?;
+            let output = output::materialize(loaded, native, &sequence.sampling_logits)?;
             Ok(DecodeOutput {
                 event: TokenEvent {
                     token_id: output.next_token,

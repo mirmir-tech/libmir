@@ -36,14 +36,18 @@ fn preserves_multi_prompt_greedy_pipeline() -> Result<()> {
 
     for seed in 0..PROMPTS {
         let prompt = prompt(seed)?;
-        let reference = generate(&mut model, &prompt, SamplingLogits::Full)?;
-        let pipelined = generate(&mut model, &prompt, SamplingLogits::None)?;
+        let reference = generate(&mut model, &prompt, &SamplingLogits::Full)?;
+        let pipelined = generate(&mut model, &prompt, &SamplingLogits::None)?;
         assert_eq!(pipelined, reference, "greedy pipeline differs for prompt seed {seed}");
     }
     Ok(())
 }
 
-fn generate(model: &mut LoadedModel, prompt: &[u32], sampling: SamplingLogits) -> Result<Vec<u32>> {
+fn generate(
+    model: &mut LoadedModel,
+    prompt: &[u32],
+    sampling: &SamplingLogits,
+) -> Result<Vec<u32>> {
     let session = Uuid::new_v4();
     let mut ignored = |_event| {};
     let output = model.prefill(session, prompt, &[], sampling, None, &mut ignored)?;
@@ -51,7 +55,7 @@ fn generate(model: &mut LoadedModel, prompt: &[u32], sampling: SamplingLogits) -
     let mut tokens = Vec::with_capacity(DECODE_TOKENS + 1);
     tokens.push(token);
     for _ in 0..DECODE_TOKENS {
-        let output = model.decode(session, token, sampling)?;
+        let output = model.decode(session, token, sampling.clone())?;
         token = output_token(model, output)?;
         tokens.push(token);
     }

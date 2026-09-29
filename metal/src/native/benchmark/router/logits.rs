@@ -52,7 +52,7 @@ fn logits(model: &mut LoadedModel, prompt: &[u32], precision: RouterPrecision) -
     model.stream.synchronize()?;
     model.stream.set_router_precision_for_test(precision);
     let session = Uuid::new_v4();
-    let output = model.prefill(session, prompt, &[], SamplingLogits::Full, None, &mut |_| {})?;
+    let output = model.prefill(session, prompt, &[], &SamplingLogits::Full, None, &mut |_| {})?;
     let NativeOutput::Logits(logits) = output.output else {
         return Err(Error::Benchmark("missing logits".into()));
     };

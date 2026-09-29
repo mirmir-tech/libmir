@@ -90,12 +90,12 @@ pub(super) fn output(
     stream: &Stream,
     state: &mut SessionState,
     logits: Array,
-    sampling: SamplingLogits,
+    sampling: &SamplingLogits,
 ) -> Result<NativeOutput> {
     if matches!(sampling, SamplingLogits::Masked { .. }) {
-        return Err(Error::InvalidDecodeBatch("schema masking is unsupported by Metal".into()));
+        return Err(Error::InvalidDecodeBatch("schema masking requires full device logits".into()));
     }
-    if !supports_device_token(sampling.clone()) {
+    if !supports_device_token(sampling) {
         return Ok(NativeOutput::Logits(logits));
     }
     let deferred = deferred_token(model, stream, state, &logits, sampling)?;
@@ -107,9 +107,9 @@ fn deferred_token(
     stream: &Stream,
     state: &mut SessionState,
     logits: &Array,
-    sampling: SamplingLogits,
+    sampling: &SamplingLogits,
 ) -> Result<DeferredToken> {
-    let sampled = device_token(logits, sampling.clone(), stream)?.ok_or_else(|| {
+    let sampled = device_token(logits, sampling, stream)?.ok_or_else(|| {
         Error::InvalidDecodeBatch("batch row does not use device token sampling".into())
     })?;
     sampled.async_eval(stream)?;
@@ -119,7 +119,7 @@ fn deferred_token(
         state,
         &sampled,
         state.model_position()?,
-        sampling == SamplingLogits::None,
+        *sampling == SamplingLogits::None,
     )?;
     let mut roots = vec![&next_logits];
     state.cache.extend_graph_roots(&mut roots);
@@ -133,7 +133,7 @@ pub(super) fn decode_pending(
     stream: &Stream,
     state: &mut SessionState,
     token: u32,
-    sampling: SamplingLogits,
+    sampling: &SamplingLogits,
 ) -> Result<NativeOutput> {
     let logits = take_pending(state, token)?;
     output(model, stream, state, logits, sampling)
@@ -152,8 +152,8 @@ pub(super) fn take_pending(state: &mut SessionState, token: u32) -> Result<Array
     Ok(pending.logits)
 }
 
-pub(super) fn supports_device_token(sampling: SamplingLogits) -> bool {
-    match sampling {
+pub(super) fn supports_device_token(sampling: &SamplingLogits) -> bool {
+    match *sampling {
         SamplingLogits::None | SamplingLogits::SampleTopK { .. } => true,
         SamplingLogits::Sample { top_k, top_p, .. } => top_k > 0 || top_p >= 1.0,
         SamplingLogits::Masked { .. } | SamplingLogits::Full | SamplingLogits::TopK { .. } => false,
@@ -162,13 +162,13 @@ pub(super) fn supports_device_token(sampling: SamplingLogits) -> bool {
 
 pub(super) fn device_token(
     logits: &Array,
-    sampling: SamplingLogits,
+    sampling: &SamplingLogits,
     stream: &Stream,
 ) -> Result<Option<Array>> {
-    let parameters = match sampling {
+    let parameters = match *sampling {
         SamplingLogits::Masked { .. } => {
             return Err(Error::InvalidPrefillBatch(
-                "schema masking is not supported by Metal".into(),
+                "schema masking requires full device logits".into(),
             ));
         },
         SamplingLogits::None => return Ok(Some(logits.argmax(stream)?)),

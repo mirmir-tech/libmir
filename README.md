@@ -28,14 +28,14 @@ For Apple Metal:
 
 ```toml
 [dependencies]
-libmir = { version = "0.3.1", features = ["metal"] }
+libmir = { version = "0.4.0", features = ["metal"] }
 ```
 
 For NVIDIA CUDA:
 
 ```toml
 [dependencies]
-libmir = { version = "0.3.1", default-features = false, features = ["cuda"] }
+libmir = { version = "0.4.0", default-features = false, features = ["cuda"] }
 ```
 
 ## Generate from a local checkpoint
@@ -98,7 +98,7 @@ The default preserves existing model rendering. Explicit modes require a
 Jinja `enable_thinking` input or a supported built-in Qwen/Gemma template;
 unsupported templates and image requests reject explicit modes.
 `GenerationOverrides::max_tokens` counts all generated tokens, including
-reasoning and final content. For enabled, schema-constrained XML tools on CUDA,
+reasoning and final content. For enabled, schema-constrained XML tools on Metal or CUDA,
 `GenerationRequest::reasoning_token_budget` optionally caps reasoning inside that
 total. At the cap, a device mask selects only the native reasoning delimiter;
 the tool grammar owns all following tokens. Natural early exits are unchanged.

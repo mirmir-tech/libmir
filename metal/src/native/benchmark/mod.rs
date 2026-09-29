@@ -101,9 +101,9 @@ fn keeps_kv_state_for_interleaved_sessions() -> Result<()> {
     let first_session = Uuid::new_v4();
     let second_session = Uuid::new_v4();
     let first =
-        model.prefill(first_session, &[1, 2], &[], SamplingLogits::None, None, &mut ignored)?;
+        model.prefill(first_session, &[1, 2], &[], &SamplingLogits::None, None, &mut ignored)?;
     let second =
-        model.prefill(second_session, &[3, 4], &[], SamplingLogits::None, None, &mut ignored)?;
+        model.prefill(second_session, &[3, 4], &[], &SamplingLogits::None, None, &mut ignored)?;
     let first_token = greedy_token(&first.output)?;
     let _second_token = greedy_token(&second.output)?;
 
@@ -123,9 +123,9 @@ fn reuses_exact_device_prefix_snapshot() -> Result<()> {
     let mut model = LoadedModel::load(&config.manifest(), &mut ignored)?;
     let prompt = [1, 2];
     let first =
-        model.prefill(Uuid::new_v4(), &prompt, &[], SamplingLogits::None, None, &mut ignored)?;
+        model.prefill(Uuid::new_v4(), &prompt, &[], &SamplingLogits::None, None, &mut ignored)?;
     let second =
-        model.prefill(Uuid::new_v4(), &prompt, &[], SamplingLogits::None, None, &mut ignored)?;
+        model.prefill(Uuid::new_v4(), &prompt, &[], &SamplingLogits::None, None, &mut ignored)?;
 
     assert_eq!(first.prefix_cache_tokens, 0);
     assert_eq!(second.prefix_cache_tokens, prompt.len());
@@ -136,7 +136,7 @@ fn reuses_exact_device_prefix_snapshot() -> Result<()> {
         extended_session,
         &[1, 2, 3],
         &[],
-        SamplingLogits::None,
+        &SamplingLogits::None,
         None,
         &mut ignored,
     )?;
@@ -151,7 +151,7 @@ fn reuses_exact_device_prefix_snapshot() -> Result<()> {
 fn run_decode(model: &mut LoadedModel, prompt: &[u32], decode_tokens: usize) -> Result<Duration> {
     let session = Uuid::new_v4();
     let mut ignored = |_event| {};
-    let output = model.prefill(session, prompt, &[], SamplingLogits::None, None, &mut ignored)?;
+    let output = model.prefill(session, prompt, &[], &SamplingLogits::None, None, &mut ignored)?;
     let mut token = greedy_token(&output.output)?;
     let started = Instant::now();
     for _ in 0..decode_tokens {

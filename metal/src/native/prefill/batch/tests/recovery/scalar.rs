@@ -47,7 +47,7 @@ fn exercise(case: Case) -> Result<()> {
                     request.session_id,
                     &request.prompt_tokens,
                     &[],
-                    SamplingLogits::Full,
+                    &SamplingLogits::Full,
                     None,
                     &mut |_| {},
                 )?;
@@ -80,7 +80,7 @@ fn exercise(case: Case) -> Result<()> {
                         request.session_id,
                         &request.prompt_tokens,
                         &[],
-                        SamplingLogits::None,
+                        &SamplingLogits::None,
                         None,
                         &mut |_| {},
                     )
@@ -98,7 +98,7 @@ fn exercise(case: Case) -> Result<()> {
                 request.session_id,
                 &request.prompt_tokens,
                 &[],
-                SamplingLogits::Full,
+                &SamplingLogits::Full,
                 None,
                 &mut |_| {},
             )?;

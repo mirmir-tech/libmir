@@ -35,8 +35,11 @@ impl ToolConstraint {
         if request.tool_constraints == ToolConstraints::None {
             return Ok(None);
         }
-        if model.engine().target() != foundation::model::BackendTarget::Cuda {
-            return Err(invalid("schema-constrained device sampling currently requires CUDA"));
+        if !matches!(
+            model.engine().target(),
+            foundation::model::BackendTarget::Cuda | foundation::model::BackendTarget::Metal
+        ) {
+            return Err(invalid("schema-constrained device sampling requires CUDA or Metal"));
         }
         if (settings.repetition_penalty - 1.0).abs() > f32::EPSILON
             || settings.ignore_eos

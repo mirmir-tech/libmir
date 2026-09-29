@@ -102,7 +102,7 @@ impl LoadedModel {
         &mut self,
         session: Uuid,
         token: u32,
-        sampling: SamplingLogits,
+        sampling: &SamplingLogits,
     ) -> Result<NativeOutput> {
         let model = self.execution.decoder()?;
         let stream = &self.stream;
@@ -111,7 +111,7 @@ impl LoadedModel {
             session,
         })?;
         if state.pending.is_some() {
-            if sampling == SamplingLogits::None && model.has_decode_plan_candidates() {
+            if *sampling == SamplingLogits::None && model.has_decode_plan_candidates() {
                 let key = crate::engine::DecodePlanKey {
                     model: self.info.manifest.id.clone(),
                     weight_bytes: self.info.weight_bytes,

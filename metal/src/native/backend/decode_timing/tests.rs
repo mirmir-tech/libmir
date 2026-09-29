@@ -75,8 +75,8 @@ fn exercise(path: String) -> Result<()> {
             sequence.session_id,
             sequence.token_id,
             &sequence.block_table,
-            sequence.sampling_logits,
-            sequence.sampling_logits,
+            &sequence.sampling_logits,
+            sequence.sampling_logits.clone(),
             true,
             started.checked_sub(QUEUED).ok_or_else(|| {
                 crate::native::error::Error::InvalidDecodeBatch(

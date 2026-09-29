@@ -89,7 +89,7 @@ pub use moe::{RouterOutput, SortedExpertInputs};
 pub(crate) use norm::NormWeight;
 pub use quantized::QuantizedArrays;
 pub use sampling::TopK;
-pub(crate) use sampling::{DeviceSampling, sample, sample_u32};
+pub(crate) use sampling::{DeviceSampling, MaskedSampling, TokenAllowlist, sample, sample_u32};
 pub use sequence_scoring::SequenceScoringModel;
 pub use shared_expert_moe::{SharedExpertMoe, SharedExpertMoeConfig};
 pub use stream::Stream;

@@ -9,7 +9,7 @@ pub(super) fn exercise(manifest: &ModelManifest) -> Result<()> {
     let model = backend.load_model_with_progress(manifest, &mut |_| {})?;
     let invalid = SamplingLogits::TopK { k: 1, vocab_size: 0 };
     let mut scalar = request(&model, 0);
-    scalar.sampling_logits = invalid;
+    scalar.sampling_logits = invalid.clone();
     assert!(backend.prefill_request_with_progress(&scalar, &mut |_| {}).is_err());
     let scalar_id = scalar.session_id;
     backend.with_model(&model.id, move |loaded| {

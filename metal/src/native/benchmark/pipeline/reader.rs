@@ -37,7 +37,7 @@ fn locates_scalar_and_packed_reader_divergence() -> Result<()> {
             .collect::<Result<Vec<_>>>()?;
         let session = Uuid::new_v4();
         let output =
-            model.prefill(session, &prompt, &[], SamplingLogits::Full, None, &mut |_| {})?;
+            model.prefill(session, &prompt, &[], &SamplingLogits::Full, None, &mut |_| {})?;
         let NativeOutput::Logits(logits) = output.output else {
             unreachable!()
         };

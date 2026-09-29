@@ -79,7 +79,7 @@ fn optional_tail_is_reclaimed_before_refill_evicts_prefixes() -> Result<()> {
             first.session_id,
             &first.prompt_tokens,
             &[],
-            SamplingLogits::Full,
+            &SamplingLogits::Full,
             None,
             first.generation_tokens,
             &mut |_| {},

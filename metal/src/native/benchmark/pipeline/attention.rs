@@ -40,7 +40,7 @@ fn compares_paged_attention_candidate_with_row_reader() -> Result<()> {
             .collect::<Result<Vec<_>>>()?;
         let session = Uuid::new_v4();
         let output =
-            model.prefill(session, &prompt, &[], SamplingLogits::None, None, &mut |_| {})?;
+            model.prefill(session, &prompt, &[], &SamplingLogits::None, None, &mut |_| {})?;
         let token = output_token(&model, output.output)?;
         let cloned = model.sessions[&session].snapshot()?;
         let reference = Uuid::new_v4();
@@ -70,8 +70,8 @@ fn compares_paged_attention_candidate_with_row_reader() -> Result<()> {
             let outputs = if rows > 1 {
                 model.decode_batch(&cohorts[variant])?
             } else {
-                let input = cohorts[variant][0];
-                vec![model.decode(input.session, input.token, input.sampling)?]
+                let input = &cohorts[variant][0].clone();
+                vec![model.decode(input.session, input.token, input.sampling.clone())?]
             };
             for (input, output) in cohorts[variant].iter_mut().zip(outputs) {
                 input.token = output_token(&model, output)?;

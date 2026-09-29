@@ -27,7 +27,7 @@ fn mixed_sampling_preserves_tokens_and_rejoins_packed_decode() -> Result<()> {
         for (row, (input, _)) in rows.iter_mut().enumerate() {
             input.sampling = policy(row, iteration);
         }
-        let inputs = rows.iter().map(|(input, _)| *input).collect::<Vec<_>>();
+        let inputs = rows.iter().map(|(input, _)| input.clone()).collect::<Vec<_>>();
         let eligible = inputs.iter().filter(|input| model.can_decode_packed_row(input)).count();
         let actual = model.decode_grouped(&inputs)?;
         assert_eq!(actual.len(), rows.len());
@@ -40,12 +40,12 @@ fn mixed_sampling_preserves_tokens_and_rejoins_packed_decode() -> Result<()> {
                 packed_steps += 1;
             }
             let expected = model.decode(*reference, input.token, SamplingLogits::Full)?;
-            let expected = choose(&model, expected, input.sampling)?;
-            let actual = choose(&model, output, input.sampling)?;
+            let expected = choose(&model, expected, &input.sampling)?;
+            let actual = choose(&model, output, &input.sampling)?;
             assert_eq!(actual, expected, "row {row}, step {iteration}");
             assert_eq!(
                 model.sessions[&input.session].pending.is_some(),
-                step::supports_device_token(input.sampling),
+                step::supports_device_token(&input.sampling),
                 "pipeline must resume after a full-logit step"
             );
             assert_eq!(model.sessions[&input.session].position, model.sessions[reference].position);
@@ -71,9 +71,9 @@ fn invalid_group_does_not_consume_any_pending_tokens() -> Result<()> {
     let before = model.sessions[&first.session].position;
     let bad = DecodeInput {
         token: second.token.wrapping_add(1),
-        ..second
+        ..second.clone()
     };
-    assert!(model.decode_grouped(&[first, bad]).is_err());
+    assert!(model.decode_grouped(&[first.clone(), bad.clone()]).is_err());
     assert_eq!(model.sessions[&first.session].position, before);
     assert_eq!(
         model.sessions[&first.session].pending.as_ref().map(|pending| pending.token_id),
@@ -83,13 +83,13 @@ fn invalid_group_does_not_consume_any_pending_tokens() -> Result<()> {
         model.sessions[&second.session].pending.as_ref().map(|pending| pending.token_id),
         Some(second.token)
     );
-    assert!(model.decode_grouped(&[first, first]).is_err());
+    assert!(model.decode_grouped(&[first.clone(), first.clone()]).is_err());
     assert!(model.decode(second.session, bad.token, SamplingLogits::None).is_err());
     assert_eq!(
         model.sessions[&second.session].pending.as_ref().map(|pending| pending.token_id),
         Some(second.token)
     );
-    let outputs = model.decode_grouped(&[first, second])?;
+    let outputs = model.decode_grouped(&[first.clone(), second.clone()])?;
     assert_eq!(outputs.len(), 2);
     for session in [first.session, second.session, reference_first, reference_second] {
         model.release_session(session)?;
@@ -103,10 +103,11 @@ fn pair(model: &mut LoadedModel, seed: u32) -> Result<(DecodeInput, Uuid)> {
     let prompt = (0..6).map(|token| (seed + token) % 63 + 1).collect::<Vec<_>>();
     let session = Uuid::new_v4();
     let reference = Uuid::new_v4();
-    let output = model.prefill(session, &prompt, &[], SamplingLogits::None, None, &mut |_| {})?;
-    let token = choose(model, output.output, SamplingLogits::None)?;
-    let output = model.prefill(reference, &prompt, &[], SamplingLogits::Full, None, &mut |_| {})?;
-    assert_eq!(token, choose(model, output.output, SamplingLogits::Full)?);
+    let output = model.prefill(session, &prompt, &[], &SamplingLogits::None, None, &mut |_| {})?;
+    let token = choose(model, output.output, &SamplingLogits::None)?;
+    let output =
+        model.prefill(reference, &prompt, &[], &SamplingLogits::Full, None, &mut |_| {})?;
+    assert_eq!(token, choose(model, output.output, &SamplingLogits::Full)?);
     Ok((
         DecodeInput {
             session,
@@ -131,7 +132,7 @@ fn policy(row: usize, step: usize) -> SamplingLogits {
     }
 }
 
-fn choose(model: &LoadedModel, output: NativeOutput, sampling: SamplingLogits) -> Result<u32> {
+fn choose(model: &LoadedModel, output: NativeOutput, sampling: &SamplingLogits) -> Result<u32> {
     match output {
         NativeOutput::Greedy(token) => Ok(token),
         NativeOutput::Logits(logits) => {

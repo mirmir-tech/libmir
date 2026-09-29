@@ -18,7 +18,7 @@ pub(super) fn decode_pending(
     state: &mut SessionState,
     key: DecodePlanKey,
     token: u32,
-    sampling: SamplingLogits,
+    sampling: &SamplingLogits,
     recovery: &mut ExecutionRecovery,
 ) -> Result<NativeOutput> {
     match stream.decode_plan_action(&key) {
@@ -35,11 +35,11 @@ fn tune(
     state: &mut SessionState,
     key: DecodePlanKey,
     token: u32,
-    sampling: SamplingLogits,
+    sampling: &SamplingLogits,
     recovery: &mut ExecutionRecovery,
 ) -> Result<NativeOutput> {
     let started = Instant::now();
-    let plan = match measure_candidates(model, stream, state, token, sampling.clone(), recovery) {
+    let plan = match measure_candidates(model, stream, state, token, sampling, recovery) {
         Ok(timings) => {
             let fastest = usize::from(timings[1] < timings[0]);
             let selected = select_fastest_candidate(
@@ -76,7 +76,7 @@ fn measure_candidates(
     stream: &Stream,
     state: &SessionState,
     token: u32,
-    sampling: SamplingLogits,
+    sampling: &SamplingLogits,
     recovery: &mut ExecutionRecovery,
 ) -> Result<[Duration; 2]> {
     let config = stream.config().tuning.clone();
@@ -85,15 +85,14 @@ fn measure_candidates(
         stream,
         state,
         token,
-        sampling.clone(),
+        sampling,
         DecodePlan::SeparateGateUp,
         false,
         recovery,
     )?;
     for _ in 0..config.warmup_iterations {
         for plan in CANDIDATES {
-            let _ =
-                run_snapshot(model, stream, state, token, sampling.clone(), plan, true, recovery)?;
+            let _ = run_snapshot(model, stream, state, token, sampling, plan, true, recovery)?;
         }
     }
     let mut samples = [Vec::new(), Vec::new()];
@@ -106,7 +105,7 @@ fn measure_candidates(
                 stream,
                 state,
                 token,
-                sampling.clone(),
+                sampling,
                 CANDIDATES[index],
                 true,
                 recovery,
@@ -128,7 +127,7 @@ fn run_snapshot(
     stream: &Stream,
     state: &SessionState,
     token: u32,
-    sampling: SamplingLogits,
+    sampling: &SamplingLogits,
     plan: DecodePlan,
     suppress_operator_tuning: bool,
     recovery: &mut ExecutionRecovery,
@@ -162,7 +161,7 @@ fn execute(
     stream: &Stream,
     state: &mut SessionState,
     token: u32,
-    sampling: SamplingLogits,
+    sampling: &SamplingLogits,
     plan: DecodePlan,
     suppress_operator_tuning: bool,
 ) -> Result<NativeOutput> {

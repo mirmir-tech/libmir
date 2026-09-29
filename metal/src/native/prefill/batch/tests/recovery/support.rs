@@ -10,7 +10,7 @@ pub(super) fn survivors(model: &mut LoadedModel) -> Result<(Uuid, Uuid, u32)> {
             request.session_id,
             &request.prompt_tokens,
             &[],
-            SamplingLogits::Full,
+            &SamplingLogits::Full,
             None,
             &mut |_| {},
         )?;
@@ -41,7 +41,7 @@ pub(super) fn recover(
                 request.session_id,
                 &request.prompt_tokens,
                 &[],
-                SamplingLogits::Full,
+                &SamplingLogits::Full,
                 None,
                 &mut |_| {}
             )

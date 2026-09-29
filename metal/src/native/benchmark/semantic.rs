@@ -77,10 +77,10 @@ pub(super) fn generate(
         if pending.is_empty() {
             return Ok(tokens);
         }
-        let inputs = pending.iter().map(|(_, input)| *input).collect::<Vec<_>>();
+        let inputs = pending.iter().map(|(_, input)| input.clone()).collect::<Vec<_>>();
         let outputs = if inputs.len() == 1 {
-            let input = inputs[0];
-            vec![model.decode(input.session, input.token, input.sampling)?]
+            let input = &inputs[0].clone();
+            vec![model.decode(input.session, input.token, input.sampling.clone())?]
         } else {
             model.decode_batch(&inputs)?
         };
@@ -105,7 +105,7 @@ pub(super) fn start(
     if prompts.len() == 1 {
         let session = Uuid::new_v4();
         let output =
-            model.prefill(session, &prompts[0], &[], SamplingLogits::None, None, &mut |_| {})?;
+            model.prefill(session, &prompts[0], &[], &SamplingLogits::None, None, &mut |_| {})?;
         return Ok(vec![(
             0,
             DecodeInput {
