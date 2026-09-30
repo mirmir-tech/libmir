@@ -6,7 +6,7 @@
 
 mod reference;
 
-use std::{collections::BTreeMap, path::PathBuf};
+use std::collections::BTreeMap;
 
 use libmir::decision::{DecisionBackend, DecisionModel, DecisionRow};
 use reference::{Case, Failure, Reference};
@@ -26,9 +26,7 @@ const BACKENDS: &[DecisionBackend] = &[
 type StateGroup<'a> = (Vec<&'a Case>, Vec<DecisionRow>);
 
 fn reference() -> Result<Reference, Failure> {
-    let fixture =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/laya_parity/multilingual-fp32.json");
-    Ok(serde_json::from_str(&std::fs::read_to_string(fixture)?)?)
+    Ok(serde_json::from_str(include_str!("multilingual-fp32.json"))?)
 }
 
 fn rows<'a>(
