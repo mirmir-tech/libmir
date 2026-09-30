@@ -142,8 +142,10 @@ extern "C" __global__ void libmir_cuda_nvfp4_gated_quantize_indexed_bf16(
   float value = 0.0f;
   if (lane < 16u) {
     const unsigned int index = group * columns + feature;
-    const float activated = libmir_grouped_activation(
-        __bfloat162float(gate[index]), activation);
+    // Match libmir_cuda_gated_bf16: the activation is materialized in BF16
+    // before the up product, so fused and split quantization see equal inputs.
+    const float activated = __bfloat162float(__float2bfloat16_rn(
+        libmir_grouped_activation(__bfloat162float(gate[index]), activation)));
     value = __bfloat162float(__float2bfloat16_rn(
         activated * __bfloat162float(up[index])));
     values[lane] = value;

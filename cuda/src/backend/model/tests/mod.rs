@@ -23,6 +23,7 @@ mod long_profile;
 mod policy;
 mod profile;
 mod projection_gate;
+mod prompt;
 mod reference;
 use assertions::assert_logits_close;
 
@@ -102,7 +103,8 @@ fn checkpoint_model_decodes() -> std::result::Result<(), Box<dyn std::error::Err
     assert!(second.iter().zip(&third).any(|(left, right)| left != right));
     drop(session);
 
-    let prompt = (2_u32..18).collect::<Vec<_>>();
+    let question = prompt::Question::load(&layout, &mut table)?;
+    let prompt = question.prompt.as_slice();
     let mut sequential = template.instantiate()?;
     let mut expected = Vec::new();
     for (index, token) in prompt.iter().copied().enumerate() {
@@ -118,14 +120,14 @@ fn checkpoint_model_decodes() -> std::result::Result<(), Box<dyn std::error::Err
     let mut prefill =
         template.instantiate_with_config(CudaModelSessionConfig { prefill_chunk_tokens })?;
     table.set_token_len(prompt.len());
-    let logits = prefill.prefill_from(Uuid::nil(), &prompt, 0, &table)?;
+    let logits = prefill.prefill_from(Uuid::nil(), prompt, 0, &table)?;
     let prefetched = read(&backend, logits)?;
     if profiling {
-        profile::run(&backend, &mut sequential, &mut prefill, &prompt, &mut table)?;
+        profile::run(&backend, &mut sequential, &mut prefill, prompt, &mut table)?;
     }
     let maximum_rmse = [0.1, 0.35][usize::from(dense_vectors)];
     assert_logits_close(&prefetched, &expected, maximum_rmse);
-    Ok(())
+    question.assert_answer(&prefetched)
 }
 
 #[test]

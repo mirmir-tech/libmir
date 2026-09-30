@@ -25,7 +25,7 @@ pub(super) fn assert_logits_close(
     );
 }
 
-fn maximum(values: &[mircuda::bf16]) -> Option<usize> {
+pub(super) fn maximum(values: &[mircuda::bf16]) -> Option<usize> {
     values
         .iter()
         .enumerate()

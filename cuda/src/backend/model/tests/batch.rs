@@ -7,7 +7,7 @@ use runtime::{
 };
 use uuid::Uuid;
 
-use super::{assertions::assert_logits_close, projection_gate, read, template};
+use super::{assertions::assert_logits_close, projection_gate, prompt, read, template};
 use crate::{
     CudaBackend, CudaConfig, CudaModelSessionConfig, CudaOutputHeadPolicy, CudaPlanningPolicy,
 };
@@ -37,29 +37,36 @@ fn checkpoint_model_batch_matches_independent_scalar_rows() -> Result<(), Box<dy
     } else {
         template(&backend, &decoder, &catalog)?
     };
-    let first_session = Uuid::new_v4();
-    let second_session = Uuid::new_v4();
-    let mut first_table = table(BlockId(0));
-    let mut second_table = table(BlockId(1));
+    let rows = prompt::rows(&layout)?;
+    let sessions = [Uuid::new_v4(), Uuid::new_v4()];
+    let blocks = [BlockId(0), BlockId(1)];
     let mut reference = template.instantiate()?;
-    reference.decode(first_session, 2, &first_table)?;
-    reference.decode(second_session, 7, &second_table)?;
-    first_table.set_token_len(2);
-    second_table.set_token_len(2);
-    let first = read(&backend, reference.decode(first_session, 3, &first_table)?)?;
-    let second = read(&backend, reference.decode(second_session, 8, &second_table)?)?;
+    let mut expected = Vec::with_capacity(2);
+    for ((session, block), tokens) in sessions.iter().zip(blocks).zip(&rows) {
+        let mut logits = Vec::new();
+        for (index, token) in tokens.iter().enumerate() {
+            logits = read(&backend, reference.decode(*session, *token, &table(block, index + 1))?)?;
+        }
+        expected.push(logits);
+    }
+    let (first, second) = (&expected[0], &expected[1]);
 
     let caches = template.allocate_shared_kv()?;
     let mut scalar =
         template.instantiate_with_config_and_caches(CudaModelSessionConfig::default(), &caches)?;
-    scalar.decode(first_session, 2, &table(BlockId(0)))?;
-    scalar.decode(second_session, 7, &table(BlockId(1)))?;
+    for ((session, block), tokens) in sessions.iter().zip(blocks).zip(&rows) {
+        for (index, token) in tokens[..tokens.len() - 1].iter().enumerate() {
+            scalar.decode(*session, *token, &table(block, index + 1))?;
+        }
+    }
+    let tables = [table(blocks[0], rows[0].len()), table(blocks[1], rows[1].len())];
+    let last = [rows[0][rows[0].len() - 1], rows[1][rows[1].len() - 1]];
     let mut batch = template.instantiate_decode_batch_with_caches(2, &caches)?;
-    let logits = read(&backend, batch.decode(&[3, 8], &[&first_table, &second_table])?)?;
+    let logits = read(&backend, batch.decode(&last, &[&tables[0], &tables[1]])?)?;
     let (actual_first, actual_second) = logits.split_at(decoder.vocab_size);
-    assert_logits_close(actual_first, &first, 0.1);
-    assert_logits_close(actual_second, &second, 0.1);
-    let scalar_tokens = [u32::try_from(maximum(&first))?, u32::try_from(maximum(&second))?];
+    assert_logits_close(actual_first, first, 0.1);
+    assert_logits_close(actual_second, second, 0.1);
+    let scalar_tokens = [u32::try_from(maximum(first))?, u32::try_from(maximum(second))?];
     let batch_tokens =
         [u32::try_from(maximum(actual_first))?, u32::try_from(maximum(actual_second))?];
     if !dense {
@@ -162,10 +169,10 @@ fn read_token(backend: &CudaBackend, token: &mircuda::DeviceBuffer<u32>) -> crat
     Ok(host.to_vec()?[0])
 }
 
-fn table(block: BlockId) -> BlockTable {
+fn table(block: BlockId, tokens: usize) -> BlockTable {
     let mut table = BlockTable::with_block_size(16);
     table.push(block);
-    table.set_token_len(1);
+    table.set_token_len(tokens);
     table
 }
 
