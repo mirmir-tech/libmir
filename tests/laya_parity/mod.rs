@@ -2,24 +2,37 @@
 //!
 //! Needs the `convaiinnovations/laya-multilingual` checkpoint directory in
 //! `LIBMIR_LAYA_MODEL`; without it the tests have nothing to compare.
-#![cfg(any(feature = "cpu", feature = "metal"))]
+#![cfg(any(feature = "cpu", feature = "metal", feature = "cuda"))]
 
 mod reference;
 
 use std::collections::BTreeMap;
 
+#[cfg(feature = "cuda")]
+use libmir::decision::DecisionPrecision;
 use libmir::decision::{DecisionBackend, DecisionModel, DecisionRow};
 use reference::{Case, Failure, Reference};
 
 /// Largest accepted logit difference; fp32 reductions run in a different
 /// order than `PyTorch`'s.
-const LOGIT_TOLERANCE: f32 = 5e-4;
+const F32_TOLERANCE: f32 = 5e-4;
 
-const BACKENDS: &[DecisionBackend] = &[
+/// Largest accepted logit difference with bf16 encoder products. On this
+/// fixture they reach 0.29, and `PyTorch` bf16 autocast on CUDA reaches 0.18;
+/// neither changes an answer.
+#[cfg(feature = "cuda")]
+const BF16_TOLERANCE: f32 = 0.4;
+
+/// Every enabled backend and its largest accepted logit difference.
+const BACKENDS: &[(DecisionBackend, f32)] = &[
     #[cfg(feature = "cpu")]
-    DecisionBackend::Cpu,
+    (DecisionBackend::Cpu, F32_TOLERANCE),
     #[cfg(feature = "metal")]
-    DecisionBackend::Metal,
+    (DecisionBackend::Metal, F32_TOLERANCE),
+    #[cfg(feature = "cuda")]
+    (DecisionBackend::Cuda(DecisionPrecision::F32), F32_TOLERANCE),
+    #[cfg(feature = "cuda")]
+    (DecisionBackend::Cuda(DecisionPrecision::Bf16), BF16_TOLERANCE),
 ];
 
 /// Reference cases of one state and the rows libmir builds for them.
@@ -65,7 +78,7 @@ fn every_backend_reproduces_the_reference_rows_and_logits() -> Result<(), Failur
         return Ok(());
     };
     let reference = reference()?;
-    for &backend in BACKENDS {
+    for &(backend, tolerance) in BACKENDS {
         let model = DecisionModel::load(&root, backend)?;
         let mut largest = 0.0_f32;
         for (cases, rows) in rows(&model, &reference)? {
@@ -78,7 +91,7 @@ fn every_backend_reproduces_the_reference_rows_and_logits() -> Result<(), Failur
                 assert_eq!(argmax(actual), argmax(&case.logits), "{label}: argmax");
             }
         }
-        assert!(largest <= LOGIT_TOLERANCE, "{backend:?}: largest logit difference {largest}");
+        assert!(largest <= tolerance, "{backend:?}: largest logit difference {largest}");
     }
     Ok(())
 }

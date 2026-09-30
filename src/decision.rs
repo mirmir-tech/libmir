@@ -3,10 +3,12 @@
 //! A [`DecisionModel`] answers typed questions about one state in a single
 //! encoder pass per question: pick an option, place the state on a scale, or
 //! decide whether a statement holds. Enable the `cpu` feature for the native
-//! CPU backend and `metal` for Apple GPUs.
+//! CPU backend, `metal` for Apple GPUs, and `cuda` for NVIDIA GPUs.
 
 use std::path::Path;
 
+#[cfg(feature = "cuda")]
+pub use cuda::DecisionPrecision;
 pub use models::decision::{
     Answer, ChoiceOption, DecisionCheckpoint, DecisionRow, DecisionSchema, DecisionState, Question,
     QuestionKind, SchemaField, StateEnd, Verdict, Verdicts,
@@ -24,6 +26,10 @@ pub enum DecisionBackend {
     /// Apple GPU execution through `mirtal`.
     #[cfg(feature = "metal")]
     Metal,
+    /// NVIDIA GPU execution through `mircuda`, with the encoder's matrix
+    /// products in the given precision.
+    #[cfg(feature = "cuda")]
+    Cuda(DecisionPrecision),
 }
 
 enum Engine {
@@ -31,6 +37,8 @@ enum Engine {
     Cpu(Box<cpu::CpuDecisionModel>),
     #[cfg(feature = "metal")]
     Metal(Box<metal::engine::MetalDecisionModel>),
+    #[cfg(feature = "cuda")]
+    Cuda(Box<cuda::CudaDecisionModel>),
 }
 
 /// A loaded Laya checkpoint ready to answer questions.
@@ -62,6 +70,10 @@ impl DecisionModel {
             DecisionBackend::Metal => {
                 Engine::Metal(Box::new(metal::engine::MetalDecisionModel::load(&checkpoint)?))
             },
+            #[cfg(feature = "cuda")]
+            DecisionBackend::Cuda(precision) => {
+                Engine::Cuda(Box::new(cuda::CudaDecisionModel::load(&checkpoint, precision)?))
+            },
         };
         Ok(Self { checkpoint, engine })
     }
@@ -69,11 +81,13 @@ impl DecisionModel {
     /// Hardware this model runs on.
     #[must_use]
     pub const fn backend(&self) -> DecisionBackend {
-        match self.engine {
+        match &self.engine {
             #[cfg(feature = "cpu")]
             Engine::Cpu(_) => DecisionBackend::Cpu,
             #[cfg(feature = "metal")]
             Engine::Metal(_) => DecisionBackend::Metal,
+            #[cfg(feature = "cuda")]
+            Engine::Cuda(model) => DecisionBackend::Cuda(model.precision()),
         }
     }
 
@@ -115,6 +129,8 @@ impl DecisionModel {
             Engine::Cpu(model) => Ok(model.logits(rows)?),
             #[cfg(feature = "metal")]
             Engine::Metal(model) => Ok(model.logits(rows)?),
+            #[cfg(feature = "cuda")]
+            Engine::Cuda(model) => Ok(model.logits(rows)?),
         }
     }
 }
