@@ -115,7 +115,7 @@ pub use shared_routed::{
     CudaSharedRoutedDecodeBatch, CudaSharedRoutedLayerState, CudaSharedRoutedModelSession,
     CudaSharedRoutedModelTemplate, CudaSharedRoutedPrefillBatch, SharedRoutedCheckpoint,
 };
-pub use task::{CudaSequenceScoringModel, CudaTextEmbeddingModel};
+pub use task::{CudaDecisionModel, CudaSequenceScoringModel, CudaTextEmbeddingModel};
 pub use tuning::{AttentionFamily, AttentionProfileRequest, CudaTuningConfig, CudaTuningMode};
 pub use vision::{CudaPooledVisionTower, CudaSpatialMergeVisionTower};
 

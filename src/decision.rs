@@ -3,7 +3,7 @@
 //! A [`DecisionModel`] answers typed questions about one state in a single
 //! encoder pass per question: pick an option, place the state on a scale, or
 //! decide whether a statement holds. Enable the `cpu` feature for the native
-//! CPU backend and `metal` for Apple GPUs.
+//! CPU backend, `metal` for Apple GPUs, and `cuda` for NVIDIA GPUs.
 
 use std::path::Path;
 
@@ -24,6 +24,9 @@ pub enum DecisionBackend {
     /// Apple GPU execution through `mirtal`.
     #[cfg(feature = "metal")]
     Metal,
+    /// NVIDIA GPU execution through `mircuda`.
+    #[cfg(feature = "cuda")]
+    Cuda,
 }
 
 enum Engine {
@@ -31,6 +34,8 @@ enum Engine {
     Cpu(Box<cpu::CpuDecisionModel>),
     #[cfg(feature = "metal")]
     Metal(Box<metal::engine::MetalDecisionModel>),
+    #[cfg(feature = "cuda")]
+    Cuda(Box<cuda::CudaDecisionModel>),
 }
 
 /// A loaded Laya checkpoint ready to answer questions.
@@ -62,6 +67,10 @@ impl DecisionModel {
             DecisionBackend::Metal => {
                 Engine::Metal(Box::new(metal::engine::MetalDecisionModel::load(&checkpoint)?))
             },
+            #[cfg(feature = "cuda")]
+            DecisionBackend::Cuda => {
+                Engine::Cuda(Box::new(cuda::CudaDecisionModel::load(&checkpoint)?))
+            },
         };
         Ok(Self { checkpoint, engine })
     }
@@ -74,6 +83,8 @@ impl DecisionModel {
             Engine::Cpu(_) => DecisionBackend::Cpu,
             #[cfg(feature = "metal")]
             Engine::Metal(_) => DecisionBackend::Metal,
+            #[cfg(feature = "cuda")]
+            Engine::Cuda(_) => DecisionBackend::Cuda,
         }
     }
 
@@ -115,6 +126,8 @@ impl DecisionModel {
             Engine::Cpu(model) => Ok(model.logits(rows)?),
             #[cfg(feature = "metal")]
             Engine::Metal(model) => Ok(model.logits(rows)?),
+            #[cfg(feature = "cuda")]
+            Engine::Cuda(model) => Ok(model.logits(rows)?),
         }
     }
 }

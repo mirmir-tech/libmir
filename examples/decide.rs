@@ -3,7 +3,7 @@
 //! Measures Laya decisions on a workshop conversation.
 //!
 //! ```text
-//! cargo run --release --example decide --features cpu,metal -- <checkpoint> [cpu|metal] [turns]
+//! cargo run --release --example decide --features cpu,metal -- <checkpoint> [cpu|metal|cuda] [turns]
 //! ```
 
 use std::{env, time::Instant};
@@ -17,11 +17,13 @@ const RUNS: usize = 20;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut arguments = env::args().skip(1);
-    let root = arguments.next().ok_or("usage: decide <checkpoint> [cpu|metal] [turns]")?;
+    let root = arguments.next().ok_or("usage: decide <checkpoint> [cpu|metal|cuda] [turns]")?;
     let backend = match arguments.next().as_deref() {
         None | Some("cpu") => DecisionBackend::Cpu,
         #[cfg(feature = "metal")]
         Some("metal") => DecisionBackend::Metal,
+        #[cfg(feature = "cuda")]
+        Some("cuda") => DecisionBackend::Cuda,
         Some(other) => return Err(format!("backend {other} is not enabled").into()),
     };
     let turns: usize = arguments.next().map_or(Ok(4), |turns| turns.parse())?;

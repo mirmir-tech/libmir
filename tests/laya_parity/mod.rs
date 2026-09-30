@@ -2,7 +2,7 @@
 //!
 //! Needs the `convaiinnovations/laya-multilingual` checkpoint directory in
 //! `LIBMIR_LAYA_MODEL`; without it the tests have nothing to compare.
-#![cfg(any(feature = "cpu", feature = "metal"))]
+#![cfg(any(feature = "cpu", feature = "metal", feature = "cuda"))]
 
 mod reference;
 
@@ -20,6 +20,8 @@ const BACKENDS: &[DecisionBackend] = &[
     DecisionBackend::Cpu,
     #[cfg(feature = "metal")]
     DecisionBackend::Metal,
+    #[cfg(feature = "cuda")]
+    DecisionBackend::Cuda,
 ];
 
 /// Reference cases of one state and the rows libmir builds for them.
