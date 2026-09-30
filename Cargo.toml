@@ -45,9 +45,9 @@ blake3 = "1"
 image = { version = "0.25.10", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 minijinja = { version = "2", features = ["builtins", "json"] }
 minijinja-contrib = { version = "2", features = ["pycompat"] }
-mircuda = "0.4.0"
-mircup = "0.1.0"
-mirtal = "0.4.0"
+mircuda = { git = "https://github.com/mirmir-tech/mircuda", branch = "develop" }
+mircup = { git = "https://github.com/mirmir-tech/mircup", branch = "develop" }
+mirtal = { git = "https://github.com/mirmir-tech/mirtal", branch = "develop" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
