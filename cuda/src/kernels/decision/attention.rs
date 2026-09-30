@@ -36,6 +36,15 @@ pub struct DecisionAttentionInput<'a> {
     pub window: DecisionWindow,
 }
 
+impl DecisionWindow {
+    pub(super) fn kernel_radius(self) -> Result<u32> {
+        Ok(match self {
+            Self::Full => FULL_WINDOW,
+            Self::Band { radius } => u32::try_from(radius)?,
+        })
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct DecisionAttention {
     kernel: TypedKernel<AttentionKernel>,
@@ -64,10 +73,7 @@ impl DecisionAttention {
         if input.qkv.len() != input.lengths.len() * input.length * 3 * hidden {
             return Err(Error::InvalidDecoderKernel("decision attention qkv geometry"));
         }
-        let radius = match input.window {
-            DecisionWindow::Full => FULL_WINDOW,
-            DecisionWindow::Band { radius } => u32::try_from(radius)?,
-        };
+        let radius = input.window.kernel_radius()?;
         let scale = 1.0 / f32::from(u16::try_from(input.head_dim)?).sqrt();
         Ok(self.kernel.launch(
             stream,

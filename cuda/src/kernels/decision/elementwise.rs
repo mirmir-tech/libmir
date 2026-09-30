@@ -9,19 +9,8 @@ cuda_export!(EmbedKernel = "libmir_decision_embed"(
     ids: &DeviceBuffer<u32>, table: &DeviceBuffer<f16>, output: &mut DeviceBuffer<f32>,
     rows: u32, width: u32,
 ));
-cuda_export!(NormKernel = "libmir_decision_layer_norm"(
-    input: &DeviceBuffer<f32>, weight: &DeviceBuffer<f32>, bias: &DeviceBuffer<f32>,
-    output: &mut DeviceBuffer<f32>, rows: u32, width: u32, epsilon: f32,
-));
 cuda_export!(BiasKernel = "libmir_decision_add_bias"(
     values: &mut DeviceBuffer<f32>, bias: &DeviceBuffer<f32>, elements: u32, width: u32,
-));
-cuda_export!(RopeKernel = "libmir_decision_rope"(
-    values: &mut DeviceBuffer<f32>, tokens: u32, length: u32, width: u32, rotated_heads: u32,
-    head_dim: u32, theta: f32,
-));
-cuda_export!(GegluKernel = "libmir_decision_geglu"(
-    input: &DeviceBuffer<f32>, output: &mut DeviceBuffer<f32>, rows: u32, width: u32,
 ));
 cuda_export!(GeluKernel = "libmir_decision_gelu"(values: &mut DeviceBuffer<f32>, elements: u32));
 cuda_export!(ReluKernel = "libmir_decision_relu"(values: &mut DeviceBuffer<f32>, elements: u32));
@@ -38,10 +27,7 @@ cuda_export!(GatherKernel = "libmir_decision_gather"(
 #[derive(Clone, Debug)]
 pub struct DecisionElementwise {
     embed: TypedKernel<EmbedKernel>,
-    norm: TypedKernel<NormKernel>,
     bias: TypedKernel<BiasKernel>,
-    rope: TypedKernel<RopeKernel>,
-    geglu: TypedKernel<GegluKernel>,
     gelu: TypedKernel<GeluKernel>,
     relu: TypedKernel<ReluKernel>,
     kind: TypedKernel<KindKernel>,
@@ -54,10 +40,7 @@ impl DecisionElementwise {
         let module = compiler.compile(source, &CompileOptions::default())?;
         Ok(Self {
             embed: module.kernel()?,
-            norm: module.kernel()?,
             bias: module.kernel()?,
-            rope: module.kernel()?,
-            geglu: module.kernel()?,
             gelu: module.kernel()?,
             relu: module.kernel()?,
             kind: module.kernel()?,
@@ -80,26 +63,6 @@ impl DecisionElementwise {
             .launch(stream, rows_launch(ids.len())?, (ids, table, output, rows, width))?)
     }
 
-    /// Layer normalisation of every `weight.len()`-wide row.
-    pub fn norm(
-        &self,
-        stream: &Stream,
-        input: &DeviceBuffer<f32>,
-        (weight, bias, epsilon): (&DeviceBuffer<f32>, &DeviceBuffer<f32>, f32),
-        output: &mut DeviceBuffer<f32>,
-    ) -> Result<()> {
-        let width = weight.len();
-        require(output, input.len(), "decision norm output")?;
-        let rows = input.len() / width;
-        let launch = rows_launch(rows)?;
-        let geometry = (u32::try_from(rows)?, u32::try_from(width)?);
-        Ok(self.norm.launch(
-            stream,
-            launch,
-            (input, weight, bias, output, geometry.0, geometry.1, epsilon),
-        )?)
-    }
-
     pub fn add_bias(
         &self,
         stream: &Stream,
@@ -111,50 +74,6 @@ impl DecisionElementwise {
             stream,
             elements_launch(values.len())?,
             (values, bias, elements, width),
-        )?)
-    }
-
-    /// Rotates the first `rotated_heads` heads of each `length`-token row.
-    pub fn rope(
-        &self,
-        stream: &Stream,
-        values: &mut DeviceBuffer<f32>,
-        (length, width, rotated_heads, head_dim, theta): (usize, usize, usize, usize, f32),
-    ) -> Result<()> {
-        let tokens = values.len() / width;
-        let launch = elements_launch(tokens * rotated_heads * head_dim / 2)?;
-        let arguments = (
-            u32::try_from(tokens)?,
-            u32::try_from(length)?,
-            u32::try_from(width)?,
-            u32::try_from(rotated_heads)?,
-            u32::try_from(head_dim)?,
-            theta,
-        );
-        Ok(self.rope.launch(
-            stream,
-            launch,
-            (
-                values, arguments.0, arguments.1, arguments.2, arguments.3, arguments.4,
-                arguments.5,
-            ),
-        )?)
-    }
-
-    pub fn geglu(
-        &self,
-        stream: &Stream,
-        input: &DeviceBuffer<f32>,
-        output: &mut DeviceBuffer<f32>,
-        width: usize,
-    ) -> Result<()> {
-        let rows = output.len() / width;
-        require(input, rows * 2 * width, "decision GeGLU input")?;
-        let geometry = (u32::try_from(rows)?, u32::try_from(width)?);
-        Ok(self.geglu.launch(
-            stream,
-            elements_launch(output.len())?,
-            (input, output, geometry.0, geometry.1),
         )?)
     }
 

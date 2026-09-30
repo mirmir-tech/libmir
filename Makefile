@@ -2,7 +2,7 @@ SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 .DEFAULT_GOAL := help
 
-.PHONY: help docs docs-open examples check-base check-cpu check-metal check-cuda laya-parity \
+.PHONY: help docs docs-open examples check-base check-cpu check-metal check-cuda laya-parity laya-parity-cuda \
 	cuda-checkpoint \
 	cuda-quality cuda-dense-gate cuda-profile
 
@@ -48,6 +48,11 @@ laya-parity: ## Compare Laya rows and logits on CPU and Metal with the fp32 refe
 	@test -d "$(LAYA_MODEL)" || { printf 'Laya checkpoint not found.\n' >&2; exit 2; }
 	@LIBMIR_LAYA_MODEL="$(LAYA_MODEL)" cargo test --release -p libmir --no-default-features \
 		--features cpu,metal --test laya_parity
+
+laya-parity-cuda: ## Compare Laya rows and logits on CPU and both CUDA precisions.
+	@test -d "$(LAYA_MODEL)" || { printf 'Laya checkpoint not found.\n' >&2; exit 2; }
+	@LIBMIR_LAYA_MODEL="$(LAYA_MODEL)" cargo test --release -p libmir --features cpu,cuda \
+		--test laya_parity
 
 check-metal: ## Validate the complete Metal facade.
 	@cargo clippy -p libmir --all-targets --no-default-features \

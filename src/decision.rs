@@ -7,6 +7,8 @@
 
 use std::path::Path;
 
+#[cfg(feature = "cuda")]
+pub use cuda::DecisionPrecision;
 pub use models::decision::{
     Answer, ChoiceOption, DecisionCheckpoint, DecisionRow, DecisionSchema, DecisionState, Question,
     QuestionKind, SchemaField, StateEnd, Verdict, Verdicts,
@@ -24,9 +26,10 @@ pub enum DecisionBackend {
     /// Apple GPU execution through `mirtal`.
     #[cfg(feature = "metal")]
     Metal,
-    /// NVIDIA GPU execution through `mircuda`.
+    /// NVIDIA GPU execution through `mircuda`, with the encoder's matrix
+    /// products in the given precision.
     #[cfg(feature = "cuda")]
-    Cuda,
+    Cuda(DecisionPrecision),
 }
 
 enum Engine {
@@ -68,8 +71,8 @@ impl DecisionModel {
                 Engine::Metal(Box::new(metal::engine::MetalDecisionModel::load(&checkpoint)?))
             },
             #[cfg(feature = "cuda")]
-            DecisionBackend::Cuda => {
-                Engine::Cuda(Box::new(cuda::CudaDecisionModel::load(&checkpoint)?))
+            DecisionBackend::Cuda(precision) => {
+                Engine::Cuda(Box::new(cuda::CudaDecisionModel::load(&checkpoint, precision)?))
             },
         };
         Ok(Self { checkpoint, engine })
@@ -78,13 +81,13 @@ impl DecisionModel {
     /// Hardware this model runs on.
     #[must_use]
     pub const fn backend(&self) -> DecisionBackend {
-        match self.engine {
+        match &self.engine {
             #[cfg(feature = "cpu")]
             Engine::Cpu(_) => DecisionBackend::Cpu,
             #[cfg(feature = "metal")]
             Engine::Metal(_) => DecisionBackend::Metal,
             #[cfg(feature = "cuda")]
-            Engine::Cuda(_) => DecisionBackend::Cuda,
+            Engine::Cuda(model) => DecisionBackend::Cuda(model.precision()),
         }
     }
 

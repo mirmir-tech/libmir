@@ -1,9 +1,10 @@
-use mircuda::{DeviceBuffer, PinnedBuffer};
+use mircuda::DeviceBuffer;
 use models::decision::{DecisionTensor, HeadTensor, ScorerTensor};
 
 use super::{
+    attention::attend_full,
     batch::DeviceBatch,
-    encoder::Device,
+    device::Device,
     weights::{DeviceLinear, DeviceNorm, Uploader, Write},
 };
 use crate::{
@@ -17,19 +18,19 @@ pub struct Head {
     kinds: DeviceBuffer<f32>,
     layers: Vec<Layer>,
     scorer_norm: DeviceNorm,
-    scorer_hidden: DeviceLinear,
-    scorer_logit: DeviceLinear,
+    scorer_hidden: DeviceLinear<f32>,
+    scorer_logit: DeviceLinear<f32>,
     heads: usize,
     hidden: usize,
 }
 
 struct Layer {
     attention_norm: DeviceNorm,
-    qkv: DeviceLinear,
-    output: DeviceLinear,
+    qkv: DeviceLinear<f32>,
+    output: DeviceLinear<f32>,
     feed_forward_norm: DeviceNorm,
-    up: DeviceLinear,
-    down: DeviceLinear,
+    up: DeviceLinear<f32>,
+    down: DeviceLinear<f32>,
 }
 
 impl Head {
@@ -83,15 +84,16 @@ impl Head {
         })
     }
 
-    /// Option logits per row. The last layer runs only at the markers, the
-    /// only rows the scorer reads; its keys still cover every token.
+    /// Option logits of every marker, row by row. The last layer runs only at
+    /// the markers, the only rows the scorer reads; its keys still cover every
+    /// token.
     pub fn logits(
         &self,
         device: &Device<'_>,
         mut hidden: DeviceBuffer<f32>,
         batch: &DeviceBatch,
-    ) -> Result<Vec<Vec<f32>>> {
-        let stream = &device.backend.inner.stream;
+    ) -> Result<DeviceBuffer<f32>> {
+        let stream = device.stream();
         device.elementwise.add_kind(
             stream,
             &mut hidden,
@@ -103,29 +105,20 @@ impl Head {
         };
         for layer in earlier {
             let mixed = self.attend_all(device, layer, &hidden, batch)?;
-            layer.output.apply(device.kit(), &mixed, &mut hidden, Write::Accumulate)?;
+            layer.output.apply(device, &mixed, &mut hidden, Write::Accumulate)?;
             feed_forward(device, layer, &mut hidden)?;
         }
         let mut markers = device.buffer(batch.markers.len() * self.hidden)?;
         device.elementwise.gather(stream, &hidden, &batch.markers, &mut markers)?;
         if let Some(layer) = last {
             let mixed = self.attend(device, layer, &hidden, batch, &batch.markers)?;
-            layer.output.apply(device.kit(), &mixed, &mut markers, Write::Accumulate)?;
+            layer.output.apply(device, &mixed, &mut markers, Write::Accumulate)?;
             feed_forward(device, layer, &mut markers)?;
         }
-        let mut scored =
-            device.linear(&self.scorer_hidden, &device.norm(&markers, &self.scorer_norm)?)?;
+        let mut scored = device
+            .linear(&self.scorer_hidden, &device.norm::<f32>(&markers, &self.scorer_norm)?)?;
         device.elementwise.gelu(stream, &mut scored)?;
-        let logits = device.linear(&self.scorer_logit, &scored)?;
-        let mut host: PinnedBuffer<f32> =
-            device.backend.inner.context.allocate_pinned(logits.len())?;
-        stream.copy_to_host(&logits, &mut host)?;
-        let mut values = host.to_vec()?.into_iter();
-        Ok(batch
-            .marker_counts
-            .iter()
-            .map(|&count| values.by_ref().take(count).collect())
-            .collect())
+        device.linear(&self.scorer_logit, &scored)
     }
 
     fn attend_all(
@@ -135,16 +128,9 @@ impl Head {
         hidden: &DeviceBuffer<f32>,
         batch: &DeviceBatch,
     ) -> Result<DeviceBuffer<f32>> {
-        let qkv = device.linear(&layer.qkv, &device.norm(hidden, &layer.attention_norm)?)?;
-        let mut mixed = device.buffer(batch.tokens() * self.hidden)?;
-        let geometry = (batch.length, self.heads, self.hidden / self.heads, DecisionWindow::Full);
-        device.dense.execute(
-            &device.backend.inner.stream,
-            (&qkv, &batch.lengths),
-            geometry,
-            &mut mixed,
-        )?;
-        Ok(mixed)
+        let qkv = device.linear(&layer.qkv, &device.norm::<f32>(hidden, &layer.attention_norm)?)?;
+        let shape = (batch.length, self.heads, self.hidden / self.heads);
+        attend_full(device, (&qkv, &batch.lengths), shape)
     }
 
     fn attend(
@@ -155,7 +141,7 @@ impl Head {
         batch: &DeviceBatch,
         queries: &DeviceBuffer<u32>,
     ) -> Result<DeviceBuffer<f32>> {
-        let qkv = device.linear(&layer.qkv, &device.norm(hidden, &layer.attention_norm)?)?;
+        let qkv = device.linear(&layer.qkv, &device.norm::<f32>(hidden, &layer.attention_norm)?)?;
         let mut mixed = device.buffer(queries.len() * self.hidden)?;
         let input = DecisionAttentionInput {
             qkv: &qkv,
@@ -166,13 +152,14 @@ impl Head {
             head_dim: self.hidden / self.heads,
             window: DecisionWindow::Full,
         };
-        device.attention.execute(&device.backend.inner.stream, &input, &mut mixed)?;
+        device.attention.execute(device.stream(), &input, &mut mixed)?;
         Ok(mixed)
     }
 }
 
 fn feed_forward(device: &Device<'_>, layer: &Layer, hidden: &mut DeviceBuffer<f32>) -> Result<()> {
-    let mut expanded = device.linear(&layer.up, &device.norm(hidden, &layer.feed_forward_norm)?)?;
-    device.elementwise.relu(&device.backend.inner.stream, &mut expanded)?;
-    layer.down.apply(device.kit(), &expanded, hidden, Write::Accumulate)
+    let mut expanded =
+        device.linear(&layer.up, &device.norm::<f32>(hidden, &layer.feed_forward_norm)?)?;
+    device.elementwise.relu(device.stream(), &mut expanded)?;
+    layer.down.apply(device, &expanded, hidden, Write::Accumulate)
 }

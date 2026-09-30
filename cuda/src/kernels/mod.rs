@@ -58,8 +58,8 @@ pub(crate) use clamped_routed::{
     ClampedRoutedSplitDecode,
 };
 pub use decision::{
-    DecisionAttention, DecisionAttentionInput, DecisionDenseAttention, DecisionElementwise,
-    DecisionWindow,
+    DecisionAttention, DecisionAttentionInput, DecisionElement, DecisionElementwise,
+    DecisionLayout, DecisionWindow, HeadLayout, RopeTables, ScoreRows,
 };
 pub use decoder::{RmsNorm, RmsNormUnit, Rope, RopeSpec};
 pub(crate) use dense_cast::DenseCast;

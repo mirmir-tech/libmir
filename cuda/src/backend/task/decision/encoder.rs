@@ -5,81 +5,47 @@ use models::{
 };
 
 use super::{
+    attention::{BLOCK, Band, attend_band, attend_full},
     batch::DeviceBatch,
-    weights::{DeviceLinear, DeviceNorm, Plans, Uploader, Write},
+    device::Device,
+    plans::Input,
+    rope,
+    weights::{DeviceLinear, DeviceNorm, Uploader, Write},
 };
-use crate::{
-    CudaBackend, Result,
-    kernels::{DecisionAttention, DecisionDenseAttention, DecisionElementwise, DecisionWindow},
-};
+use crate::{Result, kernels::RopeTables};
 
-/// A `ModernBERT` encoder with f32 weights resident on the device.
-pub struct Encoder {
+/// A `ModernBERT` encoder whose matrix products take `I` inputs; norms,
+/// softmax statistics and the residual stream stay f32.
+pub struct Encoder<I: Input> {
     embeddings: DeviceBuffer<f16>,
     embedding_norm: DeviceNorm,
-    layers: Vec<Layer>,
+    layers: Vec<Layer<I>>,
     final_norm: DeviceNorm,
     heads: usize,
     head_dim: usize,
     hidden: usize,
     intermediate: usize,
-    global_theta: f32,
-    local_theta: f32,
+    global: RopeTables,
+    local: RopeTables,
 }
 
-struct Layer {
+struct Layer<I: Input> {
     /// `None` on layer 0, which attends to the embedding norm output.
     attention_norm: Option<DeviceNorm>,
-    qkv: DeviceLinear,
-    output: DeviceLinear,
+    qkv: DeviceLinear<I>,
+    output: DeviceLinear<I>,
     mlp_norm: DeviceNorm,
-    mlp_input: DeviceLinear,
-    mlp_output: DeviceLinear,
+    mlp_input: DeviceLinear<I>,
+    mlp_output: DeviceLinear<I>,
     attention: ModernBertAttention,
 }
 
-/// Kernels and backend every forward step needs.
-pub struct Device<'a> {
-    pub backend: &'a CudaBackend,
-    pub elementwise: &'a DecisionElementwise,
-    pub attention: &'a DecisionAttention,
-    pub dense: &'a DecisionDenseAttention,
-    pub plans: &'a Plans,
-}
-
-impl Device<'_> {
-    pub const fn kit(&self) -> (&CudaBackend, &DecisionElementwise, &Plans) {
-        (self.backend, self.elementwise, self.plans)
-    }
-
-    pub fn buffer(&self, elements: usize) -> Result<DeviceBuffer<f32>> {
-        Ok(self.backend.inner.pool.allocate(&self.backend.inner.stream, elements)?)
-    }
-
-    pub fn norm(&self, input: &DeviceBuffer<f32>, norm: &DeviceNorm) -> Result<DeviceBuffer<f32>> {
-        let mut output = self.buffer(input.len())?;
-        self.elementwise.norm(
-            &self.backend.inner.stream,
-            input,
-            (&norm.weight, &norm.bias, norm.epsilon),
-            &mut output,
-        )?;
-        Ok(output)
-    }
-
-    pub fn linear(
-        &self,
-        linear: &DeviceLinear,
-        input: &DeviceBuffer<f32>,
-    ) -> Result<DeviceBuffer<f32>> {
-        let mut output = self.buffer(input.len() / linear.inputs * linear.outputs)?;
-        linear.apply(self.kit(), input, &mut output, Write::Overwrite)?;
-        Ok(output)
-    }
-}
-
-impl Encoder {
-    pub fn load(config: &ModernBertConfig, uploader: &Uploader<'_>) -> Result<Self> {
+impl<I: Input> Encoder<I> {
+    pub fn load(
+        config: &ModernBertConfig,
+        uploader: &Uploader<'_>,
+        positions: usize,
+    ) -> Result<Self> {
         let epsilon: f32 = config.norm_eps.to_string().parse()?;
         let layers = config
             .layers
@@ -100,6 +66,10 @@ impl Encoder {
                 })
             })
             .collect::<Result<_>>()?;
+        let positions = positions.div_ceil(BLOCK) * BLOCK;
+        let table = |theta: f64| {
+            rope::tables(uploader.backend, theta.to_string().parse()?, positions, config.head_dim)
+        };
         Ok(Self {
             embeddings: uploader.half(DecisionTensor::TokenEmbedding)?,
             embedding_norm: uploader.norm(DecisionTensor::EmbeddingNorm, None, epsilon)?,
@@ -109,60 +79,70 @@ impl Encoder {
             head_dim: config.head_dim,
             hidden: config.hidden_size,
             intermediate: config.intermediate_size,
-            global_theta: config.global_rope_theta.to_string().parse()?,
-            local_theta: config.local_rope_theta.to_string().parse()?,
+            global: table(config.global_rope_theta)?,
+            local: table(config.local_rope_theta)?,
         })
+    }
+
+    /// Widest band of a local layer.
+    pub fn band(&self) -> Option<usize> {
+        self.layers
+            .iter()
+            .filter_map(|layer| match layer.attention {
+                ModernBertAttention::Local { radius } => Some(radius),
+                ModernBertAttention::Global => None,
+            })
+            .max()
     }
 
     /// Final hidden states `[rows × length, hidden]`.
     pub fn forward(&self, device: &Device<'_>, batch: &DeviceBatch) -> Result<DeviceBuffer<f32>> {
-        let stream = &device.backend.inner.stream;
+        let stream = device.stream();
         let mut embedded = device.buffer(batch.tokens() * self.hidden)?;
         device
             .elementwise
             .embed(stream, &batch.tokens, &self.embeddings, &mut embedded)?;
-        let mut hidden = device.norm(&embedded, &self.embedding_norm)?;
+        let mut hidden = device.norm::<f32>(&embedded, &self.embedding_norm)?;
         for layer in &self.layers {
-            let mixed = match &layer.attention_norm {
-                Some(norm) => self.attend(device, layer, &device.norm(&hidden, norm)?, batch)?,
-                None => self.attend(device, layer, &hidden, batch)?,
+            let input = match &layer.attention_norm {
+                Some(norm) => device.norm::<I>(&hidden, norm)?,
+                None => device.norm::<I>(&embedded, &self.embedding_norm)?,
             };
-            layer.output.apply(device.kit(), &mixed, &mut hidden, Write::Accumulate)?;
-            let expanded =
-                device.linear(&layer.mlp_input, &device.norm(&hidden, &layer.mlp_norm)?)?;
-            let mut activated = device.buffer(batch.tokens() * self.intermediate)?;
-            device.elementwise.geglu(stream, &expanded, &mut activated, self.intermediate)?;
-            layer
-                .mlp_output
-                .apply(device.kit(), &activated, &mut hidden, Write::Accumulate)?;
+            let mixed = self.attend(device, layer, &input, batch)?;
+            layer.output.apply(device, &mixed, &mut hidden, Write::Accumulate)?;
+            let normed = device.norm::<I>(&hidden, &layer.mlp_norm)?;
+            let expanded = device.linear(&layer.mlp_input, &normed)?;
+            let mut activated = device.buffer::<I>(batch.tokens() * self.intermediate)?;
+            I::geglu(device.layout, stream, &expanded, &mut activated, self.intermediate)?;
+            layer.mlp_output.apply(device, &activated, &mut hidden, Write::Accumulate)?;
         }
-        device.norm(&hidden, &self.final_norm)
+        device.norm::<f32>(&hidden, &self.final_norm)
     }
 
     fn attend(
         &self,
         device: &Device<'_>,
-        layer: &Layer,
-        input: &DeviceBuffer<f32>,
+        layer: &Layer<I>,
+        input: &DeviceBuffer<I>,
         batch: &DeviceBatch,
-    ) -> Result<DeviceBuffer<f32>> {
-        let stream = &device.backend.inner.stream;
-        let mut qkv = device.linear(&layer.qkv, input)?;
-        let (theta, window) = match layer.attention {
-            ModernBertAttention::Global => (self.global_theta, DecisionWindow::Full),
-            ModernBertAttention::Local { radius } => {
-                (self.local_theta, DecisionWindow::Band { radius })
+    ) -> Result<DeviceBuffer<I>> {
+        let qkv = device.linear(&layer.qkv, input)?;
+        let shape = (batch.length, self.heads, self.head_dim);
+        match layer.attention {
+            ModernBertAttention::Global => {
+                let mut rotated = device.buffer::<I>(qkv.len())?;
+                I::rotate(device.layout, device.stream(), &qkv, &self.global, shape, &mut rotated)?;
+                attend_full(device, (&rotated, &batch.lengths), shape)
             },
-        };
-        let rope = (batch.length, 3 * self.hidden, 2 * self.heads, self.head_dim, theta);
-        device.elementwise.rope(stream, &mut qkv, rope)?;
-        let mut mixed = device.buffer(batch.tokens() * self.hidden)?;
-        device.dense.execute(
-            stream,
-            (&qkv, &batch.lengths),
-            (batch.length, self.heads, self.head_dim, window),
-            &mut mixed,
-        )?;
-        Ok(mixed)
+            ModernBertAttention::Local { radius } => {
+                let band = Band {
+                    length: batch.length,
+                    heads: self.heads,
+                    head_dim: self.head_dim,
+                    radius,
+                };
+                attend_band(device, (&qkv, &batch.lengths), &self.local, band)
+            },
+        }
     }
 }

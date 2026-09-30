@@ -32,7 +32,7 @@ pub use backend::{
     CudaMoeModelSession, CudaMoeModelTemplate, CudaNumericalPolicy, CudaOutputHead,
     CudaOutputHeadPolicy, CudaPlanningPolicy, CudaSharedRoutedLayerState,
     CudaSharedRoutedModelSession, CudaSharedRoutedModelTemplate, CudaTuningConfig, CudaTuningMode,
-    DecodeAttentionBf16, DecodeAttentionConfig, DecodeAttentionOutputWeight,
+    DecisionPrecision, DecodeAttentionBf16, DecodeAttentionConfig, DecodeAttentionOutputWeight,
     DecodeAttentionWeights, DecodeDenseSwiGlu, DecodeGraphAction, DecodeMoeBlockBf16,
     DecodeMoeBlockConfig, DecodeMoeBlockExecutor, DecodeMoeBlockWeights, DecodeMoeLayerTemplate,
     DecodeQkvWeights, DenseDownSource, DenseDownWeight, DenseExecution, DenseGateUpSource,

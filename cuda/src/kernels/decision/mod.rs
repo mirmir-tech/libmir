@@ -1,12 +1,14 @@
-//! f32 kernels of the Laya decision model.
+//! Kernels of the Laya decision model.
 
 mod attention;
-mod dense;
+mod element;
 mod elementwise;
+mod layout;
 
 pub use attention::{DecisionAttention, DecisionAttentionInput, DecisionWindow};
-pub use dense::DecisionDenseAttention;
+pub use element::DecisionElement;
 pub use elementwise::DecisionElementwise;
+pub use layout::{DecisionLayout, HeadLayout, RopeTables, ScoreRows};
 use mircuda::LaunchConfig;
 
 use crate::{Error, Result};

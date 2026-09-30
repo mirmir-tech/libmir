@@ -1,17 +1,21 @@
 use std::{
-    collections::{HashMap, hash_map::Entry},
     fs::File,
     io::{Read, Seek, SeekFrom},
-    sync::Mutex,
 };
 
-use mircuda::{CublasDenseSpec, CublasF32Plan, DeviceBuffer, DeviceElement, f16};
+use mircuda::{
+    CublasGemmOffsets, CublasGemmOperand, CublasGemmSpec, DeviceBuffer, DeviceElement, bf16, f16,
+};
 use models::{
     decision::{DecisionTensor, DecisionTensorPlan},
     weights::TensorInfo,
 };
 
-use crate::{CudaBackend, Error, Result, kernels::DecisionElementwise};
+use super::{
+    device::Device,
+    plans::{Input, Operands},
+};
+use crate::{CudaBackend, Error, Result};
 
 /// Whether a product replaces its output or is added to it.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -20,41 +24,10 @@ pub enum Write {
     Accumulate,
 }
 
-/// Fixed-shape f32 cuBLAS plans reused across calls; creating one costs an
-/// allocation and a device synchronisation.
-#[derive(Default)]
-pub struct Plans {
-    plans: Mutex<HashMap<CublasDenseSpec, CublasF32Plan>>,
-}
-
-impl Plans {
-    fn multiply(
-        &self,
-        backend: &CudaBackend,
-        spec: CublasDenseSpec,
-        (input, weight, output): (&DeviceBuffer<f32>, &DeviceBuffer<f32>, &mut DeviceBuffer<f32>),
-        beta: f32,
-    ) -> Result<()> {
-        let mut plans = self
-            .plans
-            .lock()
-            .map_err(|_| Error::InvalidDecoderKernel("decision plan cache is poisoned"))?;
-        let stream = &backend.inner.stream;
-        let plan = match plans.entry(spec) {
-            Entry::Occupied(plan) => plan.into_mut(),
-            Entry::Vacant(slot) => {
-                slot.insert(CublasF32Plan::new(&backend.inner.context, stream, spec)?)
-            },
-        };
-        let executed = plan.execute(stream, input, weight, output, 1.0, beta);
-        drop(plans);
-        Ok(executed?)
-    }
-}
-
-/// `y = x Wᵀ + b` with an `[outputs, inputs]` f32 weight on the device.
-pub struct DeviceLinear {
-    weight: DeviceBuffer<f32>,
+/// `y = x Wᵀ + b` with an `[outputs, inputs]` weight on the device; a bf16
+/// weight multiplies bf16 inputs on tensor cores into f32 products.
+pub struct DeviceLinear<I: Input> {
+    weight: DeviceBuffer<I>,
     bias: Option<DeviceBuffer<f32>>,
     pub inputs: usize,
     pub outputs: usize,
@@ -67,24 +40,37 @@ pub struct DeviceNorm {
     pub epsilon: f32,
 }
 
-impl DeviceLinear {
+impl<I: Input> DeviceLinear<I> {
     /// Writes `rows` products into `output`, sized `rows × outputs`.
     pub fn apply(
         &self,
-        (backend, kernels, plans): (&CudaBackend, &DecisionElementwise, &Plans),
-        input: &DeviceBuffer<f32>,
+        device: &Device<'_>,
+        input: &DeviceBuffer<I>,
         output: &mut DeviceBuffer<f32>,
         write: Write,
     ) -> Result<()> {
         let rows = input.len() / self.inputs;
-        let spec = CublasDenseSpec::new(rows, self.outputs, self.inputs)?;
+        let operand = |leading, transposed| CublasGemmOperand { leading, stride: 0, transposed };
+        let spec = CublasGemmSpec::new(
+            (rows, self.outputs, self.inputs, 1),
+            operand(self.inputs, false),
+            operand(self.inputs, true),
+            operand(self.outputs, false),
+        )?;
         let beta = match write {
             Write::Overwrite => 0.0,
             Write::Accumulate => 1.0,
         };
-        plans.multiply(backend, spec, (input, &self.weight, output), beta)?;
-        let stream = &backend.inner.stream;
-        self.bias.as_ref().map_or(Ok(()), |bias| kernels.add_bias(stream, output, bias))
+        let operands = Operands {
+            left: input,
+            right: &self.weight,
+            output: &mut *output,
+            offsets: CublasGemmOffsets::default(),
+        };
+        device.plans.multiply(device.backend, spec, operands, (1.0, beta))?;
+        self.bias
+            .as_ref()
+            .map_or(Ok(()), |bias| device.elementwise.add_bias(device.stream(), output, bias))
     }
 }
 
@@ -116,17 +102,18 @@ impl Uploader<'_> {
         self.copy(&values)
     }
 
-    pub fn linear(
+    pub fn linear<I: Input>(
         &self,
         weight: DecisionTensor,
         bias: Option<DecisionTensor>,
-    ) -> Result<DeviceLinear> {
-        let shape = &self.plan.get(weight)?.shape;
-        let &[outputs, inputs] = shape.as_slice() else {
+    ) -> Result<DeviceLinear<I>> {
+        let info = self.plan.get(weight)?;
+        let &[outputs, inputs] = info.shape.as_slice() else {
             return Err(Error::InvalidDecoderKernel("decision linear weight is not a matrix"));
         };
+        let values: Vec<I> = decode(info, &payload(info)?)?.into_iter().map(I::from_f32).collect();
         Ok(DeviceLinear {
-            weight: self.float(weight)?,
+            weight: self.copy(&values)?,
             bias: bias.map(|bias| self.float(bias)).transpose()?,
             inputs,
             outputs,
@@ -193,7 +180,7 @@ fn decode(info: &TensorInfo, bytes: &[u8]) -> Result<Vec<f32>> {
             .as_chunks::<2>()
             .0
             .iter()
-            .map(|chunk| mircuda::bf16::from_le_bytes(*chunk).to_f32())
+            .map(|chunk| bf16::from_le_bytes(*chunk).to_f32())
             .collect(),
         _ => {
             return Err(Error::DTypeMismatch {
