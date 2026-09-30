@@ -1,0 +1,15 @@
+[package]
+name = "libmir-cpu"
+version = "0.4.0"
+edition.workspace = true
+license.workspace = true
+description = "CPU inference backend for libmir"
+repository.workspace = true
+
+[dependencies]
+mircup.workspace = true
+models = { package = "libmir-models", version = "0.4.0", path = "../models" }
+thiserror.workspace = true
+
+[lints]
+workspace = true

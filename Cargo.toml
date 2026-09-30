@@ -16,10 +16,15 @@ path = "tests/vision/mod.rs"
 name = "dense_checkpoints"
 path = "tests/dense_checkpoints/mod.rs"
 
+[[test]]
+name = "laya_parity"
+path = "tests/laya_parity/mod.rs"
+
 [workspace]
 members = [
     "admission",
     "core",
+    "cpu",
     "cuda",
     "metal",
     "models",
@@ -40,8 +45,9 @@ blake3 = "1"
 image = { version = "0.25.10", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 minijinja = { version = "2", features = ["builtins", "json"] }
 minijinja-contrib = { version = "2", features = ["pycompat"] }
-mircuda = "0.4.0"
-mirtal = "0.4.0"
+mircuda = { git = "https://github.com/mirmir-tech/mircuda", branch = "develop" }
+mircup = { git = "https://github.com/mirmir-tech/mircup", branch = "develop" }
+mirtal = { git = "https://github.com/mirmir-tech/mirtal", branch = "develop" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -55,6 +61,7 @@ sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 
 [features]
 default = []
+cpu = ["dep:cpu"]
 cuda = ["dep:cuda", "dep:nvml-wrapper", "dep:sysinfo"]
 cuda-diagnostics = ["cuda", "cuda/diagnostics"]
 metal = ["dep:macmon", "dep:metal"]
@@ -67,6 +74,7 @@ serde.workspace = true
 architecture = { package = "libmir-admission", version = "0.4.0", path = "admission" }
 async-trait.workspace = true
 foundation = { package = "libmir-core", version = "0.4.0", path = "core" }
+cpu = { package = "libmir-cpu", version = "0.4.0", path = "cpu", optional = true }
 cuda = { package = "libmir-cuda", version = "0.4.0", path = "cuda", optional = true }
 metal = { package = "libmir-metal", version = "0.4.0", path = "metal", optional = true }
 models = { package = "libmir-models", version = "0.4.0", path = "models" }
@@ -89,6 +97,10 @@ image.workspace = true
 serde.workspace = true
 toml.workspace = true
 tracing-subscriber.workspace = true
+
+[[example]]
+name = "decide"
+required-features = ["cpu"]
 
 [lints]
 workspace = true

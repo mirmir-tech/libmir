@@ -2,12 +2,14 @@ SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 .DEFAULT_GOAL := help
 
-.PHONY: help docs docs-open examples check-base check-metal check-cuda cuda-checkpoint \
+.PHONY: help docs docs-open examples check-base check-cpu check-metal check-cuda laya-parity \
+	cuda-checkpoint \
 	cuda-quality cuda-dense-gate cuda-profile
 
 CUDA_NVFP4_MODEL ?= $(firstword $(wildcard $(HOME)/.cache/huggingface/hub/models--nvidia--Gemma-4-26B-A4B-NVFP4/snapshots/*))
 CUDA_QUALITY_MODEL ?= $(firstword $(wildcard $(HOME)/.cache/mirmir/huggingface/hub/models--Qwen--Qwen3-4B/snapshots/*))
 CUDA_QUALITY_MODES ?= throughput block-fp8-gate-up fp8-int4-gate-up
+LAYA_MODEL ?= $(firstword $(wildcard $(HOME)/.cache/huggingface/hub/models--convaiinnovations--laya-multilingual/snapshots/*))
 DENSE_FIXTURE_FAMILY ?=
 DENSE_MODEL ?=
 DENSE_REFERENCE ?=
@@ -36,6 +38,16 @@ examples: ## Type-check every public libmir example.
 check-base: ## Validate libmir without an accelerator backend.
 	@cargo clippy -p libmir --all-targets --no-default-features -- -D warnings
 	@cargo test -p libmir --no-default-features
+
+check-cpu: ## Validate the CPU facade and its crates.
+	@cargo clippy -p libmir -p libmir-cpu -p libmir-models --all-targets --no-default-features \
+		--features cpu -- -D warnings
+	@cargo test -p libmir -p libmir-cpu -p libmir-models --no-default-features --features cpu
+
+laya-parity: ## Compare Laya rows and logits on CPU and Metal with the fp32 reference.
+	@test -d "$(LAYA_MODEL)" || { printf 'Laya checkpoint not found.\n' >&2; exit 2; }
+	@LIBMIR_LAYA_MODEL="$(LAYA_MODEL)" cargo test --release -p libmir --no-default-features \
+		--features cpu,metal --test laya_parity
 
 check-metal: ## Validate the complete Metal facade.
 	@cargo clippy -p libmir --all-targets --no-default-features \

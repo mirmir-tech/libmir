@@ -31,7 +31,8 @@ The target shape is:
   dotenv, CLI, and file parsing belong to consuming applications.
 - Keep accelerator dependencies optional. The `metal` feature is the only path
   from the facade to `metal`/`mirtal`; the `cuda` feature is the only path to
-  `cuda`/`mircuda`; the default feature set links neither backend.
+  `cuda`/`mircuda`; the `cpu` feature is the only path to `cpu`/`mircup`; the
+  default feature set links no backend.
 - Do not add PyTorch, Transformers, or Python runtime dependencies.
 - Prefer explicit model/backend manifests over dynamic Python-style model code.
 - Keep unsafe code isolated behind small backend modules with clear invariants.
@@ -78,6 +79,8 @@ The target shape is:
 - `runtime`: scheduler, backend traits, KV cache and session state.
 - `libmir`: public model loading, prompt preparation, session, and generation API
   used by product binaries and embedders.
+- `cpu`: native CPU backend implemented through the public `mircup` crate; it
+  runs Laya decision checkpoints.
 - `cuda`: CUDA backend adapter placeholder.
 - `metal`: Apple Metal backend implemented through the public `mirtal` crate.
 
@@ -88,7 +91,8 @@ The target shape is:
 3. Implement KV block allocator, prefix hash, and continuous batching controls.
 4. Stabilize the Metal backend for Apple Silicon.
 5. Implement CUDA backend for one decoder-only family.
-6. Add CPU dummy backend only for tests, not product direction.
+6. Keep the CPU backend a product path for encoder decisions: results must
+   match the fp32 reference (`tests/laya_parity`) like every accelerator.
 
 ## Style
 
@@ -1169,3 +1173,16 @@ The target shape is:
 - Workmir's `2026-09-29-metal-schema-tools` passes Qwen3.6 greedy/sampled,
   reasoning, budget, streaming and mixed concurrent schema requests, plus an
   adversarial prompt the unconstrained model violates. No timing gate was run.
+
+## Laya decisions
+
+- `models::decision` owns everything backend-independent: the checkpoint
+  layout, `ModernBERT` and `rl_agent_config.json` parsing, question rendering,
+  token rows identical to the reference `build_sequence`, tensor plans, and
+  answer decoding. Backends only turn `DecisionRow`s into option logits.
+- CPU and Metal evaluate in `f32`. `tests/laya_parity` compares token rows and
+  logits of every enabled backend with the upstream fp32 CPU runtime; run it
+  with `LIBMIR_LAYA_MODEL` pointing at `convaiinnovations/laya-multilingual`.
+  The fixture generator lives in Workmir `benchmarks/2026-09-29-laya-reference`.
+- MLX reads safetensors payloads only on a CPU stream; the Metal decision model
+  loads them there and computes on the GPU stream.
