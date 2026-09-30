@@ -1,4 +1,4 @@
-use mircup::{AttentionWindow, LayerNorm, Linear, Tensor, attention, gelu, relu};
+use mircup::{AttentionWindow, LayerNorm, Linear, Tensor, attention, attention_at, gelu, relu};
 use models::decision::{DecisionTensor, HeadTensor, ScorerTensor};
 
 use super::{batch::PaddedBatch, weights::WeightReader};
@@ -76,7 +76,11 @@ impl Head {
                 token.iter_mut().zip(embedding).for_each(|(value, addend)| *value += addend);
             }
         }
-        for layer in &self.layers {
+        let (last, earlier) = match self.layers.split_last() {
+            Some((last, earlier)) => (Some(last), earlier),
+            None => (None, &[][..]),
+        };
+        for layer in earlier {
             let normalized = layer.attention_norm.forward(&hidden)?;
             layer.output.accumulate(&self.attend(layer, &normalized, batch)?, &mut hidden)?;
             let mut expanded = layer.up.forward(&layer.feed_forward_norm.forward(&hidden)?)?;
@@ -91,9 +95,31 @@ impl Head {
                 markers.iter().map(move |marker| row * batch.length + marker)
             })
             .collect();
-        let mut scored = self
-            .scorer_hidden
-            .forward(&self.scorer_norm.forward(&hidden.gather_rows(&positions)?)?)?;
+        let mut markers = hidden.gather_rows(&positions)?;
+        if let Some(layer) = last {
+            // Only the option markers are read after the last layer, so its
+            // queries and feed-forward block run on those rows alone; keys
+            // and values still cover every token.
+            let rows = batch.lengths.len();
+            let normalized = layer.attention_norm.forward(&hidden)?;
+            let qkv = layer.qkv.forward(&normalized)?.reshape(vec![
+                rows,
+                batch.length,
+                3 * hidden.width(),
+            ])?;
+            let mixed = attention_at(
+                &qkv,
+                self.heads,
+                &batch.lengths,
+                AttentionWindow::Full,
+                &batch.markers,
+            )?;
+            layer.output.accumulate(&mixed, &mut markers)?;
+            let mut expanded = layer.up.forward(&layer.feed_forward_norm.forward(&markers)?)?;
+            relu(&mut expanded);
+            layer.down.accumulate(&expanded, &mut markers)?;
+        }
+        let mut scored = self.scorer_hidden.forward(&self.scorer_norm.forward(&markers)?)?;
         gelu(&mut scored);
         let mut logits = self.scorer_logit.forward(&scored)?.into_data().into_iter();
         Ok(batch
