@@ -173,3 +173,27 @@ fn accepts_annotations_and_matching_types() -> Result<()> {
     assert_eq!(schema.fields().len(), 3);
     Ok(())
 }
+
+#[test]
+fn ignores_annotations_without_changing_the_plan() -> Result<()> {
+    let plain = DecisionSchema::from_json_schema(&json!({
+        "type": "object",
+        "properties": {
+            "kind": {"enum": ["a", "b"]},
+            "level": {"type": "integer", "minimum": 0, "maximum": 2}
+        }
+    }))?;
+    let annotated = DecisionSchema::from_json_schema(&json!({
+        "$id": "https://example.com/decision",
+        "type": "object",
+        "properties": {
+            "kind": {"enum": ["a", "b"], "$id": "#kind", "format": "token", "readOnly": true},
+            "level": {
+                "type": "integer", "minimum": 0, "maximum": 2,
+                "writeOnly": false, "nullable": true, "format": "int32"
+            }
+        }
+    }))?;
+    assert_eq!(annotated, plain);
+    Ok(())
+}

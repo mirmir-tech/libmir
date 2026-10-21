@@ -6,9 +6,12 @@ use serde_json::{Map, Value};
 use super::invalid;
 use crate::error::Result;
 
-/// Keywords that describe but never constrain a value.
-const ANNOTATIONS: [&str; 6] =
-    ["title", "description", "default", "examples", "$comment", "deprecated"];
+/// Keywords that describe but never constrain a value; `format` is an
+/// annotation by default and `nullable` only widens what is allowed.
+const ANNOTATIONS: [&str; 11] = [
+    "title", "description", "default", "examples", "$comment", "deprecated", "$id", "readOnly",
+    "writeOnly", "format", "nullable",
+];
 /// Top-level keywords besides annotations; `$defs` is inert without `$ref`.
 const TOP_LEVEL: [&str; 6] =
     ["type", "properties", "required", "additionalProperties", "$schema", "$defs"];

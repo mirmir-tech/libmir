@@ -39,7 +39,8 @@ pub struct SchemaField {
 ///   `minimum` and `maximum` spanning 1 to 10 levels, or an `anyOf`/`oneOf`
 ///   with exactly one non-null branch;
 /// - anywhere: the annotations `title`, `description`, `default`, `examples`,
-///   `$comment`, and `deprecated`.
+///   `$comment`, `deprecated`, `$id`, `readOnly`, `writeOnly`, `format`, and
+///   `nullable`, which never change the planned questions.
 ///
 /// Any other keyword, such as `multipleOf`, `exclusiveMinimum`, or `$ref`, is
 /// rejected rather than ignored, so every projected answer satisfies the
