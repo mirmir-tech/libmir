@@ -52,7 +52,7 @@ laya-parity: ## Compare Laya rows and logits on CPU and Metal with the fp32 refe
 laya-parity-cuda: ## Compare Laya rows and logits on CPU and both CUDA precisions.
 	@test -d "$(LAYA_MODEL)" || { printf 'Laya checkpoint not found.\n' >&2; exit 2; }
 	@LIBMIR_LAYA_MODEL="$(LAYA_MODEL)" cargo test --release -p libmir --features cpu,cuda \
-		--test laya_parity
+		--test laya_parity -- --include-ignored
 
 check-metal: ## Validate the complete Metal facade.
 	@cargo clippy -p libmir --all-targets --no-default-features \

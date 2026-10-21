@@ -75,7 +75,7 @@ fn rows<'a>(
 }
 
 #[test]
-#[ignore = "needs the Laya checkpoint in LIBMIR_LAYA_MODEL; run `make laya-parity`"]
+#[ignore = "needs the Laya checkpoint in LIBMIR_LAYA_MODEL; run `make laya-parity` or `make laya-parity-cuda`"]
 fn every_backend_reproduces_the_reference_rows_and_logits() -> Result<(), Failure> {
     let root = std::env::var_os("LIBMIR_LAYA_MODEL")
         .ok_or("LIBMIR_LAYA_MODEL must name the Laya checkpoint directory")?;
