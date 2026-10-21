@@ -136,7 +136,8 @@ fn score(
             "{path}: a numeric field needs integer 'minimum' and 'maximum'"
         )));
     };
-    if maximum < minimum || maximum - minimum + 1 > MAX_SCORE_LEVELS {
+    let count = maximum.checked_sub(minimum).and_then(|span| span.checked_add(1));
+    if !count.is_some_and(|count| (1..=MAX_SCORE_LEVELS).contains(&count)) {
         return Err(invalid(format!("{path}: a score needs 1 to {MAX_SCORE_LEVELS} levels")));
     }
     let levels = (minimum..=maximum).map(|level| level.to_string()).collect();

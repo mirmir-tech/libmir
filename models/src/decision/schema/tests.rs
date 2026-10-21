@@ -63,3 +63,46 @@ fn rejects_what_a_fixed_option_set_cannot_express() {
         DecisionSchema::from_json_schema(&json!({"type": "object", "properties": {}})).is_err()
     );
 }
+
+fn score_field(minimum: i64, maximum: i64) -> Result<DecisionSchema> {
+    DecisionSchema::from_json_schema(&json!({
+        "type": "object",
+        "properties": {"field": {"type": "integer", "minimum": minimum, "maximum": maximum}}
+    }))
+}
+
+#[test]
+fn rejects_score_ranges_that_overflow_or_exceed_the_level_limit() {
+    for (minimum, maximum) in [
+        (i64::MIN, i64::MAX),
+        (i64::MIN, 0),
+        (-1, i64::MAX),
+        (i64::MIN, i64::MIN + 10),
+        (i64::MAX - 10, i64::MAX),
+        (3, 2),
+        (i64::MAX, i64::MIN),
+        (0, 10),
+    ] {
+        assert!(score_field(minimum, maximum).is_err(), "{minimum}..={maximum}");
+    }
+}
+
+#[test]
+fn accepts_single_and_maximum_score_ranges_at_the_extremes() -> Result<()> {
+    for (minimum, maximum, levels) in [
+        (5, 5, 1),
+        (i64::MIN, i64::MIN, 1),
+        (i64::MAX, i64::MAX, 1),
+        (0, 9, 10),
+        (i64::MIN, i64::MIN + 9, 10),
+        (i64::MAX - 9, i64::MAX, 10),
+    ] {
+        let schema = score_field(minimum, maximum)?;
+        let options = schema.questions()[0].rendered_options();
+        assert_eq!(options.len(), levels, "{minimum}..={maximum}");
+        let top = vec![0.0; levels - 1].into_iter().chain([1.0]).collect::<Vec<_>>();
+        let answer = Answer::decode(&schema.questions()[0], &top, &config()?)?;
+        assert_eq!(schema.project(&[answer])?["field"], json!(maximum));
+    }
+    Ok(())
+}
