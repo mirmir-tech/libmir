@@ -19,13 +19,17 @@ pub struct DeviceBatch {
 
 impl DeviceBatch {
     /// `band` is the widest local attention band, which may pad the rows to
-    /// whole attention blocks.
+    /// whole attention blocks. Rows are validated against `vocab` before any
+    /// upload, since the kernels index the embedding table and rows with them.
     pub fn new(
         (backend, staging): (&CudaBackend, &mut Staging),
         rows: &[DecisionRow],
-        positions: usize,
+        (positions, vocab): (usize, usize),
         band: Option<usize>,
     ) -> Result<Self> {
+        for row in rows {
+            row.validate(vocab)?;
+        }
         let longest = rows
             .iter()
             .map(|row| row.tokens.len())

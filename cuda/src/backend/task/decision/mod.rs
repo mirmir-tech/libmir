@@ -64,6 +64,7 @@ pub struct CudaDecisionModel {
     encoder: Encoder,
     head: head::Head,
     positions: usize,
+    vocab: usize,
     staging: Mutex<staging::Staging>,
 }
 
@@ -97,6 +98,7 @@ impl CudaDecisionModel {
             encoder,
             head,
             positions,
+            vocab: config.vocab_size,
             staging: Mutex::new(staging::Staging::new(&backend, 4 * positions)?),
             backend,
         })
@@ -120,7 +122,7 @@ impl CudaDecisionModel {
         let batch = batch::DeviceBatch::new(
             (&self.backend, &mut staging),
             rows,
-            self.positions,
+            (self.positions, self.vocab),
             self.encoder.band(),
         )?;
         let device = device::Device {
