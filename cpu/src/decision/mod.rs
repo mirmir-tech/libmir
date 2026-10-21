@@ -12,6 +12,7 @@ pub struct CpuDecisionModel {
     encoder: encoder::Encoder,
     head: head::Head,
     positions: usize,
+    vocab: usize,
 }
 
 impl CpuDecisionModel {
@@ -27,11 +28,15 @@ impl CpuDecisionModel {
                 checkpoint.head_attention_heads(),
             )?,
             positions,
+            vocab: checkpoint.encoder.vocab_size,
         })
     }
 
     /// Raw option logits of every row, one per marker.
     pub fn logits(&self, rows: &[DecisionRow]) -> Result<Vec<Vec<f32>>> {
+        for row in rows {
+            row.validate(self.vocab)?;
+        }
         let batch = batch::PaddedBatch::new(rows, self.positions)?;
         let hidden = self.encoder.forward(&batch)?;
         self.head.logits(hidden, &batch)

@@ -134,3 +134,24 @@ fn refuses_options_that_do_not_fit() -> Result<()> {
     assert!(rows.is_err());
     Ok(())
 }
+
+#[test]
+fn validates_tokens_markers_and_length_against_the_checkpoint() {
+    let row = |tokens: Vec<u32>, markers: Vec<usize>| DecisionRow {
+        tokens,
+        markers,
+        kind: QuestionKind::Choice,
+        state_tokens_dropped: 0,
+    };
+    assert!(row(vec![2, 4, 3], vec![1]).validate(14).is_ok());
+    assert!(row(vec![2, 13], vec![0, 1]).validate(14).is_ok());
+    for (bad, why) in [
+        (row(vec![], vec![]), "empty row"),
+        (row(vec![2, 14, 3], vec![1]), "token equal to the vocabulary size"),
+        (row(vec![2, u32::MAX], vec![0]), "token far past the vocabulary"),
+        (row(vec![2, 4, 3], vec![3]), "marker at the row boundary"),
+        (row(vec![2, 4, 3], vec![1, usize::MAX]), "marker far past the row"),
+    ] {
+        assert!(bad.validate(14).is_err(), "{why}");
+    }
+}

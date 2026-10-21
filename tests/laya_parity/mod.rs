@@ -5,6 +5,7 @@
 //! `LIBMIR_LAYA_MODEL` and fails when run without it.
 #![cfg(any(feature = "cpu", feature = "metal"))]
 
+mod invalid;
 mod reference;
 
 use std::collections::BTreeMap;
