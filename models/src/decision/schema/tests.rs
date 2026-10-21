@@ -106,3 +106,26 @@ fn accepts_single_and_maximum_score_ranges_at_the_extremes() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn keeps_restricted_boolean_constants_and_enums() -> Result<()> {
+    for (property, allowed) in [
+        (json!({"const": true}), true),
+        (json!({"const": false}), false),
+        (json!({"enum": [true]}), true),
+        (json!({"type": "boolean", "enum": [false]}), false),
+    ] {
+        let schema = DecisionSchema::from_json_schema(
+            &json!({"type": "object", "properties": {"field": property}}),
+        )?;
+        let question = &schema.questions()[0];
+        assert_eq!(question.rendered_options().len(), 1, "{property}");
+        let answer = Answer::decode(question, &[-5.0], &config()?)?;
+        assert_eq!(schema.project(&[answer])?["field"], json!(allowed), "{property}");
+    }
+    let free = DecisionSchema::from_json_schema(
+        &json!({"type": "object", "properties": {"field": {"enum": [false, true]}}}),
+    )?;
+    assert_eq!(free.questions()[0].instruction(), "Is `field` true?");
+    Ok(())
+}

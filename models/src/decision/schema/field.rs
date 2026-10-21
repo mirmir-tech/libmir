@@ -86,7 +86,10 @@ fn enumeration(
     if values.is_empty() || values.len() > MAX_OPTIONS {
         return Err(invalid(format!("{path}: 'enum' needs 1 to {MAX_OPTIONS} values")));
     }
-    if values.iter().all(Value::is_boolean) {
+    // Only the full {true, false} set is a free yes/no; a subset stays a choice.
+    if values.iter().all(Value::is_boolean)
+        && [true, false].iter().all(|flag| values.contains(&Value::Bool(*flag)))
+    {
         return boolean(name, description);
     }
     let options = values
