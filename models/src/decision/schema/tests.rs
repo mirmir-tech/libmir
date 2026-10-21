@@ -63,3 +63,137 @@ fn rejects_what_a_fixed_option_set_cannot_express() {
         DecisionSchema::from_json_schema(&json!({"type": "object", "properties": {}})).is_err()
     );
 }
+
+fn score_field(minimum: i64, maximum: i64) -> Result<DecisionSchema> {
+    DecisionSchema::from_json_schema(&json!({
+        "type": "object",
+        "properties": {"field": {"type": "integer", "minimum": minimum, "maximum": maximum}}
+    }))
+}
+
+#[test]
+fn rejects_score_ranges_that_overflow_or_exceed_the_level_limit() {
+    for (minimum, maximum) in [
+        (i64::MIN, i64::MAX),
+        (i64::MIN, 0),
+        (-1, i64::MAX),
+        (i64::MIN, i64::MIN + 10),
+        (i64::MAX - 10, i64::MAX),
+        (3, 2),
+        (i64::MAX, i64::MIN),
+        (0, 10),
+    ] {
+        assert!(score_field(minimum, maximum).is_err(), "{minimum}..={maximum}");
+    }
+}
+
+#[test]
+fn accepts_single_and_maximum_score_ranges_at_the_extremes() -> Result<()> {
+    for (minimum, maximum, levels) in [
+        (5, 5, 1),
+        (i64::MIN, i64::MIN, 1),
+        (i64::MAX, i64::MAX, 1),
+        (0, 9, 10),
+        (i64::MIN, i64::MIN + 9, 10),
+        (i64::MAX - 9, i64::MAX, 10),
+    ] {
+        let schema = score_field(minimum, maximum)?;
+        let options = schema.questions()[0].rendered_options();
+        assert_eq!(options.len(), levels, "{minimum}..={maximum}");
+        let top = vec![0.0; levels - 1].into_iter().chain([1.0]).collect::<Vec<_>>();
+        let answer = Answer::decode(&schema.questions()[0], &top, &config()?)?;
+        assert_eq!(schema.project(&[answer])?["field"], json!(maximum));
+    }
+    Ok(())
+}
+
+#[test]
+fn keeps_restricted_boolean_constants_and_enums() -> Result<()> {
+    for (property, allowed) in [
+        (json!({"const": true}), true),
+        (json!({"const": false}), false),
+        (json!({"enum": [true]}), true),
+        (json!({"type": "boolean", "enum": [false]}), false),
+    ] {
+        let schema = DecisionSchema::from_json_schema(
+            &json!({"type": "object", "properties": {"field": property}}),
+        )?;
+        let question = &schema.questions()[0];
+        assert_eq!(question.rendered_options().len(), 1, "{property}");
+        let answer = Answer::decode(question, &[-5.0], &config()?)?;
+        assert_eq!(schema.project(&[answer])?["field"], json!(allowed), "{property}");
+    }
+    let free = DecisionSchema::from_json_schema(
+        &json!({"type": "object", "properties": {"field": {"enum": [false, true]}}}),
+    )?;
+    assert_eq!(free.questions()[0].instruction(), "Is `field` true?");
+    Ok(())
+}
+
+#[test]
+fn rejects_validation_keywords_outside_the_supported_subset() {
+    for property in [
+        json!({"type": "integer", "minimum": 0, "maximum": 4, "multipleOf": 2}),
+        json!({"type": "integer", "minimum": 0, "maximum": 4, "exclusiveMaximum": 4}),
+        json!({"type": "string", "enum": ["a", "b"], "pattern": "^a$"}),
+        json!({"$ref": "#/$defs/Choice"}),
+        json!({"const": "a", "enum": ["a", "b"]}),
+        json!({"type": "string", "enum": ["a", 1]}),
+        json!({"type": "boolean", "const": "yes"}),
+        json!({"enum": [1, 2], "minimum": 2}),
+        json!({"type": "boolean", "maximum": 1}),
+        json!({"anyOf": [{"type": "boolean"}, {"type": "null"}], "type": "boolean"}),
+        json!({"anyOf": [{"type": "integer", "minimum": 0, "maximum": 3, "multipleOf": 3}]}),
+    ] {
+        let schema = json!({"type": "object", "properties": {"field": property}});
+        assert!(DecisionSchema::from_json_schema(&schema).is_err(), "{property}");
+    }
+    for top in [
+        json!({"type": "object", "properties": {"a": {"type": "boolean"}}, "minProperties": 1}),
+        json!({"type": "object", "properties": {"a": {"type": "boolean"}}, "required": ["b"]}),
+    ] {
+        assert!(DecisionSchema::from_json_schema(&top).is_err(), "{top}");
+    }
+}
+
+#[test]
+fn accepts_annotations_and_matching_types() -> Result<()> {
+    let schema = DecisionSchema::from_json_schema(&json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Decision",
+        "type": "object",
+        "required": ["kind", "level"],
+        "additionalProperties": false,
+        "properties": {
+            "kind": {"type": ["string", "null"], "enum": ["a", null], "title": "Kind"},
+            "level": {"type": "integer", "minimum": 0, "maximum": 2, "default": 1},
+            "maybe": {"anyOf": [{"type": "boolean"}, {"type": "null"}], "default": null}
+        }
+    }))?;
+    assert_eq!(schema.fields().len(), 3);
+    Ok(())
+}
+
+#[test]
+fn ignores_annotations_without_changing_the_plan() -> Result<()> {
+    let plain = DecisionSchema::from_json_schema(&json!({
+        "type": "object",
+        "properties": {
+            "kind": {"enum": ["a", "b"]},
+            "level": {"type": "integer", "minimum": 0, "maximum": 2}
+        }
+    }))?;
+    let annotated = DecisionSchema::from_json_schema(&json!({
+        "$id": "https://example.com/decision",
+        "type": "object",
+        "properties": {
+            "kind": {"enum": ["a", "b"], "$id": "#kind", "format": "token", "readOnly": true},
+            "level": {
+                "type": "integer", "minimum": 0, "maximum": 2,
+                "writeOnly": false, "nullable": true, "format": "int32"
+            }
+        }
+    }))?;
+    assert_eq!(annotated, plain);
+    Ok(())
+}

@@ -1,4 +1,5 @@
 mod field;
+mod keywords;
 
 use serde_json::{Map, Value};
 
@@ -29,6 +30,21 @@ pub struct SchemaField {
 
 /// A flat JSON schema whose properties are enums, booleans, or bounded
 /// integer scales, planned as one question per property.
+///
+/// The accepted subset is:
+/// - top level: `type: "object"`, a non-empty `properties`, `required` naming
+///   only declared properties, `additionalProperties`, `$schema`, and `$defs`;
+/// - per property: `const` or `enum` of scalars (optionally with a matching
+///   `type`), `type: "boolean"`, `type: "integer" | "number"` with integer
+///   `minimum` and `maximum` spanning 1 to 10 levels, or an `anyOf`/`oneOf`
+///   with exactly one non-null branch;
+/// - anywhere: the annotations `title`, `description`, `default`, `examples`,
+///   `$comment`, `deprecated`, `$id`, `readOnly`, `writeOnly`, `format`, and
+///   `nullable`, which never change the planned questions.
+///
+/// Any other keyword, such as `multipleOf`, `exclusiveMinimum`, or `$ref`, is
+/// rejected rather than ignored, so every projected answer satisfies the
+/// schema it was planned from.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DecisionSchema {
     fields: Vec<SchemaField>,
@@ -45,6 +61,7 @@ impl DecisionSchema {
             .and_then(Value::as_object)
             .filter(|properties| !properties.is_empty())
             .ok_or_else(|| invalid("'properties' must be a non-empty object"))?;
+        keywords::check_top_level(object, properties)?;
         if properties.len() > MAX_PROPERTIES {
             return Err(invalid(format!(
                 "{} properties exceed the limit of {MAX_PROPERTIES}",

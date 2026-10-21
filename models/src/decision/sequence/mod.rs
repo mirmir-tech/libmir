@@ -31,6 +31,34 @@ pub struct DecisionRow {
     pub state_tokens_dropped: usize,
 }
 
+impl DecisionRow {
+    /// Rejects a row a backend cannot index safely: one without tokens, a
+    /// token outside a `vocab`-row embedding table, or a marker past the row.
+    pub fn validate(&self, vocab: usize) -> Result<()> {
+        if self.tokens.is_empty() {
+            return Err(ModelsError::InvalidConfig(
+                "a decision row needs at least one token".into(),
+            ));
+        }
+        if let Some(token) = self
+            .tokens
+            .iter()
+            .find(|&&token| !usize::try_from(token).is_ok_and(|id| id < vocab))
+        {
+            return Err(ModelsError::InvalidConfig(format!(
+                "decision token {token} is outside the vocabulary of {vocab}"
+            )));
+        }
+        if let Some(marker) = self.markers.iter().find(|&&marker| marker >= self.tokens.len()) {
+            return Err(ModelsError::InvalidConfig(format!(
+                "decision marker {marker} is outside a row of {} tokens",
+                self.tokens.len()
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// Tokenizer and special tokens of a Laya checkpoint.
 #[derive(Debug, Clone)]
 pub struct DecisionTokenizer {

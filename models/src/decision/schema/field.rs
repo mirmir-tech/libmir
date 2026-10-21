@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use super::{Projection, SchemaField, invalid};
+use super::{Projection, SchemaField, invalid, keywords};
 use crate::{
     decision::{ChoiceOption, Question, Verdicts},
     error::Result,
@@ -20,6 +20,7 @@ pub(super) fn plan(
     let object = property
         .as_object()
         .ok_or_else(|| invalid(format!("{path}: property must be an object")))?;
+    keywords::check_property(path, object)?;
     let description = object.get("description").and_then(Value::as_str).or(inherited);
     if !["const", "enum", "type"].iter().any(|key| object.contains_key(*key))
         && let Some(union) =
@@ -86,7 +87,10 @@ fn enumeration(
     if values.is_empty() || values.len() > MAX_OPTIONS {
         return Err(invalid(format!("{path}: 'enum' needs 1 to {MAX_OPTIONS} values")));
     }
-    if values.iter().all(Value::is_boolean) {
+    // Only the full {true, false} set is a free yes/no; a subset stays a choice.
+    if values.iter().all(Value::is_boolean)
+        && [true, false].iter().all(|flag| values.contains(&Value::Bool(*flag)))
+    {
         return boolean(name, description);
     }
     let options = values
@@ -136,7 +140,8 @@ fn score(
             "{path}: a numeric field needs integer 'minimum' and 'maximum'"
         )));
     };
-    if maximum < minimum || maximum - minimum + 1 > MAX_SCORE_LEVELS {
+    let count = maximum.checked_sub(minimum).and_then(|span| span.checked_add(1));
+    if !count.is_some_and(|count| (1..=MAX_SCORE_LEVELS).contains(&count)) {
         return Err(invalid(format!("{path}: a score needs 1 to {MAX_SCORE_LEVELS} levels")));
     }
     let levels = (minimum..=maximum).map(|level| level.to_string()).collect();
