@@ -7,6 +7,8 @@
 
 mod invalid;
 mod reference;
+#[cfg(all(feature = "cpu", feature = "cuda"))]
+mod sweep;
 
 use std::collections::BTreeMap;
 
@@ -76,6 +78,7 @@ fn rows<'a>(
 
 #[test]
 #[ignore = "needs the Laya checkpoint in LIBMIR_LAYA_MODEL; run `make laya-parity` or `make laya-parity-cuda`"]
+#[expect(clippy::print_stdout, reason = "the measured differences are the evidence")]
 fn every_backend_reproduces_the_reference_rows_and_logits() -> Result<(), Failure> {
     let root = std::env::var_os("LIBMIR_LAYA_MODEL")
         .ok_or("LIBMIR_LAYA_MODEL must name the Laya checkpoint directory")?;
@@ -93,6 +96,7 @@ fn every_backend_reproduces_the_reference_rows_and_logits() -> Result<(), Failur
                 assert_eq!(argmax(actual), argmax(&case.logits), "{label}: argmax");
             }
         }
+        println!("{backend:?}: largest |Δlogit| vs the fp32 reference {largest:.3e}");
         assert!(largest <= tolerance, "{backend:?}: largest logit difference {largest}");
     }
     Ok(())
