@@ -129,3 +129,47 @@ fn keeps_restricted_boolean_constants_and_enums() -> Result<()> {
     assert_eq!(free.questions()[0].instruction(), "Is `field` true?");
     Ok(())
 }
+
+#[test]
+fn rejects_validation_keywords_outside_the_supported_subset() {
+    for property in [
+        json!({"type": "integer", "minimum": 0, "maximum": 4, "multipleOf": 2}),
+        json!({"type": "integer", "minimum": 0, "maximum": 4, "exclusiveMaximum": 4}),
+        json!({"type": "string", "enum": ["a", "b"], "pattern": "^a$"}),
+        json!({"$ref": "#/$defs/Choice"}),
+        json!({"const": "a", "enum": ["a", "b"]}),
+        json!({"type": "string", "enum": ["a", 1]}),
+        json!({"type": "boolean", "const": "yes"}),
+        json!({"enum": [1, 2], "minimum": 2}),
+        json!({"type": "boolean", "maximum": 1}),
+        json!({"anyOf": [{"type": "boolean"}, {"type": "null"}], "type": "boolean"}),
+        json!({"anyOf": [{"type": "integer", "minimum": 0, "maximum": 3, "multipleOf": 3}]}),
+    ] {
+        let schema = json!({"type": "object", "properties": {"field": property}});
+        assert!(DecisionSchema::from_json_schema(&schema).is_err(), "{property}");
+    }
+    for top in [
+        json!({"type": "object", "properties": {"a": {"type": "boolean"}}, "minProperties": 1}),
+        json!({"type": "object", "properties": {"a": {"type": "boolean"}}, "required": ["b"]}),
+    ] {
+        assert!(DecisionSchema::from_json_schema(&top).is_err(), "{top}");
+    }
+}
+
+#[test]
+fn accepts_annotations_and_matching_types() -> Result<()> {
+    let schema = DecisionSchema::from_json_schema(&json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Decision",
+        "type": "object",
+        "required": ["kind", "level"],
+        "additionalProperties": false,
+        "properties": {
+            "kind": {"type": ["string", "null"], "enum": ["a", null], "title": "Kind"},
+            "level": {"type": "integer", "minimum": 0, "maximum": 2, "default": 1},
+            "maybe": {"anyOf": [{"type": "boolean"}, {"type": "null"}], "default": null}
+        }
+    }))?;
+    assert_eq!(schema.fields().len(), 3);
+    Ok(())
+}

@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use super::{Projection, SchemaField, invalid};
+use super::{Projection, SchemaField, invalid, keywords};
 use crate::{
     decision::{ChoiceOption, Question, Verdicts},
     error::Result,
@@ -20,6 +20,7 @@ pub(super) fn plan(
     let object = property
         .as_object()
         .ok_or_else(|| invalid(format!("{path}: property must be an object")))?;
+    keywords::check_property(path, object)?;
     let description = object.get("description").and_then(Value::as_str).or(inherited);
     if !["const", "enum", "type"].iter().any(|key| object.contains_key(*key))
         && let Some(union) =
