@@ -47,7 +47,7 @@ check-cpu: ## Validate the CPU facade and its crates.
 laya-parity: ## Compare Laya rows and logits on CPU and Metal with the fp32 reference.
 	@test -d "$(LAYA_MODEL)" || { printf 'Laya checkpoint not found.\n' >&2; exit 2; }
 	@LIBMIR_LAYA_MODEL="$(LAYA_MODEL)" cargo test --release -p libmir --no-default-features \
-		--features cpu,metal --test laya_parity
+		--features cpu,metal --test laya_parity -- --include-ignored
 
 check-metal: ## Validate the complete Metal facade.
 	@cargo clippy -p libmir --all-targets --no-default-features \

@@ -1,7 +1,8 @@
 //! Parity of every enabled Laya backend with the upstream fp32 CPU runtime.
 //!
-//! Needs the `convaiinnovations/laya-multilingual` checkpoint directory in
-//! `LIBMIR_LAYA_MODEL`; without it the tests have nothing to compare.
+//! The checkpoint-backed comparison is ignored by default: it needs the
+//! `convaiinnovations/laya-multilingual` checkpoint directory in
+//! `LIBMIR_LAYA_MODEL` and fails when run without it.
 #![cfg(any(feature = "cpu", feature = "metal"))]
 
 mod reference;
@@ -9,7 +10,7 @@ mod reference;
 use std::collections::BTreeMap;
 
 use libmir::decision::{DecisionBackend, DecisionModel, DecisionRow};
-use reference::{Case, Failure, Reference};
+use reference::{Case, Definition, Failure, Reference};
 
 /// Largest accepted logit difference; fp32 reductions run in a different
 /// order than `PyTorch`'s.
@@ -60,10 +61,10 @@ fn rows<'a>(
 }
 
 #[test]
+#[ignore = "needs the Laya checkpoint in LIBMIR_LAYA_MODEL; run `make laya-parity`"]
 fn every_backend_reproduces_the_reference_rows_and_logits() -> Result<(), Failure> {
-    let Some(root) = std::env::var_os("LIBMIR_LAYA_MODEL") else {
-        return Ok(());
-    };
+    let root = std::env::var_os("LIBMIR_LAYA_MODEL")
+        .ok_or("LIBMIR_LAYA_MODEL must name the Laya checkpoint directory")?;
     let reference = reference()?;
     for &backend in BACKENDS {
         let model = DecisionModel::load(&root, backend)?;
@@ -80,6 +81,23 @@ fn every_backend_reproduces_the_reference_rows_and_logits() -> Result<(), Failur
         }
         assert!(largest <= LOGIT_TOLERANCE, "{backend:?}: largest logit difference {largest}");
     }
+    Ok(())
+}
+
+#[test]
+fn reference_questions_read_pairs_and_ordered_objects_alike() -> Result<(), Failure> {
+    for case in &reference()?.cases {
+        case.question()?;
+    }
+    let definition = |criteria: &str| -> Result<Definition, Failure> {
+        let text =
+            format!(r#"{{"type": "choice", "instructions": "Who?", "criteria": {criteria}}}"#);
+        Ok(serde_json::from_str(&text)?)
+    };
+    let pairs = definition(r#"[["piotr", "Piotr"], ["anna", null], ["all", ""]]"#)?.question()?;
+    let object = definition(r#"{"piotr": "Piotr", "anna": null, "all": ""}"#)?.question()?;
+    assert_eq!(object.choice_labels(), ["piotr", "anna", "all"]);
+    assert_eq!(object, pairs);
     Ok(())
 }
 
