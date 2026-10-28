@@ -49,7 +49,10 @@ impl SharedRoutedExecutionPlanCache {
         self.bytes_per_token
     }
 
-    pub(in crate::backend::shared_routed) fn get_mut(&mut self, tokens: usize) -> Option<&mut SharedRoutedExecutionPlan> {
+    pub(in crate::backend::shared_routed) fn get_mut(
+        &mut self,
+        tokens: usize,
+    ) -> Option<&mut SharedRoutedExecutionPlan> {
         self.clock = self.clock.wrapping_add(1);
         let clock = self.clock;
         self.plans.get_mut(&tokens).map(|cached| {
@@ -101,7 +104,11 @@ impl SharedRoutedExecutionPlanCache {
             .fold(0_usize, |total, tokens| total.saturating_add(*tokens))
     }
 
-    pub(in crate::backend::shared_routed) fn insert(&mut self, tokens: usize, plan: SharedRoutedExecutionPlan) {
+    pub(in crate::backend::shared_routed) fn insert(
+        &mut self,
+        tokens: usize,
+        plan: SharedRoutedExecutionPlan,
+    ) {
         self.reserve(tokens);
         self.clock = self.clock.wrapping_add(1);
         // Only chunk-sized plans price a token; a one-token decode plan is
@@ -130,4 +137,3 @@ impl SharedRoutedExecutionPlanCache {
         self.plans.len()
     }
 }
-
