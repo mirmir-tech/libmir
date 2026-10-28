@@ -12,12 +12,14 @@ use crate::{
     },
 };
 
+type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
+
 const PREFILL_TOKENS: usize = 64;
 const INPUT: usize = 896;
 const OUTPUT: usize = 4_864;
 
 #[test]
-fn profiles_and_persists_dynamic_e4m3() -> Result<()> {
+fn profiles_and_persists_dynamic_e4m3() -> TestResult {
     let (backend, directory) = backend()?;
     let weight = checkpoint_weight(
         &backend,
@@ -44,7 +46,7 @@ fn profiles_and_persists_dynamic_e4m3() -> Result<()> {
 }
 
 #[test]
-fn profiles_and_persists_static_e4m3() -> Result<()> {
+fn profiles_and_persists_static_e4m3() -> TestResult {
     let (backend, directory) = backend()?;
     let weight = static_weight(&backend)?;
     execute_and_validate(&backend, &weight, PREFILL_TOKENS)?;
@@ -52,7 +54,7 @@ fn profiles_and_persists_static_e4m3() -> Result<()> {
 }
 
 #[test]
-fn profiles_static_e4m3_decode_independently() -> Result<()> {
+fn profiles_static_e4m3_decode_independently() -> TestResult {
     let (backend, directory) = backend()?;
     let weight = static_weight(&backend)?;
     execute_and_validate(&backend, &weight, 1)?;
@@ -60,7 +62,7 @@ fn profiles_static_e4m3_decode_independently() -> Result<()> {
 }
 
 #[test]
-fn profiles_unscaled_e5m2_weight_only() -> Result<()> {
+fn profiles_unscaled_e5m2_weight_only() -> TestResult {
     let (backend, directory) = backend()?;
     let weight = e5m2_weight(&backend)?;
     execute_and_validate(&backend, &weight, PREFILL_TOKENS)?;
@@ -73,7 +75,7 @@ fn profiles_unscaled_e5m2_weight_only() -> Result<()> {
 }
 
 #[test]
-fn profiles_unscaled_e5m2_decode_independently() -> Result<()> {
+fn profiles_unscaled_e5m2_decode_independently() -> TestResult {
     let (backend, directory) = backend()?;
     let weight = e5m2_weight(&backend)?;
     execute_and_validate(&backend, &weight, 1)?;
@@ -190,7 +192,7 @@ struct Profile {
     average_ns: u64,
 }
 
-fn validate_profile(directory: &std::path::Path, request: QuantizedProfileRequest) -> Result<()> {
+fn validate_profile(directory: &std::path::Path, request: QuantizedProfileRequest) -> TestResult {
     let profile = fs::read_dir(directory)?
         .next()
         .ok_or(Error::InvalidExecutionPlan("missing direct FP8 profile"))??
