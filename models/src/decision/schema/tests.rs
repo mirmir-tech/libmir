@@ -144,6 +144,9 @@ fn rejects_validation_keywords_outside_the_supported_subset() {
         json!({"type": "boolean", "maximum": 1}),
         json!({"anyOf": [{"type": "boolean"}, {"type": "null"}], "type": "boolean"}),
         json!({"anyOf": [{"type": "integer", "minimum": 0, "maximum": 3, "multipleOf": 3}]}),
+        json!({"oneOf": [{"enum": [null, true]}, {"type": "null"}]}),
+        json!({"oneOf": [{"type": "null"}, {"const": null}]}),
+        json!({"oneOf": [{"anyOf": [{"enum": ["a", null]}]}, {"type": "null"}]}),
     ] {
         let schema = json!({"type": "object", "properties": {"field": property}});
         assert!(DecisionSchema::from_json_schema(&schema).is_err(), "{property}");
@@ -167,10 +170,13 @@ fn accepts_annotations_and_matching_types() -> Result<()> {
         "properties": {
             "kind": {"type": ["string", "null"], "enum": ["a", null], "title": "Kind"},
             "level": {"type": "integer", "minimum": 0, "maximum": 2, "default": 1},
-            "maybe": {"anyOf": [{"type": "boolean"}, {"type": "null"}], "default": null}
+            "maybe": {"anyOf": [{"type": "boolean"}, {"type": "null"}], "default": null},
+            "one": {"oneOf": [{"enum": ["a", "b"]}, {"type": "null"}]},
+            "any": {"anyOf": [{"enum": [null, true]}, {"type": "null"}]},
+            "sole": {"oneOf": [{"enum": [null, true]}]}
         }
     }))?;
-    assert_eq!(schema.fields().len(), 3);
+    assert_eq!(schema.fields().len(), 6);
     Ok(())
 }
 

@@ -35,6 +35,12 @@ pub(super) fn plan(
                 "{path}: only unions with one non-null branch are supported"
             )));
         };
+        // Under `oneOf`, a planned null would match the null branch too.
+        if object.contains_key("oneOf") && branches.len() < union.len() && plans_null(branch) {
+            return Err(invalid(format!(
+                "{path}: a 'oneOf' branch that overlaps its null branch is not supported"
+            )));
+        }
         return plan(path, name, branch, description);
     }
     if let Some(value) = object.get("const") {
@@ -60,6 +66,22 @@ pub(super) fn plan(
         },
         _ => Err(invalid(format!("{path}: unsupported schema"))),
     }
+}
+
+/// Whether `plan` can project `null` for this property: only an enumerated
+/// `null` does, directly or through a nested union.
+fn plans_null(property: &Value) -> bool {
+    property.get("const") == Some(&Value::Null)
+        || property
+            .get("enum")
+            .and_then(Value::as_array)
+            .is_some_and(|values| values.contains(&Value::Null))
+        || ["anyOf", "oneOf"].iter().any(|key| {
+            property
+                .get(*key)
+                .and_then(Value::as_array)
+                .is_some_and(|union| union.iter().any(plans_null))
+        })
 }
 
 fn json_type<'a>(path: &str, kind: Option<&'a Value>) -> Result<Option<&'a str>> {
