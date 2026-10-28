@@ -1186,3 +1186,9 @@ The target shape is:
   The fixture generator lives in Workmir `benchmarks/2026-09-29-laya-reference`.
 - MLX reads safetensors payloads only on a CPU stream; the Metal decision model
   loads them there and computes on the GPU stream.
+- CUDA takes a `DecisionPrecision`: `F32` matches the reference like CPU and
+  Metal; `Bf16` runs the encoder's products on tensor cores with f32 norms,
+  softmax and residuals, and passes parity under its own, looser tolerance.
+  Global layers use fused padded attention; local layers multiply
+  64-query blocks against their band only, so batches longer than one window
+  are padded to whole blocks.

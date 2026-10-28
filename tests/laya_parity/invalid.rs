@@ -39,7 +39,7 @@ fn every_backend_rejects_malformed_rows_and_keeps_answering() -> Result<(), Fail
         .ok_or("LIBMIR_LAYA_MODEL must name the Laya checkpoint directory")?;
     let checkpoint = DecisionCheckpoint::inspect(&root)?;
     let reference = reference()?;
-    for &backend in BACKENDS {
+    for &(backend, _) in BACKENDS {
         let model = DecisionModel::load(&root, backend)?;
         let (_, built) = rows(&model, &reference)?.swap_remove(0);
         let base = built[0].clone();
