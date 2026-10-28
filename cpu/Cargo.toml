@@ -1,6 +1,6 @@
 [package]
 name = "libmir-cpu"
-version = "0.5.1"
+version = "0.5.2"
 edition.workspace = true
 license.workspace = true
 description = "CPU inference backend for libmir"
@@ -8,7 +8,7 @@ repository.workspace = true
 
 [dependencies]
 mircup.workspace = true
-models = { package = "libmir-models", version = "0.5.1", path = "../models" }
+models = { package = "libmir-models", version = "0.5.2", path = "../models" }
 thiserror.workspace = true
 
 [lints]
