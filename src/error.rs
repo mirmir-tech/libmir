@@ -19,6 +19,14 @@ pub enum Error {
     #[error("CUDA backend error: {0}")]
     /// The CUDA backend rejected an operation.
     Cuda(#[from] cuda::Error),
+    #[cfg(feature = "cpu")]
+    #[error("CPU backend error: {0}")]
+    /// The CPU backend rejected an operation.
+    Cpu(#[from] cpu::Error),
+    #[cfg(feature = "metal")]
+    #[error("Metal decision backend error: {0}")]
+    /// The Metal backend rejected a decision operation.
+    Metal(#[from] metal::engine::Error),
     #[error("model error: {0}")]
     /// Model metadata, tokenizer, or template processing failed.
     Model(#[from] models::ModelsError),

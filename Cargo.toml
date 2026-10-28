@@ -1,6 +1,6 @@
 [package]
 name = "libmir"
-version = "0.4.0"
+version = "0.5.2"
 edition.workspace = true
 
 license.workspace = true
@@ -16,10 +16,15 @@ path = "tests/vision/mod.rs"
 name = "dense_checkpoints"
 path = "tests/dense_checkpoints/mod.rs"
 
+[[test]]
+name = "laya_parity"
+path = "tests/laya_parity/mod.rs"
+
 [workspace]
 members = [
     "admission",
     "core",
+    "cpu",
     "cuda",
     "metal",
     "models",
@@ -29,7 +34,7 @@ default-members = [".", "admission", "core", "models", "runtime"]
 resolver = "3"
 
 [workspace.package]
-version = "0.4.0"
+version = "0.5.2"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/mirmir-tech/libmir"
@@ -40,7 +45,8 @@ blake3 = "1"
 image = { version = "0.25.10", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 minijinja = { version = "2", features = ["builtins", "json"] }
 minijinja-contrib = { version = "2", features = ["pycompat"] }
-mircuda = "0.4.0"
+mircuda = "0.5.2"
+mircup = "0.5.2"
 mirtal = "0.4.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -55,6 +61,7 @@ sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 
 [features]
 default = []
+cpu = ["dep:cpu"]
 cuda = ["dep:cuda", "dep:nvml-wrapper", "dep:sysinfo"]
 cuda-diagnostics = ["cuda", "cuda/diagnostics"]
 metal = ["dep:macmon", "dep:metal"]
@@ -64,13 +71,14 @@ llguidance = "=1.8.0"
 jsonschema = { version = "=0.29.0", default-features = false }
 toktrie_hf_tokenizers = "=1.8.0"
 serde.workspace = true
-architecture = { package = "libmir-admission", version = "0.4.0", path = "admission" }
+architecture = { package = "libmir-admission", version = "0.5.2", path = "admission" }
 async-trait.workspace = true
-foundation = { package = "libmir-core", version = "0.4.0", path = "core" }
-cuda = { package = "libmir-cuda", version = "0.4.0", path = "cuda", optional = true }
-metal = { package = "libmir-metal", version = "0.4.0", path = "metal", optional = true }
-models = { package = "libmir-models", version = "0.4.0", path = "models" }
-runtime = { package = "libmir-runtime", version = "0.4.0", path = "runtime" }
+foundation = { package = "libmir-core", version = "0.5.2", path = "core" }
+cpu = { package = "libmir-cpu", version = "0.5.2", path = "cpu", optional = true }
+cuda = { package = "libmir-cuda", version = "0.5.2", path = "cuda", optional = true }
+metal = { package = "libmir-metal", version = "0.5.2", path = "metal", optional = true }
+models = { package = "libmir-models", version = "0.5.2", path = "models" }
+runtime = { package = "libmir-runtime", version = "0.5.2", path = "runtime" }
 serde_json.workspace = true
 sysinfo = { workspace = true, optional = true }
 thiserror.workspace = true
@@ -89,6 +97,10 @@ image.workspace = true
 serde.workspace = true
 toml.workspace = true
 tracing-subscriber.workspace = true
+
+[[example]]
+name = "decide"
+required-features = ["cpu"]
 
 [lints]
 workspace = true

@@ -21,7 +21,7 @@ pub struct GatedDeltaChunkedScratch {
 }
 
 impl GatedDeltaChunkedScratch {
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn poison(&mut self, context: &Context, stream: &Stream) -> Result<()> {
         for buffer in [&mut self.cumulative_decay, &mut self.matrix] {
             let mut host = context.allocate_pinned(buffer.len())?;

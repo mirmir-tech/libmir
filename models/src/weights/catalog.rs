@@ -59,8 +59,12 @@ impl TensorCatalog {
     }
 
     pub fn from_layout(layout: &ModelLayout) -> Result<Self> {
+        Self::from_weight_files(&layout.weights)
+    }
+
+    pub fn from_weight_files(weights: &[WeightFile]) -> Result<Self> {
         let mut tensors = Vec::new();
-        for weight in &layout.weights {
+        for weight in weights {
             tensors.extend(read_weight_header(weight)?);
         }
         Ok(Self::new(tensors))

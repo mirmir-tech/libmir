@@ -7,6 +7,7 @@ mod attention_tuning;
 mod binding;
 pub mod clamped_routed;
 mod compiled;
+mod decision;
 mod decode_graph;
 mod decode_plan_tuning;
 mod decoder;
@@ -57,6 +58,7 @@ pub mod vision;
 
 pub use array::Array;
 pub use attention::{ImageTokenSpan, PagedAttention, RopeOptions, prefix_attention_mask};
+pub use decision::MetalDecisionModel;
 pub(crate) use decode_plan_tuning::{
     DecodePlan, DecodePlanAction, DecodePlanKey, context_bucket as decode_context_bucket,
 };
