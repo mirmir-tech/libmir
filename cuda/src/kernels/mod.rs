@@ -9,6 +9,7 @@ mod affine;
 mod awq;
 mod bitsandbytes;
 mod clamped_routed;
+mod decision;
 mod decoder;
 mod dense_cast;
 mod direct_fp8;
@@ -55,6 +56,10 @@ pub(crate) use clamped_routed::{
     ClampedRoutedAttention, ClampedRoutedBatchSplitDecode, ClampedRoutedKernels,
     ClampedRoutedMarlinEpilogue, ClampedRoutedMarlinGeometry, ClampedRoutedSpec,
     ClampedRoutedSplitDecode,
+};
+pub use decision::{
+    DecisionAttention, DecisionAttentionInput, DecisionElement, DecisionElementwise,
+    DecisionLayout, DecisionWindow, HeadLayout, RopeTables, ScoreRows,
 };
 pub use decoder::{RmsNorm, RmsNormUnit, Rope, RopeSpec};
 pub(crate) use dense_cast::DenseCast;
