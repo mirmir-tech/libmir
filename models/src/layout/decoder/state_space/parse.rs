@@ -1,8 +1,10 @@
+use std::num::NonZeroUsize;
+
 use serde_json::Value;
 
 use super::{
-    HybridBlockKind, HybridBlockPattern, LatentRoutedConfig, Mamba2Config, StateSpaceHybridConfig,
-    StateSpaceStateDType, TimeStepBound, TimeStepLimit,
+    HybridBlockKind, HybridBlockPattern, LatentRoutedConfig, Mamba2Config, PredictionModules,
+    StateSpaceHybridConfig, StateSpaceStateDType, TimeStepBound, TimeStepLimit,
 };
 use crate::{
     error::Result,
@@ -31,7 +33,27 @@ pub(in crate::layout::decoder) fn state_space_hybrid(
     }
     let mamba = mamba(decoder, hidden_size)?;
     let routed = routed(decoder)?;
-    Ok(Some(StateSpaceHybridConfig { blocks, mamba, routed }))
+    let prediction = prediction(decoder)?;
+    Ok(Some(StateSpaceHybridConfig { blocks, mamba, routed, prediction }))
+}
+
+/// Multi-token prediction modules; each must be one attention block followed
+/// by one routed block, the only composition with a checkpoint fixture.
+fn prediction(decoder: &Value) -> Result<Option<PredictionModules>> {
+    let Some(depth) =
+        optional_usize(decoder, &["num_nextn_predict_layers"])?.and_then(NonZeroUsize::new)
+    else {
+        return Ok(None);
+    };
+    let raw = decoder
+        .get("mtp_layers_block_type")
+        .ok_or_else(|| invalid("num_nextn_predict_layers requires mtp_layers_block_type"))?;
+    if block_kinds(raw)? != [HybridBlockKind::Attention, HybridBlockKind::Moe] {
+        return Err(invalid(
+            "prediction modules must be one attention block followed by one routed block",
+        ));
+    }
+    Ok(Some(PredictionModules { depth }))
 }
 
 fn block_kinds(raw: &Value) -> Result<Vec<HybridBlockKind>> {

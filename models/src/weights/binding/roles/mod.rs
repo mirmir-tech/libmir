@@ -7,8 +7,41 @@ pub enum LogicalTensorRole {
     FinalNorm,
     Output,
     VisionProjection,
-    Layer { index: usize, tensor: LayerTensorRole },
-    Auxiliary { path: String },
+    Layer {
+        index: usize,
+        tensor: LayerTensorRole,
+    },
+    /// A tensor of multi-token prediction module `depth`.
+    Prediction {
+        depth: usize,
+        tensor: PredictionTensorRole,
+    },
+    Auxiliary {
+        path: String,
+    },
+}
+
+/// Tensors of one multi-token prediction module.
+///
+/// The fusion of the next token's embedding with the decoder's last hidden
+/// state, then an attention block and a routed block with decoder-layer
+/// roles, then the output norm before the shared head.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PredictionTensorRole {
+    /// `enorm`: normalizes the embedding of the next token.
+    EmbeddingNorm,
+    /// `hnorm`: normalizes the decoder's last hidden state.
+    HiddenNorm,
+    /// `eh_proj`: projects the concatenated pair back to the hidden width.
+    Fusion,
+    /// `final_layernorm`: normalizes the module output before the shared head.
+    FinalNorm,
+    /// `k_scale` / `v_scale`: FP8 K/V cache scales of the module's attention,
+    /// unused while K/V stays in BF16.
+    CacheScale { projection: AttentionProjectionRole },
+    /// A tensor of the module's attention or routed block.
+    Layer { tensor: LayerTensorRole },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -127,5 +160,6 @@ pub enum LatentProjectionRole {
 
 mod paired;
 mod parse;
+mod prediction;
 
 pub(super) use parse::parse;

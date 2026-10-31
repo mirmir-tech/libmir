@@ -1,10 +1,11 @@
 //! Checkpoint bytes a text-only load keeps resident.
 //!
-//! A checkpoint can ship components outside the decoder, such as a
-//! multi-token prediction head or a vision tower without a supported vision
-//! contract. The decoder contract gives them a top-level auxiliary role, and
-//! the runtime loads tensors only through their typed roles, so a text-only
-//! load leaves them on disk.
+//! A checkpoint can ship components outside the decoder, such as a vision
+//! tower without a supported vision contract, which the decoder contract
+//! gives a top-level auxiliary role. Multi-token prediction modules have
+//! typed roles but load only with speculative decoding, which no backend runs
+//! yet. The runtime loads tensors only through the roles it executes, so a
+//! text-only load leaves both on disk.
 
 use models::{
     execution::DecoderExecutionContract,
@@ -36,7 +37,12 @@ pub fn unloaded(
         .bindings
         .tensors
         .iter()
-        .filter(|binding| matches!(binding.role, LogicalTensorRole::Auxiliary { .. }))
+        .filter(|binding| {
+            matches!(
+                binding.role,
+                LogicalTensorRole::Auxiliary { .. } | LogicalTensorRole::Prediction { .. }
+            )
+        })
         .flat_map(|binding| binding.physical_sources())
         .try_fold(UnloadedTensors::default(), |total, name| {
             let bytes = u64::try_from(catalog.get(name)?.payload_bytes().ok()?).ok()?;

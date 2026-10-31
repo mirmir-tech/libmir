@@ -16,16 +16,28 @@ pub(super) fn validate(spec: &SemanticModelSpec) -> Result<()> {
         return Err(invalid("decoder dimensions and layer list must be non-empty"));
     }
     norm(decoder.final_norm.epsilon)?;
-    for (expected, layer) in decoder.layers.iter().enumerate() {
+    layers(&decoder.layers, "decoder")?;
+    layers(&decoder.prediction_layers, "prediction")?;
+    if decoder.prediction_layers.iter().any(|layer| {
+        !matches!(layer.mixer, MixerSpec::SoftmaxAttention(_))
+            || layer.feed_forward == FeedForwardSpec::None
+    }) {
+        return Err(invalid("prediction layers must pair attention with a feed-forward"));
+    }
+    block_layout(decoder)
+}
+
+fn layers(layers: &[super::DecoderLayerSpec], kind: &str) -> Result<()> {
+    for (expected, layer) in layers.iter().enumerate() {
         if layer.index != expected {
-            return Err(invalid("decoder layer indices must be contiguous and ordered"));
+            return Err(invalid(format!("{kind} layer indices must be contiguous and ordered")));
         }
         norm(layer.input_norm.epsilon)?;
         norm(layer.post_attention_norm.epsilon)?;
         mixer(&layer.mixer)?;
         feed_forward(&layer.feed_forward)?;
     }
-    block_layout(decoder)
+    Ok(())
 }
 
 /// A paired layout must cover every checkpoint block exactly once: each

@@ -8,6 +8,7 @@ use crate::{
 };
 
 mod dense;
+mod prediction;
 mod state_space;
 
 pub(super) fn validate(spec: &SemanticModelSpec, tensors: &[TensorBinding]) -> Result<()> {
@@ -15,6 +16,7 @@ pub(super) fn validate(spec: &SemanticModelSpec, tensors: &[TensorBinding]) -> R
     clamped_routed(spec, tensors)?;
     shared_routed(spec, tensors)?;
     state_space::validate(spec, tensors)?;
+    prediction::validate(spec, tensors)?;
     dense::validate(spec, tensors)
 }
 

@@ -22,20 +22,25 @@ pub(super) fn parse(path: &str, decoder: &DecoderSpec) -> LogicalTensorRole {
     let Some((index, position)) = decoder.block_layout.locate(&decoder.layers, block) else {
         return auxiliary();
     };
-    let tensor = match (suffix, position) {
-        ("norm.weight", LayerBlockPosition::Mixer) => LayerTensorRole::InputNorm,
-        ("norm.weight", LayerBlockPosition::FeedForward) => LayerTensorRole::PostAttentionNorm,
+    block_role(suffix, position)
+        .map_or_else(auxiliary, |tensor| LogicalTensorRole::Layer { index, tensor })
+}
+
+/// The layer role of a tensor inside a mixer or feed-forward block. A tensor
+/// in the wrong kind of block gets no role; the binding grammar rejects it
+/// instead of misusing it.
+pub(super) fn block_role(suffix: &str, position: LayerBlockPosition) -> Option<LayerTensorRole> {
+    match (suffix, position) {
+        ("norm.weight", LayerBlockPosition::Mixer) => Some(LayerTensorRole::InputNorm),
+        ("norm.weight", LayerBlockPosition::FeedForward) => {
+            Some(LayerTensorRole::PostAttentionNorm)
+        },
         (suffix, position) => {
             let tensor = layer(suffix);
-            // A tensor in the wrong kind of block gets no layer role; the
-            // binding grammar rejects it instead of misusing it.
-            if feed_forward_role(&tensor) != (position == LayerBlockPosition::FeedForward) {
-                return auxiliary();
-            }
-            tensor
+            (feed_forward_role(&tensor) == (position == LayerBlockPosition::FeedForward))
+                .then_some(tensor)
         },
-    };
-    LogicalTensorRole::Layer { index, tensor }
+    }
 }
 
 const fn feed_forward_role(tensor: &LayerTensorRole) -> bool {

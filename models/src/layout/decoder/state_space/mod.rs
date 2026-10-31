@@ -6,6 +6,8 @@
 //! and the routed-expert block that directly follows it, so the layer shapes
 //! match the mixer-plus-feed-forward composition used everywhere else.
 
+use std::num::NonZeroUsize;
+
 mod blocks;
 mod parse;
 
@@ -21,6 +23,20 @@ pub struct StateSpaceHybridConfig {
     pub mamba: Mamba2Config,
     /// Routed-expert geometry shared by every routed block.
     pub routed: LatentRoutedConfig,
+    /// Multi-token prediction modules, when the checkpoint declares them.
+    pub prediction: Option<PredictionModules>,
+}
+
+/// Multi-token prediction (MTP) modules after the decoder.
+///
+/// Each module fuses the embedding of the next token with the decoder's last
+/// hidden state, then runs one attention block and one routed block with the
+/// decoder's geometry to draft a further token. Physical module blocks are
+/// `mtp.layers.{2d}` and `mtp.layers.{2d + 1}` for module `d`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PredictionModules {
+    /// Number of modules (`num_nextn_predict_layers`).
+    pub depth: NonZeroUsize,
 }
 
 /// Mamba-2 selective state-space mixer geometry.

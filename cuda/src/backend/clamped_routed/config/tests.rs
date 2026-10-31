@@ -90,6 +90,7 @@ fn spec(
                 },
             }],
             block_layout: BlockLayoutSpec::Unified,
+            prediction_layers: Vec::new(),
         },
     }
 }

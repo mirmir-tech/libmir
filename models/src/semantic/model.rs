@@ -21,6 +21,10 @@ pub struct DecoderSpec {
     pub layers: Vec<DecoderLayerSpec>,
     #[serde(default, skip_serializing_if = "BlockLayoutSpec::is_unified")]
     pub block_layout: BlockLayoutSpec,
+    /// Multi-token prediction modules after the decoder, each an attention
+    /// mixer with the routed block after it; empty when the model has none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prediction_layers: Vec<DecoderLayerSpec>,
 }
 
 /// How checkpoint blocks map to semantic decoder layers.

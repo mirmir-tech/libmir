@@ -52,10 +52,10 @@ pub(super) fn catalog() -> TensorCatalog {
     dense(&mut tensors, "language_model.backbone.norm_f.weight", &[HIDDEN]);
     float8(&mut tensors, "language_model.lm_head", &[64, HIDDEN], &[]);
     mamba(&mut tensors, 0);
-    moe(&mut tensors, 1);
+    moe(&mut tensors, &block(1));
     mamba(&mut tensors, 2);
-    attention(&mut tensors, 3);
-    moe(&mut tensors, 4);
+    attention(&mut tensors, &block(3));
+    moe(&mut tensors, &block(4));
     dense(
         &mut tensors,
         "language_model.mtp.layers.0.eh_proj.weight",
@@ -88,18 +88,18 @@ fn mamba(tensors: &mut Vec<TensorInfo>, index: usize) {
     float8(tensors, &format!("{root}.out_proj"), &[HIDDEN, INNER], &[1]);
 }
 
-fn attention(tensors: &mut Vec<TensorInfo>, index: usize) {
-    let root = format!("{}.mixer", block(index));
-    dense(tensors, &format!("{}.norm.weight", block(index)), &[HIDDEN]);
+fn attention(tensors: &mut Vec<TensorInfo>, block: &str) {
+    let root = format!("{block}.mixer");
+    dense(tensors, &format!("{block}.norm.weight"), &[HIDDEN]);
     float8(tensors, &format!("{root}.q_proj"), &[HIDDEN, HIDDEN], &[1]);
     float8(tensors, &format!("{root}.k_proj"), &[16, HIDDEN], &[]);
     float8(tensors, &format!("{root}.v_proj"), &[16, HIDDEN], &[]);
     float8(tensors, &format!("{root}.o_proj"), &[HIDDEN, HIDDEN], &[1]);
 }
 
-fn moe(tensors: &mut Vec<TensorInfo>, index: usize) {
-    let root = format!("{}.mixer", block(index));
-    dense(tensors, &format!("{}.norm.weight", block(index)), &[HIDDEN]);
+fn moe(tensors: &mut Vec<TensorInfo>, block: &str) {
+    let root = format!("{block}.mixer");
+    dense(tensors, &format!("{block}.norm.weight"), &[HIDDEN]);
     dense(tensors, &format!("{root}.gate.weight"), &[EXPERTS, HIDDEN]);
     tensors.push(tensor(&format!("{root}.gate.e_score_correction_bias"), "F32", vec![EXPERTS]));
     dense(tensors, &format!("{root}.fc1_latent_proj.weight"), &[LATENT, HIDDEN]);
@@ -110,6 +110,32 @@ fn moe(tensors: &mut Vec<TensorInfo>, index: usize) {
     }
     nvfp4(tensors, &format!("{root}.shared_experts.up_proj"), EXPERT_WIDTH, HIDDEN);
     nvfp4(tensors, &format!("{root}.shared_experts.down_proj"), HIDDEN, EXPERT_WIDTH);
+}
+
+/// [`config`] declaring one prediction module.
+pub(super) fn prediction_config() -> Value {
+    let mut config = config();
+    config["llm_config"]["num_nextn_predict_layers"] = json!(1);
+    config["llm_config"]["mtp_layers_block_type"] = json!(["attention", "moe"]);
+    config
+}
+
+/// [`catalog`] with the rest of the Nemotron-H prediction module: BF16
+/// attention with FP8 K/V cache scales and an NVFP4 routed block.
+pub(super) fn prediction_catalog() -> TensorCatalog {
+    let mut tensors = catalog().tensors;
+    let fusion = "language_model.mtp.layers.0";
+    for name in ["enorm", "hnorm", "norm"] {
+        dense(&mut tensors, &format!("{fusion}.{name}.weight"), &[HIDDEN]);
+    }
+    for (name, rows) in [("q_proj", HIDDEN), ("k_proj", 16), ("v_proj", 16), ("o_proj", HIDDEN)] {
+        dense(&mut tensors, &format!("{fusion}.mixer.{name}.weight"), &[rows, HIDDEN]);
+    }
+    tensors.push(tensor(&format!("{fusion}.mixer.k_proj.k_scale"), "F32", vec![1]));
+    tensors.push(tensor(&format!("{fusion}.mixer.v_proj.v_scale"), "F32", vec![1]));
+    moe(&mut tensors, "language_model.mtp.layers.1");
+    dense(&mut tensors, "language_model.mtp.layers.1.final_layernorm.weight", &[HIDDEN]);
+    sorted(tensors)
 }
 
 pub(super) fn dense(tensors: &mut Vec<TensorInfo>, name: &str, shape: &[usize]) {

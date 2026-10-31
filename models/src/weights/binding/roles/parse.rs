@@ -11,6 +11,9 @@ pub(in crate::weights::binding) fn parse(name: &str, decoder: &DecoderSpec) -> L
         return super::paired::parse(&path, decoder);
     }
     let path = canonical_path(name);
+    if let Some(prediction) = path.strip_prefix("mtp.") {
+        return super::prediction::parse(prediction, decoder);
+    }
     match path.as_str() {
         "embed_tokens.weight" => return LogicalTensorRole::Embedding,
         "norm.weight" => return LogicalTensorRole::FinalNorm,

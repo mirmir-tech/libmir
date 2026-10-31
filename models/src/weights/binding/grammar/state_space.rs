@@ -1,7 +1,7 @@
 //! Binding grammar of state-space hybrid layers: Mamba-2 or attention mixers
 //! paired with an optional latent routed-expert block.
 
-use super::{has_attention, has_layer, invalid};
+use super::{has_layer, invalid};
 use crate::{
     error::Result,
     semantic::{BlockLayoutSpec, DecoderLayerSpec, FeedForwardSpec, MixerSpec, SemanticModelSpec},
@@ -35,7 +35,8 @@ pub(super) fn validate(spec: &SemanticModelSpec, tensors: &[TensorBinding]) -> R
         if !paired {
             return Err(invalid("state-space mixers require a paired block layout"));
         }
-        if !mixer(layer, tensors)? || !feed_forward(layer, tensors) {
+        let has = |tensor| has_layer(tensors, layer.index, tensor);
+        if !mixer(layer, tensors, &has)? || !feed_forward(layer, &has) {
             return Err(invalid(format!(
                 "semantic state-space hybrid layer {} has an incomplete binding grammar",
                 layer.index
@@ -45,16 +46,22 @@ pub(super) fn validate(spec: &SemanticModelSpec, tensors: &[TensorBinding]) -> R
     Ok(())
 }
 
-fn mixer(layer: &DecoderLayerSpec, tensors: &[TensorBinding]) -> Result<bool> {
+/// Whether a hybrid layer's mixer is complete; `has` looks a layer role up in
+/// the layer, which may be a decoder layer or a prediction module.
+pub(super) fn mixer(
+    layer: &DecoderLayerSpec,
+    tensors: &[TensorBinding],
+    has: &dyn Fn(LayerTensorRole) -> bool,
+) -> Result<bool> {
     let index = layer.index;
-    if !has_layer(tensors, index, LayerTensorRole::InputNorm) {
+    if !has(LayerTensorRole::InputNorm) {
         return Ok(false);
     }
     match &layer.mixer {
         MixerSpec::StateSpace(state) => {
             let complete = STATE_SPACE
                 .into_iter()
-                .all(|tensor| has_layer(tensors, index, LayerTensorRole::StateSpace { tensor }));
+                .all(|tensor| has(LayerTensorRole::StateSpace { tensor }));
             let bias = convolution_bias(tensors, index);
             if complete && bias != state.convolution_bias {
                 return Err(invalid(format!(
@@ -70,16 +77,18 @@ fn mixer(layer: &DecoderLayerSpec, tensors: &[TensorBinding]) -> Result<bool> {
             AttentionProjectionRole::Output,
         ]
         .into_iter()
-        .all(|projection| has_attention(tensors, index, projection))
-            && !has_layer(tensors, index, LayerTensorRole::QueryNorm)
-            && !has_layer(tensors, index, LayerTensorRole::KeyNorm)),
+        .all(|projection| has(LayerTensorRole::AttentionProjection { projection }))
+            && !has(LayerTensorRole::QueryNorm)
+            && !has(LayerTensorRole::KeyNorm)),
         MixerSpec::LinearAttention(_) => Ok(false),
     }
 }
 
-fn feed_forward(layer: &DecoderLayerSpec, tensors: &[TensorBinding]) -> bool {
-    let index = layer.index;
-    let has = |tensor| has_layer(tensors, index, tensor);
+/// Whether a hybrid layer's feed-forward is complete; `has` as in [`mixer`].
+pub(super) fn feed_forward(
+    layer: &DecoderLayerSpec,
+    has: &dyn Fn(LayerTensorRole) -> bool,
+) -> bool {
     match &layer.feed_forward {
         FeedForwardSpec::None => {
             !has(LayerTensorRole::PostAttentionNorm) && !has(LayerTensorRole::Router)

@@ -2,7 +2,8 @@
 
 use super::{
     AttentionProjectionRole, FeedForwardProjectionRole, LatentProjectionRole, LayerTensorRole,
-    LogicalTensorRole, StateSpaceTensorRole, TensorBinding, WeightBindingPlan,
+    StateSpaceTensorRole, TensorBinding, WeightBindingPlan,
+    slot::LayerSlot,
     view::{RoutedExpertBindings, sources},
 };
 use crate::error::{ModelsError, Result};
@@ -66,10 +67,18 @@ impl WeightBindingPlan {
         &self,
         index: usize,
     ) -> Result<StateSpaceHybridLayerBindings<'_>> {
-        let get = |tensor| required(self, index, tensor);
-        let mixer = if optional(self, index, state(StateSpaceTensorRole::InputProjection)).is_some()
+        self.hybrid_layer(LayerSlot::Decoder(index))
+    }
+
+    /// The hybrid-layer bindings of a decoder layer or prediction module.
+    pub(super) fn hybrid_layer(
+        &self,
+        slot: LayerSlot,
+    ) -> Result<StateSpaceHybridLayerBindings<'_>> {
+        let get = |tensor| required(self, slot, tensor);
+        let mixer = if optional(self, slot, state(StateSpaceTensorRole::InputProjection)).is_some()
         {
-            let get = |tensor| required(self, index, state(tensor));
+            let get = |tensor| required(self, slot, state(tensor));
             StateSpaceHybridMixerBindings::StateSpace(StateSpaceMixerBindings {
                 decay_log: get(StateSpaceTensorRole::DecayLog)?,
                 skip_scale: get(StateSpaceTensorRole::SkipScale)?,
@@ -81,7 +90,7 @@ impl WeightBindingPlan {
             })
         } else {
             let get = |projection| {
-                required(self, index, LayerTensorRole::AttentionProjection { projection })
+                required(self, slot, LayerTensorRole::AttentionProjection { projection })
             };
             StateSpaceHybridMixerBindings::Attention(AttentionProjectionBindings {
                 query: get(AttentionProjectionRole::Query)?,
@@ -90,8 +99,8 @@ impl WeightBindingPlan {
                 output: get(AttentionProjectionRole::Output)?,
             })
         };
-        let feed_forward = optional(self, index, LayerTensorRole::Router)
-            .map(|router| latent_routed(self, index, router))
+        let feed_forward = optional(self, slot, LayerTensorRole::Router)
+            .map(|router| latent_routed(self, slot, router))
             .transpose()?;
         Ok(StateSpaceHybridLayerBindings {
             input_norm: get(LayerTensorRole::InputNorm)?,
@@ -140,18 +149,18 @@ impl<'a> StateSpaceHybridLayerBindings<'a> {
 
 fn latent_routed<'a>(
     plan: &'a WeightBindingPlan,
-    index: usize,
+    slot: LayerSlot,
     router: &'a TensorBinding,
 ) -> Result<LatentRoutedBindings<'a>> {
-    let get = |tensor| required(plan, index, tensor);
+    let get = |tensor| required(plan, slot, tensor);
     let latent = |projection| get(LayerTensorRole::LatentProjection { projection });
     let shared =
-        |projection| optional(plan, index, LayerTensorRole::SharedExpertProjection { projection });
+        |projection| optional(plan, slot, LayerTensorRole::SharedExpertProjection { projection });
     let shared =
         match (shared(FeedForwardProjectionRole::Up), shared(FeedForwardProjectionRole::Down)) {
             (Some(up), Some(down)) => Some(UngatedExpertBindings { up, down }),
             (None, None) => None,
-            _ => return Err(invalid(index, "shared expert has only one projection")),
+            _ => return Err(invalid(slot, "shared expert has only one projection")),
         };
     Ok(LatentRoutedBindings {
         norm: get(LayerTensorRole::PostAttentionNorm)?,
@@ -159,7 +168,7 @@ fn latent_routed<'a>(
         correction_bias: get(LayerTensorRole::RouterCorrectionBias)?,
         latent_input: latent(LatentProjectionRole::Input)?,
         latent_output: latent(LatentProjectionRole::Output)?,
-        routed: RoutedExpertBindings::Individual { tensors: &plan.tensors, layer: index },
+        routed: RoutedExpertBindings::Individual { tensors: &plan.tensors, layer: slot },
         shared,
     })
 }
@@ -170,22 +179,22 @@ const fn state(tensor: StateSpaceTensorRole) -> LayerTensorRole {
 
 fn required(
     plan: &WeightBindingPlan,
-    index: usize,
+    slot: LayerSlot,
     tensor: LayerTensorRole,
 ) -> Result<&TensorBinding> {
-    let role = LogicalTensorRole::Layer { index, tensor };
+    let role = slot.role(tensor);
     plan.binding(&role)
-        .ok_or_else(|| invalid(index, &format!("unbound role {role:?}")))
+        .ok_or_else(|| invalid(slot, &format!("unbound role {role:?}")))
 }
 
 fn optional(
     plan: &WeightBindingPlan,
-    index: usize,
+    slot: LayerSlot,
     tensor: LayerTensorRole,
 ) -> Option<&TensorBinding> {
-    plan.binding(&LogicalTensorRole::Layer { index, tensor })
+    plan.binding(&slot.role(tensor))
 }
 
-fn invalid(index: usize, reason: &str) -> ModelsError {
-    ModelsError::InvalidConfig(format!("invalid state-space hybrid layer {index}: {reason}"))
+fn invalid(slot: LayerSlot, reason: &str) -> ModelsError {
+    ModelsError::InvalidConfig(format!("invalid state-space hybrid {slot}: {reason}"))
 }

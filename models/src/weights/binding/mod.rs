@@ -10,8 +10,10 @@ mod gptq;
 mod grammar;
 mod hybrid;
 mod packed_integer;
+mod prediction;
 mod roles;
 mod shapes;
+mod slot;
 mod state_space;
 mod types;
 mod validation;
@@ -52,10 +54,13 @@ pub use packed_integer::{
     CompressedIntegerQuantization, CompressedIntegerScaleDType, CompressedIntegerScaleStrategy,
     CompressedIntegerSignedness, CompressedIntegerStorageDType, CompressedIntegerZeroPointMode,
 };
+pub use prediction::PredictionLayerBindings;
 pub use roles::{
     AttentionProjectionRole, ExpertProjectionRole, FeedForwardProjectionRole, LatentProjectionRole,
-    LayerTensorRole, LinearAttentionTensorRole, LogicalTensorRole, StateSpaceTensorRole,
+    LayerTensorRole, LinearAttentionTensorRole, LogicalTensorRole, PredictionTensorRole,
+    StateSpaceTensorRole,
 };
+pub use slot::LayerSlot;
 pub use state_space::{
     AttentionProjectionBindings, LatentRoutedBindings, StateSpaceHybridLayerBindings,
     StateSpaceHybridMixerBindings, StateSpaceMixerBindings, UngatedExpertBindings,

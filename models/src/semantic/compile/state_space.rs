@@ -37,6 +37,20 @@ pub(super) fn compile(
             })
         })
         .collect::<Result<Vec<_>>>()?;
+    let prediction_layers = match hybrid.prediction {
+        Some(prediction) => (0..prediction.depth.get())
+            .map(|index| {
+                Ok(DecoderLayerSpec {
+                    index,
+                    input_norm: norm,
+                    post_attention_norm: norm,
+                    mixer: attention(decoder)?,
+                    feed_forward: latent_routed(hybrid),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?,
+        None => Vec::new(),
+    };
     Ok(SemanticModelSpec {
         schema_version: CURRENT_SCHEMA_VERSION,
         decoder: DecoderSpec {
@@ -54,6 +68,7 @@ pub(super) fn compile(
                     .map(|layer| layer.mixer_block())
                     .collect(),
             },
+            prediction_layers,
         },
     })
 }
@@ -86,6 +101,11 @@ fn mixer(
             },
         }));
     }
+    attention(decoder)
+}
+
+/// The attention mixer of hybrid decoder and prediction layers.
+fn attention(decoder: &DecoderConfig) -> Result<MixerSpec> {
     if decoder.sliding_window.is_some() {
         return Err(invalid("state-space hybrid attention does not support sliding windows"));
     }

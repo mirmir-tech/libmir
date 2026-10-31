@@ -1,6 +1,7 @@
 use super::{
     AttentionProjectionRole, ExpertProjectionRole, FeedForwardProjectionRole, LayerTensorRole,
     LinearAttentionTensorRole, LogicalTensorRole, TensorBinding, WeightBindingPlan,
+    slot::LayerSlot,
     view::{RoutedExpertBindings, sources},
 };
 use crate::error::{ModelsError, Result};
@@ -179,7 +180,10 @@ fn feed_forward(
                 down: expert(ExpertProjectionRole::Down)?,
             }
         } else {
-            let routed = RoutedExpertBindings::Individual { tensors: &plan.tensors, layer: index };
+            let routed = RoutedExpertBindings::Individual {
+                tensors: &plan.tensors,
+                layer: LayerSlot::Decoder(index),
+            };
             let gate = routed.individual(ExpertProjectionRole::Gate);
             let up = routed.individual(ExpertProjectionRole::Up);
             let down = routed.individual(ExpertProjectionRole::Down);

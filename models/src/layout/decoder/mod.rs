@@ -9,7 +9,8 @@ pub use features::{AttentionOutput, LinearAttentionConfig, RotaryEmbeddingLayout
 pub use rope::RopeScaling;
 pub use state_space::{
     HybridBlockKind, HybridBlockPattern, HybridLayer, HybridLayerBlock, LatentRoutedConfig,
-    Mamba2Config, StateSpaceHybridConfig, StateSpaceStateDType, TimeStepBound, TimeStepLimit,
+    Mamba2Config, PredictionModules, StateSpaceHybridConfig, StateSpaceStateDType, TimeStepBound,
+    TimeStepLimit,
 };
 
 #[derive(Debug, Clone, PartialEq)]

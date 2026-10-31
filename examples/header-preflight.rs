@@ -20,6 +20,7 @@ fn main() -> Result<()> {
     let contract = RemoteModelContract::inspect_generation(&config, &catalog)?;
     if let Some(execution) = contract.execution() {
         println!("semantic layers: {}", execution.semantic.decoder.layers.len());
+        println!("prediction modules: {}", execution.semantic.decoder.prediction_layers.len());
         println!("bindings: {}", execution.bindings.tensors.len());
     }
     println!("encoding: {:?}", contract.checkpoint_encoding());

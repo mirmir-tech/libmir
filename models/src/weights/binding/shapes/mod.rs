@@ -1,15 +1,19 @@
 use super::{
-    AttentionProjectionRole, BindingTransform, ExpertProjectionRole, FeedForwardProjectionRole,
-    LatentProjectionRole, LayerTensorRole, LinearAttentionTensorRole, LogicalTensorRole,
-    StateSpaceTensorRole, TensorPacking, TensorStorage, dimensions,
+    AttentionProjectionRole, ExpertProjectionRole, FeedForwardProjectionRole, LatentProjectionRole,
+    LayerTensorRole, LinearAttentionTensorRole, LogicalTensorRole, StateSpaceTensorRole,
 };
-use crate::semantic::{AttentionOutputSpec, FeedForwardSpec, MixerSpec, SemanticModelSpec};
+use crate::semantic::{
+    AttentionOutputSpec, DecoderLayerSpec, FeedForwardSpec, MixerSpec, SemanticModelSpec,
+};
 
 mod clamped;
 mod feed_forward;
+mod prediction;
 mod state_space;
+mod transforms;
 
 use feed_forward::{expert_width, routed, shared};
+pub(in crate::weights::binding) use transforms::transforms;
 
 pub(super) fn logical(
     spec: &SemanticModelSpec,
@@ -23,13 +27,22 @@ pub(super) fn logical(
         LogicalTensorRole::FinalNorm => Some(vec![spec.decoder.hidden_size]),
         LogicalTensorRole::Output => Some(vec![spec.decoder.vocab_size, spec.decoder.hidden_size]),
         LogicalTensorRole::VisionProjection => vision_projection.map(Vec::from),
-        LogicalTensorRole::Layer { index, tensor } => layer(spec, *index, tensor),
+        LogicalTensorRole::Layer { index, tensor } => {
+            layer(spec, spec.decoder.layers.get(*index)?, tensor)
+        },
+        LogicalTensorRole::Prediction { depth, tensor } => {
+            prediction::logical(spec, *depth, tensor)
+        },
         LogicalTensorRole::Auxiliary { .. } => None,
     }
 }
 
-fn layer(spec: &SemanticModelSpec, index: usize, role: &LayerTensorRole) -> Option<Vec<usize>> {
-    let layer = spec.decoder.layers.get(index)?;
+/// Logical shape of a decoder- or prediction-layer tensor.
+fn layer(
+    spec: &SemanticModelSpec,
+    layer: &DecoderLayerSpec,
+    role: &LayerTensorRole,
+) -> Option<Vec<usize>> {
     let hidden = spec.decoder.hidden_size;
     match role {
         LayerTensorRole::InputNorm
@@ -129,56 +142,6 @@ fn linear_attention(
         LinearAttentionTensorRole::Norm => vec![linear.value_head_dim],
         LinearAttentionTensorRole::OutputProjection => vec![hidden, value],
     })
-}
-
-pub(super) fn transforms(
-    spec: &SemanticModelSpec,
-    role: &LogicalTensorRole,
-    source: &str,
-    physical: &[usize],
-    logical: Option<&[usize]>,
-    storage: &TensorStorage,
-) -> Vec<BindingTransform> {
-    let mut transforms = Vec::new();
-    if let LogicalTensorRole::Layer { index, tensor } = role {
-        let layer = spec.decoder.layers.get(*index);
-        if matches!(
-            tensor,
-            LayerTensorRole::AttentionProjection { projection: AttentionProjectionRole::Qkv }
-        ) && let Some(crate::semantic::DecoderLayerSpec {
-            mixer: MixerSpec::SoftmaxAttention(attention),
-            ..
-        }) = layer
-        {
-            transforms.push(BindingTransform::FusedQkv {
-                query: attention.query_heads * attention.head_dim,
-                key: attention.key_value_heads * attention.head_dim,
-                value: attention.key_value_heads * attention.head_dim,
-            });
-        }
-        if let LayerTensorRole::ExpertProjection { expert: None, projection } = tensor {
-            if let Some(routed) = layer.and_then(|layer| routed(&layer.feed_forward)) {
-                transforms.push(BindingTransform::StackedExperts { count: routed.expert_count });
-            }
-            if *projection == ExpertProjectionRole::GateUp {
-                let interleaved = matches!(
-                    storage,
-                    TensorStorage::BlockQuantized {
-                        packing: TensorPacking::InterleavedGateUp,
-                        ..
-                    }
-                ) || clamped::dense_expert(spec, role, source);
-                transforms.push(BindingTransform::FusedGateUp { interleaved });
-            }
-        }
-    }
-    if matches!(storage, TensorStorage::Dense { .. } | TensorStorage::Float8 { .. })
-        && (clamped::dense_expert(spec, role, source)
-            || logical.is_some_and(|shape| dimensions::transposes_last_two(shape, physical)))
-    {
-        transforms.push(BindingTransform::Transpose);
-    }
-    transforms
 }
 
 fn router(feed_forward: &FeedForwardSpec, hidden: usize) -> Option<Vec<usize>> {

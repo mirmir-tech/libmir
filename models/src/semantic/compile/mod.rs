@@ -38,6 +38,7 @@ pub(super) fn compile(
             final_norm: norm,
             layers,
             block_layout: super::BlockLayoutSpec::Unified,
+            prediction_layers: Vec::new(),
         },
     })
 }

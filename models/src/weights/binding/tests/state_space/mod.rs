@@ -4,6 +4,7 @@ use super::*;
 use crate::semantic::{FeedForwardSpec, MixerSpec, PositionEncodingSpec};
 
 mod fixture;
+mod prediction;
 
 use fixture::{EXPERTS, HIDDEN, block, catalog, config, dense, sorted};
 

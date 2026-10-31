@@ -182,3 +182,40 @@ fn rejects_unsupported_routed_contracts() -> Result<()> {
     rejects(&with(config("ME"), "mlp_bias", json!(true)), "projection bias")?;
     Ok(())
 }
+
+#[test]
+fn reads_one_prediction_module_and_none_without_the_key() -> Result<()> {
+    let plain = DecoderConfig::from_value(&config("ME"))?;
+    assert_eq!(plain.state_space.ok_or_else(|| missing("hybrid"))?.prediction, None);
+    let declared = with(
+        with(config("ME"), "num_nextn_predict_layers", json!(1)),
+        "mtp_layers_block_type",
+        json!(["attention", "moe"]),
+    );
+    let prediction = DecoderConfig::from_value(&declared)?
+        .state_space
+        .and_then(|hybrid| hybrid.prediction)
+        .ok_or_else(|| missing("prediction modules"))?;
+    assert_eq!(prediction.depth.get(), 1);
+    let disabled = with(config("ME"), "num_nextn_predict_layers", json!(0));
+    assert_eq!(
+        DecoderConfig::from_value(&disabled)?.state_space.and_then(|h| h.prediction),
+        None
+    );
+    Ok(())
+}
+
+#[test]
+fn rejects_unsupported_prediction_modules() -> Result<()> {
+    let declared = with(config("ME"), "num_nextn_predict_layers", json!(1));
+    rejects(&declared, "requires mtp_layers_block_type")?;
+    rejects(
+        &with(declared.clone(), "mtp_layers_block_type", json!(["mamba", "moe"])),
+        "one attention block followed by one routed block",
+    )?;
+    rejects(
+        &with(declared, "mtp_layers_block_type", json!(["attention"])),
+        "one attention block followed by one routed block",
+    )?;
+    Ok(())
+}
