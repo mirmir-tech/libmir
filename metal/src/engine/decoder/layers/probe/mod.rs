@@ -27,6 +27,11 @@ pub enum Stage {
     RawAttention,
     Attended,
     AttentionProjection,
+    GatedDeltaInput,
+    GatedDeltaProjection,
+    GatedDeltaConvolution,
+    GatedDeltaRecurrence,
+    GatedDeltaOutput,
 }
 
 pub struct Value {
@@ -109,4 +114,8 @@ pub fn detail(stage: Stage, array: &Array) -> Result<()> {
         }
         Ok(())
     })
+}
+
+pub fn is_materialized(array: &Array) -> Result<bool> {
+    Ok(array.native().allocation()?.is_some())
 }

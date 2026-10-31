@@ -8,7 +8,8 @@ pub use diagnostics::MetalDiagnosticsConfig;
 #[cfg(test)]
 pub use diagnostics::{
     GatedDeltaPrefill, GdnExecution, HistoryBatching, KeyValueProjection, MoeDecodeProbe,
-    MoePrefill, PrefixRetention, RopeBatching, RouterPrecision,
+    MoePrefill, PrefillMaterialization, PrefillOutput, PrefixRetention, RopeBatching,
+    RouterPrecision,
 };
 pub use fusion::{FeatureToggle, FusionMode, MetalFusionConfig};
 pub use runtime::tuning::{TuningConfig as MetalTuningConfig, TuningMode as MetalTuningMode};

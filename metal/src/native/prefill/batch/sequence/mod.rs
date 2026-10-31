@@ -1,5 +1,7 @@
 mod completion;
 mod retention;
+#[cfg(test)]
+mod terminal;
 
 use runtime::backend::{PrefillRequest, SamplingLogits};
 
@@ -153,7 +155,7 @@ impl Sequence {
         for row in checkpoint_rows {
             states[row].cache.prepare_prefix_retention(&loaded.stream)?;
         }
-        evaluation::materialize_packed(loaded, &states, &state_root)?;
+        evaluation::intermediate_packed(loaded, &states, state_root)?;
         for sequence in sequences {
             sequence.page_reservation_pending = false;
             sequence.position += count;
@@ -179,6 +181,10 @@ impl Sequence {
                 .prefill_chunk_len(self.position, remaining)
                 .min(budget)
                 .min(self.checkpoint_distance());
+            #[cfg(test)]
+            if let Some(used) = self.complete_terminal_chunk(loaded, remaining, count, budget)? {
+                return Ok(used);
+            }
             let tokens = &self.request.prompt_tokens[self.position..self.position + count];
             #[cfg(test)]
             let checkpoint = loaded.prefixes.enabled() && self.retains_checkpoint_after(count);
@@ -192,7 +198,7 @@ impl Sequence {
             if checkpoint {
                 state.cache.prepare_prefix_retention(&loaded.stream)?;
             }
-            evaluation::materialize(loaded, state, &state_root)?;
+            evaluation::intermediate(loaded, state, state_root)?;
             self.page_reservation_pending = false;
             self.position += count;
             self.cache_checkpoint(loaded)?;

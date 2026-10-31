@@ -1,5 +1,6 @@
 mod diagnosis;
 mod memory;
+mod tail;
 
 use std::{env, io::Write, time::Instant};
 

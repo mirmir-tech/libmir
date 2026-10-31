@@ -5,15 +5,17 @@ use super::{
     error::{Error, Result},
     model::{LoadedModel, NativeOutput},
     session::SessionState,
-    step,
 };
 use crate::MetalProgressEvent;
 
 mod batch;
 mod cohort;
 pub(in crate::native) mod diagnostics;
-mod evaluation;
+pub(in crate::native) mod evaluation;
 mod reservation;
+mod scalar;
+#[cfg(test)]
+mod tail;
 #[cfg(test)]
 mod tests;
 pub(in crate::native) mod timing;
@@ -63,13 +65,12 @@ impl LoadedModel {
         progress: &mut dyn FnMut(MetalProgressEvent),
     ) -> Result<NativePrefill> {
         self.require_execution_ready()?;
-        let Some((&last, prefix)) = tokens.split_last() else {
+        if tokens.is_empty() {
             return Err(Error::EmptyPrompt);
-        };
+        }
         let (mut state, cached_logits) = self.prepare_prefill_state(tokens)?;
-        let mut position = state.position;
+        let position = state.position;
         let prefix_cache_tokens = position;
-        let page_size = self.stream.config().kv_cache.block_size.max(1);
         let plan = reservation::Plan::admit(self, tokens.len(), generation_tokens, position)?;
         state.cache.plan_contiguous(plan.tokens());
         if position == 0 {
@@ -87,51 +88,13 @@ impl LoadedModel {
             }
 
             progress(MetalProgressEvent::prefill_tokens(position, tokens.len()));
-            let mut remaining = &prefix[position..];
-            let restored_position = position;
-            let mut checkpoints = cache_checkpoints
-                .iter()
-                .copied()
-                .filter(|checkpoint| *checkpoint > restored_position && *checkpoint < tokens.len())
-                .peekable();
-            while !remaining.is_empty() {
-                let count = self
-                    .prefill_chunk_len(position, remaining.len())
-                    .min(checkpoints.peek().map_or(usize::MAX, |checkpoint| checkpoint - position));
-                let state_root = step::forward_prefill_state(
-                    model,
-                    &self.stream,
-                    &mut state,
-                    &remaining[..count],
-                    position,
-                )?;
-                #[cfg(test)]
-                if self.prefixes.enabled() && checkpoints.peek() == Some(&(position + count)) {
-                    state.cache.prepare_prefix_retention(&self.stream)?;
-                }
-                evaluation::materialize(self, &state, &state_root)?;
-                position += count;
-                remaining = &remaining[count..];
-                if checkpoints.next_if_eq(&position).is_some() {
-                    let checkpoint_bytes = self.estimated_prefix_bytes(position)?;
-                    super::model::cache_prefix_checkpoint(
-                        &mut self.prefixes,
-                        &self.info.manifest.id,
-                        &tokens[..position],
-                        &state,
-                        page_size,
-                        checkpoint_bytes,
-                    )?;
-                }
-                progress(MetalProgressEvent::prefill_tokens(position, tokens.len()));
-            }
-            let logits = step::forward_token(
-                model,
-                &self.stream,
+            let logits = self.forward_prefill_prompt(
                 &mut state,
-                last,
+                tokens,
+                cache_checkpoints,
                 position,
-                *sampling == SamplingLogits::None,
+                sampling,
+                progress,
             )?;
             evaluation::materialize(self, &state, &logits)?;
             state.position = tokens.len();
@@ -150,6 +113,7 @@ impl LoadedModel {
             )?;
             let _reclaimed = Self::reclaim_prefill_allocator_cache()?;
             progress(MetalProgressEvent::prefill_tokens(tokens.len(), tokens.len()));
+            let model = self.execution.decoder()?;
             let output = diagnostics::measure(diagnostics::Stage::FirstToken, || {
                 reservation::output(model, &self.stream, &mut state, logits, sampling)
             })?;

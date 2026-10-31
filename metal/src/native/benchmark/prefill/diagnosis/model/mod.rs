@@ -1,5 +1,6 @@
 mod decode;
 mod drift;
+mod materialization;
 mod run;
 mod settled;
 mod tiles;

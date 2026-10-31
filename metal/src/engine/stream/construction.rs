@@ -6,6 +6,24 @@ use crate::engine::{
 };
 
 impl Stream {
+    #[cfg(test)]
+    pub(crate) fn set_prefill_chunk_limit(&mut self, limit: std::num::NonZeroUsize) {
+        Arc::make_mut(&mut self.config).diagnostics.prefill_chunk_limit = Some(limit);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_prefill_materialization(
+        &mut self,
+        plan: crate::config::PrefillMaterialization,
+    ) {
+        Arc::make_mut(&mut self.config).diagnostics.prefill_materialization = plan;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_prefill_output(&mut self, plan: crate::config::PrefillOutput) {
+        Arc::make_mut(&mut self.config).diagnostics.prefill_output = plan;
+    }
+
     pub fn synchronize(&self) -> Result<()> {
         Ok(self.native.synchronize()?)
     }

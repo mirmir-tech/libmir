@@ -47,6 +47,7 @@ impl Variant {
 enum Workload {
     Sample32,
     Complete256,
+    StateOnly32,
 }
 
 #[derive(serde::Deserialize)]
@@ -65,16 +66,22 @@ fn epoch() -> u128 {
 #[test]
 #[ignore = "bounded hardware-gated sustained Qwen qualification driver; external controller required"]
 fn qualifies_sustained_qwen_reservation() -> std::result::Result<(), DriverError> {
-    run_driver(Workload::Sample32)
+    run_driver(Workload::Sample32, 300)
 }
 
-fn run_driver(workload: Workload) -> std::result::Result<(), DriverError> {
+#[test]
+#[ignore = "thermally conditioned state-only prefill, external controller required"]
+fn qualifies_sustained_state_only_prefill() -> std::result::Result<(), DriverError> {
+    run_driver(Workload::StateOnly32, 600)
+}
+
+fn run_driver(workload: Workload, limit_seconds: u64) -> std::result::Result<(), DriverError> {
     let generation_budget = match workload {
-        Workload::Sample32 => 32,
+        Workload::Sample32 | Workload::StateOnly32 => 32,
         Workload::Complete256 => 256,
     };
     let decode = match workload {
-        Workload::Sample32 => decode::plain,
+        Workload::Sample32 | Workload::StateOnly32 => decode::plain,
         Workload::Complete256 => full::decode_complete,
     };
     let mut model = tiles::load_model()?;
@@ -86,10 +93,24 @@ fn run_driver(workload: Workload) -> std::result::Result<(), DriverError> {
         let Command::Run { phase, variant } = command else {
             return Ok(());
         };
-        if run >= 40 || started.elapsed().as_secs() >= 300 {
+        let run_limit = if matches!(workload, Workload::StateOnly32) {
+            96
+        } else {
+            40
+        };
+        if run >= run_limit || started.elapsed().as_secs() >= limit_seconds {
             return Err(DriverError::Limit);
         }
-        model.stream.set_decode_reservation(variant.policy());
+        if matches!(workload, Workload::StateOnly32) {
+            use crate::config::PrefillMaterialization::{OutputAndState, StateOnly};
+            model.stream.set_prefill_materialization(match variant {
+                Variant::Baseline => OutputAndState,
+                Variant::Candidate => StateOnly,
+            });
+            model.stream.set_decode_reservation(DecodeReservation::OnePage);
+        } else {
+            model.stream.set_decode_reservation(variant.policy());
+        }
         let start_epoch_ms = epoch();
         let observation = run_budget_with_decode(
             &mut model,

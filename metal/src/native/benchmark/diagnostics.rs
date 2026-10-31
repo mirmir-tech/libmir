@@ -4,6 +4,16 @@ use crate::MetalConfig;
 
 pub(super) fn isolated_config() -> Arc<MetalConfig> {
     let mut config = MetalConfig::default();
+    if enabled("MIRMIR_BENCH_TERMINAL_PREFILL") {
+        config.diagnostics.prefill_output = crate::config::PrefillOutput::LastChunk;
+    }
+    if enabled("MIRMIR_BENCH_DEFERRED_PREFILL") {
+        config.diagnostics.prefill_output = crate::config::PrefillOutput::DeferredToken;
+    }
+    if enabled("MIRMIR_BENCH_STATE_ONLY_PREFILL") {
+        config.diagnostics.prefill_materialization =
+            crate::config::PrefillMaterialization::StateOnly;
+    }
     if !enabled("MIRMIR_BENCH_PREFIX_CACHE") {
         config.cache.prefix_cache_entries = 0;
     }

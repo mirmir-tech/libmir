@@ -124,7 +124,7 @@ impl LoadedModel {
         let mut total = 0_usize;
         for layer in 0..decoder.num_hidden_layers {
             let length = match decoder.layer_type(layer) {
-                AttentionLayerType::Linear => continue,
+                AttentionLayerType::Linear | AttentionLayerType::StateSpace => continue,
                 AttentionLayerType::Full => tokens,
                 AttentionLayerType::Sliding => {
                     tokens.min(decoder.layer_sliding_window(layer).unwrap_or(tokens))

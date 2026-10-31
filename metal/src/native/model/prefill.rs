@@ -32,12 +32,21 @@ pub(super) fn prefill_step(spec: &SemanticModelSpec, configured: Option<usize>) 
 }
 
 pub(super) fn bounded_prefill_step(configured: usize, position: usize, remaining: usize) -> usize {
+    bounded_step_with_limit(configured, position, remaining, MAX_PREFILL_CHUNK_TOKENS)
+}
+
+pub(super) fn bounded_step_with_limit(
+    configured: usize,
+    position: usize,
+    remaining: usize,
+    chunk_limit: usize,
+) -> usize {
     if position >= NATIVE_PAGED_TAIL_CONTEXT && remaining <= NATIVE_PAGED_TAIL_TOKENS {
         return remaining.min(1);
     }
     let context = position.saturating_add(1);
     let workspace_bound = (MAX_PREFILL_TOKEN_PAIRS / context).max(1);
-    remaining.min(configured).min(MAX_PREFILL_CHUNK_TOKENS).min(workspace_bound)
+    remaining.min(configured).min(chunk_limit).min(workspace_bound)
 }
 
 const fn default_prefill_step(architecture: PrefillArchitecture) -> usize {
@@ -69,6 +78,15 @@ mod tests {
         assert_eq!(default_prefill_step(dense), 512);
         assert_eq!(default_prefill_step(linear), 2_048);
         assert_eq!(default_prefill_step(routed), 2_048);
+    }
+
+    #[test]
+    fn larger_limits_preserve_workspace_and_long_context_tail_bounds() {
+        assert_eq!(bounded_step_with_limit(2048, 0, 4096, 1024), 1024);
+        assert_eq!(bounded_step_with_limit(2048, 0, 4096, 2048), 2048);
+        assert_eq!(bounded_step_with_limit(512, 0, 4096, 2048), 512);
+        assert_eq!(bounded_step_with_limit(2048, 16384, 4096, 2048), 511);
+        assert_eq!(bounded_step_with_limit(2048, 32767, 16, 2048), 1);
     }
 
     #[test]

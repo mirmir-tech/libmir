@@ -27,6 +27,11 @@ pub struct HybridLinearMoeModel {
 }
 
 impl HybridLinearMoeModel {
+    #[cfg(test)]
+    pub(crate) fn project_prefill_output(&self, hidden: &Array, stream: &Stream) -> Result<Array> {
+        self.output.forward(hidden, stream)
+    }
+
     pub(crate) fn has_decode_plan_candidates(&self) -> bool {
         self.layers.iter().any(HybridLinearMoeLayer::has_decode_plan_candidates)
     }

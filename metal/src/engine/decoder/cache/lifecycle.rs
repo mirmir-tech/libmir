@@ -98,6 +98,28 @@ impl DecoderCache {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn extend_prefill_graph_roots<'a>(
+        &'a self,
+        roots: &mut Vec<&'a crate::engine::Array>,
+    ) {
+        self.extend_graph_roots(roots);
+        match &self.storage {
+            CacheStorage::Attention(caches) => {
+                for cache in caches {
+                    cache.extend_graph_roots(roots);
+                }
+            },
+            CacheStorage::HybridLinear(layers) => {
+                for layer in layers {
+                    if let hybrid::HybridLinearLayerCache::Full(cache) = layer {
+                        cache.extend_graph_roots(roots);
+                    }
+                }
+            },
+        }
+    }
+
     pub(crate) fn recurrent_allocations(
         &self,
     ) -> Result<std::collections::HashSet<mirtal::memory::Allocation>> {

@@ -117,7 +117,7 @@ The target shape is:
   Qwen and synthetic clamped tests. Do not enable it by default from the first
   favorable pair; see Workmir's `2026-09-06-prefill-cohort-budget` report.
   Any candidate must retain scalar progress when the whole budget is tiny.
-- Use the latest stable MLX as the tuning baseline (currently 0.32.2, pinned
+- Use the latest stable MLX as the tuning baseline (currently 0.32.3, pinned
   by Workmir). Cross-version greedy differences alone do not establish a quality
   regression or justify reverting the baseline. Validate semantic correctness
   on the new version and compare tuning candidates within that same version.
@@ -125,6 +125,22 @@ The target shape is:
   never reuse it as performance evidence. Version smoke tests must not hard-code
   the Homebrew minor version; benchmark metadata must record actual linked MLX.
   Reuse archived MLX-LM results instead of rerunning an unchanged reference.
+
+- Terminal-prefill `LastChunk` is test-only, limited to hybrid/clamped scalar
+  execution and scalar rows in the normal batch. It projects the last hidden
+  row, preserves checkpoint/chunk/step boundaries, and leaves packed prefill
+  unchanged. Synthetic logits, checkpoint restoration, continuation and batch
+  budget checks pass. Qwen short/2065 C1/C5 arithmetic passes 40/40 answers on
+  MLX 0.32.3, but timing stops in warm-up at generated token25 (index24).
+  Matched-history full logits reproduce all32 original baseline IDs; candidate
+  differs at index24 with margins2.5625/3.3125 and max logit delta5.5546875,
+  not an argmax tie. Do not rank the incomplete timing pair or repeat it
+  unchanged. Layer probes now isolate the first difference to layer0 MXFP4 QKV projection:
+  identical normalized input, scalar versus17-row matrix arithmetic, before
+  convolution/recurrence. The first16 rows match exactly; disabling fused/compiled
+  GDN leaves the difference. FP64 decoded-weight probes confirm shape-dependent
+  native arithmetic. Keep LastChunk test-only without weakening its failed gate.
+  See Workmir's `2026-10-07-metal-terminal-layers` and `2026-10-07-metal-mlx0323`.
 
 - `MIRMIR_METAL_DEVICE_TOKEN_PIPELINE=0` disables the default greedy device-token
   pipeline. The pipeline keeps the next token on MLX for the following
@@ -1169,3 +1185,78 @@ The target shape is:
 - Workmir's `2026-09-29-metal-schema-tools` passes Qwen3.6 greedy/sampled,
   reasoning, budget, streaming and mixed concurrent schema requests, plus an
   adversarial prompt the unconstrained model violates. No timing gate was run.
+
+
+## Settled prefill window reconciliation
+
+- After each received collection command, refresh PrefillWindow from the current
+  policy, allowing30→3 ms once all announced requests reach an idle worker.
+  Preserve arrival anchors, oldest hard deadline, cancellation retirement and
+  active/unsettled cohort windows. Do not retain max(old,new) after settlement.
+- Workmir's `2026-10-07-settled-prefill-window` reproduces the old wait and
+  measures host collection35.52→4.50 ms across16 cohorts per build.171 Metal
+  facade tests,114 neutral tests, doctests, CUDA check, clippy and app build pass.
+  HTTP12/12 answers and1068 exact IDs preserve C3/cache/unload behavior. The host
+  gain and raw HTTP pair do not certify GPU throughput or reservation defaults.
+
+
+## Intermediate prefill materialization experiments
+
+- PrefillMaterialization::StateOnly is test-only. Explicitly evaluate recurrent
+  roots AND pending paged K/V arenas before detaching state; a final attention
+  write need not be an ancestor of recurrence. Final logits still evaluate.
+  A probe confirms discarded hidden output stays lazy. Owned-output evaluation
+  drops that unused graph first; default OutputAndState retains ordinary behavior.
+- Original C1/2065 ABBA/BAAB preserves384 IDs, mean prefill-3.30%, total-2.70%,
+  but clocks drift. Sustained C3 readiness fails before candidate observations,
+  including a native caffeinate activity assertion (44 baseline runs,4224 IDs).
+  This is not proof of App Nap or a default-performance qualification.
+- The owned-output refinement passes704 actual-model IDs across C3/C5 and C1
+  cold/exact/checkpoint restoration,337 ordinary tests, strict clippy. Its timing
+  remains unqualified. Initial concurrent churn physical-byte assertion failed;
+  focused, serial and a diagnostic concurrent suite pass. Larger reusable MLX
+  buffers can change physical accounting; do not erase the failure or weaken its
+  assertion. See Workmir's `2026-10-08-state-only-release` report.
+- DeferredToken preserves384 IDs but slightly worsens total time; do not promote.
+  A separate1024-token chunk trial changes generated token3;2048 was not run.
+  Keep production512 cap. Actual C1 HTTP trace did not trigger the128-token
+  pressure cap, so do not attribute current short-prefill cost to that policy.
+- Native activity assertions and canonical HTTP refresh do not establish stable
+  conditions. The latter stops during startup on44 global Swapins, no measured
+  requests. Preserve failed trials; no unchanged retry or fresh MLX-LM reference.
+
+
+## StateOnly contiguous and sliding K/V roots
+
+- The first StateOnly application experiment passes Qwen C1/C3/C5 HTTP but fails
+  actual GPT-OSS's short2+2 before output: MLX reports an array without a primitive.
+  Its final contiguous K/V was not evaluated before cache graph detachment.
+  Earlier synthetic fixtures forced paging from token1 and missed that domain.
+- Keep DecoderCache::extend_graph_roots recurrent-only for existing decode and
+  recurrent allocation accounting. Test-only extend_prefill_graph_roots additionally
+  collects every contiguous/sliding K/V handle; StateOnly evaluates these plus
+  paged arena writes before the existing detach boundary. Do not add another sync.
+- A normal128-token paging-threshold regression reproduces the original exception
+  and passes after the fix for hybrid/clamped C1/C3/C5, checkpoints, exact hits and
+  continuation. A final sliding layer past wrap also preserves all full logits.
+  Persistent roots materialize while the discarded final output stays lazy.
+-338 ordinary Metal tests and strict all-target/all-feature clippy pass. Fixed
+  GPT-OSS HTTP C1/C3 preserves16 correct answers/624 IDs. Benchmark overlays are
+  isolated binaries and restored after builds; production stays OutputAndState.
+- After simulator/Safari shutdown the Qwen HTTP quality run completes36 answers/
+  3204 IDs. Timing readiness still fails18.28% TTFT spread, despite zero measured
+  swap and2.39% whole-pair frequency spread. A separate equal-length warmup fixes
+  1915-versus1911 input shapes but still fails23.79% TTFT/32.95% frequency spread.
+  Neither admits candidate timing. Preserve both failures; no unchanged retry or
+  default promotion. See Workmir's2026-10-08-state-only-cache-roots report.
+
+- Workmir's2026-10-08-resident-state-only now qualifies repaired StateOnly for
+  intermittent Qwen HTTP C1: same resident model/binary, explicit cold/cache
+  reset, fixed15second spacing, unchanged ABBA/BAAB gates; TTFT−1.70%, total−0.90%,
+  28 answers/2492 IDs. This does not qualify sustained traffic or other widths.
+  C3 passes readiness but fails its closing baseline at GPU1378→586MHz and
+  TTFT4.14→7.75s, despite zero swap and20.67GiB minimum headroom.60 answers/5340
+  IDs pass; no partial candidate ranking, unchanged retry, C5 run or promotion.
+  The cause of the GPU power-state transition remains unproven. Temporary HTTP
+  control/mode/cache-clear APIs existed only in an archived benchmark overlay;
+  keep them out of product APIs. Ordinary application and sources are restored.

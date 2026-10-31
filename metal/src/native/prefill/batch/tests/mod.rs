@@ -3,10 +3,12 @@ mod churn;
 mod fixture;
 mod history;
 mod lifecycle;
+mod materialization;
 mod parity;
 mod recovery;
 mod reservation;
 mod router;
+mod terminal;
 
 use fixture::load;
 use runtime::{

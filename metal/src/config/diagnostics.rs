@@ -47,6 +47,25 @@ pub enum RouterPrecision {
 use std::path::PathBuf;
 
 #[cfg(test)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrefillOutput {
+    #[default]
+    SeparateToken,
+    LastChunk,
+    DeferredToken,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrefillMaterialization {
+    #[default]
+    OutputAndState,
+    StateOnly,
+}
+
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum GatedDeltaPrefill {
     #[default]
@@ -66,6 +85,12 @@ pub enum PrefixRetention {
 
 #[derive(Debug, Clone, Default)]
 pub struct MetalDiagnosticsConfig {
+    #[cfg(test)]
+    pub(crate) prefill_chunk_limit: Option<std::num::NonZeroUsize>,
+    #[cfg(test)]
+    pub(crate) prefill_materialization: PrefillMaterialization,
+    #[cfg(test)]
+    pub(crate) prefill_output: PrefillOutput,
     #[cfg(test)]
     pub(crate) history_batching: HistoryBatching,
     #[cfg(test)]

@@ -4,6 +4,11 @@ use crate::engine::{
 };
 
 impl DecoderExecution for HybridLinearMoeModel {
+    #[cfg(test)]
+    fn prefill_logits(&self, last_hidden: &Array, stream: &Stream) -> Result<Array> {
+        self.project_prefill_output(last_hidden, stream)
+    }
+
     fn has_decode_plan_candidates(&self) -> bool {
         self.has_decode_plan_candidates()
     }
