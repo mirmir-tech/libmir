@@ -1,9 +1,17 @@
 use super::{CudaSharedRoutedLayerState, CudaSharedRoutedModelSession};
-use crate::{Error, Result, backend::gated_delta::CudaGatedDeltaCheckpoint};
+use crate::{CudaMamba2Checkpoint, Error, Result, backend::gated_delta::CudaGatedDeltaCheckpoint};
+
+/// Saved state of one recurrent layer; attention layers keep their K/V in
+/// the shared pages and save nothing here.
+#[derive(Debug)]
+enum RecurrentCheckpoint {
+    Linear(CudaGatedDeltaCheckpoint),
+    Mamba2(CudaMamba2Checkpoint),
+}
 
 #[derive(Debug)]
 pub struct SharedRoutedCheckpoint {
-    linear: Vec<Option<CudaGatedDeltaCheckpoint>>,
+    layers: Vec<Option<RecurrentCheckpoint>>,
     pub(super) position: usize,
     pub(super) position_delta: i32,
     bytes: usize,
@@ -16,20 +24,27 @@ impl SharedRoutedCheckpoint {
         position_delta: i32,
     ) -> Result<Self> {
         let mut bytes = 0_usize;
-        let linear = states
+        let layers = states
             .iter()
-            .map(|state| match state {
-                CudaSharedRoutedLayerState::Linear(state) => {
-                    bytes = bytes.saturating_add(state.checkpoint_bytes());
-                    state.checkpoint().map(Some)
-                },
-                CudaSharedRoutedLayerState::Full(_) => Ok(None),
+            .map(|state| {
+                Ok(match state {
+                    CudaSharedRoutedLayerState::Linear(state) => {
+                        bytes = bytes.saturating_add(state.checkpoint_bytes());
+                        Some(RecurrentCheckpoint::Linear(state.checkpoint()?))
+                    },
+                    CudaSharedRoutedLayerState::Mamba2(state) => {
+                        bytes = bytes.saturating_add(state.checkpoint_bytes());
+                        Some(RecurrentCheckpoint::Mamba2(state.checkpoint()?))
+                    },
+                    CudaSharedRoutedLayerState::Full(_)
+                    | CudaSharedRoutedLayerState::Attention(_) => None,
+                })
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(Self { linear, position, position_delta, bytes })
+        Ok(Self { layers, position, position_delta, bytes })
     }
 
-    /// Collects the checkpoints that linear layers staged inside the last
+    /// Collects the checkpoints that recurrent layers staged inside the last
     /// prefill pass; `None` when no layer staged one.
     pub(super) fn take_staged(
         states: &mut [CudaSharedRoutedLayerState],
@@ -39,19 +54,28 @@ impl SharedRoutedCheckpoint {
         let mut bytes = 0_usize;
         let mut staged = 0_usize;
         let mut expected = 0_usize;
-        let linear = states
+        let mut count = |checkpoint: Option<RecurrentCheckpoint>, size: usize| {
+            expected += 1;
+            if checkpoint.is_some() {
+                staged += 1;
+                bytes = bytes.saturating_add(size);
+            }
+            checkpoint
+        };
+        let layers = states
             .iter_mut()
             .map(|state| match state {
-                CudaSharedRoutedLayerState::Linear(state) => {
-                    expected += 1;
-                    let checkpoint = state.take_staged_checkpoint();
-                    if checkpoint.is_some() {
-                        staged += 1;
-                        bytes = bytes.saturating_add(state.checkpoint_bytes());
-                    }
-                    checkpoint
+                CudaSharedRoutedLayerState::Linear(state) => count(
+                    state.take_staged_checkpoint().map(RecurrentCheckpoint::Linear),
+                    state.checkpoint_bytes(),
+                ),
+                CudaSharedRoutedLayerState::Mamba2(state) => count(
+                    state.take_staged_checkpoint().map(RecurrentCheckpoint::Mamba2),
+                    state.checkpoint_bytes(),
+                ),
+                CudaSharedRoutedLayerState::Full(_) | CudaSharedRoutedLayerState::Attention(_) => {
+                    None
                 },
-                CudaSharedRoutedLayerState::Full(_) => None,
             })
             .collect::<Vec<_>>();
         if staged == 0 {
@@ -62,21 +86,29 @@ impl SharedRoutedCheckpoint {
                 "shared-routed layers staged an incomplete checkpoint",
             ));
         }
-        Ok(Some(Self { linear, position, position_delta, bytes }))
+        Ok(Some(Self { layers, position, position_delta, bytes }))
     }
 
     pub(super) fn restore(&self, states: &mut [CudaSharedRoutedLayerState]) -> Result<()> {
-        if self.linear.len() != states.len() {
+        if self.layers.len() != states.len() {
             return Err(Error::InvalidDecoderKernel(
                 "shared-routed checkpoint layer count mismatch",
             ));
         }
-        for (checkpoint, state) in self.linear.iter().zip(states) {
+        for (checkpoint, state) in self.layers.iter().zip(states) {
             match (checkpoint, state) {
-                (Some(checkpoint), CudaSharedRoutedLayerState::Linear(state)) => {
-                    state.restore(checkpoint)?;
-                },
-                (None, CudaSharedRoutedLayerState::Full(_)) => {},
+                (
+                    Some(RecurrentCheckpoint::Linear(checkpoint)),
+                    CudaSharedRoutedLayerState::Linear(state),
+                ) => state.restore(checkpoint)?,
+                (
+                    Some(RecurrentCheckpoint::Mamba2(checkpoint)),
+                    CudaSharedRoutedLayerState::Mamba2(state),
+                ) => state.restore(checkpoint)?,
+                (
+                    None,
+                    CudaSharedRoutedLayerState::Full(_) | CudaSharedRoutedLayerState::Attention(_),
+                ) => {},
                 _ => {
                     return Err(Error::InvalidDecoderKernel(
                         "shared-routed checkpoint layer kind mismatch",
@@ -97,8 +129,11 @@ impl CudaSharedRoutedModelSession {
     /// short prompt tail needs no pass of its own.
     pub(crate) fn arm_checkpoint(&mut self, tokens: usize) {
         for state in &mut self.states {
-            if let CudaSharedRoutedLayerState::Linear(state) = state {
-                state.arm_checkpoint(tokens);
+            match state {
+                CudaSharedRoutedLayerState::Linear(state) => state.arm_checkpoint(tokens),
+                CudaSharedRoutedLayerState::Mamba2(state) => state.arm_checkpoint(tokens),
+                CudaSharedRoutedLayerState::Full(_) | CudaSharedRoutedLayerState::Attention(_) => {
+                },
             }
         }
     }

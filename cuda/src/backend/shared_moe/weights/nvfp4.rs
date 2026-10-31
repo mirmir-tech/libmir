@@ -4,7 +4,7 @@ use models::weights::{
 };
 
 use crate::{
-    CudaBackend, Error, NvFp4ExpertBankConfig, NvFp4ExpertSource, NvFp4ScaleMode, Result,
+    CudaBackend, Error, NvFp4ExpertBankConfig, NvFp4ExpertSource, Result,
     backend::block::experts::ExpertWeights,
 };
 
@@ -42,40 +42,10 @@ fn sources<'a>(
     catalog: &'a TensorCatalog,
     bindings: Vec<&TensorBinding>,
 ) -> Result<Vec<NvFp4ExpertSource<'a>>> {
-    bindings.into_iter().map(|binding| source(catalog, binding)).collect()
-}
-
-fn source<'a>(
-    catalog: &'a TensorCatalog,
-    binding: &TensorBinding,
-) -> Result<NvFp4ExpertSource<'a>> {
-    let TensorStorage::BlockQuantized {
-        format,
-        scales,
-        global_scale: Some(global_scale),
-        input_scale: Some(input_scale),
-        ..
-    } = &binding.storage
-    else {
-        return Err(Error::UnsupportedDecoderLayer(format!(
-            "CUDA individual expert is not complete NVFP4: {}",
-            binding.source
-        )));
-    };
-    if format.format != BlockFormat::NvFp4 {
-        return Err(Error::UnsupportedDecoderLayer(format!(
-            "CUDA individual expert is not NVFP4: {}",
-            binding.source
-        )));
-    }
-    let get = |name: &str| catalog.get(name).ok_or_else(|| Error::MissingTensor(name.into()));
-    Ok(NvFp4ExpertSource {
-        weight: get(&binding.source)?,
-        weight_scale: get(scales)?,
-        weight_scale_2: get(global_scale)?,
-        input_scale: get(input_scale)?,
-        scale_mode: NvFp4ScaleMode::from_names(global_scale, input_scale)?,
-    })
+    bindings
+        .into_iter()
+        .map(|binding| NvFp4ExpertSource::from_binding(catalog, binding))
+        .collect()
 }
 
 fn mode(bindings: RoutedExpertBindings<'_>) -> Result<BlockActivationMode> {

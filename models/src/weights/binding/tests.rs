@@ -21,6 +21,7 @@ mod hybrid;
 mod mistral;
 mod packed_integer;
 mod roles;
+mod state_space;
 mod view;
 mod vision;
 

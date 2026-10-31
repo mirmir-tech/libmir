@@ -1,13 +1,11 @@
+mod layers;
 mod output;
+use layers::PrefillRows;
 use mircuda::{DeviceBuffer, PinnedBuffer, bf16};
 use output::PackedOutput;
 use runtime::{backend::SamplingLogits, kv::BlockTable};
 
-use super::{
-    graph::checked,
-    layer::SharedRoutedBatchLayer,
-    states::{full_states, linear_states},
-};
+use super::{graph::checked, layer::SharedRoutedBatchLayer};
 use crate::{
     CudaBackend, CudaSharedRoutedModelSession, Error, ExecutionPhase, PagedPrefillBatch, Result,
     backend::shared_routed::{CudaSharedRoutedModelTemplate, boundary::SharedRoutedEmbedding},
@@ -154,37 +152,20 @@ impl CudaSharedRoutedPrefillBatch {
         stream.copy_to_device(&mut self.position_staging, &mut self.positions)?;
         self.embedding
             .execute_batch(&self.token_ids, self.token_ids.len(), &mut self.first)?;
+        let rows = PrefillRows {
+            counts: &self.counts,
+            uniform: tokens.len() == self.token_ids.len()
+                && self.counts.iter().all(|count| *count == self.counts[0]),
+            positions: &self.positions,
+            paging: &self.paging,
+        };
         for index in 0..self.layers.len() {
             let (input, output) = if index.is_multiple_of(2) {
                 (&self.first, &mut self.second)
             } else {
                 (&self.second, &mut self.first)
             };
-            match &mut self.layers[index] {
-                SharedRoutedBatchLayer::Linear(layer) => {
-                    let mut states = linear_states(sessions, index)?;
-                    // A row with an armed checkpoint splits its recurrence,
-                    // which only the ragged path does.
-                    if self.rows > 1
-                        && tokens.len() == self.token_ids.len()
-                        && self.counts.iter().all(|count| *count == self.counts[0])
-                        && states.iter().all(|state| state.armed_checkpoint().is_none())
-                    {
-                        layer.execute_packed(input, &mut states, output)?;
-                    } else {
-                        layer.execute_ragged(input, &mut states, &self.counts, output)?;
-                    }
-                },
-                SharedRoutedBatchLayer::Full(layer) => {
-                    layer.execute_packed_prefill(
-                        input,
-                        &self.positions,
-                        &mut full_states(sessions, index)?,
-                        &self.paging,
-                        output,
-                    )?;
-                },
-            }
+            self.layers[index].execute_prefill(sessions, index, input, output, &rows)?;
         }
         for (session, count) in sessions.iter_mut().zip(&self.counts) {
             session.position = session

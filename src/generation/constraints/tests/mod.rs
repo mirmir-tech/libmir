@@ -187,3 +187,18 @@ fn optional_nested_properties_follow_declared_order_before_extensions() -> TestR
     assert!(!accepts(&schema, &envelope(r#"{"payload":"source","confidence":0.95}"#))?);
     Ok(())
 }
+
+#[test]
+fn trie_masks_drop_the_spare_word_of_word_aligned_vocabularies() -> TestResult {
+    for vocab in [64_u32, 70] {
+        let size = vocab as usize;
+        let mut bits = llguidance::toktrie::SimpleVob::alloc_with_capacity(size, size + 1);
+        bits.allow_token(vocab - 1);
+        let words = super::mask_words(&bits, size)?;
+        assert_eq!(words.len(), size.div_ceil(32));
+        runtime::backend::TokenMask::new(words, size)?;
+    }
+    let bits = llguidance::toktrie::SimpleVob::alloc(63);
+    assert!(super::mask_words(&bits, 64).is_err());
+    Ok(())
+}

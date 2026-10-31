@@ -107,3 +107,25 @@ fn spatial_vision_catalog() -> TensorCatalog {
     catalog.tensors.sort_by(|left, right| left.name.cmp(&right.name));
     catalog
 }
+
+#[test]
+fn keeps_a_text_contract_when_the_vision_tower_is_unsupported() -> Result<()> {
+    let mut config = json!({
+        "model_type": "mistral",
+        "architectures": ["MistralForCausalLM"],
+        "hidden_size": 32,
+        "intermediate_size": 64,
+        "num_hidden_layers": 1,
+        "num_attention_heads": 4,
+        "num_key_value_heads": 2,
+        "vocab_size": 64,
+        "hidden_act": "silu"
+    });
+    config["vision_config"] = json!({ "model_type": "radio", "hidden_size": 1280 });
+
+    let contract = RemoteModelContract::inspect_generation(&config, &dense_catalog())?;
+
+    assert!(contract.vision().is_none());
+    assert!(contract.execution().is_some());
+    Ok(())
+}

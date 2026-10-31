@@ -6,8 +6,8 @@ mod schema;
 
 pub use binding::{
     AffineBits, AffineGroupAxis, AffinePacking, AffineParameterDType, AffineSignedness,
-    AffineStorageDType, AffineZeroPointMode, AttentionProjectionRole, AwqBits, AwqPacking,
-    AwqQuantization, AwqScaleDType, AwqStorageDType, BindingTransform,
+    AffineStorageDType, AffineZeroPointMode, AttentionProjectionBindings, AttentionProjectionRole,
+    AwqBits, AwqPacking, AwqQuantization, AwqScaleDType, AwqStorageDType, BindingTransform,
     BitsAndBytes4BitQuantization, BitsAndBytes4BitType, BitsAndBytesComputeDType,
     BitsAndBytesStorageDType, BlockActivationMode, BlockFormat, BlockInputPadding,
     BlockProjectionLayout, BlockQuantization, BlockScale, BlockScaleEncoding, BlockStorageDType,
@@ -21,10 +21,12 @@ pub use binding::{
     GptqPacking, GptqQuantization, GptqScaleDType, GptqStorageDType, GroupedAffineQuantization,
     HybridDecoderLayerBindings, HybridMixerBindings, HybridMoeAttentionBindings,
     HybridMoeDenseBindings, HybridMoeExpertBindings, HybridMoeLayerBindings,
-    HybridMoeRouterBindings, LayerTensorRole, LinearAttentionBindings, LinearAttentionTensorRole,
-    LogicalTensorRole, MixedDecoderLayerBindings, MixedFeedForwardBindings,
-    RoutedDecoderLayerBindings, RoutedExpertBindings, SharedRoutedFeedForwardBindings,
-    TensorBinding, TensorPacking, TensorStorage, WeightBindingPlan,
+    HybridMoeRouterBindings, LatentProjectionRole, LatentRoutedBindings, LayerTensorRole,
+    LinearAttentionBindings, LinearAttentionTensorRole, LogicalTensorRole,
+    MixedDecoderLayerBindings, MixedFeedForwardBindings, RoutedDecoderLayerBindings,
+    RoutedExpertBindings, SharedRoutedFeedForwardBindings, StateSpaceHybridLayerBindings,
+    StateSpaceHybridMixerBindings, StateSpaceMixerBindings, StateSpaceTensorRole, TensorBinding,
+    TensorPacking, TensorStorage, UngatedExpertBindings, WeightBindingPlan,
 };
 pub use catalog::{
     MAX_SAFETENSORS_HEADER_BYTES, TensorCatalog, TensorInfo, safetensors_header_len,

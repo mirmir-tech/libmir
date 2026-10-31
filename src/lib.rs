@@ -34,10 +34,10 @@ pub use model::{
     CheckpointEncoding, IMAGE_PLACEHOLDER, Library, MODEL_FORMAT_REGISTRY_SCHEMA_VERSION, Model,
     ModelDescriptor, ModelLoadOptions, PreparedPrompt, PreparedVisionPrompt,
     PromptPreparationTimings, RemoteModelContract, RemoteTaskMetadata, RemoteVisionContract,
-    WeightEncoding,
+    UnloadedTensors, WeightEncoding,
 };
 pub use models::{
-    chat::{ReasoningMode, TemplateKind},
+    chat::{ReasoningEffort, ReasoningHistory, ReasoningMode, TemplateKind},
     execution::{
         ArchitectureCapability, ArchitectureRequirements, CausalScoringTask, EmbeddingTask,
         ModelTask, PoolingMode, TaskExecutionPlan,

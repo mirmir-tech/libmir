@@ -87,7 +87,7 @@ impl Model {
         let mut session = self.session();
         let mut constraints =
             constraints::ToolConstraint::prepare(self, request, &prepared, settings)?;
-        let sampling = request_sampling(settings, vocab_size, &mut sampler);
+        let sampling = request_sampling(self, settings, vocab_size, &mut sampler);
         let sampling = constraints::sampling(&mut constraints, sampling)?;
         let harmony_exit = reasoning_exit(request, descriptor, constraints.as_ref())?;
         let mut cycle =
@@ -133,7 +133,7 @@ impl Model {
             } else {
                 cycle.observe(prepared.token_ids(), &token_ids);
                 let started = Instant::now();
-                let sampling = request_sampling(settings, vocab_size, &mut sampler);
+                let sampling = request_sampling(self, settings, vocab_size, &mut sampler);
                 let sampling = cycle.sampling(sampling);
                 let sampling = constraints::sampling(&mut constraints, sampling)?;
                 Some((started, session.start_decode(next, sampling)?))

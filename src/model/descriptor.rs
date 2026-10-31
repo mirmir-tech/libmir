@@ -130,6 +130,13 @@ impl ModelDescriptor {
     }
 
     #[must_use]
+    /// Returns the checkpoint tensors a text-only load leaves on disk, when
+    /// the decoder contract binds every tensor the load uses.
+    pub const fn unloaded_tensors(&self) -> Option<&super::memory::UnloadedTensors> {
+        self.unloaded.as_ref()
+    }
+
+    #[must_use]
     /// Returns the image processor configuration shipped with the checkpoint.
     pub const fn image_processor(&self) -> Option<&ImageProcessorConfig> {
         self.image_processor.as_ref()

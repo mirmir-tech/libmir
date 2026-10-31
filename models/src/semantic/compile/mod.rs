@@ -1,3 +1,5 @@
+mod state_space;
+
 use super::{
     ActivationSpec, AttentionOutputSpec, AttentionSpec, DecoderLayerSpec, DecoderSpec,
     FeedForwardSpec, KeyValueRelation, LinearAttentionSpec, MixerSpec, NormalizationKind,
@@ -21,6 +23,9 @@ pub(super) fn compile(
         kind: NormalizationKind::Rms,
         epsilon: decoder.rms_norm_eps,
     };
+    if let Some(hybrid) = &decoder.state_space {
+        return state_space::compile(decoder, hybrid, norm);
+    }
     let layers = (0..decoder.num_hidden_layers)
         .map(|index| layer(decoder, tensors, index, norm))
         .collect::<Result<Vec<_>>>()?;
@@ -32,6 +37,7 @@ pub(super) fn compile(
             tie_word_embeddings: decoder.tie_word_embeddings,
             final_norm: norm,
             layers,
+            block_layout: super::BlockLayoutSpec::Unified,
         },
     })
 }

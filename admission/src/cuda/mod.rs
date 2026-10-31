@@ -15,6 +15,7 @@ pub enum CudaMixerLowering {
         key_value_relation: KeyValueRelation,
     },
     Linear,
+    StateSpace,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -22,6 +23,8 @@ pub enum CudaFeedForwardLowering {
     Dense,
     Routed { shared: bool, clamped: bool },
     DenseAndRouted,
+    LatentRouted { shared: bool },
+    None,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -91,6 +94,11 @@ impl CudaDecoderPlan {
     }
 
     #[must_use]
+    pub fn has_state_space_mixer(&self) -> bool {
+        self.layers.iter().any(|layer| layer.mixer == CudaMixerLowering::StateSpace)
+    }
+
+    #[must_use]
     pub fn has_softmax_mixer(&self) -> bool {
         self.layers
             .iter()
@@ -121,6 +129,8 @@ pub enum CudaDecoderRuntime {
     SharedRouted,
     DenseMixed,
     ClampedRouted,
+    /// Mamba-2 and attention mixers with latent routed experts (Nemotron-H).
+    StateSpaceHybrid,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -138,9 +148,11 @@ pub fn graph_normalization(plan: &CudaDecoderPlan) -> Result<CudaQkvNormalizatio
             CudaMixerLowering::Softmax { normalization, key_value_relation, .. } => {
                 Ok((normalization, key_value_relation))
             },
-            CudaMixerLowering::Linear => Err(ArchitectureError::invalid(
-                "CUDA graph decoder requires softmax attention in every layer",
-            )),
+            CudaMixerLowering::Linear | CudaMixerLowering::StateSpace => {
+                Err(ArchitectureError::invalid(
+                    "CUDA graph decoder requires softmax attention in every layer",
+                ))
+            },
         })
         .collect::<Result<Vec<_>>>()?;
     if softmax.iter().all(|value| *value == (QkNormalization::None, value.1)) {
@@ -171,6 +183,7 @@ fn lower_mixer(spec: &MixerSpec) -> CudaMixerLowering {
             key_value_relation: attention.key_value_relation,
         },
         MixerSpec::LinearAttention(_) => CudaMixerLowering::Linear,
+        MixerSpec::StateSpace(_) => CudaMixerLowering::StateSpace,
     }
 }
 
@@ -185,5 +198,9 @@ fn lower_feed_forward(spec: &FeedForwardSpec) -> CudaFeedForwardLowering {
                 ActivationSpec::SwiGlu { clamp: Some(_), up_shift, .. } if up_shift != 0.0
             ),
         },
+        FeedForwardSpec::LatentRouted { shared, .. } => {
+            CudaFeedForwardLowering::LatentRouted { shared: shared.is_some() }
+        },
+        FeedForwardSpec::None => CudaFeedForwardLowering::None,
     }
 }

@@ -58,7 +58,7 @@ pub struct CudaGatedDeltaState {
     offset: usize,
     identity: u64,
     revision: u64,
-    resident: Option<Box<residency::GatedDeltaResidency>>,
+    resident: super::recurrent::ResidentRow,
     inline: Option<Box<checkpoint::InlineCheckpoint>>,
 }
 
@@ -100,7 +100,7 @@ impl CudaBackend {
             offset: 0,
             identity: NEXT_STATE_IDENTITY.fetch_add(1, Ordering::Relaxed),
             revision: 0,
-            resident: None,
+            resident: super::recurrent::ResidentRow::default(),
             inline: None,
         })
     }
@@ -165,7 +165,7 @@ impl CudaGatedDeltaState {
     }
 
     pub fn reset(&mut self) -> Result<()> {
-        self.resident = None;
+        self.resident.clear();
         self.inline = None;
         self.state = self
             .backend

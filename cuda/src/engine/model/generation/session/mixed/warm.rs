@@ -1,16 +1,19 @@
 //! Concurrency warm-up: every decode batch shape and the cost of a session,
 //! measured before the K/V budget is.
 
+use runtime::backend::{ModelHandle, PrefillRequest, SamplingLogits};
 use uuid::Uuid;
 
 use super::MixedMixerExecution;
-use crate::{CudaBackend, Result};
+use crate::{CudaBackend, Result, engine::model::generation::PrefillChunk};
 
 /// Prefill chunks per throwaway session: two exercise the reusable-prefix
 /// path, as the profile warm-up does.
 const WARM_SESSION_CHUNKS: usize = 2;
 
-/// Prefills `rows` throwaway sessions the way traffic does, decodes them as
+/// Prefills `rows` throwaway sessions through the traffic prefill path, so
+/// they reuse its retained chunk shape instead of building a second prefill
+/// workspace, then decodes them as
 /// batches of every row count from `rows` down to one, then drops them. The
 /// batches and what they allocate on first execution stay resident for the
 /// memory measurement; the pool bytes one live session costs are recorded
@@ -26,7 +29,11 @@ pub(super) fn warm_concurrency(
     // Every row decodes once per batch width, so the tables grow by `rows`.
     let blocks_per_session =
         tokens.saturating_add(rows).div_ceil(block_size.max(1)).saturating_add(1);
-    let prompt = vec![1_u32; chunk];
+    let prompt = vec![1_u32; tokens];
+    let model = ModelHandle {
+        id: "warm-concurrency".into(),
+        backend: "cuda".into(),
+    };
     let used_before = execution.template.pool_used_bytes()?;
     let mut sequences = Vec::with_capacity(rows);
     let result = (|| {
@@ -37,18 +44,39 @@ pub(super) fn warm_concurrency(
             for block in first_block..first_block.saturating_add(blocks_per_session) {
                 table.push(runtime::kv::BlockId(u32::try_from(block)?));
             }
-            let mut session = execution.template.instantiate_with_caches(&execution.caches)?;
+            table.set_token_len(tokens);
+            let request = PrefillRequest {
+                model: model.clone(),
+                session_id,
+                prompt_tokens: prompt.clone(),
+                cache_checkpoints: Vec::new(),
+                block_table: table.clone(),
+                cached_tokens: 0,
+                generation_tokens: None,
+                sampling_logits: SamplingLogits::None,
+            };
             for index in 0..WARM_SESSION_CHUNKS {
-                table.set_token_len((index + 1).saturating_mul(chunk));
-                session.prefill(session_id, &prompt, &table)?;
+                let offset = index.saturating_mul(chunk);
+                let mut chunk_table = table.clone();
+                chunk_table.set_token_len(offset.saturating_add(chunk));
+                super::batch::prefill(
+                    execution,
+                    backend,
+                    &[PrefillChunk {
+                        request: &request,
+                        tokens: &prompt[offset..offset.saturating_add(chunk)],
+                        offset,
+                        table: &chunk_table,
+                        final_chunk: index + 1 == WARM_SESSION_CHUNKS,
+                    }],
+                )?;
             }
-            execution.sessions.insert(session_id, session);
             table.set_token_len(tokens.saturating_add(1));
             sequences.push(runtime::backend::DecodeSequence {
                 session_id,
                 token_id: 1,
                 block_table: table,
-                sampling_logits: runtime::backend::SamplingLogits::None,
+                sampling_logits: SamplingLogits::None,
             });
         }
         let used_after = execution.template.pool_used_bytes()?;

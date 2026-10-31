@@ -8,12 +8,14 @@ mod validation;
 pub use attention::{
     AttentionOutputSpec, AttentionSpec, KeyValueRelation, LinearAttentionSpec, MixerSpec,
     PositionEncodingSpec, QkNormalization, RopeScalingSpec, RotaryLayoutSpec, RotarySpec,
+    StateSpaceSpec, StateSpaceStateDTypeSpec,
 };
 pub use feed_forward::{
     ActivationSpec, FeedForwardSpec, RoutedExpertsSpec, RouterNormalization, SharedExpertSpec,
 };
 pub use model::{
-    DecoderLayerSpec, DecoderSpec, NormalizationKind, NormalizationSpec, SemanticModelSpec,
+    BlockLayoutSpec, DecoderLayerSpec, DecoderSpec, LayerBlockPosition, NormalizationKind,
+    NormalizationSpec, SemanticModelSpec,
 };
 
 use crate::{

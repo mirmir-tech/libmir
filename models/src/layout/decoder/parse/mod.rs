@@ -2,13 +2,18 @@ use std::{fs, path::Path};
 
 use serde_json::Value;
 
-use super::{DecoderConfig, attention, features, rope};
+use super::{
+    AttentionLayerType, DecoderConfig, StateSpaceHybridConfig, attention, features, rope,
+    state_space,
+};
 use crate::{error::Result, layout::ModelLayout};
 
 mod value;
 
-pub(super) use value::{invalid, optional_usize, require_usize};
-use value::{optional_bool, optional_f64, optional_string, partial_rotary_factor, rope_theta};
+pub(super) use value::{
+    invalid, optional_bool, optional_f64, optional_string, optional_usize, require_usize,
+};
+use value::{partial_rotary_factor, rope_theta};
 
 impl DecoderConfig {
     pub fn from_layout(layout: &ModelLayout) -> Result<Self> {
@@ -39,8 +44,15 @@ impl DecoderConfig {
             return Err(invalid("num_attention_heads must be greater than zero"));
         }
         let hidden_size = require_usize(decoder, &["hidden_size", "n_embd"])?;
-        let num_hidden_layers =
-            require_usize(decoder, &["num_hidden_layers", "num_layers", "n_layer"])?;
+        let state_space = state_space::state_space_hybrid(decoder, hidden_size)?;
+        let num_hidden_layers = match &state_space {
+            Some(hybrid) => hybrid.blocks.layers().len(),
+            None => require_usize(decoder, &["num_hidden_layers", "num_layers", "n_layer"])?,
+        };
+        let layer_types = match &state_space {
+            Some(hybrid) => hybrid_layer_types(hybrid),
+            None => attention::layer_types(decoder, num_hidden_layers)?,
+        };
         let partial_rotary_factor = partial_rotary_factor(decoder)?;
         let explicit_head_dim =
             optional_usize(decoder, &["head_dim", "attention_head_dim", "kv_channels"])?;
@@ -89,7 +101,7 @@ impl DecoderConfig {
                 "sliding_attention",
             )?
             .or(partial_rotary_factor),
-            layer_types: attention::layer_types(decoder, num_hidden_layers)?,
+            layer_types,
             tie_word_embeddings: optional_bool(decoder, "tie_word_embeddings")?
                 .or(optional_bool(value, "tie_word_embeddings")?)
                 .unwrap_or(false),
@@ -98,7 +110,10 @@ impl DecoderConfig {
             attention_output: features::attention_output(decoder)?,
             sliding_window: optional_usize(decoder, &["sliding_window"])?,
             linear_attention: features::linear_attention(decoder)?,
-            num_experts: optional_usize(decoder, &["num_experts", "num_local_experts"])?,
+            num_experts: optional_usize(
+                decoder,
+                &["num_experts", "num_local_experts", "n_routed_experts"],
+            )?,
             top_k_experts: optional_usize(
                 decoder,
                 &["top_k_experts", "num_experts_per_tok", "experts_per_token"],
@@ -115,6 +130,7 @@ impl DecoderConfig {
             attention_sinks: optional_bool(decoder, "attention_sinks")?.unwrap_or(false),
             swiglu_limit: optional_f64(decoder, &["swiglu_limit"])?,
             initial_context_length: optional_usize(decoder, &["initial_context_length"])?,
+            state_space,
         };
         config.validate()?;
         Ok(config)
@@ -164,8 +180,23 @@ fn intermediate_size(value: &Value) -> Result<usize> {
     })
 }
 
+fn hybrid_layer_types(hybrid: &StateSpaceHybridConfig) -> Vec<AttentionLayerType> {
+    hybrid
+        .blocks
+        .layers()
+        .iter()
+        .map(|layer| {
+            if layer.is_state_space() {
+                AttentionLayerType::StateSpace
+            } else {
+                AttentionLayerType::Full
+            }
+        })
+        .collect()
+}
+
 fn decoder_value(value: &Value) -> &Value {
-    ["text_config", "language_config"]
+    ["text_config", "language_config", "llm_config"]
         .into_iter()
         .filter_map(|key| value.get(key))
         .find(|section| section.is_object())

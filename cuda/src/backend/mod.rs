@@ -10,19 +10,23 @@ mod gated_full_attention;
 mod hybrid_layer;
 mod init;
 mod kv;
+mod latent_moe;
 mod layer_scratch;
 mod linear;
+mod mamba2;
 mod model;
 mod output;
 mod planning;
 mod prepare;
 mod profile;
+mod recurrent;
 mod router;
 mod runtime;
 mod sampling;
 mod scratch_pool;
 mod shared_moe;
 mod shared_routed;
+mod state_space_hybrid;
 mod task;
 mod tuning;
 mod vision;
@@ -33,9 +37,9 @@ use std::{
 };
 
 pub use attention::{
-    BatchedDecodeAttentionBf16, CapturedDecodeAttentionBf16, DecodeAttentionBf16,
-    DecodeAttentionConfig, DecodeAttentionOutputWeight, DecodeAttentionWeights, DecodeQkvWeights,
-    PrefillAttentionBf16,
+    AttentionLayerPolicy, BatchedDecodeAttentionBf16, CapturedDecodeAttentionBf16,
+    DecodeAttentionBf16, DecodeAttentionConfig, DecodeAttentionOutputWeight,
+    DecodeAttentionWeights, DecodeQkvWeights, PrefillAttentionBf16,
 };
 pub use block::{
     BatchedDecodeMoeBlockBf16, BatchedDecodeMoeLayer, CapturedDecodeMoeBlockBf16,
@@ -69,6 +73,7 @@ pub use kv::{
     PagedAttentionBf16, PagedDecodeBatch, PagedKvCache, PagedPrefillBatch, WindowedPrefillStaging,
     attention_execution_average, candidate_partitions, sample_contexts, select_attention_execution,
 };
+pub use latent_moe::{CudaLatentMoe, CudaLatentMoeExecution, LatentMoeConfig, LatentMoeWeights};
 pub use linear::{
     AffineQuantizedBf16Linear, AffineQuantizedBf16Qmm, AffineQuantizedConfig,
     AffineQuantizedPairTensors, AffineQuantizedTensors, AffineQuantizedWeight, Bf16Linear,
@@ -88,6 +93,9 @@ pub use linear::{
 };
 use linear::{
     BucketedNvFp4Scratch, BucketedNvFp4ScratchConfig, MarlinNvFp4Scratch, MarlinNvFp4ScratchConfig,
+};
+pub use mamba2::{
+    CudaMamba2BatchState, CudaMamba2Checkpoint, CudaMamba2State, Mamba2ScanPath, Mamba2Workspace,
 };
 use mircuda::{Compiler, Context, DeviceInfo, MemoryPool, Stream};
 pub use model::{
@@ -114,6 +122,10 @@ pub use shared_moe::{
 pub use shared_routed::{
     CudaSharedRoutedDecodeBatch, CudaSharedRoutedLayerState, CudaSharedRoutedModelSession,
     CudaSharedRoutedModelTemplate, CudaSharedRoutedPrefillBatch, SharedRoutedCheckpoint,
+};
+pub use state_space_hybrid::{
+    CudaAttentionHybridExecution, CudaAttentionHybridLayer, CudaMamba2HybridExecution,
+    CudaMamba2HybridLayer,
 };
 pub use task::{CudaSequenceScoringModel, CudaTextEmbeddingModel};
 pub use tuning::{AttentionFamily, AttentionProfileRequest, CudaTuningConfig, CudaTuningMode};
@@ -142,6 +154,12 @@ struct CudaRuntime {
     gated_delta_batches: scratch_pool::ScratchPool<
         gated_delta::GatedDeltaBatchKey,
         gated_delta::CudaGatedDeltaBatchState,
+    >,
+    latent_moe_scratch:
+        scratch_pool::ScratchPool<latent_moe::LatentMoeScratchKey, latent_moe::LatentMoeScratch>,
+    mamba2_scratch: scratch_pool::ScratchPool<
+        state_space_hybrid::MixerScratchKey,
+        state_space_hybrid::MixerScratch,
     >,
     decode_workspaces: scratch_pool::ScratchPool<
         shared_routed::DecodeWorkspaceKey,

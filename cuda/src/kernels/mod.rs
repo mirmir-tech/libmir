@@ -21,8 +21,10 @@ mod gated_attention;
 mod gated_delta;
 mod geometry;
 mod gptq;
+mod latent_moe;
 mod linear_fp8;
 mod logit_softcap;
+mod mamba2;
 mod mrope;
 mod mxfp4;
 mod nvfp4;
@@ -83,8 +85,13 @@ pub use gated_delta::{
     GatedDeltaRecurrenceMode, GatedDeltaSpec, GatedDeltaTransformSpec, GatedDeltaTransforms,
 };
 pub use gptq::{GptqLaunch, GptqLinear, GptqSpec};
+pub use latent_moe::{ReluSquaredBf16, SigmoidRouter, SigmoidRouterOutputs, SigmoidRouterSpec};
 pub use linear_fp8::{BlockFp8LinearKernels, BlockFp8LinearSpec};
 pub(crate) use logit_softcap::LogitSoftcap;
+pub use mamba2::{
+    MAMBA2_CHUNK, MAMBA2_SCAN_ROWS, Mamba2DecodeBatch, Mamba2Geometry, Mamba2Kernels, Mamba2Launch,
+    Mamba2Parameters,
+};
 pub use mrope::{Mrope, MropeSpec};
 pub use mxfp4::{
     MxFp4Embedding, MxFp4EmbeddingOperands, MxFp4EmbeddingSpec, MxFp4GatheredLinear,
@@ -117,6 +124,7 @@ pub use paged::{
     PagedKvStore, PagedPrefillAttention, SplitAttentionWorkspace, SplitPagedAttention,
 };
 pub use projection_pack::ProjectionPackSplit;
+pub use qkv::RotaryEmbedding;
 pub(crate) use qkv::{
     BatchedQkvPostprocess, QkvNormalization, QkvPostprocess, QkvPostprocessArguments,
     QkvPostprocessKernel, QkvPostprocessSpec,

@@ -95,9 +95,7 @@ fn spec(vocab: usize, policy: &SamplingLogits) -> Result<SamplingSpec> {
             top_p,
             top_k,
             draw,
-        } if vocab_size <= vocab && (top_k > 0 || top_p >= 1.0) => {
-            (top_k, top_p, temperature, draw)
-        },
+        } if vocab_size <= vocab => (top_k, top_p, temperature, draw),
         SamplingLogits::Masked { .. }
         | SamplingLogits::Full
         | SamplingLogits::TopK { .. }

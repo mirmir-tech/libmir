@@ -42,6 +42,10 @@ pub enum ArchitectureCapability {
     NamedGatedActivation,
     SoftmaxTopKRouter,
     UnitTopKRouter,
+    StateSpaceMixer,
+    LatentRoutedExperts,
+    ReluSquared,
+    SigmoidBiasedTopKRouter,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -145,6 +149,10 @@ fn mixer(mixer: &MixerSpec, capabilities: &mut BTreeSet<ArchitectureCapability>)
             capabilities.insert(ArchitectureCapability::LinearAttention);
             attention.output
         },
+        MixerSpec::StateSpace(_) => {
+            capabilities.insert(ArchitectureCapability::StateSpaceMixer);
+            AttentionOutputSpec::Direct
+        },
     };
     if output == AttentionOutputSpec::Gated {
         capabilities.insert(ArchitectureCapability::GatedAttentionOutput);
@@ -198,6 +206,15 @@ fn feed_forward(
             activation_capability(dense_activation, capabilities);
             routed_capabilities(routed, capabilities);
         },
+        FeedForwardSpec::LatentRouted { routed, shared, .. } => {
+            capabilities.insert(ArchitectureCapability::LatentRoutedExperts);
+            routed_capabilities(routed, capabilities);
+            if let Some(shared) = shared {
+                capabilities.insert(ArchitectureCapability::SharedExpert);
+                activation_capability(&shared.activation, capabilities);
+            }
+        },
+        FeedForwardSpec::None => {},
     }
 }
 
@@ -209,6 +226,7 @@ fn routed_capabilities(
     capabilities.insert(match routed.router_normalization {
         RouterNormalization::SoftmaxTopK => ArchitectureCapability::SoftmaxTopKRouter,
         RouterNormalization::UnitTopK => ArchitectureCapability::UnitTopKRouter,
+        RouterNormalization::SigmoidBiasedTopK => ArchitectureCapability::SigmoidBiasedTopKRouter,
     });
     activation_capability(&routed.activation, capabilities);
 }
@@ -222,5 +240,6 @@ fn activation_capability(
         ActivationSpec::SwiGlu { clamp: None, .. } => ArchitectureCapability::SwiGlu,
         ActivationSpec::GeluTanh => ArchitectureCapability::GeluTanh,
         ActivationSpec::NamedGated { .. } => ArchitectureCapability::NamedGatedActivation,
+        ActivationSpec::ReluSquared => ArchitectureCapability::ReluSquared,
     });
 }

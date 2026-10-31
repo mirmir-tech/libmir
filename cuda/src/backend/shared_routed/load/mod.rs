@@ -1,7 +1,11 @@
 mod feed_forward;
+mod state_space;
 use models::{
     layout::{AttentionLayerType, DecoderConfig},
     weights::{HybridMixerBindings, MixedDecoderLayerBindings, TensorCatalog, WeightBindingPlan},
+};
+pub(super) use state_space::{
+    HybridLoad, validate_composition as validate_state_space_composition,
 };
 
 use super::SharedRoutedLayerTemplate;
@@ -79,6 +83,9 @@ pub(super) fn build_layer(
         ),
         AttentionLayerType::Sliding => Err(Error::UnsupportedDecoderLayer(
             "shared-routed linear mixer stack contains sliding attention".into(),
+        )),
+        AttentionLayerType::StateSpace => Err(Error::UnsupportedDecoderLayer(
+            "shared-routed linear mixer stack contains a state-space mixer".into(),
         )),
     }
 }

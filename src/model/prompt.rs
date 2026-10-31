@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use foundation::conversation::Conversation;
-use models::{execution::ModelTask, generation::GenerationSettings};
+use models::{chat::TemplateControls, execution::ModelTask, generation::GenerationSettings};
 
 use super::{
     ModelDescriptor, PreparedPrompt, PromptPreparationTimings, task_mismatch, validate_context,
@@ -23,20 +23,20 @@ impl ModelDescriptor {
         conversation: &Conversation,
         generation: GenerationSettings,
     ) -> Result<PreparedPrompt> {
-        self.prepare_with_reasoning(conversation, generation, crate::ReasoningMode::ModelDefault)
+        self.prepare_with_controls(conversation, generation, TemplateControls::default())
     }
 
-    pub(crate) fn prepare_with_reasoning(
+    pub(crate) fn prepare_with_controls(
         &self,
         conversation: &Conversation,
         generation: GenerationSettings,
-        reasoning: crate::ReasoningMode,
+        controls: TemplateControls,
     ) -> Result<PreparedPrompt> {
         if !matches!(self.task_plan.task(), ModelTask::Generation) {
             return Err(task_mismatch("generation", &self.task_plan));
         }
         let render_started = Instant::now();
-        let prompt = self.template.render_with_reasoning(conversation, reasoning)?;
+        let prompt = self.template.render_with_controls(conversation, controls)?;
         let render = render_started.elapsed();
         let tokenize_started = Instant::now();
         let (tokens, token_ends) =
@@ -47,7 +47,7 @@ impl ModelDescriptor {
         }
         validate_context(tokens.token_ids.len(), generation.max_tokens, self.metadata.context_len)?;
         let cache_checkpoints =
-            self.cache_checkpoints(conversation, &prompt.text, &token_ends, reasoning);
+            self.cache_checkpoints(conversation, &prompt.text, &token_ends, controls);
         Ok(PreparedPrompt {
             prompt,
             tokens,

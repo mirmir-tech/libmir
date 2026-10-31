@@ -12,6 +12,7 @@ mod hybrid;
 mod packed_integer;
 mod roles;
 mod shapes;
+mod state_space;
 mod types;
 mod validation;
 mod view;
@@ -52,8 +53,12 @@ pub use packed_integer::{
     CompressedIntegerSignedness, CompressedIntegerStorageDType, CompressedIntegerZeroPointMode,
 };
 pub use roles::{
-    AttentionProjectionRole, ExpertProjectionRole, FeedForwardProjectionRole, LayerTensorRole,
-    LinearAttentionTensorRole, LogicalTensorRole,
+    AttentionProjectionRole, ExpertProjectionRole, FeedForwardProjectionRole, LatentProjectionRole,
+    LayerTensorRole, LinearAttentionTensorRole, LogicalTensorRole, StateSpaceTensorRole,
+};
+pub use state_space::{
+    AttentionProjectionBindings, LatentRoutedBindings, StateSpaceHybridLayerBindings,
+    StateSpaceHybridMixerBindings, StateSpaceMixerBindings, UngatedExpertBindings,
 };
 pub use types::{
     BindingTransform, ExpertProjectionLayout, TensorBinding, TensorPacking, TensorStorage,

@@ -18,6 +18,8 @@ mod mxfp8;
 mod output;
 mod prefill;
 mod qkv;
+mod rebind;
+mod semantic;
 #[cfg(test)]
 mod tests;
 
@@ -30,6 +32,7 @@ pub use output::DecodeAttentionOutputWeight;
 pub(in crate::backend) use prefill::ImageAttentionSpan;
 pub use prefill::PrefillAttentionBf16;
 use qkv::{AttentionQkvProjection, QkvProjectionBuffers};
+pub use semantic::AttentionLayerPolicy;
 
 /// Allocation-free BF16 decode attention over runtime-owned paged K/V state.
 #[derive(Debug)]
@@ -102,9 +105,7 @@ impl DecodeAttentionBf16 {
             kv_heads: config.cache.kv_heads,
             head_dim: config.cache.key_head_dim,
             value_head_dim: config.cache.value_head_dim,
-            rotary_dim: config.rotary_dim,
-            pairing_dim: config.rope_pairing_dim,
-            theta: config.rope_theta,
+            rotary: config.rotary,
             epsilon: config.rms_norm_epsilon,
             normalization: config.qkv_normalization,
         };

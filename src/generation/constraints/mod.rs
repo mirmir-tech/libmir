@@ -6,7 +6,7 @@ pub(super) mod prompt;
 mod tests;
 mod validation;
 
-use llguidance::{Matcher, api::TopLevelGrammar};
+use llguidance::{Matcher, api::TopLevelGrammar, toktrie::SimpleVob};
 use models::{chat::ToolCallPrefix, generation::GenerationSettings};
 use runtime::backend::{DeviceSampling, SamplingLogits, TokenMask};
 
@@ -136,8 +136,17 @@ pub(super) fn sampling(
         _ => return Err(invalid("schema mode requires device sampling without history")),
     };
     let bits = constraint.matcher.compute_mask().map_err(|error| invalid(error.to_string()))?;
-    let mask = TokenMask::new(bits.as_slice().to_vec(), constraint.vocab)?;
+    let mask = TokenMask::new(mask_words(&bits, constraint.vocab)?, constraint.vocab)?;
     Ok(SamplingLogits::Masked { mask, sampling })
+}
+
+/// llguidance allocates one spare bit past the vocabulary, which adds a whole
+/// word when the vocabulary is a multiple of 32 (Nemotron-H's 131 072).
+fn mask_words(bits: &SimpleVob, vocab: usize) -> Result<Vec<u32>> {
+    if bits.len() != vocab {
+        return Err(invalid("token mask vocabulary mismatch"));
+    }
+    Ok(bits.as_slice()[..vocab.div_ceil(32)].to_vec())
 }
 
 /// A required schema tool cannot finish on the reasoning channel. Use the

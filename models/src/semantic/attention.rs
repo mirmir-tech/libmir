@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub enum MixerSpec {
     SoftmaxAttention(AttentionSpec),
     LinearAttention(LinearAttentionSpec),
+    StateSpace(StateSpaceSpec),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -32,6 +33,52 @@ pub struct LinearAttentionSpec {
     pub key_head_dim: usize,
     pub value_head_dim: usize,
     pub output: AttentionOutputSpec,
+}
+
+/// Mamba-2 selective state-space mixer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StateSpaceSpec {
+    pub heads: usize,
+    pub head_dim: usize,
+    pub state_size: usize,
+    pub groups: usize,
+    pub convolution_kernel_size: usize,
+    pub convolution_bias: bool,
+    pub projection_bias: bool,
+    pub chunk_size: usize,
+    pub time_step_minimum: f64,
+    /// Upper clamp of the time step; `None` leaves it unbounded.
+    pub time_step_maximum: Option<f64>,
+    pub state_dtype: StateSpaceStateDTypeSpec,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StateSpaceStateDTypeSpec {
+    Float32,
+    BFloat16,
+    Float16,
+}
+
+impl StateSpaceSpec {
+    /// Width of the gated SSM output.
+    #[must_use]
+    pub const fn inner_size(&self) -> usize {
+        self.heads * self.head_dim
+    }
+
+    /// Channels passing through the causal convolution.
+    #[must_use]
+    pub const fn convolution_channels(&self) -> usize {
+        self.inner_size() + 2 * self.groups * self.state_size
+    }
+
+    /// Width of the fused `z | xBC | dt` input projection.
+    #[must_use]
+    pub const fn input_projection_size(&self) -> usize {
+        self.inner_size() + self.convolution_channels() + self.heads
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

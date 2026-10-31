@@ -11,15 +11,19 @@ impl PrefillAttentionBf16 {
         batch: &PagedPrefillBatch,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
+        // Rows past the batch's tokens are padding of a packed pass.
+        let rows = batch.tokens();
+        let query = self.scratch.query_rope.slice(0..rows * self.query_width)?;
+        let mut attended = self.scratch.attention.slice(0..rows * self.attention_width)?;
         self.fmha
             .as_ref()
             .ok_or(Error::InvalidPagedKv("missing paged variable-length FMHA"))?
             .execute_paged_varlen(
                 &self.stream,
-                &self.scratch.query_rope,
+                &query,
                 state.cache.key_pages(),
                 state.cache.value_pages(),
-                &mut self.scratch.attention,
+                &mut attended,
                 batch.query_starts(),
                 batch.token_counts(),
                 batch.context_starts(),
@@ -39,5 +43,22 @@ impl PrefillAttentionBf16 {
             weights.output,
             output,
         )
+    }
+}
+
+impl PrefillAttentionBf16 {
+    /// Follows a K/V resize of the pages this prefill writes; only the block
+    /// count may change.
+    pub(in crate::backend) fn follow_cache(
+        &mut self,
+        storage: runtime::kv::KvStorageSpec,
+    ) -> Result<()> {
+        let mut expected = self.config.cache;
+        expected.cache.block_count = storage.cache.block_count;
+        if storage != expected {
+            return Err(Error::InvalidPagedKv("resized cache differs from prefill attention"));
+        }
+        self.config.cache = storage;
+        Ok(())
     }
 }

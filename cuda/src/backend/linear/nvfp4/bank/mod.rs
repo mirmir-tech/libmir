@@ -14,6 +14,7 @@ use crate::{
 };
 
 mod marlin;
+mod source;
 mod validation;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

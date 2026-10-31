@@ -56,6 +56,8 @@ fn request() -> GenerationRequest {
         seed: None,
         reasoning_cycle: libmir::ReasoningCyclePolicy::default(),
         reasoning: libmir::ReasoningMode::ModelDefault,
+        reasoning_effort: libmir::ReasoningEffort::ModelDefault,
+        reasoning_history: libmir::ReasoningHistory::ModelDefault,
     }
 }
 

@@ -5,7 +5,7 @@ mod reasoning;
 mod render;
 mod tools;
 use foundation::conversation::Conversation;
-pub use reasoning::ReasoningMode;
+pub use reasoning::{ReasoningEffort, ReasoningHistory, ReasoningMode, TemplateControls};
 pub use tools::ToolCallPrefix;
 
 use self::{
@@ -72,25 +72,27 @@ impl ChatTemplate {
     }
 
     pub fn render(&self, conversation: &Conversation) -> Result<ChatPrompt> {
-        self.render_with_reasoning(conversation, ReasoningMode::ModelDefault)
+        self.render_with_controls(conversation, TemplateControls::default())
     }
 
-    /// Renders the model's reasoning control; rejects unsupported explicit
-    /// modes.
-    pub fn render_with_reasoning(
+    /// Renders the model's reasoning controls; rejects controls the template
+    /// does not declare.
+    pub fn render_with_controls(
         &self,
         conversation: &Conversation,
-        reasoning: ReasoningMode,
+        controls: TemplateControls,
     ) -> Result<ChatPrompt> {
-        if self.template.is_none()
-            && reasoning != ReasoningMode::ModelDefault
-            && !matches!(self.kind, TemplateKind::QwenChatMl | TemplateKind::Gemma4)
-        {
+        let reasoning = controls.reasoning;
+        let builtin_controls = controls.effort == ReasoningEffort::ModelDefault
+            && controls.history == ReasoningHistory::ModelDefault
+            && (reasoning == ReasoningMode::ModelDefault
+                || matches!(self.kind, TemplateKind::QwenChatMl | TemplateKind::Gemma4));
+        if self.template.is_none() && !builtin_controls {
             return Err(crate::ModelsError::UnsupportedReasoningControl);
         }
         let mut text = self.template.as_deref().map_or_else(
             || Ok(render_builtin(conversation, self.kind, &self.tokens, reasoning)),
-            |template| render_model_template(template, conversation, &self.tokens, reasoning),
+            |template| render_model_template(template, conversation, &self.tokens, controls),
         )?;
         let tool_prefix = tools::prefix(self.template.as_deref(), conversation, reasoning)?;
         if let Some(prefix) = &tool_prefix {

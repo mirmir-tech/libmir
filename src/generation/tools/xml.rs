@@ -92,8 +92,11 @@ fn argument(input: &str, schema: &Value) -> Result<Value> {
         return Ok(serde_json::from_str::<String>(input)
             .map_or_else(|_| Value::String(input.into()), Value::String));
     }
-    let parsed: Value = serde_json::from_str(input)
-        .map_err(|error| json_error("non-string parameter must contain JSON", input, &error))?;
+    let parsed = match boolean(input, kind) {
+        Some(value) => value,
+        None => serde_json::from_str(input)
+            .map_err(|error| json_error("non-string parameter must contain JSON", input, &error))?,
+    };
     let accepts = |kind: &str| match kind {
         "null" => parsed.is_null(),
         "string" => parsed.is_string(),
@@ -114,6 +117,25 @@ fn argument(input: &str, schema: &Value) -> Result<Value> {
         return Err(invalid("XML argument does not match its declared type"));
     }
     Ok(parsed)
+}
+
+/// XML-format models (Nemotron-H among them) may spell a boolean the Python
+/// way; vLLM's parser for this format also reads it case-insensitively. Only
+/// a parameter declared boolean accepts it.
+fn boolean(input: &str, kind: Option<&Value>) -> Option<Value> {
+    let declared = match kind? {
+        Value::String(kind) => kind == "boolean",
+        Value::Array(kinds) => kinds.iter().any(|kind| kind == "boolean"),
+        _ => false,
+    };
+    let value = if input.eq_ignore_ascii_case("true") {
+        true
+    } else if input.eq_ignore_ascii_case("false") {
+        false
+    } else {
+        return None;
+    };
+    declared.then_some(Value::Bool(value))
 }
 
 fn strip<'a>(input: &'a str, prefix: &str) -> Result<&'a str> {

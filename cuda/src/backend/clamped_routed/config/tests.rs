@@ -1,8 +1,8 @@
 use models::semantic::{
-    ActivationSpec, AttentionOutputSpec, AttentionSpec, DecoderLayerSpec, DecoderSpec,
-    FeedForwardSpec, KeyValueRelation, MixerSpec, NormalizationKind, NormalizationSpec,
-    PositionEncodingSpec, QkNormalization, RopeScalingSpec, RotaryLayoutSpec, RotarySpec,
-    RoutedExpertsSpec, RouterNormalization, SemanticModelSpec,
+    ActivationSpec, AttentionOutputSpec, AttentionSpec, BlockLayoutSpec, DecoderLayerSpec,
+    DecoderSpec, FeedForwardSpec, KeyValueRelation, MixerSpec, NormalizationKind,
+    NormalizationSpec, PositionEncodingSpec, QkNormalization, RopeScalingSpec, RotaryLayoutSpec,
+    RotarySpec, RoutedExpertsSpec, RouterNormalization, SemanticModelSpec,
 };
 
 use super::ClampedRoutedConfig;
@@ -89,6 +89,7 @@ fn spec(
                     shared: None,
                 },
             }],
+            block_layout: BlockLayoutSpec::Unified,
         },
     }
 }

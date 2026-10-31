@@ -1,6 +1,6 @@
 use mircuda::{DeviceBuffer, LaunchConfig, bf16};
 
-use super::{QkvPostprocess, QkvPostprocessArguments};
+use super::{QkvPostprocess, QkvPostprocessArguments, RotaryEmbedding};
 use crate::{
     Error, Result,
     kernels::geometry::{narrow, product, require},
@@ -38,6 +38,7 @@ impl QkvPostprocess {
         require("Q output", product(self.spec.tokens, query)?, query_output.len())?;
         require("K output", product(self.spec.tokens, key)?, key_output.len())?;
         require("V output", product(self.spec.tokens, value)?, value_output.len())?;
+        let (rotary_dim, pairing_dim, theta) = RotaryEmbedding::arguments(self.spec.rotary)?;
         Ok((
             self.config()?,
             (
@@ -54,10 +55,10 @@ impl QkvPostprocess {
                 narrow(self.spec.kv_heads)?,
                 narrow(self.spec.head_dim)?,
                 narrow(self.spec.value_head_dim)?,
-                narrow(self.spec.rotary_dim)?,
-                narrow(self.spec.pairing_dim)?,
+                rotary_dim,
+                pairing_dim,
                 narrow(start_position)?,
-                self.spec.theta,
+                theta,
                 self.spec.epsilon,
                 u32::from(separate),
                 u32::from(self.spec.normalization.query),

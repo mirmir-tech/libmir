@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use super::{
-    BindingTransform, BlockFormat, BlockProjectionLayout, BlockQuantization, LayerTensorRole,
-    LinearAttentionTensorRole, LogicalTensorRole, TensorBinding, TensorStorage, WeightBindingPlan,
+    BindingTransform, BlockFormat, BlockProjectionLayout, BlockQuantization, LogicalTensorRole,
+    TensorBinding, TensorStorage, WeightBindingPlan,
 };
 use crate::{
     error::{ModelsError, Result},
@@ -12,6 +12,7 @@ use crate::{
 mod affine;
 mod awq;
 mod bitsandbytes;
+mod convolution;
 mod float8;
 mod gptq;
 mod packed_integer;
@@ -26,7 +27,7 @@ pub(super) fn validate(plan: &WeightBindingPlan, catalog: &TensorCatalog) -> Res
         match &binding.storage {
             TensorStorage::Dense { dtype, bias } => {
                 let expected = dense_shape(binding, logical);
-                if !alternate_convolution(binding, &expected) {
+                if !convolution::alternate(binding, &expected) {
                     shape(&binding.source, &binding.shape, &expected)?;
                 }
                 if let Some(bias) = bias
@@ -85,18 +86,6 @@ pub(super) fn validate(plan: &WeightBindingPlan, catalog: &TensorCatalog) -> Res
         }
     }
     Ok(())
-}
-
-fn alternate_convolution(binding: &TensorBinding, expected: &[usize]) -> bool {
-    matches!(
-        binding.role,
-        LogicalTensorRole::Layer {
-            tensor: LayerTensorRole::LinearAttention {
-                tensor: LinearAttentionTensorRole::Convolution
-            },
-            ..
-        }
-    ) && matches!(expected, [channels, kernel, 1] if binding.shape == [*channels, 1, *kernel])
 }
 
 fn dense_shape(binding: &TensorBinding, logical: &[usize]) -> Vec<usize> {

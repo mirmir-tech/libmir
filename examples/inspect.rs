@@ -2,7 +2,7 @@
 
 use std::{env, path::PathBuf};
 
-use libmir::{Error, GenerationOverrides, ModelDescriptor};
+use libmir::{BackendTarget, Error, GenerationOverrides, ModelDescriptor, RuntimeConfig};
 
 fn main() -> libmir::Result<()> {
     let descriptor = ModelDescriptor::inspect(model_path()?, GenerationOverrides::default())?;
@@ -15,6 +15,11 @@ fn main() -> libmir::Result<()> {
     println!("checkpoint encoding: {:?}", descriptor.checkpoint_encoding());
     println!("decoder: {:?}", descriptor.decoder());
     println!("generation: {:?}", descriptor.generation());
+    println!("unloaded tensors: {:?}", descriptor.unloaded_tensors());
+    println!(
+        "memory estimate (CUDA, default runtime): {:?}",
+        descriptor.memory_estimate_for(&RuntimeConfig::default(), &BackendTarget::Cuda)
+    );
     Ok(())
 }
 

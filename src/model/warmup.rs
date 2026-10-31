@@ -21,7 +21,9 @@ impl Model {
             // The widest decode batch allocates on first use; build it before
             // startup tuning seals and memory is measured.
             let rows = self.inner.config.scheduler.max_batch_requests.max(1);
-            Ok(self.engine().warm_concurrency(self.handle(), rows)?)
+            self.engine().warm_concurrency(self.handle(), rows)?;
+            self.trace_memory("concurrency");
+            Ok(())
         });
         let finish = self.engine().finish_startup_tuning(self.handle());
         // Startup tuning is sealed and its scratch is resident: measure now,
@@ -79,6 +81,7 @@ impl Model {
             let mut token = required_token(output.next_token)?;
             let completed = session_index * (PROFILE_DECODE_STEPS + 1) + 1;
             progress(ProgressEvent::warmup(completed, total, "prefill profile is warm"));
+            self.trace_memory("prefill");
             for step in 0..PROFILE_DECODE_STEPS {
                 token =
                     required_token(session.decode(token, SamplingLogits::None)?.event.token_id)?;
@@ -88,6 +91,7 @@ impl Model {
                     "decode profile is warm",
                 ));
             }
+            self.trace_memory("decode");
         }
         for (index, (shape, tokens)) in profiles.into_iter().enumerate() {
             // Each shape needs a distinct prefix: otherwise the preceding
@@ -113,6 +117,7 @@ impl Model {
                 &mut |_| {},
             )?;
             tracing::info!(model = %self.handle().id, shape, "exact prefill profile is warm");
+            self.trace_memory("exact prefill");
             progress(ProgressEvent::warmup(
                 base_total + index + 1,
                 total,
@@ -121,6 +126,20 @@ impl Model {
         }
         tracing::info!(model = %self.handle().id, "accelerator execution profiles are warm");
         Ok(())
+    }
+
+    /// Records accelerator memory after one warm-up stage, so retained
+    /// execution buffers can be attributed to the shape that built them.
+    fn trace_memory(&self, stage: &str) {
+        if let Ok(memory) = self.engine().memory_snapshot() {
+            tracing::debug!(
+                model = %self.handle().id,
+                stage,
+                active_bytes = memory.active_bytes,
+                cached_bytes = memory.cached_bytes,
+                "warm-up memory"
+            );
+        }
     }
 }
 

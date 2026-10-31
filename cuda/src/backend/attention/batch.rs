@@ -16,12 +16,12 @@ pub struct BatchedDecodeAttentionBf16 {
     input_norm: RmsNormBf16,
     qkv: AttentionQkvProjection,
     qkv_postprocess: BatchedQkvPostprocess,
-    attention: BatchedPagedAttentionBf16,
+    pub(super) attention: BatchedPagedAttentionBf16,
     output_projection: AttentionOutputProjection,
-    cache: PagedKvCache,
+    pub(super) cache: PagedKvCache,
     scratch: BatchAttentionScratch,
     stream: Stream,
-    config: DecodeAttentionConfig,
+    pub(super) config: DecodeAttentionConfig,
     batch_size: usize,
 }
 
@@ -105,9 +105,7 @@ impl BatchedDecodeAttentionBf16 {
             kv_heads: config.cache.kv_heads,
             head_dim: config.cache.key_head_dim,
             value_head_dim: config.cache.value_head_dim,
-            rotary_dim: config.rotary_dim,
-            pairing_dim: config.rope_pairing_dim,
-            theta: config.rope_theta,
+            rotary: config.rotary,
             epsilon: config.rms_norm_epsilon,
             normalization: config.qkv_normalization,
         };

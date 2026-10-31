@@ -12,7 +12,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use super::*;
-use crate::{CudaConfig, Result};
+use crate::{CudaConfig, Error, Result};
 
 #[test]
 fn executes_mixed_linear_and_full_attention_session() -> Result<()> {

@@ -3,7 +3,7 @@ use runtime::kv::{CacheConfig, KvStorageSpec};
 
 use crate::{
     DecodeAttentionConfig, DecodeMoeBlockConfig, DenseSwiGluConfig, Error, GatedActivation, Result,
-    kernels::QkvNormalization,
+    kernels::{QkvNormalization, RotaryEmbedding},
 };
 
 /// Session-independent policy used to prepare one BF16 dense `SwiGLU` layer.
@@ -97,9 +97,11 @@ fn attention_config(
         layer,
         hidden_size: decoder.hidden_size,
         query_heads: decoder.num_attention_heads,
-        rotary_dim,
-        rope_pairing_dim: pairing_dim(decoder, layer, head_dim, rotary_dim)?,
-        rope_theta: to_f32("RoPE theta", rope_theta)?,
+        rotary: Some(RotaryEmbedding {
+            dimensions: rotary_dim,
+            pairing: pairing_dim(decoder, layer, head_dim, rotary_dim)?,
+            theta: to_f32("RoPE theta", rope_theta)?,
+        }),
         rms_norm_epsilon: to_f32("RMS norm epsilon", decoder.rms_norm_eps)?,
         attention_scale: decoder
             .attention_scale

@@ -39,7 +39,9 @@ impl CudaEngine {
         Ok(matches!(
             crate::admit_architecture(&task_plan, Some(&contract.semantic))?,
             CudaArchitecture::Generation(
-                CudaDecoderRuntime::SharedRouted | CudaDecoderRuntime::DenseMixed
+                CudaDecoderRuntime::SharedRouted
+                    | CudaDecoderRuntime::DenseMixed
+                    | CudaDecoderRuntime::StateSpaceHybrid
             )
         ))
     }

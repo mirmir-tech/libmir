@@ -17,7 +17,7 @@ pub(super) fn attention_counts(model: &LoadedModel) -> (usize, usize) {
                     (full, sliding + 1)
                 },
                 MixerSpec::SoftmaxAttention(_) => (full + 1, sliding),
-                MixerSpec::LinearAttention(_) => (full, sliding),
+                MixerSpec::LinearAttention(_) | MixerSpec::StateSpace(_) => (full, sliding),
             });
     }
     (model.encoder.as_ref().map_or(0, |encoder| encoder.num_hidden_layers), 0)

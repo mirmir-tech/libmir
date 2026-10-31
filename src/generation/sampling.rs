@@ -7,7 +7,7 @@ use runtime::{
     sampling::{Sampler, SamplerConfig},
 };
 
-use crate::Result;
+use crate::{Model, Result};
 
 pub(super) fn sampler_config(
     settings: GenerationSettings,
@@ -25,11 +25,13 @@ pub(super) fn sampler_config(
 }
 
 pub(super) fn request_sampling(
+    model: &Model,
     settings: GenerationSettings,
     vocab_size: usize,
     sampler: &mut Sampler,
 ) -> SamplingLogits {
-    let mut sampling = sampling(settings, vocab_size);
+    let device_nucleus = model.engine().samples_unbounded_nucleus();
+    let mut sampling = sampling(settings, vocab_size, device_nucleus);
     match &mut sampling {
         SamplingLogits::SampleTopK { draw, .. } | SamplingLogits::Sample { draw, .. } => {
             *draw = sampler.draw_unit_f32();
@@ -42,14 +44,20 @@ pub(super) fn request_sampling(
     sampling
 }
 
-pub(super) fn sampling(settings: GenerationSettings, vocab_size: usize) -> SamplingLogits {
+/// `device_nucleus` lets top-p without a top-k bound sample on the device;
+/// otherwise it reads full logits.
+pub(super) fn sampling(
+    settings: GenerationSettings,
+    vocab_size: usize,
+    device_nucleus: bool,
+) -> SamplingLogits {
     let greedy = (settings.temperature <= f32::EPSILON || settings.top_k == 1)
         && settings.repetition_penalty <= 1.0;
     if greedy {
         return SamplingLogits::None;
     }
     if settings.repetition_penalty <= 1.0 {
-        if settings.top_k == 0 && settings.top_p >= 1.0 {
+        if settings.top_k == 0 && (settings.top_p >= 1.0 || device_nucleus) {
             return SamplingLogits::Sample {
                 vocab_size,
                 temperature: settings.temperature,

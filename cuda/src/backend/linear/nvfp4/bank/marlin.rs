@@ -3,6 +3,13 @@ use mircuda::MarlinNvFp4RepackSpec;
 use super::{MarlinNvFp4Bank, NvFp4ExpertBank, NvFp4ExpertBankConfig};
 use crate::{CudaBackend, Error, Result};
 
+impl MarlinNvFp4Bank {
+    #[must_use]
+    pub(in crate::backend) const fn config(&self) -> NvFp4ExpertBankConfig {
+        self.config
+    }
+}
+
 impl NvFp4ExpertBank {
     pub(in crate::backend) fn marlin(&self, backend: &CudaBackend) -> Result<MarlinNvFp4Bank> {
         let mut cached = self

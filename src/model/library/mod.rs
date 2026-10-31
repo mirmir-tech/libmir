@@ -1,3 +1,5 @@
+mod resolve;
+
 use std::{
     path::Path,
     sync::{Arc, Mutex},
@@ -8,7 +10,7 @@ use models::generation::GenerationOverrides;
 use runtime::kv::CacheConfig;
 
 use super::{
-    Library, Model, ModelDescriptor, ModelInner, automatic_cache,
+    Library, Model, ModelDescriptor, ModelInner,
     cache_cohort::CacheCohort,
     memory_admission::{AdmissionTerms, ModelMemoryManager},
     memory_policy,
@@ -27,6 +29,10 @@ pub struct ModelLoadOptions {
     /// Continue when the atomic memory admission estimate exceeds the safe
     /// accelerator budget. Backend allocation may still fail.
     pub allow_memory_overcommit: bool,
+    /// A fixed K/V block count for this model in place of the library's
+    /// sizing, for models whose requests need far less cache than others,
+    /// such as rerankers.
+    pub kv_blocks: Option<std::num::NonZeroU32>,
 }
 
 impl Library {
@@ -62,7 +68,7 @@ impl Library {
     ) -> Result<Model> {
         let descriptor = ModelDescriptor::inspect(path, overrides)?;
         let _load = self.memory.serialize_load()?;
-        let (engine, mut config, kv_sizing) = self.model_runtime(&descriptor)?;
+        let (engine, mut config, kv_sizing) = self.model_runtime(&descriptor, options)?;
         let manifest = descriptor.manifest_for(engine.target())?;
         let target = engine.target();
         let initial_estimate = descriptor.memory_estimate_for(&config, &target);
@@ -144,7 +150,16 @@ impl Library {
 
     /// Resolves the effective runtime configuration for a model.
     pub fn model_config(&self, descriptor: &ModelDescriptor) -> Result<RuntimeConfig> {
-        self.model_runtime(descriptor).map(|(_, config, _)| config)
+        self.model_config_with_options(descriptor, ModelLoadOptions::default())
+    }
+
+    /// Resolves the runtime configuration a load with `options` would use.
+    pub fn model_config_with_options(
+        &self,
+        descriptor: &ModelDescriptor,
+        options: ModelLoadOptions,
+    ) -> Result<RuntimeConfig> {
+        self.model_runtime(descriptor, options).map(|(_, config, _)| config)
     }
 
     /// Resizes idle models with measured K/V caches to the memory other
@@ -182,52 +197,6 @@ impl Library {
         Ok(initialized)
     }
 
-    fn model_runtime(
-        &self,
-        descriptor: &ModelDescriptor,
-    ) -> Result<(Engine, RuntimeConfig, super::kv_sizing::KvSizing)> {
-        let mut state = self.lock_state()?;
-        let engine_config = state.model_config.as_ref().unwrap_or(&self.config).clone();
-        let probe = match state.engine.take() {
-            Some(engine) => engine,
-            None => Engine::from_config(&engine_config)?,
-        };
-        let target = probe.target();
-        let estimate = descriptor.memory_estimate_for(&self.config, &target);
-        let memory = probe.memory_snapshot()?;
-        let committed = self.memory.committed_bytes()?;
-        let mut config = automatic_cache::resolve(&self.config, estimate, &memory, committed);
-        let resizable = probe.kv_cache_resizable(&descriptor.manifest_for(target.clone())?)?;
-        let kv_sizing = super::kv_sizing::KvSizing::for_load(
-            &self.config, &mut config, estimate, &target, resizable,
-        );
-        let resolved_estimate = descriptor.memory_estimate_for(&config, &target);
-        let engine = if engine_cache_compatible(&target, config.kv_cache, engine_config.kv_cache) {
-            probe
-        } else {
-            Engine::from_config(&config)?
-        };
-        tracing::info!(
-            automatic = self.config.automatic_kv_cache,
-            sizing = ?kv_sizing,
-            blocks = config.kv_cache.block_count,
-            block_size = config.kv_cache.block_size,
-            capacity_tokens = u64::from(config.kv_cache.block_count)
-                .saturating_mul(u64::try_from(config.kv_cache.block_size).unwrap_or(u64::MAX)),
-            kv_bytes_per_token = estimate.kv_bytes_per_token,
-            kv_cache_bytes = resolved_estimate.kv_cache_bytes,
-            platform_reserve_bytes = memory_policy::platform_reserve(config.memory, &memory),
-            transient_reserve_bytes = memory_policy::transient_reserve(resolved_estimate, &memory),
-            planned_residency_bytes = memory_policy::planned_residency(resolved_estimate, &memory),
-            memory_source = memory.source,
-            "resolved model KV cache"
-        );
-        state.model_config = Some(config.clone());
-        state.engine = Some(engine.clone());
-        drop(state);
-        Ok((engine, config, kv_sizing))
-    }
-
     fn lock_state(&self) -> Result<std::sync::MutexGuard<'_, LibraryState>> {
         let Ok(state) = self.state.lock() else {
             return Err(
@@ -257,17 +226,6 @@ fn resolved_metal_cache(target: &BackendTarget, config: &RuntimeConfig) -> Optio
     (*target == BackendTarget::Metal).then_some(config.kv_cache)
 }
 
-fn engine_cache_compatible(
-    target: &BackendTarget,
-    resolved: CacheConfig,
-    current: CacheConfig,
-) -> bool {
-    resolved == current
-        || (*target == BackendTarget::Metal
-            && resolved.block_size == current.block_size
-            && resolved.dtype == current.dtype)
-}
-
 fn cleanup_failed_load(engine: &Engine, handle: &runtime::backend::ModelHandle) {
     if let Err(error) = engine.unload_model(handle) {
         tracing::warn!(%error, model = handle.id, "failed to roll back partial model load");
@@ -278,5 +236,4 @@ fn cleanup_failed_load(engine: &Engine, handle: &runtime::backend::ModelHandle) 
 }
 
 #[cfg(test)]
-#[path = "library/tests.rs"]
 mod tests;

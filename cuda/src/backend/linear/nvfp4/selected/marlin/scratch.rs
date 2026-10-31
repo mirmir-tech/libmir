@@ -108,12 +108,39 @@ impl MarlinNvFp4Scratch {
             )?,
             padded_down: allocate(backend, product(assignments, config.padded_hidden)?)?,
             down: allocate(backend, product(assignments, config.hidden)?)?,
-            temporary: allocate(backend, product(capacity, maximum_width)?)?,
+            temporary: allocate(
+                backend,
+                reduction_floats(backend, config, capacity, maximum_width)?,
+            )?,
             locks: backend.inner.pool.allocate_zeroed(
                 &backend.inner.stream,
                 usize::try_from(backend.inner.device.multiprocessor_count)? * 4,
             )?,
         })
+    }
+}
+
+/// Widest Marlin tile, `max_thread_n` in the vendored kernels.
+const MARLIN_MAX_THREAD_N: usize = 256;
+
+/// FP32 cross-block reduction scratch, sized as vLLM sizes it. The kernel
+/// indexes it per lock in tiles of at least 16 rows, so with 8-row route
+/// blocks a small problem needs twice its row count; a short buffer let the
+/// reduction overwrite the locks that follow it and deadlock the kernel.
+fn reduction_floats(
+    backend: &CudaBackend,
+    config: MarlinNvFp4ScratchConfig,
+    capacity: usize,
+    maximum_width: usize,
+) -> Result<usize> {
+    let blocks = usize::try_from(backend.inner.device.multiprocessor_count)? * 4;
+    let route_block = config.route_block.size();
+    let bounded = product(capacity, maximum_width)?
+        .min(product(product(blocks, route_block)?, MARLIN_MAX_THREAD_N)?);
+    if route_block == 8 {
+        product(bounded, 2)
+    } else {
+        Ok(bounded)
     }
 }
 

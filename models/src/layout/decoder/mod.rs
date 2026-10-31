@@ -2,10 +2,15 @@ mod attention;
 mod features;
 mod parse;
 mod rope;
+mod state_space;
 
 pub use attention::AttentionLayerType;
 pub use features::{AttentionOutput, LinearAttentionConfig, RotaryEmbeddingLayout};
 pub use rope::RopeScaling;
+pub use state_space::{
+    HybridBlockKind, HybridBlockPattern, HybridLayer, HybridLayerBlock, LatentRoutedConfig,
+    Mamba2Config, StateSpaceHybridConfig, StateSpaceStateDType, TimeStepBound, TimeStepLimit,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::struct_excessive_bools)]
@@ -48,6 +53,7 @@ pub struct DecoderConfig {
     pub attention_sinks: bool,
     pub swiglu_limit: Option<f64>,
     pub initial_context_length: Option<usize>,
+    pub state_space: Option<StateSpaceHybridConfig>,
 }
 
 #[cfg(test)]

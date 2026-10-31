@@ -41,7 +41,7 @@ pub(super) fn validate(spec: &SemanticModelSpec, tensors: &[TensorBinding]) -> R
                     && (attention.key_value_relation == KeyValueRelation::KeyEqualsValue
                         || has_attention(tensors, layer.index, AttentionProjectionRole::Value))
             },
-            MixerSpec::LinearAttention(_) => false,
+            MixerSpec::LinearAttention(_) | MixerSpec::StateSpace(_) => false,
         };
         let dense = [
             FeedForwardProjectionRole::Gate,

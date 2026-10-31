@@ -22,7 +22,6 @@ pub(super) fn validate(spec: SamplingSpec) -> Result<()> {
     if spec.vocab == 0
         || spec.top_k > spec.vocab
         || spec.top_k > MAX_TOP_K
-        || (spec.top_k == 0 && spec.top_p < 1.0)
         || !spec.top_p.is_finite()
         || spec.top_p <= 0.0
         || spec.top_p > 1.0

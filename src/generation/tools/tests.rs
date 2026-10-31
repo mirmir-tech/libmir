@@ -10,7 +10,7 @@ fn conversation() -> Conversation {
             function: FunctionDefinition {
                 name: "emit".into(),
                 description: None,
-                parameters: json!({"type":"object","properties":{"name":{"type":"string"},"year":{"type":"integer"},"items":{"type":"array"}},"required":["name","year","items"]}),
+                parameters: json!({"type":"object","properties":{"name":{"type":"string"},"year":{"type":"integer"},"items":{"type":"array"},"exhaustive":{"type":"boolean"}},"required":["name","year","items"]}),
             },
         }],
         tool_choice: ToolChoice::Function("emit".into()),
@@ -34,11 +34,15 @@ fn normalizes_xml_to_openai_calls_without_losing_argument_types() -> Result<()> 
 fn supports_json_tools_and_rejects_missing_or_wrong_required_calls() -> Result<()> {
     let request = conversation();
     let body = r#"[{"name":"emit","arguments":{"name":"n","year":2023,"items":[]}}]"#;
-    assert!(!normalize(body, &request)?.is_empty());
-    assert!(
-        !normalize(&format!("<tool_call>{}</tool_call>", &body[1..body.len() - 1]), &request)?
-            .is_empty()
-    );
+    let expected = json!({"name":"n","year":2023,"items":[]});
+    for payload in [body.to_owned(), format!("<tool_call>{}</tool_call>", &body[1..body.len() - 1])]
+    {
+        let calls = ToolCall::parse_mistral(&normalize(&payload, &request)?)
+            .map_err(Error::InvalidToolCall)?;
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].function.name, "emit");
+        assert_eq!(calls[0].function.arguments, expected);
+    }
     assert!(normalize("", &request).is_err());
     assert!(normalize(&body.replace("emit", "wrong"), &request).is_err());
     assert!(normalize(body, &Conversation { tool_choice: ToolChoice::None, ..request }).is_err());
@@ -88,5 +92,22 @@ fn json_string_tags_do_not_terminate_tool_envelopes() -> Result<()> {
         let calls = ToolCall::parse_mistral(&parsed).map_err(Error::InvalidToolCall)?;
         assert_eq!(calls[0].function.arguments, expected);
     }
+    Ok(())
+}
+
+#[test]
+fn declared_booleans_accept_python_spelling_only() -> Result<()> {
+    let call = |exhaustive: &str, year: &str| {
+        format!(
+            "<tool_call><function=emit><parameter=name>n</parameter><parameter=year>{year}</parameter><parameter=items>[]</parameter><parameter=exhaustive>{exhaustive}</parameter></function></tool_call>"
+        )
+    };
+    for (spelling, value) in [("False", false), ("TRUE", true), ("false", false)] {
+        let normalized = normalize(&call(spelling, "2023"), &conversation())?;
+        let calls = ToolCall::parse_mistral(&normalized).map_err(Error::InvalidToolCall)?;
+        assert_eq!(calls[0].function.arguments["exhaustive"], json!(value));
+    }
+    assert!(normalize(&call("False", "True"), &conversation()).is_err());
+    assert!(normalize(&call("no", "2023"), &conversation()).is_err());
     Ok(())
 }

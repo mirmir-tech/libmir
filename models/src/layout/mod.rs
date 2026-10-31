@@ -5,8 +5,10 @@ mod metadata;
 mod vision;
 
 pub use decoder::{
-    AttentionLayerType, AttentionOutput, DecoderConfig, LinearAttentionConfig, RopeScaling,
-    RotaryEmbeddingLayout,
+    AttentionLayerType, AttentionOutput, DecoderConfig, HybridBlockKind, HybridBlockPattern,
+    HybridLayer, HybridLayerBlock, LatentRoutedConfig, LinearAttentionConfig, Mamba2Config,
+    RopeScaling, RotaryEmbeddingLayout, StateSpaceHybridConfig, StateSpaceStateDType,
+    TimeStepBound, TimeStepLimit,
 };
 pub use encoder::{EncoderConfig, EncoderPositionEmbedding, EncoderRopeScaling, NormKind};
 pub use files::{ModelLayout, WeightFile};

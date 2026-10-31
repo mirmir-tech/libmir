@@ -3,8 +3,6 @@
 //! executes at a time and the kernels stride rows independently of the
 //! batch width they were compiled for.
 
-use runtime::kv::KvStorageSpec;
-
 use super::super::{CudaSharedRoutedModelTemplate, SharedRoutedLayerTemplate};
 use crate::{
     BatchedPagedAttentionBf16, Error, Result, backend::scratch_pool::SharedScratch,
@@ -28,23 +26,22 @@ pub(super) fn attention_workspace(
     let capacity = rows.max(template.decode_rows);
     let (values, statistics) = template.layers.iter().enumerate().try_fold(
         (0_usize, 0_usize),
-        |(values, statistics), (layer, template_layer)| match template_layer {
-            SharedRoutedLayerTemplate::Linear(_) => Ok((values, statistics)),
-            SharedRoutedLayerTemplate::Full(_) => {
-                let storage = KvStorageSpec::new(
-                    template.cache,
-                    template.decoder.layer_key_value_heads(layer),
-                    template.decoder.layer_head_dim(layer),
-                );
-                let required = BatchedPagedAttentionBf16::workspace_lengths_for_storage(
-                    &template.backend,
-                    storage,
-                    template.decoder.num_attention_heads,
-                    template.max_sequence_blocks,
-                    capacity,
-                )?;
-                Ok::<_, Error>((values.max(required.0), statistics.max(required.1)))
-            },
+        |(values, statistics), (layer, template_layer)| {
+            let Some(storage) = template.layer_storage(layer, template_layer) else {
+                return Ok((values, statistics));
+            };
+            let query_heads = match template_layer {
+                SharedRoutedLayerTemplate::Attention(layer) => layer.config().query_heads,
+                _ => template.decoder.num_attention_heads,
+            };
+            let required = BatchedPagedAttentionBf16::workspace_lengths_for_storage(
+                &template.backend,
+                storage,
+                query_heads,
+                template.max_sequence_blocks,
+                capacity,
+            )?;
+            Ok::<_, Error>((values.max(required.0), statistics.max(required.1)))
         },
     )?;
     if values == 0 || statistics == 0 {

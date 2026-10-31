@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use super::{PREFILL_HARD_WAIT_MULTIPLIER, next_prefill_deadline};
 
-/// Deadlines stay anchored to arrivals when a long prompt widens the window.
+/// Policy changes keep deadlines anchored to the original request arrivals.
 pub(super) struct PrefillWindow {
     quiet: Duration,
     oldest: Instant,
@@ -27,8 +27,8 @@ impl PrefillWindow {
         self.latest = self.latest.max(arrival);
     }
 
-    pub(super) fn widen(&mut self, quiet: Duration) {
-        self.quiet = self.quiet.max(quiet);
+    pub(super) fn update(&mut self, quiet: Duration) {
+        self.quiet = quiet;
     }
 
     pub(super) fn remaining(&self, now: Instant) -> Duration {

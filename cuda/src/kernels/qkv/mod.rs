@@ -8,10 +8,12 @@ use crate::{Error, Result};
 
 mod batch;
 mod launch;
+mod rotary;
 #[cfg(test)]
 mod tests;
 
 pub use batch::BatchedQkvPostprocess;
+pub use rotary::RotaryEmbedding;
 
 cuda_export!(
     pub QkvPostprocessKernel = "libmir_cuda_qkv_postprocess_bf16"(
@@ -85,9 +87,7 @@ pub struct QkvPostprocessSpec {
     pub(crate) kv_heads: usize,
     pub(crate) head_dim: usize,
     pub(crate) value_head_dim: usize,
-    pub(crate) rotary_dim: usize,
-    pub(crate) pairing_dim: usize,
-    pub(crate) theta: f32,
+    pub(crate) rotary: Option<RotaryEmbedding>,
     pub(crate) epsilon: f32,
     pub(crate) normalization: QkvNormalization,
 }
@@ -219,14 +219,7 @@ fn validate(spec: QkvPostprocessSpec) -> Result<()> {
         || spec.kv_heads == 0
         || spec.head_dim == 0
         || spec.value_head_dim == 0
-        || spec.rotary_dim == 0
-        || spec.rotary_dim > spec.head_dim
-        || spec.pairing_dim < spec.rotary_dim
-        || spec.pairing_dim > spec.head_dim
-        || !spec.rotary_dim.is_multiple_of(2)
-        || !spec.pairing_dim.is_multiple_of(2)
-        || !spec.theta.is_finite()
-        || spec.theta <= 0.0
+        || !spec.rotary.is_none_or(|rotary| rotary.fits(spec.head_dim))
         || !spec.epsilon.is_finite()
         || spec.epsilon < 0.0
     {

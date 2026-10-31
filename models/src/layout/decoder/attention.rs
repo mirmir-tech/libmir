@@ -8,6 +8,7 @@ pub enum AttentionLayerType {
     Full,
     Linear,
     Sliding,
+    StateSpace,
 }
 
 pub(super) fn layer_types(value: &Value, layer_count: usize) -> Result<Vec<AttentionLayerType>> {
@@ -82,7 +83,9 @@ impl DecoderConfig {
     pub fn layer_head_dim(&self, index: usize) -> usize {
         match self.layer_type(index) {
             AttentionLayerType::Full => self.global_head_dim.unwrap_or(self.head_dim),
-            AttentionLayerType::Linear | AttentionLayerType::Sliding => self.head_dim,
+            AttentionLayerType::Linear
+            | AttentionLayerType::Sliding
+            | AttentionLayerType::StateSpace => self.head_dim,
         }
     }
 
@@ -99,7 +102,7 @@ impl DecoderConfig {
     pub fn rope_theta_for_layer(&self, index: usize) -> Option<f64> {
         match self.layer_type(index) {
             AttentionLayerType::Full => self.full_attention_rope_theta.or(self.rope_theta),
-            AttentionLayerType::Linear => None,
+            AttentionLayerType::Linear | AttentionLayerType::StateSpace => None,
             AttentionLayerType::Sliding => self.sliding_attention_rope_theta.or(self.rope_theta),
         }
     }
@@ -108,7 +111,7 @@ impl DecoderConfig {
     pub fn rope_type_for_layer(&self, index: usize) -> Option<&str> {
         match self.layer_type(index) {
             AttentionLayerType::Full => self.full_attention_rope_type.as_deref(),
-            AttentionLayerType::Linear => None,
+            AttentionLayerType::Linear | AttentionLayerType::StateSpace => None,
             AttentionLayerType::Sliding => self.sliding_attention_rope_type.as_deref(),
         }
     }
@@ -117,7 +120,7 @@ impl DecoderConfig {
     pub fn partial_rotary_factor_for_layer(&self, index: usize) -> Option<f64> {
         match self.layer_type(index) {
             AttentionLayerType::Full => self.full_attention_partial_rotary_factor,
-            AttentionLayerType::Linear => None,
+            AttentionLayerType::Linear | AttentionLayerType::StateSpace => None,
             AttentionLayerType::Sliding => self.sliding_attention_partial_rotary_factor,
         }
     }

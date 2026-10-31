@@ -11,6 +11,12 @@ use runtime::kv::{CacheConfig, KvStorageSpec};
 use super::ModelDescriptor;
 use crate::{ModelMemoryEstimate, RuntimeConfig};
 
+mod resident;
+mod session;
+
+pub use resident::UnloadedTensors;
+pub(super) use resident::unloaded;
+
 const CUDA_SLIDING_PHYSICAL_SLOTS_PER_SESSION: usize = 4;
 
 const MIB: u64 = 1024 * 1024;
@@ -30,7 +36,7 @@ impl ModelDescriptor {
         config: &RuntimeConfig,
         target: &BackendTarget,
     ) -> ModelMemoryEstimate {
-        let weight_bytes = self.layout.weights.iter().map(|weight| weight.bytes).sum::<u64>();
+        let weight_bytes = resident::weight_bytes(&self.layout, self.unloaded.as_ref());
         let generation_decoder = match &self.task_plan {
             TaskExecutionPlan::Generation { decoder }
             | TaskExecutionPlan::CausalScoring { decoder, .. } => Some(decoder),
@@ -58,7 +64,7 @@ impl ModelDescriptor {
             kv_bytes_per_token,
             cache_capacity_tokens,
             model_context_tokens: u64::try_from(self.metadata.context_len).unwrap_or(u64::MAX),
-            session_state_bytes: generation_decoder.map_or(0, session_state_bytes),
+            session_state_bytes: generation_decoder.map_or(0, session::state_bytes),
         }
     }
 }
@@ -72,7 +78,9 @@ fn kv_budget(
         .layer_types
         .iter()
         .enumerate()
-        .filter(|(_, layer)| **layer != AttentionLayerType::Linear)
+        .filter(|(_, layer)| {
+            matches!(layer, AttentionLayerType::Full | AttentionLayerType::Sliding)
+        })
         .fold((0_u64, 0_u64), |(per_token, total), (index, layer)| {
             let cache = if *layer == AttentionLayerType::Sliding && bounded_sliding(decoder) {
                 sliding_cache(decoder, config, target)
@@ -125,23 +133,6 @@ const fn bounded_sliding(decoder: &DecoderConfig) -> bool {
     decoder.swiglu_limit.is_some() && decoder.num_experts.is_some()
 }
 
-/// Float32 recurrent state plus convolution history of every linear layer.
-fn session_state_bytes(decoder: &DecoderConfig) -> u64 {
-    let Some(linear) = decoder.linear_attention.as_ref() else {
-        return 0;
-    };
-    let layers = decoder
-        .layer_types
-        .iter()
-        .filter(|layer| **layer == AttentionLayerType::Linear)
-        .count();
-    let state = linear.value_heads * linear.value_head_dim * linear.key_head_dim * 4;
-    let channels =
-        2 * linear.key_heads * linear.key_head_dim + linear.value_heads * linear.value_head_dim;
-    let history = channels * linear.convolution_kernel_size.saturating_sub(1) * 2;
-    u64::try_from(layers * (state + history)).unwrap_or(u64::MAX)
-}
-
 const fn workspace(weights: u64) -> u64 {
     let proportional = weights / 10;
     if proportional > 512 * MIB {
@@ -189,49 +180,4 @@ fn nvfp4_marlin_bytes(shape: &[usize]) -> u64 {
 }
 
 #[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::*;
-
-    #[test]
-    fn reserves_at_least_half_a_gibibyte_for_runtime_workspace() {
-        assert_eq!(workspace(128 * MIB), 512 * MIB);
-        assert_eq!(workspace(10 * 1024 * MIB), 1024 * MIB);
-    }
-
-    #[test]
-    fn accounts_for_persistent_marlin_weights_scales_and_globals() {
-        assert_eq!(nvfp4_marlin_bytes(&[4, 32, 64]), 4_624);
-        assert_eq!(nvfp4_marlin_bytes(&[32, 64]), 1_156);
-    }
-
-    #[test]
-    fn bounds_clamped_sliding_layers_per_concurrent_session() -> crate::Result<()> {
-        let decoder = DecoderConfig::from_value(&json!({
-            "hidden_size": 128,
-            "intermediate_size": 128,
-            "num_hidden_layers": 2,
-            "num_attention_heads": 2,
-            "num_key_value_heads": 1,
-            "head_dim": 64,
-            "vocab_size": 256,
-            "max_position_embeddings": 131_072,
-            "num_local_experts": 4,
-            "experts_per_token": 2,
-            "sliding_window": 128,
-            "swiglu_limit": 7.0,
-            "layer_types": ["sliding_attention", "full_attention"]
-        }))?;
-        let config = RuntimeConfig::default();
-        let bounded = sliding_cache(&decoder, &config, &BackendTarget::Cuda);
-        let metal = sliding_cache(&decoder, &config, &BackendTarget::Metal);
-        let (growing, total) = kv_budget(&decoder, &config, &BackendTarget::Cuda);
-
-        assert_eq!(bounded.block_count, 576);
-        assert_eq!(metal.block_count, 144);
-        assert_eq!(growing, 256);
-        assert!(total < growing * 4_096 * 16 * 2);
-        Ok(())
-    }
-}
+mod tests;

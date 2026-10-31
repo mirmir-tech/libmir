@@ -19,6 +19,59 @@ pub struct DecoderSpec {
     pub tie_word_embeddings: bool,
     pub final_norm: NormalizationSpec,
     pub layers: Vec<DecoderLayerSpec>,
+    #[serde(default, skip_serializing_if = "BlockLayoutSpec::is_unified")]
+    pub block_layout: BlockLayoutSpec,
+}
+
+/// How checkpoint blocks map to semantic decoder layers.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum BlockLayoutSpec {
+    /// Checkpoint layer `i` is semantic layer `i`.
+    #[default]
+    Unified,
+    /// Each semantic layer is composed of its mixer block and, when the layer
+    /// has a feed-forward, the block directly after it.
+    Paired {
+        physical_blocks: usize,
+        mixer_blocks: Vec<usize>,
+    },
+}
+
+/// Position of a checkpoint block inside its semantic layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayerBlockPosition {
+    Mixer,
+    FeedForward,
+}
+
+impl BlockLayoutSpec {
+    #[must_use]
+    pub const fn is_unified(&self) -> bool {
+        matches!(self, Self::Unified)
+    }
+
+    /// Maps a paired checkpoint block to its semantic layer and position.
+    /// Returns `None` for a unified layout or a block outside the pairing.
+    #[must_use]
+    pub fn locate(
+        &self,
+        layers: &[DecoderLayerSpec],
+        block: usize,
+    ) -> Option<(usize, LayerBlockPosition)> {
+        let Self::Paired { mixer_blocks, .. } = self else {
+            return None;
+        };
+        mixer_blocks.iter().zip(layers).enumerate().find_map(|(index, (mixer, layer))| {
+            if *mixer == block {
+                Some((index, LayerBlockPosition::Mixer))
+            } else if *mixer + 1 == block && layer.feed_forward != FeedForwardSpec::None {
+                Some((index, LayerBlockPosition::FeedForward))
+            } else {
+                None
+            }
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -1,3 +1,4 @@
+mod controls;
 mod reasoning;
 mod rerank;
 

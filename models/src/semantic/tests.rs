@@ -52,7 +52,7 @@ fn key_equals_value_applies_only_to_full_attention() -> Result<()> {
         .iter()
         .map(|layer| match &layer.mixer {
             MixerSpec::SoftmaxAttention(attention) => Some(attention.key_value_relation),
-            MixerSpec::LinearAttention(_) => None,
+            MixerSpec::LinearAttention(_) | MixerSpec::StateSpace(_) => None,
         })
         .collect::<Option<Vec<_>>>();
     assert_eq!(

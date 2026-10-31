@@ -2,7 +2,7 @@ use mircuda::{
     Compiler, DeviceBuffer, LaunchConfig, Stream, TypedKernel, bf16, cuda_export, cuda_kernel_file,
 };
 
-use super::{QkvPostprocessSpec, validate};
+use super::{QkvPostprocessSpec, RotaryEmbedding, validate};
 use crate::{
     Error, Result,
     kernels::geometry::{narrow, product, require},
@@ -78,6 +78,7 @@ impl BatchedQkvPostprocess {
             .checked_add(self.spec.kv_heads.saturating_mul(2))
             .and_then(|heads| heads.checked_mul(self.spec.tokens))
             .ok_or(Error::InvalidDecoderKernel("batched QKV launch overflow"))?;
+        let (rotary_dim, pairing_dim, theta) = RotaryEmbedding::arguments(self.spec.rotary)?;
         Ok(self.kernel.launch(
             stream,
             LaunchConfig {
@@ -100,9 +101,9 @@ impl BatchedQkvPostprocess {
                 narrow(self.spec.kv_heads)?,
                 narrow(self.spec.head_dim)?,
                 narrow(self.spec.value_head_dim)?,
-                narrow(self.spec.rotary_dim)?,
-                narrow(self.spec.pairing_dim)?,
-                self.spec.theta,
+                rotary_dim,
+                pairing_dim,
+                theta,
                 self.spec.epsilon,
                 u32::from(separate),
                 u32::from(self.spec.normalization.query),

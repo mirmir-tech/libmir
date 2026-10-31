@@ -41,7 +41,7 @@ impl CudaBackend {
                 "shared-routed model sequence block capacity is empty".into(),
             ));
         }
-        let source = shared_routed_source(bindings, decoder.num_hidden_layers, catalog)?;
+        let source = shared_routed_source(bindings, decoder, catalog)?;
         let raw = raw_sources(bindings);
         let cast = self.prepare_dense_cast()?;
         let mut upload = self.begin_tensor_upload();
@@ -75,9 +75,11 @@ impl CudaBackend {
     }
 }
 
+/// Every tensor uploaded with the template. Individual expert tensors are
+/// excluded: their banks are built straight from the checkpoint.
 fn shared_routed_source<'a>(
     bindings: &WeightBindingPlan,
-    layers: usize,
+    decoder: &DecoderConfig,
     catalog: &'a TensorCatalog,
 ) -> Result<Vec<&'a TensorInfo>> {
     let individual = bindings
@@ -95,8 +97,12 @@ fn shared_routed_source<'a>(
         .flat_map(|binding| binding.physical_sources())
         .collect::<HashSet<_>>();
     let mut names = bindings.decoder_boundary()?.physical_sources();
-    for layer in 0..layers {
-        names.extend(bindings.mixed_decoder_layer(layer)?.physical_sources());
+    for layer in 0..decoder.num_hidden_layers {
+        if decoder.state_space.is_some() {
+            names.extend(bindings.state_space_hybrid_layer(layer)?.physical_sources());
+        } else {
+            names.extend(bindings.mixed_decoder_layer(layer)?.physical_sources());
+        }
     }
     let mut seen = HashSet::new();
     names
@@ -107,12 +113,21 @@ fn shared_routed_source<'a>(
         .collect()
 }
 
+/// Tensors uploaded in their checkpoint dtype; every other floating tensor
+/// is converted to BF16. Router correction biases stay FP32: they decide the
+/// expert selection.
 fn raw_sources(bindings: &WeightBindingPlan) -> HashSet<&str> {
     bindings
         .tensors
         .iter()
         .filter(|binding| {
             matches!(
+                binding.role,
+                LogicalTensorRole::Layer {
+                    tensor: LayerTensorRole::RouterCorrectionBias,
+                    ..
+                }
+            ) || matches!(
                 binding.storage,
                 TensorStorage::AffineQuantized { .. }
                     | TensorStorage::BlockQuantized { .. }
@@ -129,9 +144,5 @@ fn raw_sources(bindings: &WeightBindingPlan) -> HashSet<&str> {
 }
 
 fn required<'a>(catalog: &'a TensorCatalog, name: &str) -> Result<&'a TensorInfo> {
-    catalog
-        .tensors
-        .iter()
-        .find(|tensor| tensor.name == name)
-        .ok_or_else(|| Error::MissingTensor(name.into()))
+    catalog.get(name).ok_or_else(|| Error::MissingTensor(name.into()))
 }

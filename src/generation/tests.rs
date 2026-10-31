@@ -45,7 +45,7 @@ fn keeps_greedy_selection_on_the_backend() {
         top_k: 0,
         repetition_penalty: 1.0,
     };
-    assert_eq!(sampling(settings, 32_000), SamplingLogits::None);
+    assert_eq!(sampling(settings, 32_000, false), SamplingLogits::None);
 }
 
 #[test]
@@ -59,7 +59,7 @@ fn uses_device_top_p_when_top_k_is_bounded() {
         top_k: 40,
         repetition_penalty: 1.0,
     };
-    assert!(matches!(sampling(settings, 32_000), SamplingLogits::Sample { .. }));
+    assert!(matches!(sampling(settings, 32_000, false), SamplingLogits::Sample { .. }));
 }
 
 #[test]
@@ -74,9 +74,27 @@ fn uses_device_sampling_for_the_full_distribution() {
         repetition_penalty: 1.0,
     };
     assert!(matches!(
-        sampling(settings, 201_088),
+        sampling(settings, 201_088, false),
         SamplingLogits::Sample { top_k: 0, top_p: 1.0, .. }
     ));
+}
+
+#[test]
+fn samples_unbounded_nucleus_on_the_device_only_where_supported() {
+    let settings = GenerationSettings {
+        max_tokens: 16,
+        min_tokens: 0,
+        ignore_eos: false,
+        temperature: 1.0,
+        top_p: 0.95,
+        top_k: 0,
+        repetition_penalty: 1.0,
+    };
+    assert!(matches!(
+        sampling(settings, 131_072, true),
+        SamplingLogits::Sample { top_k: 0, top_p, .. } if (top_p - 0.95).abs() < f32::EPSILON
+    ));
+    assert!(matches!(sampling(settings, 131_072, false), SamplingLogits::Full));
 }
 
 #[test]

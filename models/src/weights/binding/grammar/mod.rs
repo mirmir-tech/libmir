@@ -8,11 +8,13 @@ use crate::{
 };
 
 mod dense;
+mod state_space;
 
 pub(super) fn validate(spec: &SemanticModelSpec, tensors: &[TensorBinding]) -> Result<()> {
     attention(spec, tensors)?;
     clamped_routed(spec, tensors)?;
     shared_routed(spec, tensors)?;
+    state_space::validate(spec, tensors)?;
     dense::validate(spec, tensors)
 }
 
@@ -149,6 +151,7 @@ fn mixer_complete(mixer: &MixerSpec, tensors: &[TensorBinding], index: usize) ->
         ]
         .into_iter()
         .all(|tensor| has_layer(tensors, index, LayerTensorRole::LinearAttention { tensor })),
+        MixerSpec::StateSpace(_) => false,
         MixerSpec::SoftmaxAttention(_) => {
             [
                 AttentionProjectionRole::Query,

@@ -36,6 +36,11 @@ pub struct GenerationRequest {
     /// Controls the prompt thinking mode; output limits still count all
     /// channels.
     pub reasoning: crate::ReasoningMode,
+    /// Requests shorter reasoning from templates that declare the switch.
+    pub reasoning_effort: crate::ReasoningEffort,
+    /// Keeps or drops earlier turns' reasoning in templates that declare
+    /// the choice.
+    pub reasoning_history: crate::ReasoningHistory,
     /// Opt-in schema-constrained native tool decoding.
     pub tool_constraints: ToolConstraints,
     /// Optional reasoning-token cap for enabled schema-constrained XML tools.

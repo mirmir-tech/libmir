@@ -8,6 +8,7 @@ mod selected;
 mod tests;
 mod weight_only;
 
+pub(in crate::backend) use bank::MarlinNvFp4Bank;
 pub use bank::{NvFp4ExpertBank, NvFp4ExpertBankConfig, NvFp4ExpertSource};
 use mircuda::{DeviceBuffer, bf16};
 pub use scale::NvFp4ScaleMode;
@@ -17,8 +18,8 @@ pub use selected::{
 };
 pub(in crate::backend) use selected::{
     BucketedNvFp4Scratch, BucketedNvFp4ScratchConfig, MarlinNvFp4MoeBf16, MarlinNvFp4Scratch,
-    MarlinNvFp4ScratchConfig, MarlinRouteBlock, SelectedNvFp4WeightOnlyTensorCoreMoeBf16,
-    TiledSelectedNvFp4MoeBf16,
+    MarlinNvFp4ScratchConfig, MarlinNvFp4UngatedMoeBf16, MarlinRouteBlock,
+    SelectedNvFp4WeightOnlyTensorCoreMoeBf16, TiledSelectedNvFp4MoeBf16,
 };
 pub(in crate::backend) use weight_only::MarlinNvFp4Bf16Linear;
 pub use weight_only::{NvFp4WeightOnlyBf16Linear, NvFp4WeightOnlyWeight};

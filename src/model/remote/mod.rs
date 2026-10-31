@@ -209,13 +209,9 @@ fn remote_vision(
     catalog: &TensorCatalog,
     processor: Option<&serde_json::Value>,
 ) -> Result<Option<RemoteVisionContract>> {
-    let declared = config.get("vision_config").is_some_and(serde_json::Value::is_object);
+    // A vision tower without a supported execution contract leaves a text-only
+    // contract, matching local model inspection; its tensors stay unbound.
     let Some(config) = VisionConfig::from_value(config)? else {
-        if declared {
-            return Err(Error::from(models::ModelsError::InvalidConfig(
-                "unsupported vision execution contract".into(),
-            )));
-        }
         return Ok(None);
     };
     let readiness = VisionTensorSchema::discover(&config).readiness(catalog);

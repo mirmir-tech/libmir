@@ -1,14 +1,15 @@
 use super::{
     AttentionProjectionRole, BindingTransform, ExpertProjectionRole, FeedForwardProjectionRole,
-    LayerTensorRole, LinearAttentionTensorRole, LogicalTensorRole, TensorPacking, TensorStorage,
-    dimensions,
+    LatentProjectionRole, LayerTensorRole, LinearAttentionTensorRole, LogicalTensorRole,
+    StateSpaceTensorRole, TensorPacking, TensorStorage, dimensions,
 };
 use crate::semantic::{AttentionOutputSpec, FeedForwardSpec, MixerSpec, SemanticModelSpec};
 
 mod clamped;
 mod feed_forward;
+mod state_space;
 
-use feed_forward::{routed, shared};
+use feed_forward::{expert_width, routed, shared};
 
 pub(super) fn logical(
     spec: &SemanticModelSpec,
@@ -93,6 +94,11 @@ fn layer(spec: &SemanticModelSpec, index: usize, role: &LayerTensorRole) -> Opti
             shared_expert(&layer.feed_forward, hidden, *projection)
         },
         LayerTensorRole::SharedExpertOutputGate => shared_output_gate(&layer.feed_forward, hidden),
+        LayerTensorRole::StateSpace { tensor } => state_space::mixer(&layer.mixer, hidden, *tensor),
+        LayerTensorRole::RouterCorrectionBias => state_space::correction_bias(&layer.feed_forward),
+        LayerTensorRole::LatentProjection { projection } => {
+            state_space::latent(&layer.feed_forward, hidden, *projection)
+        },
         LayerTensorRole::Auxiliary { .. } => None,
     }
 }
@@ -188,7 +194,9 @@ fn dense(
     let intermediate_size = match feed_forward {
         FeedForwardSpec::Dense { intermediate_size, .. } => *intermediate_size,
         FeedForwardSpec::DenseAndRouted { dense_intermediate_size, .. } => *dense_intermediate_size,
-        FeedForwardSpec::Routed { .. } => return None,
+        FeedForwardSpec::Routed { .. }
+        | FeedForwardSpec::LatentRouted { .. }
+        | FeedForwardSpec::None => return None,
     };
     Some(match projection {
         FeedForwardProjectionRole::Gate | FeedForwardProjectionRole::Up => {
@@ -205,15 +213,16 @@ fn experts(
     projection: ExpertProjectionRole,
 ) -> Option<Vec<usize>> {
     let routed = routed(feed_forward)?;
+    let width = expert_width(feed_forward, hidden);
     let output = match projection {
         ExpertProjectionRole::Gate | ExpertProjectionRole::Up => routed.intermediate_size,
         ExpertProjectionRole::GateUp => routed.intermediate_size.checked_mul(2)?,
-        ExpertProjectionRole::Down => hidden,
+        ExpertProjectionRole::Down => width,
     };
     let input = if projection == ExpertProjectionRole::Down {
         routed.intermediate_size
     } else {
-        hidden
+        width
     };
     match expert {
         Some(index) if index < routed.expert_count => Some(vec![output, input]),
