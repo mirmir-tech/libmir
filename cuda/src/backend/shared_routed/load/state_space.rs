@@ -11,8 +11,8 @@ use runtime::kv::CacheConfig;
 use super::{super::SharedRoutedLayerTemplate, required_norm};
 use crate::{
     AttentionLayerPolicy, CudaAttentionHybridLayer, CudaBackend, CudaLatentMoe,
-    CudaMamba2HybridLayer, CudaTensorSet, Error, LatentMoeConfig, LatentMoeWeights,
-    ProjectionFormat, Result,
+    CudaMamba2HybridLayer, CudaTensorDType, CudaTensorSet, Error, LatentMoeConfig,
+    LatentMoeWeights, ProjectionFormat, Result,
     backend::{feed_forward::FeedForward, state_space_hybrid::NormedFeedForward},
 };
 
@@ -64,6 +64,15 @@ impl HybridLoad<'_> {
             )
             .map(|layer| SharedRoutedLayerTemplate::Mamba2(Box::new(layer))),
             StateSpaceHybridMixerBindings::Attention(projections) => {
+                let query = self
+                    .tensors
+                    .get(&projections.query.source)
+                    .ok_or_else(|| Error::MissingTensor(projections.query.source.clone()))?;
+                let projection_format = if query.dtype() == CudaTensorDType::Bf16 {
+                    ProjectionFormat::Bf16
+                } else {
+                    ProjectionFormat::DirectFp8
+                };
                 CudaAttentionHybridLayer::load(
                     self.backend,
                     self.tensors,
@@ -74,7 +83,7 @@ impl HybridLoad<'_> {
                     feed_forward,
                     AttentionLayerPolicy {
                         hidden_size: hidden,
-                        projection_format: ProjectionFormat::DirectFp8,
+                        projection_format,
                         cache: self.cache,
                         max_sequence_blocks: self.max_sequence_blocks,
                     },

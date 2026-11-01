@@ -67,7 +67,7 @@ pub(super) fn decode(
             } else {
                 None
             };
-            Ok(Output { token, logits })
+            Ok(Output { accepted: Vec::new(), token, logits })
         })
         .collect::<Result<Vec<_>>>()
         .map(Some)

@@ -11,6 +11,7 @@ use runtime::kv::{CacheConfig, KvStorageSpec};
 use super::ModelDescriptor;
 use crate::{ModelMemoryEstimate, RuntimeConfig};
 
+mod prediction;
 mod resident;
 mod session;
 
@@ -36,7 +37,9 @@ impl ModelDescriptor {
         config: &RuntimeConfig,
         target: &BackendTarget,
     ) -> ModelMemoryEstimate {
-        let weight_bytes = resident::weight_bytes(&self.layout, self.unloaded.as_ref());
+        let speculation = config.scheduler.speculation.is_some();
+        let weight_bytes =
+            resident::weight_bytes(&self.layout, self.unloaded.as_ref(), speculation);
         let generation_decoder = match &self.task_plan {
             TaskExecutionPlan::Generation { decoder }
             | TaskExecutionPlan::CausalScoring { decoder, .. } => Some(decoder),
@@ -46,8 +49,12 @@ impl ModelDescriptor {
             u64::from(config.kv_cache.block_count)
                 .saturating_mul(u64::try_from(config.kv_cache.block_size).unwrap_or(u64::MAX))
         });
-        let (kv_bytes_per_token, kv_cache_bytes) =
-            generation_decoder.map_or((0, 0), |decoder| kv_budget(decoder, config, target));
+        let (kv_bytes_per_token, kv_cache_bytes) = generation_decoder.map_or((0, 0), |decoder| {
+            let (per_token, total) = kv_budget(decoder, config, target);
+            let (prediction_per_token, prediction) =
+                prediction::kv_budget(self.execution.as_ref(), config);
+            (per_token.saturating_add(prediction_per_token), total.saturating_add(prediction))
+        });
         let workspace_bytes =
             workspace(weight_bytes).saturating_add(if *target == BackendTarget::Cuda {
                 cuda_persistent_workspace(self.execution.as_ref())
@@ -64,7 +71,12 @@ impl ModelDescriptor {
             kv_bytes_per_token,
             cache_capacity_tokens,
             model_context_tokens: u64::try_from(self.metadata.context_len).unwrap_or(u64::MAX),
-            session_state_bytes: generation_decoder.map_or(0, session::state_bytes),
+            session_state_bytes: generation_decoder.map_or(0, |decoder| {
+                session::state_bytes(
+                    decoder,
+                    prediction::rollback_snapshots(self.execution.as_ref(), config),
+                )
+            }),
         }
     }
 }

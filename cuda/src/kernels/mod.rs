@@ -9,6 +9,7 @@ mod affine;
 mod awq;
 mod bitsandbytes;
 mod clamped_routed;
+mod concat;
 mod decoder;
 mod dense_cast;
 mod direct_fp8;
@@ -58,6 +59,7 @@ pub(crate) use clamped_routed::{
     ClampedRoutedMarlinEpilogue, ClampedRoutedMarlinGeometry, ClampedRoutedSpec,
     ClampedRoutedSplitDecode,
 };
+pub use concat::ConcatColumnsBf16;
 pub use decoder::{RmsNorm, RmsNormUnit, Rope, RopeSpec};
 pub(crate) use dense_cast::DenseCast;
 pub(crate) use direct_fp8::{

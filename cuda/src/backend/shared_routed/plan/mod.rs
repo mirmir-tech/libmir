@@ -9,6 +9,7 @@ pub(super) use self::cache::SharedRoutedExecutionPlanCache;
 use self::layer::{PlanStep, SharedRoutedLayerExecution};
 use super::{
     CudaSharedRoutedLayerState, CudaSharedRoutedModelTemplate, boundary::SharedRoutedEmbedding,
+    prediction::PredictionExecution,
 };
 use crate::{Error, Result, kernels::VisionEmbeddingSplice};
 
@@ -24,6 +25,8 @@ pub(super) struct SharedRoutedExecutionPlan {
     first: DeviceBuffer<bf16>,
     second: DeviceBuffer<bf16>,
     layers: Vec<SharedRoutedLayerExecution>,
+    /// The prediction module over the same rows, when the model drafts.
+    pub(super) prediction: Option<PredictionExecution>,
 }
 
 impl SharedRoutedExecutionPlan {
@@ -44,6 +47,11 @@ impl SharedRoutedExecutionPlan {
             .iter()
             .map(|layer| SharedRoutedLayerExecution::new(layer, tokens))
             .collect::<Result<Vec<_>>>()?;
+        let prediction = template
+            .prediction
+            .as_ref()
+            .map(|prediction| PredictionExecution::new(template, prediction, tokens))
+            .transpose()?;
         let mut plan = Self {
             tokens,
             bytes: 0,
@@ -54,6 +62,7 @@ impl SharedRoutedExecutionPlan {
             first: backend.inner.pool.allocate(&backend.inner.stream, elements)?,
             second: backend.inner.pool.allocate(&backend.inner.stream, elements)?,
             layers,
+            prediction,
         };
         plan.bytes = backend.pool().stats()?.used.saturating_sub(used_before);
         Ok(plan)
@@ -73,6 +82,26 @@ impl SharedRoutedExecutionPlan {
         let stream = &template.backend.inner.stream;
         stream.copy_to_device(&mut self.token_staging, &mut self.token_ids)?;
         stream.copy_to_device(&mut self.position_staging, &mut self.positions)?;
+        Ok(())
+    }
+
+    /// Replaces the last `count` uploaded tokens with device tokens.
+    pub(super) fn load_tail_tokens(
+        &mut self,
+        template: &CudaSharedRoutedModelTemplate,
+        source: &DeviceBuffer<u32>,
+        count: usize,
+    ) -> Result<()> {
+        let start = self
+            .tokens
+            .checked_sub(count)
+            .ok_or(Error::InvalidDecoderKernel("device tokens exceed the plan"))?;
+        template.backend.inner.stream.copy_device_range(
+            source,
+            0..count,
+            &mut self.token_ids,
+            start,
+        )?;
         Ok(())
     }
 
@@ -128,5 +157,17 @@ impl SharedRoutedExecutionPlan {
         } else {
             &self.second
         })
+    }
+
+    /// The last pass's decoder output and the prediction module.
+    pub(super) fn output_and_prediction(
+        &mut self,
+    ) -> (&DeviceBuffer<bf16>, Option<&mut PredictionExecution>) {
+        let output = if self.layers.len().is_multiple_of(2) {
+            &self.first
+        } else {
+            &self.second
+        };
+        (output, self.prediction.as_mut())
     }
 }

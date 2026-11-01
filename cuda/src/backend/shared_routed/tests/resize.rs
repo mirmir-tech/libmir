@@ -17,7 +17,11 @@ fn resized_cache_serves_the_same_logits() -> Result<()> {
     let template = backend.load_shared_routed_model_template(
         &decoder,
         &fixture.catalog(),
-        crate::SharedRoutedModelLoadConfig { cache, max_sequence_blocks: 2 },
+        crate::SharedRoutedModelLoadConfig {
+            cache,
+            max_sequence_blocks: 2,
+            speculation: None,
+        },
     )?;
     let tokens = (0..24)
         .map(|index| u32::try_from(index % decoder.vocab_size))
@@ -62,7 +66,11 @@ fn decode_batch_follows_a_resized_cache() -> Result<()> {
     let template = backend.load_shared_routed_model_template(
         &decoder,
         &fixture.catalog(),
-        crate::SharedRoutedModelLoadConfig { cache, max_sequence_blocks: 2 },
+        crate::SharedRoutedModelLoadConfig {
+            cache,
+            max_sequence_blocks: 2,
+            speculation: None,
+        },
     )?;
     let tokens = (0..8)
         .map(|index| u32::try_from(index % decoder.vocab_size))
@@ -82,6 +90,7 @@ fn decode_batch_follows_a_resized_cache() -> Result<()> {
             token_id: 3,
             block_table: table,
             sampling_logits: runtime::backend::SamplingLogits::Full,
+            speculation: None,
         };
         batch.execute(&mut [&mut session], std::slice::from_ref(&sequence))?;
     }
@@ -101,6 +110,7 @@ fn decode_batch_follows_a_resized_cache() -> Result<()> {
         token_id: 3,
         block_table: table.clone(),
         sampling_logits: runtime::backend::SamplingLogits::Full,
+        speculation: None,
     };
     // Full logits are copied into the session rather than sampled on device.
     assert!(batch.execute(&mut [&mut batched], std::slice::from_ref(&sequence))?.is_none());

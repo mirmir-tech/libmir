@@ -66,12 +66,15 @@ impl CudaEngine {
                     SharedRoutedModelLoadConfig {
                         cache: self.cache,
                         max_sequence_blocks: blocks,
+                        speculation: self.scheduler.speculation,
                     },
                     report,
                 )?;
+                let speculation = self.scheduler.speculation.filter(|_| template.drafts());
                 Ok(generation(MixedMixerExecution::new(
                     template.with_decode_rows(self.scheduler.max_batch_requests),
                     self.session_config.prefill_chunk_tokens,
+                    speculation,
                 )?))
             },
             CudaDecoderRuntime::ClampedRouted => {

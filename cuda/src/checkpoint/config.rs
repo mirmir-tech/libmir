@@ -45,6 +45,8 @@ pub struct NvFp4MoeLayerLoadConfig {
 pub struct SharedRoutedModelLoadConfig {
     pub cache: CacheConfig,
     pub max_sequence_blocks: usize,
+    /// Loads the checkpoint's multi-token prediction module for drafting.
+    pub speculation: Option<runtime::speculation::Speculation>,
 }
 
 impl NvFp4MoeLayerLoadConfig {

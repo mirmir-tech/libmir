@@ -1,7 +1,7 @@
-use std::time::Instant;
+use std::{collections::VecDeque, time::Instant};
 
 use models::generation::GenerationToken;
-use runtime::{metrics::GenerationMetricsRecorder, sampling::Sampler};
+use runtime::{backend::SamplingLogits, metrics::GenerationMetricsRecorder, sampling::Sampler};
 
 use crate::{CancellationToken, Model, ProgressEvent, Result};
 
@@ -60,6 +60,9 @@ impl Model {
         self.generate_inner(request, Some(encoded_image), progress, token, cancellation)
     }
 
+    // One loop drives prefill, decode, streaming and stops; splitting it
+    // would thread a dozen locals through helpers.
+    #[allow(clippy::too_many_lines)]
     fn generate_inner(
         &self,
         request: &GenerationRequest,
@@ -106,6 +109,9 @@ impl Model {
         let mut history = sampling.requires_history().then(|| prepared.token_ids().to_vec());
         let mut next = choose_prefill(&prefill, history.as_deref(), &mut sampler, &mut metrics)?;
         let mut token_ids = Vec::with_capacity(settings.max_tokens);
+        // Verified speculative drafts and the prediction after them, in order;
+        // the backend has processed all but the last.
+        let mut ahead = VecDeque::new();
         let (mut text, mut reasoning, mut tool_calls) =
             (String::new(), String::new(), prepared.initial_tool_calls());
         let mut finish_reason = "max_tokens";
@@ -128,7 +134,7 @@ impl Model {
                 finish_reason = "stop";
             }
             let finished = stopped || token_ids.len() == settings.max_tokens;
-            let pending = if finished {
+            let pending = if finished || !ahead.is_empty() {
                 None
             } else {
                 cycle.observe(prepared.token_ids(), &token_ids);
@@ -136,7 +142,8 @@ impl Model {
                 let sampling = request_sampling(self, settings, vocab_size, &mut sampler);
                 let sampling = cycle.sampling(sampling);
                 let sampling = constraints::sampling(&mut constraints, sampling)?;
-                Some((started, session.start_decode(next, sampling)?))
+                let bounds = draft_bounds(constraints.as_ref(), &cycle, &sampling, &stop_token_ids);
+                Some((started, session.start_decode(next, sampling, bounds)?))
             };
             if token_ids.len() == 1 {
                 progress(ProgressEvent::decode_tokens(0, settings.max_tokens));
@@ -149,17 +156,18 @@ impl Model {
             if finished {
                 break;
             }
-            let Some((decode_started, pending)) = pending else {
+            if let Some(pending) = pending {
+                let step = Step {
+                    metrics: &mut metrics,
+                    cycle: &mut cycle,
+                    sampler: &mut sampler,
+                };
+                ahead.extend(step.receive(&mut session, pending, history.as_deref())?);
+            }
+            let Some(token) = ahead.pop_front() else {
                 break;
             };
-            let output = session.finish_decode(pending)?;
-            metrics.record_decode(decode_started.elapsed());
-            next = cycle.choose(
-                &mut metrics,
-                &output,
-                history.as_deref().unwrap_or_default(),
-                &mut sampler,
-            )?;
+            next = token;
         }
         stream.finish_into(&mut text, &mut reasoning, &mut tool_calls, token)?;
         let tool_calls =
@@ -168,6 +176,61 @@ impl Model {
         Ok(finalize_output(
             text, reasoning, tool_calls, token_ids, prompt_tokens, finish_reason, metrics,
         ))
+    }
+}
+
+/// How far the next decode may run ahead of the host, when it takes the
+/// backend's tokens as they are: no cycle recovery or host-side sampling, and
+/// no tool grammar yet. Acceptance stops at a stop token, and in a reasoning
+/// phase at its delimiter and within its token budget.
+fn draft_bounds(
+    constraint: Option<&constraints::ToolConstraint>,
+    cycle: &CycleRecovery,
+    sampling: &SamplingLogits,
+    stop_tokens: &[u32],
+) -> Option<runtime::speculation::DraftBounds> {
+    let device = matches!(
+        sampling,
+        SamplingLogits::None | SamplingLogits::Sample { .. } | SamplingLogits::SampleTopK { .. }
+    );
+    if !device || !cycle.takes_backend_tokens() {
+        return None;
+    }
+    let mut stop_tokens = stop_tokens.to_vec();
+    let max_accepted = match constraint {
+        None => None,
+        Some(constraint) => {
+            let (end, left) = constraint.reasoning_bounds()?;
+            stop_tokens.push(end);
+            // Each kept draft and the step's token spend the budget.
+            left.map(|left| left - 1)
+        },
+    };
+    Some(runtime::speculation::DraftBounds { max_accepted, stop_tokens })
+}
+
+/// The state a finished decode step updates.
+struct Step<'a> {
+    metrics: &'a mut GenerationMetricsRecorder,
+    cycle: &'a mut CycleRecovery,
+    sampler: &'a mut Sampler,
+}
+
+impl Step<'_> {
+    /// Finishes a decode step: the verified drafts, then the chosen token.
+    fn receive(
+        self,
+        session: &mut crate::Session,
+        (started, pending): (Instant, crate::session::PendingSessionDecode),
+        history: Option<&[u32]>,
+    ) -> Result<Vec<u32>> {
+        let output = session.finish_decode(pending)?;
+        self.metrics.record_decode(started.elapsed(), output.accepted.len() + 1);
+        let history = history.unwrap_or_default();
+        let chosen = self.cycle.choose(self.metrics, &output, history, self.sampler)?;
+        let mut tokens = output.accepted;
+        tokens.push(chosen);
+        Ok(tokens)
     }
 }
 

@@ -90,6 +90,7 @@ fn build_outputs(
                 None
             };
             Ok(DecodeOutput {
+                accepted: Vec::new(),
                 event: TokenEvent {
                     token_id: token,
                     text: "cuda.decode=batch-device-token-pipeline".into(),

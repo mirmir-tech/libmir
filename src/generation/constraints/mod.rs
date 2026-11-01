@@ -25,6 +25,13 @@ pub(super) fn invalid(message: impl Into<String>) -> crate::Error {
 }
 
 impl ToolConstraint {
+    /// The reasoning delimiter and the tokens the budget still allows, while
+    /// the model reasons unconstrained; `None` once the grammar or the budget
+    /// exit takes over.
+    pub(super) fn reasoning_bounds(&self) -> Option<(u32, Option<usize>)> {
+        self.phase.reasoning_bounds()
+    }
+
     pub(super) fn prepare(
         model: &Model,
         request: &GenerationRequest,

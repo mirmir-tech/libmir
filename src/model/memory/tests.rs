@@ -70,7 +70,9 @@ fn prices_mamba_state_and_convolution_history_per_sequence() -> crate::Result<()
     let state = 128 * 64 * 128 * 4;
     let history = 10_240 * 3 * 2;
 
-    assert_eq!(session::state_bytes(&decoder), 2 * (state + history));
+    assert_eq!(session::state_bytes(&decoder, 0), 2 * (state + history));
+    // Three rollback snapshots for three drafts.
+    assert_eq!(session::state_bytes(&decoder, 3), 8 * (state + history));
     let config = RuntimeConfig::default();
     let (per_token, _) = kv_budget(&decoder, &config, &BackendTarget::Cuda);
     let attention_only = KvStorageSpec::new(config.kv_cache, 2, 128).memory_budget();

@@ -22,6 +22,7 @@ fn replacement_releases_retained_scratch_before_allocating_a_large_plan() -> Res
                 dtype: KvCacheDType::BFloat16,
             },
             max_sequence_blocks: 512,
+            speculation: None,
         },
     )?;
     backend.synchronize()?;

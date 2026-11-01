@@ -14,6 +14,7 @@ use crate::{
 mod batch;
 mod checkpoint;
 mod residency;
+mod rollback;
 mod workspace;
 pub use batch::CudaMamba2BatchState;
 pub use checkpoint::CudaMamba2Checkpoint;
@@ -33,6 +34,7 @@ pub struct CudaMamba2State {
     revision: u64,
     resident: ResidentRow,
     inline: Option<checkpoint::InlineCheckpoint>,
+    rollback: rollback::Rollback,
 }
 
 /// Algorithm advancing the selective scan over a chunk of tokens.
@@ -85,6 +87,7 @@ impl CudaBackend {
             revision: 0,
             resident: ResidentRow::default(),
             inline: None,
+            rollback: rollback::Rollback::default(),
         })
     }
 }
@@ -135,6 +138,10 @@ impl CudaMamba2State {
     ) -> Result<()> {
         if workspace.tokens() < tokens {
             return Err(Error::InvalidDecoderKernel("Mamba-2 workspace is smaller than the chunk"));
+        }
+        if self.rollback_armed() > 0 {
+            return self
+                .advance_snapshotted(path, tokens, projection, parameters, workspace, output);
         }
         let Some(before) = self.armed_checkpoint().filter(|before| (1..=tokens).contains(before))
         else {

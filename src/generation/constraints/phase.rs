@@ -51,6 +51,17 @@ impl Phase {
         }
     }
 
+    pub(super) fn reasoning_bounds(&self) -> Option<(u32, Option<usize>)> {
+        match self {
+            Self::Reasoning { end, allowance: Allowance::Unlimited } => Some((*end, None)),
+            Self::Reasoning {
+                end,
+                allowance: Allowance::Remaining(left),
+            } => Some((*end, Some(left.get()))),
+            Self::Reasoning { allowance: Allowance::Exhausted, .. } | Self::Tool => None,
+        }
+    }
+
     pub(super) fn budget_exit(&self) -> Option<u32> {
         match self {
             Self::Reasoning { end, allowance: Allowance::Exhausted } => Some(*end),

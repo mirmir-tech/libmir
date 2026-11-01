@@ -13,7 +13,7 @@ mod template;
 mod workspace;
 
 use graph::DecodeResources;
-pub use prefill::CudaSharedRoutedPrefillBatch;
+pub use prefill::{CudaSharedRoutedPrefillBatch, DraftingRow};
 pub(in crate::backend) use workspace::DecodeWorkspaceKey;
 
 #[derive(Debug)]

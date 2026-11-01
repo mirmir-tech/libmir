@@ -121,7 +121,8 @@ pub use shared_moe::{
 };
 pub use shared_routed::{
     CudaSharedRoutedDecodeBatch, CudaSharedRoutedLayerState, CudaSharedRoutedModelSession,
-    CudaSharedRoutedModelTemplate, CudaSharedRoutedPrefillBatch, SharedRoutedCheckpoint,
+    CudaSharedRoutedModelTemplate, CudaSharedRoutedPrefillBatch, DraftRow, DraftingRow,
+    SharedRoutedCheckpoint, SpeculativeStep,
 };
 pub use state_space_hybrid::{
     CudaAttentionHybridExecution, CudaAttentionHybridLayer, CudaMamba2HybridExecution,

@@ -1,7 +1,7 @@
 use runtime::kv::KvStorageSpec;
 
 use super::{CudaSharedRoutedLayerState, CudaSharedRoutedModelTemplate, SharedRoutedLayerTemplate};
-use crate::{Error, PagedKvCache, Result};
+use crate::{DecodeAttentionBf16, Error, PagedKvCache, Result};
 
 impl CudaSharedRoutedModelTemplate {
     /// K/V geometry of layer `index`, or `None` for a recurrent layer.
@@ -29,7 +29,14 @@ impl CudaSharedRoutedModelTemplate {
             .ok_or(Error::InvalidPagedKv("shared-routed model has no attention cache"))
     }
 
+    /// One cache per decoder layer, then the prediction module's.
     pub(crate) fn allocate_shared_kv(&self) -> Result<Vec<Option<PagedKvCache>>> {
+        let prediction = self.prediction.as_ref().map(|prediction| {
+            Ok(Some(self.backend.prepare_paged_kv(
+                prediction.index(),
+                prediction.layer().storage(self.cache),
+            )?))
+        });
         self.layers
             .iter()
             .enumerate()
@@ -38,14 +45,34 @@ impl CudaSharedRoutedModelTemplate {
                     .map(|storage| self.backend.prepare_paged_kv(index, storage))
                     .transpose()
             })
+            .chain(prediction)
             .collect()
+    }
+
+    /// The prediction module's attention over its pages, when loaded.
+    pub(super) fn prepare_prediction_state(
+        &self,
+        caches: &[Option<PagedKvCache>],
+    ) -> Result<Option<DecodeAttentionBf16>> {
+        self.prediction
+            .as_ref()
+            .map(|prediction| {
+                let cache = caches
+                    .get(self.layers.len())
+                    .cloned()
+                    .flatten()
+                    .ok_or(Error::InvalidPagedKv("prediction module cache is missing"))?;
+                prediction.layer().prepare_state_with_cache(cache)
+            })
+            .transpose()
     }
 
     pub(super) fn prepare_states(
         &self,
         caches: &[Option<PagedKvCache>],
     ) -> Result<Vec<CudaSharedRoutedLayerState>> {
-        if caches.len() != self.layers.len() {
+        let expected = self.layers.len() + usize::from(self.prediction.is_some());
+        if caches.len() != expected {
             return Err(Error::InvalidPagedKv("shared-routed cache count differs from layers"));
         }
         let missing = || Error::InvalidPagedKv("shared-routed attention cache is missing");

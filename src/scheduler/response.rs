@@ -106,6 +106,7 @@ mod tests {
         thread::spawn(move || {
             thread::sleep(delay);
             completer.complete(Ok(DecodeOutput {
+                accepted: Vec::new(),
                 event: TokenEvent {
                     token_id: Some(7),
                     text: String::new(),

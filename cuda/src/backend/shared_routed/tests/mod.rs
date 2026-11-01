@@ -1,6 +1,7 @@
 mod dense_mixed;
 mod fixture;
 mod inline_checkpoint;
+mod prediction;
 mod ragged;
 mod resize;
 mod retained_plans;
@@ -27,7 +28,11 @@ fn executes_mixed_linear_and_full_attention_session() -> Result<()> {
     let template = backend.load_shared_routed_model_template(
         &decoder,
         &fixture.catalog(),
-        crate::SharedRoutedModelLoadConfig { cache, max_sequence_blocks: 2 },
+        crate::SharedRoutedModelLoadConfig {
+            cache,
+            max_sequence_blocks: 2,
+            speculation: None,
+        },
     )?;
     let mut session = template.instantiate()?;
     let mut table = BlockTable::with_block_size(16);
@@ -59,7 +64,11 @@ fn continues_decode_after_spatial_vision_prefill() -> Result<()> {
     let template = backend.load_shared_routed_model_template(
         &decoder,
         &fixture.catalog(),
-        crate::SharedRoutedModelLoadConfig { cache, max_sequence_blocks: 2 },
+        crate::SharedRoutedModelLoadConfig {
+            cache,
+            max_sequence_blocks: 2,
+            speculation: None,
+        },
     )?;
     let mut session = template.instantiate()?;
     let mut table = BlockTable::with_block_size(16);
@@ -91,7 +100,11 @@ fn concurrent_sessions_reuse_model_kv_pages_and_plans() -> Result<()> {
     let template = backend.load_shared_routed_model_template(
         &decoder,
         &fixture.catalog(),
-        crate::SharedRoutedModelLoadConfig { cache, max_sequence_blocks: 2 },
+        crate::SharedRoutedModelLoadConfig {
+            cache,
+            max_sequence_blocks: 2,
+            speculation: None,
+        },
     )?;
     let caches = template.allocate_shared_kv()?;
     assert_eq!(caches.iter().filter(|cache| cache.is_some()).count(), 1);

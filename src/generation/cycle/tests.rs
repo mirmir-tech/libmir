@@ -46,6 +46,7 @@ fn settings() -> GenerationSettings {
 
 fn output(token: u32) -> DecodeOutput {
     DecodeOutput {
+        accepted: Vec::new(),
         event: TokenEvent {
             token_id: Some(token),
             text: String::new(),

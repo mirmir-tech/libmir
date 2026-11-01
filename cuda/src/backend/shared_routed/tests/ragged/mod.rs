@@ -93,6 +93,7 @@ fn run_fixture(
         crate::SharedRoutedModelLoadConfig {
             cache,
             max_sequence_blocks: usize::try_from(blocks)?,
+            speculation: None,
         },
     )?;
     assert!(template.prepare_ragged_prefill_batch(&[]).is_err());

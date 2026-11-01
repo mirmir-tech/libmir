@@ -2,15 +2,24 @@ use mircuda::{DeviceBuffer, bf16};
 use runtime::{backend::SamplingLogits, kv::BlockTable};
 use uuid::Uuid;
 
+mod draft;
+mod drafts;
+mod pass;
+mod speculate;
+
+pub use draft::DraftRow;
+use pass::Pass;
+pub use speculate::SpeculativeStep;
+pub(super) use speculate::{draft_sampling, seed};
+
 use super::{
     CudaSharedRoutedLayerState, CudaSharedRoutedModelTemplate,
     boundary::{SharedRoutedEmbedding, SharedRoutedOutputHead},
     checkpoint::SharedRoutedCheckpoint,
-    plan::SharedRoutedExecutionPlan,
     position::text_positions,
 };
 use crate::{
-    CudaBackend, DeviceSamplerBf16, Error, Result,
+    CudaBackend, DecodeAttentionBf16, DeviceSamplerBf16, Error, Result,
     kernels::{SelectRowBf16, ShiftedRmsNorm},
 };
 
@@ -19,6 +28,12 @@ pub struct CudaSharedRoutedModelSession {
     template: CudaSharedRoutedModelTemplate,
     pub(super) embedding: SharedRoutedEmbedding,
     pub(super) states: Vec<CudaSharedRoutedLayerState>,
+    /// The prediction module's attention, when the model drafts.
+    pub(super) prediction: Option<DecodeAttentionBf16>,
+    /// Drafts for the next verification, left on the device; the first
+    /// `drafted` are current.
+    pub(super) drafts: Option<DeviceBuffer<u32>>,
+    pub(super) drafted: usize,
     final_norm: ShiftedRmsNorm,
     output: SharedRoutedOutputHead,
     sampler: DeviceSamplerBf16,
@@ -43,6 +58,9 @@ impl CudaSharedRoutedModelSession {
             template: template.clone(),
             embedding: template.prepare_embedding()?,
             states: template.prepare_states(caches)?,
+            prediction: template.prepare_prediction_state(caches)?,
+            drafts: None,
+            drafted: 0,
             final_norm: ShiftedRmsNorm::compile(
                 &backend.inner.compiler,
                 1,
@@ -68,7 +86,7 @@ impl CudaSharedRoutedModelSession {
         table: &BlockTable,
     ) -> Result<&DeviceBuffer<bf16>> {
         let positions = text_positions(self.position, tokens.len(), self.position_delta)?;
-        self.prefill_inner(session_id, tokens, &positions, table, None, None)
+        self.prefill_inner(Pass::text(session_id, tokens, &positions, table))
     }
 
     pub fn prefill_with_positions(
@@ -79,7 +97,10 @@ impl CudaSharedRoutedModelSession {
         table: &BlockTable,
         image_span: Option<(usize, usize)>,
     ) -> Result<&DeviceBuffer<bf16>> {
-        self.prefill_inner(session_id, tokens, positions, table, image_span, None)
+        self.prefill_inner(Pass {
+            image_span,
+            ..Pass::text(session_id, tokens, positions, table)
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -93,77 +114,13 @@ impl CudaSharedRoutedModelSession {
         image: &DeviceBuffer<bf16>,
         position_delta: i32,
     ) -> Result<&DeviceBuffer<bf16>> {
-        self.prefill_inner(session_id, tokens, positions, table, Some(image_span), Some(image))?;
+        self.prefill_inner(Pass {
+            image_span: Some(image_span),
+            image: Some(image),
+            ..Pass::text(session_id, tokens, positions, table)
+        })?;
         self.position_delta = position_delta;
         Ok(&self.logits)
-    }
-
-    fn prefill_inner(
-        &mut self,
-        session_id: Uuid,
-        tokens: &[u32],
-        positions: &[u32],
-        table: &BlockTable,
-        image_span: Option<(usize, usize)>,
-        image: Option<&DeviceBuffer<bf16>>,
-    ) -> Result<&DeviceBuffer<bf16>> {
-        let count = tokens.len();
-        let plans = self.template.plans.clone();
-        let mut plans = plans
-            .lock()
-            .map_err(|_| Error::State("shared-routed execution plan cache is poisoned".into()))?;
-        if let Some(plan) = plans.get_mut(count) {
-            self.execute_plan(session_id, tokens, positions, table, image_span, image, plan)?;
-        } else {
-            plans.reserve(count);
-            let mut plan = SharedRoutedExecutionPlan::new(&self.template, count)?;
-            self.execute_plan(session_id, tokens, positions, table, image_span, image, &mut plan)?;
-            plans.insert(count, plan);
-        }
-        drop(plans);
-        Ok(&self.logits)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn execute_plan(
-        &mut self,
-        session_id: Uuid,
-        tokens: &[u32],
-        positions: &[u32],
-        table: &BlockTable,
-        image_span: Option<(usize, usize)>,
-        image: Option<&DeviceBuffer<bf16>>,
-        plan: &mut SharedRoutedExecutionPlan,
-    ) -> Result<()> {
-        self.validate(tokens, positions, table)?;
-        for token in tokens {
-            self.embedding.validate_token(*token)?;
-        }
-        let count = tokens.len();
-        plan.upload(&self.template, tokens, positions)?;
-        let hidden = plan.execute(
-            &self.template, &self.embedding, &mut self.states, session_id, table, self.position,
-            image_span, image,
-        )?;
-        self.select_row.execute(
-            &self.template.backend.inner.stream,
-            hidden,
-            &mut self.last_hidden,
-            count - 1,
-            count,
-        )?;
-        self.final_norm.execute(
-            &self.template.backend.inner.stream,
-            &self.last_hidden,
-            bf16_tensor(self.template.final_norm_weight())?,
-            &mut self.normalized,
-        )?;
-        self.output.execute(&self.normalized, &mut self.logits)?;
-        self.position = self
-            .position
-            .checked_add(count)
-            .ok_or(Error::InvalidDecoderKernel("shared-routed session position overflow"))?;
-        Ok(())
     }
 
     pub fn decode(

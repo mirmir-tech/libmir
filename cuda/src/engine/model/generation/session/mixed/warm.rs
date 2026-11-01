@@ -77,6 +77,7 @@ pub(super) fn warm_concurrency(
                 token_id: 1,
                 block_table: table,
                 sampling_logits: SamplingLogits::None,
+                speculation: None,
             });
         }
         let used_after = execution.template.pool_used_bytes()?;

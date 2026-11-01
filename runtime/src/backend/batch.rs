@@ -10,6 +10,8 @@ pub struct DecodeSequence {
     pub token_id: u32,
     pub block_table: BlockTable,
     pub sampling_logits: SamplingLogits,
+    /// See [`super::DecodeRequest::speculation`].
+    pub speculation: Option<crate::speculation::DraftBounds>,
 }
 
 /// A non-empty decode batch targeting exactly one loaded model.
@@ -67,6 +69,7 @@ impl TryFrom<Vec<DecodeRequest>> for DecodeBatchRequest {
                 token_id: request.token_id,
                 block_table: request.block_table,
                 sampling_logits: request.sampling_logits,
+                speculation: request.speculation,
             })
             .collect();
         Self::new(model, sequences)
@@ -109,6 +112,7 @@ mod tests {
             token_id: 1,
             block_table: BlockTable::default(),
             sampling_logits: SamplingLogits::None,
+            speculation: None,
         }
     }
 

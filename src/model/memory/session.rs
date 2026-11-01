@@ -3,9 +3,11 @@
 use models::layout::{AttentionLayerType, DecoderConfig, StateSpaceStateDType};
 
 /// Bytes of recurrent state one sequence keeps resident: gated-delta state
-/// plus convolution history, and Mamba-2 SSM state plus convolution history.
-pub(super) fn state_bytes(decoder: &DecoderConfig) -> u64 {
-    gated_delta_bytes(decoder).saturating_add(state_space_bytes(decoder))
+/// plus convolution history, and Mamba-2 SSM state plus convolution history,
+/// with `snapshots` more copies of the latter for speculative rollback.
+pub(super) fn state_bytes(decoder: &DecoderConfig, snapshots: usize) -> u64 {
+    let copies = u64::try_from(snapshots.saturating_add(1)).unwrap_or(u64::MAX);
+    gated_delta_bytes(decoder).saturating_add(state_space_bytes(decoder).saturating_mul(copies))
 }
 
 /// Float32 recurrent state plus BF16 convolution history of every linear

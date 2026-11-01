@@ -229,3 +229,5 @@ fn cached_session(cache: &mut KvCache, tokens: &[u32]) -> Result<KvSessionState>
     state.commit_ready_prefix_blocks(cache)?;
     Ok(state)
 }
+
+mod speculation;

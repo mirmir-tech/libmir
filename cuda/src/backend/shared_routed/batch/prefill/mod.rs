@@ -1,5 +1,8 @@
+mod drafting;
 mod layers;
 mod output;
+mod validate;
+pub use drafting::DraftingRow;
 use layers::PrefillRows;
 use mircuda::{DeviceBuffer, PinnedBuffer, bf16};
 use output::PackedOutput;
@@ -26,6 +29,7 @@ pub struct CudaSharedRoutedPrefillBatch {
     layers: Vec<SharedRoutedBatchLayer>,
     paging: PagedPrefillBatch,
     output: PackedOutput,
+    drafting: Option<drafting::BatchDrafting>,
 }
 
 impl CudaSharedRoutedPrefillBatch {
@@ -88,6 +92,12 @@ impl CudaSharedRoutedPrefillBatch {
                 tokens,
             )?,
             output: PackedOutput::new(template, rows)?,
+            // Built with the batch, so the bytes it takes are measured with it.
+            drafting: template
+                .prediction
+                .as_ref()
+                .map(|_| drafting::BatchDrafting::new(template, tokens))
+                .transpose()?,
         })
     }
 
@@ -134,10 +144,31 @@ impl CudaSharedRoutedPrefillBatch {
         starts: &[usize],
         policies: Option<&[SamplingLogits]>,
     ) -> Result<Option<Vec<u32>>> {
-        self.validate(sessions, tokens, tables, starts)?;
         if policies.is_some_and(|policies| policies.len() != self.rows) {
             return Err(Error::InvalidDecoderKernel("packed sampling row mismatch"));
         }
+        self.run(sessions, tokens, tables, starts, &[])?;
+        let hidden = if self.layers.len().is_multiple_of(2) {
+            &self.first
+        } else {
+            &self.second
+        };
+        policies
+            .map(|policies| self.output.execute(hidden, &self.counts, policies))
+            .transpose()
+    }
+
+    /// One decoder pass; rows in `drafted` take every token after their
+    /// first from their session's device drafts. Returns the output rows.
+    pub(super) fn run(
+        &mut self,
+        sessions: &mut [&mut CudaSharedRoutedModelSession],
+        tokens: &[u32],
+        tables: &[&BlockTable],
+        starts: &[usize],
+        drafted: &[usize],
+    ) -> Result<&DeviceBuffer<bf16>> {
+        self.validate(sessions, tokens, tables, starts)?;
         self.paging.prepare(tables, starts, &self.counts)?;
         // Padding participates only in row-independent projections. Attention,
         // recurrence, K/V writes and session positions use the logical counts.
@@ -150,6 +181,19 @@ impl CudaSharedRoutedPrefillBatch {
         let stream = &self.backend.inner.stream;
         stream.copy_to_device(&mut self.token_staging, &mut self.token_ids)?;
         stream.copy_to_device(&mut self.position_staging, &mut self.positions)?;
+        for &row in drafted {
+            let offset = self.counts[..row].iter().sum::<usize>() + 1;
+            let drafts = sessions[row]
+                .drafts
+                .as_ref()
+                .ok_or(Error::InvalidDecoderKernel("session has no device drafts"))?;
+            stream.copy_device_range(
+                drafts,
+                0..self.counts[row] - 1,
+                &mut self.token_ids,
+                offset,
+            )?;
+        }
         self.embedding
             .execute_batch(&self.token_ids, self.token_ids.len(), &mut self.first)?;
         let rows = PrefillRows {
@@ -173,47 +217,10 @@ impl CudaSharedRoutedPrefillBatch {
                 .checked_add(*count)
                 .ok_or(Error::InvalidDecoderKernel("shared-routed session position overflow"))?;
         }
-        let hidden = if self.layers.len().is_multiple_of(2) {
+        Ok(if self.layers.len().is_multiple_of(2) {
             &self.first
         } else {
             &self.second
-        };
-        policies
-            .map(|policies| self.output.execute(hidden, &self.counts, policies))
-            .transpose()
-    }
-
-    fn paging_positions(&self, starts: &[usize]) -> Result<Vec<u32>> {
-        starts
-            .iter()
-            .zip(&self.counts)
-            .flat_map(|(start, count)| *start..*start + *count)
-            .map(|value| {
-                u32::try_from(value)
-                    .map_err(|_| Error::InvalidPagedKv("shared-routed position exceeds u32"))
-            })
-            .collect()
-    }
-
-    fn validate(
-        &self,
-        sessions: &[&mut CudaSharedRoutedModelSession],
-        tokens: &[u32],
-        tables: &[&BlockTable],
-        starts: &[usize],
-    ) -> Result<()> {
-        if sessions.len() != self.rows
-            || tables.len() != self.rows
-            || starts.len() != self.rows
-            || tokens.len() != self.counts.iter().sum::<usize>()
-        {
-            return Err(Error::InvalidDecoderKernel("shared-routed prefill batch shape mismatch"));
-        }
-        for (session, start) in sessions.iter().zip(starts) {
-            if session.position != *start {
-                return Err(Error::InvalidPagedKv("shared-routed prefill position mismatch"));
-            }
-        }
-        Ok(())
+        })
     }
 }

@@ -35,6 +35,7 @@ fn bf16s(directory: &Path, name: &str) -> Result<Vec<bf16>> {
 
 #[test]
 #[ignore = "requires NEMOTRON_MODEL and NEMOTRON_ATTENTION_ORACLE"]
+#[allow(clippy::too_many_lines, reason = "one reference comparison over prefill and decode")]
 fn unrotated_attention_matches_the_reference_on_a_real_layer() -> Result<()> {
     let (Some(model), Some(oracle)) = (
         std::env::var_os("NEMOTRON_MODEL").map(PathBuf::from),

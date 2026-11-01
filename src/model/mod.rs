@@ -215,6 +215,15 @@ impl Model {
         Session::new(self.clone(), self.inner.config.kv_cache.block_size)
     }
 
+    /// Drafts each speculative decode step verifies, when the model drafts.
+    pub(crate) fn draft_tokens(&self) -> Option<usize> {
+        self.inner
+            .config
+            .scheduler
+            .speculation
+            .map(|speculation| speculation.draft_tokens.get())
+    }
+
     /// Renders, tokenizes, and validates a chat request for this model.
     pub fn prepare(&self, conversation: &Conversation) -> Result<PreparedPrompt> {
         self.inner.descriptor.prepare(conversation)

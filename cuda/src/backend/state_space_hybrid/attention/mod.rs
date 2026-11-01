@@ -1,6 +1,6 @@
 //! Attention layer without positional encoding: the paged decode attention
-//! (its own `RMSNorm`, FP8 Q/K/V, attention, FP8 output projection) followed by
-//! the residual and the optional feed-forward.
+//! (its own `RMSNorm`, FP8 or BF16 Q/K/V, attention, output projection)
+//! followed by the residual and the optional feed-forward.
 
 mod batch;
 mod execution;
@@ -14,10 +14,10 @@ use models::{
 
 use super::NormedFeedForward;
 use crate::{
-    AttentionLayerPolicy, CudaBackend, CudaTensor, CudaTensorSet, DecodeAttentionBf16,
-    DecodeAttentionConfig, DecodeAttentionOutputWeight, DecodeAttentionWeights, DecodeQkvWeights,
-    DirectFp8CheckpointWeight, Error, ExecutionPhase, PagedKvCache, ProjectionFormat, Result,
-    backend::feed_forward::LayerNormConfig,
+    AttentionLayerPolicy, Bf16LinearPackWeights, CudaBackend, CudaTensor, CudaTensorSet,
+    DecodeAttentionBf16, DecodeAttentionConfig, DecodeAttentionOutputWeight,
+    DecodeAttentionWeights, DecodeQkvWeights, DirectFp8CheckpointWeight, Error, ExecutionPhase,
+    PagedKvCache, ProjectionFormat, Result, backend::feed_forward::LayerNormConfig,
 };
 
 #[derive(Clone, Debug)]
@@ -32,13 +32,22 @@ pub struct CudaAttentionHybridLayer {
 #[derive(Clone, Debug)]
 struct AttentionWeights {
     input_norm: CudaTensor,
-    query: DirectFp8CheckpointWeight,
-    key: DirectFp8CheckpointWeight,
-    value: DirectFp8CheckpointWeight,
-    output: DirectFp8CheckpointWeight,
+    projections: Projections,
     /// Query/key norm operand of the shared QKV kernels; unused because the
     /// layer normalizes neither.
     unused_norm: DeviceBuffer<bf16>,
+}
+
+/// Decoder layers carry FP8 projections; the multi-token prediction
+/// module's attention is BF16.
+#[derive(Clone, Debug)]
+enum Projections {
+    /// Q, K, V, then the output projection.
+    DirectFp8(Box<[DirectFp8CheckpointWeight; 4]>),
+    Bf16 {
+        qkv: Bf16LinearPackWeights<3>,
+        output: CudaTensor,
+    },
 }
 
 impl CudaAttentionHybridLayer {
@@ -53,13 +62,9 @@ impl CudaAttentionHybridLayer {
         feed_forward: Option<NormedFeedForward>,
         policy: AttentionLayerPolicy,
     ) -> Result<Self> {
-        if policy.projection_format != ProjectionFormat::DirectFp8 {
-            return Err(Error::UnsupportedDecoderLayer(
-                "hybrid attention requires direct FP8 projections".into(),
-            ));
-        }
         let config = DecodeAttentionConfig::from_semantic(layer, spec, policy)?;
-        let load = |binding| DirectFp8CheckpointWeight::load_binding(tensors, binding);
+        let projections =
+            Projections::load(backend, tensors, policy.projection_format, projections)?;
         let input_norm = tensors
             .get(&input_norm.source)
             .cloned()
@@ -76,14 +81,7 @@ impl CudaAttentionHybridLayer {
                 norm_weight_shift: 0.0,
             },
             config,
-            weights: AttentionWeights {
-                input_norm,
-                query: load(projections.query)?,
-                key: load(projections.key)?,
-                value: load(projections.value)?,
-                output: load(projections.output)?,
-                unused_norm,
-            },
+            weights: AttentionWeights { input_norm, projections, unused_norm },
             feed_forward,
         })
     }
@@ -136,12 +134,63 @@ impl CudaAttentionHybridLayer {
 
 impl AttentionWeights {
     fn view(&self) -> DecodeAttentionWeights<'_> {
+        let (qkv, output) = match &self.projections {
+            Projections::DirectFp8(weights) => {
+                let [query, key, value, output] = &**weights;
+                (
+                    DecodeQkvWeights::DirectFp8([query, key, value]),
+                    DecodeAttentionOutputWeight::DirectFp8(output),
+                )
+            },
+            Projections::Bf16 { qkv, output } => {
+                (DecodeQkvWeights::Bf16(qkv), DecodeAttentionOutputWeight::Bf16(output))
+            },
+        };
         DecodeAttentionWeights {
             input_norm: &self.input_norm,
-            qkv: DecodeQkvWeights::DirectFp8([&self.query, &self.key, &self.value]),
+            qkv,
             query_norm: &self.unused_norm,
             key_norm: &self.unused_norm,
-            output: DecodeAttentionOutputWeight::DirectFp8(&self.output),
+            output,
+        }
+    }
+}
+
+impl Projections {
+    fn load(
+        backend: &CudaBackend,
+        tensors: &CudaTensorSet,
+        format: ProjectionFormat,
+        bindings: AttentionProjectionBindings<'_>,
+    ) -> Result<Self> {
+        match format {
+            ProjectionFormat::DirectFp8 => {
+                let load = |binding| DirectFp8CheckpointWeight::load_binding(tensors, binding);
+                Ok(Self::DirectFp8(Box::new([
+                    load(bindings.query)?,
+                    load(bindings.key)?,
+                    load(bindings.value)?,
+                    load(bindings.output)?,
+                ])))
+            },
+            ProjectionFormat::Bf16 => {
+                let get = |binding: &TensorBinding| {
+                    tensors
+                        .get(&binding.source)
+                        .ok_or_else(|| Error::MissingTensor(binding.source.clone()))
+                };
+                Ok(Self::Bf16 {
+                    qkv: backend.pack_bf16_linears([
+                        get(bindings.query)?,
+                        get(bindings.key)?,
+                        get(bindings.value)?,
+                    ])?,
+                    output: get(bindings.output)?.clone(),
+                })
+            },
+            _ => Err(Error::UnsupportedDecoderLayer(
+                "hybrid attention requires direct FP8 or BF16 projections".into(),
+            )),
         }
     }
 }

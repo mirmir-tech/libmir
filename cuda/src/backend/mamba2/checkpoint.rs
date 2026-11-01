@@ -6,9 +6,9 @@ use crate::Result;
 /// Copy of one sequence's Mamba-2 state at a token offset.
 #[derive(Debug)]
 pub struct CudaMamba2Checkpoint {
-    state: DeviceBuffer<f32>,
-    history: DeviceBuffer<bf16>,
-    offset: usize,
+    pub(super) state: DeviceBuffer<f32>,
+    pub(super) history: DeviceBuffer<bf16>,
+    pub(super) offset: usize,
 }
 
 /// A checkpoint requested inside the next prefill pass.

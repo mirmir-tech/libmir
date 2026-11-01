@@ -2,10 +2,10 @@
 //!
 //! A checkpoint can ship components outside the decoder, such as a vision
 //! tower without a supported vision contract, which the decoder contract
-//! gives a top-level auxiliary role. Multi-token prediction modules have
-//! typed roles but load only with speculative decoding, which no backend runs
-//! yet. The runtime loads tensors only through the roles it executes, so a
-//! text-only load leaves both on disk.
+//! gives a top-level auxiliary role. Multi-token prediction modules load only
+//! with speculative decoding. The runtime loads tensors only through the
+//! roles it executes, so a text-only load leaves both on disk, and a
+//! speculative load leaves the auxiliary components.
 
 use models::{
     execution::DecoderExecutionContract,
@@ -20,6 +20,8 @@ pub struct UnloadedTensors {
     pub tensors: usize,
     /// Their payload bytes.
     pub bytes: u64,
+    /// Of those, the bytes of multi-token prediction modules.
+    pub prediction_bytes: u64,
 }
 
 /// Tensors outside the decoder in a text-only load, or `None` when every
@@ -43,18 +45,38 @@ pub fn unloaded(
                 LogicalTensorRole::Auxiliary { .. } | LogicalTensorRole::Prediction { .. }
             )
         })
-        .flat_map(|binding| binding.physical_sources())
-        .try_fold(UnloadedTensors::default(), |total, name| {
+        .flat_map(|binding| {
+            let prediction = matches!(binding.role, LogicalTensorRole::Prediction { .. });
+            binding.physical_sources().into_iter().map(move |name| (name, prediction))
+        })
+        .try_fold(UnloadedTensors::default(), |total, (name, prediction)| {
             let bytes = u64::try_from(catalog.get(name)?.payload_bytes().ok()?).ok()?;
             Some(UnloadedTensors {
                 tensors: total.tensors + 1,
                 bytes: total.bytes.checked_add(bytes)?,
+                prediction_bytes: if prediction {
+                    total.prediction_bytes.checked_add(bytes)?
+                } else {
+                    total.prediction_bytes
+                },
             })
         })
 }
 
-/// Checkpoint file bytes minus the tensors a text-only load leaves on disk.
-pub fn weight_bytes(layout: &ModelLayout, unloaded: Option<&UnloadedTensors>) -> u64 {
+/// Checkpoint file bytes minus the tensors a load leaves on disk: with
+/// `speculation`, the prediction modules load.
+pub fn weight_bytes(
+    layout: &ModelLayout,
+    unloaded: Option<&UnloadedTensors>,
+    speculation: bool,
+) -> u64 {
     let files = layout.weights.iter().map(|weight| weight.bytes).sum::<u64>();
-    unloaded.map_or(files, |unloaded| files.saturating_sub(unloaded.bytes))
+    unloaded.map_or(files, |unloaded| {
+        let loaded = if speculation {
+            unloaded.prediction_bytes
+        } else {
+            0
+        };
+        files.saturating_sub(unloaded.bytes.saturating_sub(loaded))
+    })
 }

@@ -18,7 +18,11 @@ fn dense_mixed_prefill_decode_and_checkpoint_continuation() -> Result<()> {
     let template = backend.load_shared_routed_model_template(
         &decoder,
         &fixture.catalog(),
-        crate::SharedRoutedModelLoadConfig { cache, max_sequence_blocks: 2 },
+        crate::SharedRoutedModelLoadConfig {
+            cache,
+            max_sequence_blocks: 2,
+            speculation: None,
+        },
     )?;
     let mut session = template.instantiate()?;
     let mut table = BlockTable::with_block_size(16);

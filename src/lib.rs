@@ -57,6 +57,7 @@ pub use runtime::{
     metrics::GenerationMetrics,
     progress::{ProgressCount, ProgressEvent, ProgressStage, ProgressUnit},
     scheduler::{CachedPrefillPolicy, PrefillDecodePolicy, PrefillRefillPolicy},
+    speculation::Speculation,
 };
 pub use session::Session;
 pub use telemetry::DeviceTelemetrySnapshot;

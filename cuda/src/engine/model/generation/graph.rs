@@ -129,7 +129,11 @@ impl GenerationExecution for GraphExecution {
         let prefill = device_outputs(chunks, &sampled[..prefill_rows])?;
         let decode = sampled[prefill_rows..]
             .iter()
-            .map(|token| Output { token: Some(*token), logits: None })
+            .map(|token| Output {
+                accepted: Vec::new(),
+                token: Some(*token),
+                logits: None,
+            })
             .collect();
         Ok(Some(CombinedOutputs { prefill, decode }))
     }
@@ -207,7 +211,11 @@ fn device_outputs(chunks: &[PrefillChunk<'_>], tokens: &[u32]) -> Result<Vec<Opt
             let token = selected
                 .next()
                 .ok_or_else(|| crate::Error::InvalidSampling("missing packed token row".into()))?;
-            Ok(Some(Output { token: Some(token), logits: None }))
+            Ok(Some(Output {
+                accepted: Vec::new(),
+                token: Some(token),
+                logits: None,
+            }))
         })
         .collect::<Result<Vec<_>>>()?;
     if selected.next().is_some() {
