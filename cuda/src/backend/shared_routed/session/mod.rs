@@ -4,8 +4,10 @@ use uuid::Uuid;
 
 mod draft;
 mod drafts;
+mod masked;
 mod pass;
 mod speculate;
+mod verify;
 
 pub use draft::DraftRow;
 use pass::Pass;

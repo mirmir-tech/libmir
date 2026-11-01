@@ -60,6 +60,7 @@ pub(super) fn execute_loaded_decode(
             let output = output::materialize(loaded, native, &sequence.sampling_logits)?;
             Ok(DecodeOutput {
                 accepted: Vec::new(),
+                drafts: Vec::new(),
                 event: TokenEvent {
                     token_id: output.next_token,
                     text: match execution {

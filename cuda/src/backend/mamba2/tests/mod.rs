@@ -3,6 +3,7 @@ mod chunked;
 mod oracle;
 mod reference;
 mod residency;
+mod rollback;
 
 use mircuda::{DeviceBuffer, DeviceElement, bf16};
 use reference::{Parameters, Reference};

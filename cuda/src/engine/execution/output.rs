@@ -9,6 +9,9 @@ use crate::{
 pub(in crate::engine) struct Output {
     /// Verified speculative drafts before `token`.
     pub(in crate::engine) accepted: Vec<u32>,
+    /// Drafts held for the next step, reported after a masked speculative
+    /// step.
+    pub(in crate::engine) drafts: Vec<u32>,
     pub(in crate::engine) token: Option<u32>,
     pub(in crate::engine) logits: Option<LogitsTrace>,
 }
@@ -67,6 +70,7 @@ pub(in crate::engine) fn generation_output(
         let selected = session.sample(policy)?;
         return Ok(Output {
             accepted: Vec::new(),
+            drafts: Vec::new(),
             token: Some(backend.read_token(selected)?),
             logits: None,
         });
@@ -78,6 +82,7 @@ pub(super) fn output_logits(backend: &CudaBackend, logits: &DeviceBuffer<bf16>) 
     let values = backend.read_logits(logits)?;
     Ok(Output {
         accepted: Vec::new(),
+        drafts: Vec::new(),
         token: None,
         logits: Some(LogitsTrace {
             shape: vec![1, 1, i32::try_from(values.len())?],
@@ -89,6 +94,7 @@ pub(super) fn output_logits(backend: &CudaBackend, logits: &DeviceBuffer<bf16>) 
 pub(in crate::engine) fn decode_output(output: Output) -> DecodeOutput {
     DecodeOutput {
         accepted: output.accepted,
+        drafts: output.drafts,
         event: TokenEvent {
             token_id: output.token,
             text: "cuda.decode=device-token-pipeline".into(),

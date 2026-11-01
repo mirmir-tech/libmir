@@ -2,8 +2,8 @@ use mircuda::{DeviceBuffer, bf16};
 
 use super::{CudaMamba2HybridLayer, MixerScratch, MixerWeights, bf16 as bf16_tensor};
 use crate::{
-    CudaBackend, CudaMamba2BatchState, CudaMamba2State, CudaTensor, DirectFp8Bf16Linear,
-    DirectFp8CheckpointWeight, Error, ExecutionPhase, Result,
+    CudaBackend, CudaMamba2BatchState, CudaMamba2State, CudaMamba2VerifyState, CudaTensor,
+    DirectFp8Bf16Linear, DirectFp8CheckpointWeight, Error, ExecutionPhase, Result,
     backend::{
         layer_scratch::SharedLayerScratch, scratch_pool::SharedScratch,
         state_space_hybrid::tail::TailExecution,
@@ -27,6 +27,7 @@ pub struct CudaMamba2HybridExecution {
     scratch: SharedLayerScratch,
     rows: SharedScratch<MixerScratch>,
     batch: Option<CudaMamba2BatchState>,
+    verify: Option<CudaMamba2VerifyState>,
     capacity: usize,
 }
 
@@ -73,6 +74,7 @@ impl CudaMamba2HybridExecution {
             )?,
             rows: backend.mamba2_mixer_scratch(geometry, tokens)?,
             batch: None,
+            verify: None,
             capacity: tokens,
         })
     }
@@ -150,6 +152,45 @@ impl CudaMamba2HybridExecution {
         batch.decode(&rows.projection, parameters, &mut rows.mixed)?;
         drop(guard);
         self.finish(input, output)
+    }
+
+    /// Host-side preparation of a verification pass of one sequence over
+    /// this execution's rows.
+    pub(crate) fn prepare_verify(&mut self, state: &CudaMamba2State) -> Result<()> {
+        if self.verify.is_none() {
+            let verify = self.backend.prepare_mamba2_verify_state(self.geometry, self.tokens)?;
+            self.verify = Some(verify);
+        }
+        self.verifying()?.pack(state)
+    }
+
+    /// Device work of a verification pass; no allocation or host sync.
+    pub(crate) fn execute_prepared_verify(
+        &mut self,
+        input: &DeviceBuffer<bf16>,
+        output: &mut DeviceBuffer<bf16>,
+    ) -> Result<()> {
+        self.project_input(input)?;
+        let parameters = self.mixer.view()?;
+        let mut guard = self.rows.lock()?;
+        let rows = &mut *guard;
+        self.verify
+            .as_mut()
+            .ok_or(Error::InvalidDecoderKernel("Mamba-2 verification was not prepared"))?
+            .execute(&rows.projection, parameters, &mut rows.mixed)?;
+        drop(guard);
+        self.finish(input, output)
+    }
+
+    /// Keeps `state` after `kept` tokens of the last verification pass.
+    pub(crate) fn commit_verify(&mut self, state: &mut CudaMamba2State, kept: usize) -> Result<()> {
+        self.verifying()?.commit(state, kept)
+    }
+
+    fn verifying(&mut self) -> Result<&mut CudaMamba2VerifyState> {
+        self.verify
+            .as_mut()
+            .ok_or(Error::InvalidDecoderKernel("Mamba-2 verification was not prepared"))
     }
 
     pub(crate) fn commit_packed(&mut self, states: &mut [&mut CudaMamba2State]) -> Result<()> {

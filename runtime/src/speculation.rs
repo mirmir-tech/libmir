@@ -4,6 +4,8 @@ use std::num::NonZeroUsize;
 
 use serde::{Deserialize, Serialize};
 
+use crate::backend::TokenMask;
+
 /// Each decode step drafts `draft_tokens` tokens with the prediction module
 /// and verifies them, with the token after them, in one target pass.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -20,6 +22,19 @@ pub struct DraftBounds {
     /// Acceptance stops at the first draft among these, which becomes the
     /// step's token, so the host sees it before any token after it.
     pub stop_tokens: Vec<u32>,
+    /// Under a token mask, the drafts the host read after the last step,
+    /// each with the mask of the token after it. Verification keeps at most
+    /// these, choosing each row's token within its mask; such a step reports
+    /// its new drafts for the host to mask in turn.
+    pub masked: Vec<MaskedDraft>,
+}
+
+/// A draft the host has checked against its grammar, and the tokens the
+/// grammar allows after it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MaskedDraft {
+    pub token: u32,
+    pub mask: TokenMask,
 }
 
 impl DraftBounds {
@@ -43,7 +58,10 @@ mod tests {
 
     #[test]
     fn a_stop_draft_becomes_the_step_token() {
-        let bounds = DraftBounds { max_accepted: None, stop_tokens: vec![9] };
+        let bounds = DraftBounds {
+            stop_tokens: vec![9],
+            ..DraftBounds::default()
+        };
         assert_eq!(bounds.apply(&[4, 9, 5], 3, 6), (1, 9));
         assert_eq!(bounds.apply(&[4, 5, 9], 2, 9), (2, 9));
     }
@@ -52,7 +70,7 @@ mod tests {
     fn the_cap_ends_at_a_kept_draft() {
         let bounds = DraftBounds {
             max_accepted: Some(1),
-            stop_tokens: Vec::new(),
+            ..DraftBounds::default()
         };
         assert_eq!(bounds.apply(&[4, 5, 6], 3, 7), (1, 5));
         assert_eq!(bounds.apply(&[4, 5, 6], 0, 7), (0, 7));

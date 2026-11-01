@@ -1,12 +1,12 @@
 use mircuda::{DeviceBuffer, bf16};
 
 use super::{
-    super::SharedRoutedLayerTemplate,
+    super::{CudaSharedRoutedLayerState, SharedRoutedLayerTemplate},
     states::{attention_states, full_states, linear_states, mamba_states},
 };
 use crate::{
     CudaAffineGatedDeltaMoeExecution, CudaAffineGatedFullAttentionMoeExecution,
-    CudaAttentionHybridExecution, CudaMamba2HybridExecution, CudaSharedRoutedModelSession,
+    CudaAttentionHybridExecution, CudaMamba2HybridExecution, CudaSharedRoutedModelSession, Error,
     ExecutionPhase, PagedDecodeBatch, Result, kernels::BatchedSplitAttentionWorkspace,
 };
 
@@ -107,6 +107,56 @@ impl SharedRoutedBatchLayer {
             },
             Self::Mamba2(execution) => execution.commit_packed(&mut mamba_states(sessions, layer)?),
             Self::Full(_) | Self::Attention(_) => Ok(()),
+        }
+    }
+
+    /// Host-side preparation of a verification pass over one session's
+    /// rows: its recurrent state stays resident in the layer, and every row
+    /// uses its pages.
+    pub(super) fn prepare_verify(
+        &mut self,
+        session: &CudaSharedRoutedModelSession,
+        layer: usize,
+        paging: &PagedDecodeBatch,
+    ) -> Result<()> {
+        match (self, &session.states[layer]) {
+            (Self::Mamba2(execution), CudaSharedRoutedLayerState::Mamba2(state)) => {
+                execution.prepare_verify(state)
+            },
+            (Self::Attention(execution), CudaSharedRoutedLayerState::Attention(state)) => {
+                execution.prepare_rows(state, paging)
+            },
+            _ => Err(Error::InvalidDecoderKernel("verification layer state kind mismatch")),
+        }
+    }
+
+    pub(super) fn execute_prepared_verify(
+        &mut self,
+        input: &DeviceBuffer<bf16>,
+        paging: &PagedDecodeBatch,
+        output: &mut DeviceBuffer<bf16>,
+    ) -> Result<()> {
+        match self {
+            Self::Mamba2(execution) => execution.execute_prepared_verify(input, output),
+            Self::Attention(execution) => execution.execute_prepared_packed(input, paging, output),
+            Self::Linear(_) | Self::Full(_) => {
+                Err(Error::InvalidDecoderKernel("verification graphs need Mamba-2 and attention"))
+            },
+        }
+    }
+
+    /// Keeps the session's recurrent state after `kept` verified tokens.
+    pub(super) fn commit_verify(
+        &mut self,
+        session: &mut CudaSharedRoutedModelSession,
+        layer: usize,
+        kept: usize,
+    ) -> Result<()> {
+        match (self, &mut session.states[layer]) {
+            (Self::Mamba2(execution), CudaSharedRoutedLayerState::Mamba2(state)) => {
+                execution.commit_verify(state, kept)
+            },
+            _ => Ok(()),
         }
     }
 

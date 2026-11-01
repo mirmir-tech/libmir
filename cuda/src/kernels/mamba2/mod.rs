@@ -10,6 +10,7 @@ use crate::{Error, Result};
 mod batch;
 mod chunked;
 mod launch;
+mod snapshots;
 
 pub use batch::Mamba2DecodeBatch;
 pub use chunked::MAMBA2_CHUNK;
@@ -41,6 +42,16 @@ cuda_export!(
         output: &mut mircuda::DeviceBuffer<bf16>, tokens: u32, heads: u32, head_dim: u32,
         state_size: u32, groups: u32, projection_stride: u32, dt_offset: u32,
         dt_minimum: f32, dt_maximum: f32,
+    )
+);
+cuda_export!(
+    ScanSnapshotsKernel = "libmir_cuda_mamba2_scan_snapshots_bf16"(
+        convolved: &mircuda::DeviceBuffer<bf16>, projection: &mircuda::DeviceBuffer<bf16>,
+        a_log: &mircuda::DeviceBuffer<bf16>, skip: &mircuda::DeviceBuffer<bf16>,
+        dt_bias: &mircuda::DeviceBuffer<bf16>, state: &mut mircuda::DeviceBuffer<f32>,
+        output: &mut mircuda::DeviceBuffer<bf16>, snapshots: &mut mircuda::DeviceBuffer<f32>,
+        snapshot_count: u32, tokens: u32, heads: u32, head_dim: u32, state_size: u32,
+        groups: u32, projection_stride: u32, dt_offset: u32, dt_minimum: f32, dt_maximum: f32,
     )
 );
 cuda_export!(
@@ -121,6 +132,7 @@ pub struct Mamba2Kernels {
     convolution: TypedKernel<ConvolutionKernel>,
     history: TypedKernel<HistoryKernel>,
     scan: TypedKernel<ScanKernel>,
+    scan_snapshots: TypedKernel<ScanSnapshotsKernel>,
     gated_norm: TypedKernel<GatedNormKernel>,
     decode_convolution: TypedKernel<batch::DecodeConvolutionKernel>,
     decode_scan: TypedKernel<batch::DecodeScanKernel>,
@@ -138,6 +150,7 @@ impl Mamba2Kernels {
             convolution: module.kernel()?,
             history: module.kernel()?,
             scan: module.kernel()?,
+            scan_snapshots: module.kernel()?,
             gated_norm: module.kernel()?,
             decode_convolution: module.kernel()?,
             decode_scan: module.kernel()?,

@@ -60,7 +60,8 @@ __device__ __forceinline__ float libmir_mamba2_softplus(float value) {
 // Sequential selective scan of one sequence. Block (head, head_dim / ROWS)
 // comes from blockIdx.x/y; one thread per state column (`state_size`
 // threads, a multiple of 32). Each thread keeps ROWS state rows of its column
-// in registers for all tokens.
+// in registers for all tokens. The state after each of the first
+// `snapshot_count` tokens is also written to `snapshots`, one state apart.
 __device__ __forceinline__ void libmir_mamba2_scan(
     const __nv_bfloat16* convolved, const __nv_bfloat16* projection,
     const __nv_bfloat16* a_log, const __nv_bfloat16* skip,
@@ -68,7 +69,8 @@ __device__ __forceinline__ void libmir_mamba2_scan(
     unsigned int tokens, unsigned int heads, unsigned int head_dim,
     unsigned int state_size, unsigned int groups,
     unsigned int projection_stride, unsigned int dt_offset,
-    float dt_minimum, float dt_maximum) {
+    float dt_minimum, float dt_maximum, float* snapshots = nullptr,
+    unsigned int snapshot_count = 0u) {
   constexpr unsigned int rows = LIBMIR_MAMBA2_SCAN_ROWS;
   const unsigned int head = blockIdx.x;
   const unsigned int row_base = blockIdx.y * rows;
@@ -129,6 +131,14 @@ __device__ __forceinline__ void libmir_mamba2_scan(
       output[static_cast<size_t>(token) * inner + head * head_dim + row_base + column] =
           __float2bfloat16_rn(sum + skip_scale * x_rows[column]);
     }
+    if (token < snapshot_count) {
+      float* snapshot = snapshots + static_cast<size_t>(token) * inner * state_size +
+                        (head_state - state);
+#pragma unroll
+      for (unsigned int row = 0; row < rows; ++row) {
+        snapshot[static_cast<size_t>(row) * state_size] = values[row];
+      }
+    }
     __syncthreads();
   }
 #pragma unroll
@@ -149,6 +159,23 @@ extern "C" __global__ void libmir_cuda_mamba2_scan_bf16(
   libmir_mamba2_scan(convolved, projection, a_log, skip, dt_bias, state, output,
                      tokens, heads, head_dim, state_size, groups,
                      projection_stride, dt_offset, dt_minimum, dt_maximum);
+}
+
+// The scan above, also writing the state after each of the first
+// `snapshot_count` tokens to `snapshots` for speculative rollback.
+// Grid: (heads, head_dim / ROWS).
+extern "C" __global__ void libmir_cuda_mamba2_scan_snapshots_bf16(
+    const __nv_bfloat16* convolved, const __nv_bfloat16* projection,
+    const __nv_bfloat16* a_log, const __nv_bfloat16* skip,
+    const __nv_bfloat16* dt_bias, float* state, __nv_bfloat16* output,
+    float* snapshots, unsigned int snapshot_count, unsigned int tokens,
+    unsigned int heads, unsigned int head_dim, unsigned int state_size,
+    unsigned int groups, unsigned int projection_stride,
+    unsigned int dt_offset, float dt_minimum, float dt_maximum) {
+  libmir_mamba2_scan(convolved, projection, a_log, skip, dt_bias, state, output,
+                     tokens, heads, head_dim, state_size, groups,
+                     projection_stride, dt_offset, dt_minimum, dt_maximum,
+                     snapshots, snapshot_count);
 }
 
 // One decode token for each of `gridDim.z` independent sequences whose

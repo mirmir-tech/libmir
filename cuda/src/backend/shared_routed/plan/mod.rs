@@ -27,6 +27,9 @@ pub(super) struct SharedRoutedExecutionPlan {
     layers: Vec<SharedRoutedLayerExecution>,
     /// The prediction module over the same rows, when the model drafts.
     pub(super) prediction: Option<PredictionExecution>,
+    /// The graphed decoder pass of lone speculative steps of these rows,
+    /// built on first use.
+    pub(super) verify: Option<super::batch::CudaSharedRoutedVerifyBatch>,
 }
 
 impl SharedRoutedExecutionPlan {
@@ -63,6 +66,7 @@ impl SharedRoutedExecutionPlan {
             second: backend.inner.pool.allocate(&backend.inner.stream, elements)?,
             layers,
             prediction,
+            verify: None,
         };
         plan.bytes = backend.pool().stats()?.used.saturating_sub(used_before);
         Ok(plan)

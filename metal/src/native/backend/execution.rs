@@ -159,6 +159,7 @@ pub(super) fn execute_decode(
     );
     Ok(DecodeOutput {
         accepted: Vec::new(),
+        drafts: Vec::new(),
         event: TokenEvent {
             token_id: output.next_token,
             text: trace,

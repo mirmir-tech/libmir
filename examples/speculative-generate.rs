@@ -9,7 +9,10 @@
 //! samples with top-p 0.95 instead of greedy decoding; `rows=R` generates
 //! the first `R` prompts at once and reports their aggregate rate; `out=PATH`
 //! writes the token ids; `compare=PATH` reports where they part from that
-//! file's.
+//! file's; `tool` asks for a forced, schema-constrained tool call about each
+//! prompt instead, without reasoning, so every token decodes under the tool
+//! grammar; `only=I` generates prompt `I` alone. A failed generation is
+//! reported and the next prompt goes on.
 #![allow(clippy::print_stdout)]
 
 use std::{env, fs, num::NonZeroUsize, path::PathBuf};
@@ -42,7 +45,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let reference: Reference = serde_json::from_slice(&fs::read(reference)?)?;
     let mut config = RuntimeConfig::default();
     let (mut tokens, mut out, mut compare, mut temperature) = (256, None, None, 0.0);
-    let mut rows = None;
+    let (mut rows, mut tool, mut only) = (None, false, None);
     for option in args.filter_map(|option| option.into_string().ok()) {
         if let Some(draft) = option.strip_prefix("draft=") {
             let draft_tokens = NonZeroUsize::new(draft.parse()?).ok_or("draft=0")?;
@@ -53,6 +56,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             rows = Some(value.parse::<usize>()?);
         } else if let Some(value) = option.strip_prefix("temperature=") {
             temperature = value.parse()?;
+        } else if let Some(index) = option.strip_prefix("only=") {
+            only = Some(index.parse::<usize>()?);
+        } else if option == "tool" {
+            tool = true;
         } else if let Some(path) = option.strip_prefix("out=") {
             out = Some(PathBuf::from(path));
         } else if let Some(path) = option.strip_prefix("compare=") {
@@ -64,14 +71,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let library = Library::new(config);
     let model = library.load(model, GenerationOverrides::default(), &mut |_| {})?;
     if let Some(rows) = rows {
-        concurrent(&model, &reference.records[..rows], tokens, temperature)?;
+        concurrent(&model, &reference.records[..rows], tokens, temperature, tool)?;
         model.unload()?;
         return Ok(());
     }
     let mut run = Run { token_ids: Vec::new() };
     for (index, record) in reference.records.iter().enumerate() {
-        let request = request(&record.prompt, tokens, temperature);
-        let output = model.generate(&request, &mut |_| {}, &mut |_| {})?;
+        if only.is_some_and(|only| only != index) {
+            continue;
+        }
+        let request = request(&record.prompt, tokens, temperature, tool);
+        let output = match model.generate(&request, &mut |_| {}, &mut |_| {}) {
+            Ok(output) => output,
+            Err(error) => {
+                println!("prompt={index} error={error}");
+                continue;
+            },
+        };
         let divergence = compare.as_ref().and_then(|other| {
             let other = other.token_ids.get(index)?;
             Some(output.token_ids.iter().zip(other).position(|(a, b)| a != b))
@@ -86,6 +102,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         if temperature > 0.0 {
             println!("  text={:?}", output.text.chars().take(160).collect::<String>());
+        }
+        if tool {
+            println!("  tool_calls={:?}", output.tool_calls.chars().take(160).collect::<String>());
         }
         run.token_ids.push(output.token_ids);
     }
@@ -102,13 +121,14 @@ fn concurrent(
     records: &[Record],
     tokens: usize,
     temperature: f32,
+    tool: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let started = std::time::Instant::now();
     let generated = std::thread::scope(|scope| {
         // Every generation starts before the first is joined.
         let mut workers = Vec::with_capacity(records.len());
         for record in records {
-            let request = request(&record.prompt, tokens, temperature);
+            let request = request(&record.prompt, tokens, temperature, tool);
             workers.push(scope.spawn(move || model.generate(&request, &mut |_| {}, &mut |_| {})));
         }
         workers
@@ -129,20 +149,33 @@ fn concurrent(
     Ok(())
 }
 
-fn request(prompt: &str, tokens: usize, temperature: f32) -> GenerationRequest {
+fn request(prompt: &str, tokens: usize, temperature: f32, tool: bool) -> GenerationRequest {
+    let (content, tools, tool_choice) = if tool {
+        (
+            format!("Record a summary and the key points of an answer to: {prompt}"),
+            vec![summary_tool()],
+            libmir::ToolChoice::Function(SUMMARY.into()),
+        )
+    } else {
+        (prompt.into(), Vec::new(), libmir::ToolChoice::default())
+    };
     GenerationRequest {
-        tool_constraints: libmir::ToolConstraints::None,
+        tool_constraints: if tool {
+            libmir::ToolConstraints::Schema
+        } else {
+            libmir::ToolConstraints::None
+        },
         reasoning_token_budget: None,
         conversation: Conversation {
             messages: vec![Message {
                 role: "user".into(),
-                content: prompt.into(),
+                content,
                 reasoning_content: None,
                 tool_calls: None,
                 tool_call_id: None,
             }],
-            tools: Vec::new(),
-            tool_choice: libmir::ToolChoice::default(),
+            tools,
+            tool_choice,
         },
         options: GenerationOverrides {
             max_tokens: Some(tokens),
@@ -158,9 +191,33 @@ fn request(prompt: &str, tokens: usize, temperature: f32) -> GenerationRequest {
         },
         seed: Some(7),
         reasoning_cycle: libmir::ReasoningCyclePolicy::default(),
-        reasoning: libmir::ReasoningMode::ModelDefault,
+        reasoning: if tool {
+            libmir::ReasoningMode::Disabled
+        } else {
+            libmir::ReasoningMode::ModelDefault
+        },
         reasoning_effort: libmir::ReasoningEffort::ModelDefault,
         reasoning_history: libmir::ReasoningHistory::ModelDefault,
+    }
+}
+
+const SUMMARY: &str = "record_summary";
+
+fn summary_tool() -> libmir::Tool {
+    libmir::Tool {
+        kind: "function".into(),
+        function: libmir::FunctionDefinition {
+            name: SUMMARY.into(),
+            description: Some("Records a summary with its key points.".into()),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "summary": {"type": "string"},
+                    "points": {"type": "array", "items": {"type": "string"}}
+                },
+                "required": ["summary", "points"]
+            }),
+        },
     }
 }
 

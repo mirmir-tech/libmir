@@ -95,7 +95,8 @@ use linear::{
     BucketedNvFp4Scratch, BucketedNvFp4ScratchConfig, MarlinNvFp4Scratch, MarlinNvFp4ScratchConfig,
 };
 pub use mamba2::{
-    CudaMamba2BatchState, CudaMamba2Checkpoint, CudaMamba2State, Mamba2ScanPath, Mamba2Workspace,
+    CudaMamba2BatchState, CudaMamba2Checkpoint, CudaMamba2State, CudaMamba2VerifyState,
+    Mamba2ScanPath, Mamba2Workspace,
 };
 use mircuda::{Compiler, Context, DeviceInfo, MemoryPool, Stream};
 pub use model::{

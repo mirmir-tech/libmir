@@ -1,4 +1,5 @@
 mod budget;
+mod drafts;
 mod grammar;
 mod phase;
 pub(super) mod prompt;
@@ -89,6 +90,18 @@ impl ToolConstraint {
             validator,
             vocab: model.descriptor().tokenizer().vocab_size(),
         }))
+    }
+
+    /// Masks for the drafts after the token just consumed, while the tool
+    /// grammar holds; `None` outside it.
+    pub(super) fn draft_masks(
+        &mut self,
+        drafts: &[u32],
+    ) -> Result<Option<Vec<runtime::speculation::MaskedDraft>>> {
+        if !self.is_tool() {
+            return Ok(None);
+        }
+        drafts::masks(&mut self.matcher, drafts, self.vocab).map(Some)
     }
 
     pub(super) fn is_tool(&self) -> bool {

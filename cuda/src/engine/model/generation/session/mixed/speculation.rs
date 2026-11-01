@@ -122,6 +122,7 @@ impl MixedMixerExecution {
         )?;
         Ok(Output {
             accepted: step.accepted,
+            drafts: step.drafts,
             token: Some(step.next),
             logits: None,
         })

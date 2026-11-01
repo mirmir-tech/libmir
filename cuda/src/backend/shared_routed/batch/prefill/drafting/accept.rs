@@ -126,7 +126,13 @@ impl Verdicts {
     pub(super) fn steps(self) -> Vec<Option<SpeculativeStep>> {
         self.rows
             .into_iter()
-            .map(|row| row.step.map(|(_, next)| SpeculativeStep { accepted: row.kept, next }))
+            .map(|row| {
+                row.step.map(|(_, next)| SpeculativeStep {
+                    accepted: row.kept,
+                    next,
+                    drafts: Vec::new(),
+                })
+            })
             .collect()
     }
 }

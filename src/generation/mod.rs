@@ -1,7 +1,7 @@
 use std::{collections::VecDeque, time::Instant};
 
 use models::generation::GenerationToken;
-use runtime::{backend::SamplingLogits, metrics::GenerationMetricsRecorder, sampling::Sampler};
+use runtime::{metrics::GenerationMetricsRecorder, sampling::Sampler};
 
 use crate::{CancellationToken, Model, ProgressEvent, Result};
 
@@ -11,6 +11,7 @@ mod input;
 mod output;
 mod request;
 mod sampling;
+mod speculation;
 mod telemetry;
 mod tools;
 
@@ -20,6 +21,7 @@ pub use output::GenerationOutput;
 use output::{append_delta, finalize_output, finish_metrics, should_stop};
 pub use request::{GenerationRequest, ReasoningCyclePolicy, ToolConstraints};
 use sampling::{choose_prefill, request_sampling, sampler_config};
+use speculation::draft_bounds;
 use telemetry::record_publish;
 
 impl Model {
@@ -112,6 +114,9 @@ impl Model {
         // Verified speculative drafts and the prediction after them, in order;
         // the backend has processed all but the last.
         let mut ahead = VecDeque::new();
+        // Drafts the backend reported for the next step, for the grammar to
+        // mask.
+        let mut drafts = Vec::new();
         let (mut text, mut reasoning, mut tool_calls) =
             (String::new(), String::new(), prepared.initial_tool_calls());
         let mut finish_reason = "max_tokens";
@@ -142,7 +147,13 @@ impl Model {
                 let sampling = request_sampling(self, settings, vocab_size, &mut sampler);
                 let sampling = cycle.sampling(sampling);
                 let sampling = constraints::sampling(&mut constraints, sampling)?;
-                let bounds = draft_bounds(constraints.as_ref(), &cycle, &sampling, &stop_token_ids);
+                let bounds = draft_bounds(
+                    constraints.as_mut(),
+                    &cycle,
+                    &sampling,
+                    &stop_token_ids,
+                    &drafts,
+                )?;
                 Some((started, session.start_decode(next, sampling, bounds)?))
             };
             if token_ids.len() == 1 {
@@ -162,7 +173,10 @@ impl Model {
                     cycle: &mut cycle,
                     sampler: &mut sampler,
                 };
-                ahead.extend(step.receive(&mut session, pending, history.as_deref())?);
+                let (tokens, next_drafts) =
+                    step.receive(&mut session, pending, history.as_deref())?;
+                ahead.extend(tokens);
+                drafts = next_drafts;
             }
             let Some(token) = ahead.pop_front() else {
                 break;
@@ -179,36 +193,6 @@ impl Model {
     }
 }
 
-/// How far the next decode may run ahead of the host, when it takes the
-/// backend's tokens as they are: no cycle recovery or host-side sampling, and
-/// no tool grammar yet. Acceptance stops at a stop token, and in a reasoning
-/// phase at its delimiter and within its token budget.
-fn draft_bounds(
-    constraint: Option<&constraints::ToolConstraint>,
-    cycle: &CycleRecovery,
-    sampling: &SamplingLogits,
-    stop_tokens: &[u32],
-) -> Option<runtime::speculation::DraftBounds> {
-    let device = matches!(
-        sampling,
-        SamplingLogits::None | SamplingLogits::Sample { .. } | SamplingLogits::SampleTopK { .. }
-    );
-    if !device || !cycle.takes_backend_tokens() {
-        return None;
-    }
-    let mut stop_tokens = stop_tokens.to_vec();
-    let max_accepted = match constraint {
-        None => None,
-        Some(constraint) => {
-            let (end, left) = constraint.reasoning_bounds()?;
-            stop_tokens.push(end);
-            // Each kept draft and the step's token spend the budget.
-            left.map(|left| left - 1)
-        },
-    };
-    Some(runtime::speculation::DraftBounds { max_accepted, stop_tokens })
-}
-
 /// The state a finished decode step updates.
 struct Step<'a> {
     metrics: &'a mut GenerationMetricsRecorder,
@@ -217,20 +201,21 @@ struct Step<'a> {
 }
 
 impl Step<'_> {
-    /// Finishes a decode step: the verified drafts, then the chosen token.
+    /// Finishes a decode step: the verified drafts, then the chosen token,
+    /// and the drafts reported for the next step.
     fn receive(
         self,
         session: &mut crate::Session,
         (started, pending): (Instant, crate::session::PendingSessionDecode),
         history: Option<&[u32]>,
-    ) -> Result<Vec<u32>> {
+    ) -> Result<(Vec<u32>, Vec<u32>)> {
         let output = session.finish_decode(pending)?;
         self.metrics.record_decode(started.elapsed(), output.accepted.len() + 1);
         let history = history.unwrap_or_default();
         let chosen = self.cycle.choose(self.metrics, &output, history, self.sampler)?;
         let mut tokens = output.accepted;
         tokens.push(chosen);
-        Ok(tokens)
+        Ok((tokens, output.drafts))
     }
 }
 

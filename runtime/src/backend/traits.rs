@@ -159,6 +159,10 @@ pub struct DecodeOutput {
     /// Speculative drafts the backend verified and processed after the fed
     /// token, before `event`'s token; empty without speculation.
     pub accepted: Vec<u32>,
+    /// The drafts the backend holds for the next step, after a masked
+    /// speculative step: the host masks them before that step verifies them
+    /// (see [`crate::speculation::DraftBounds::masked`]). Empty otherwise.
+    pub drafts: Vec<u32>,
     pub event: TokenEvent,
     pub logits: Option<LogitsTrace>,
     pub candidates: Option<CandidateLogitsTrace>,

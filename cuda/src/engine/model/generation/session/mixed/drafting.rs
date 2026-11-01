@@ -46,7 +46,7 @@ pub(super) fn execute(
         let session = super::required(&mut execution.sessions, row.session_id)?;
         let room = super::speculation::room(&row.block_table, session.position())?;
         let drafts = session.pending_drafts().min(drafting.draft_tokens()).min(room);
-        counts.push(if speculate && row.speculation.is_some() {
+        counts.push(if verifies(row, speculate) {
             1 + drafts
         } else {
             1
@@ -73,7 +73,7 @@ pub(super) fn execute(
         rows.extend(decode.iter().map(|row| DraftingRow::Decode {
             token: row.token_id,
             sampling: row.sampling_logits.clone(),
-            speculation: row.speculation.clone().filter(|_| speculate),
+            speculation: row.speculation.clone().filter(|_| verifies(row, speculate)),
         }));
         let tables = chunks
             .iter()
@@ -93,6 +93,7 @@ pub(super) fn execute(
         let mut steps = steps.into_iter();
         let output = |step: crate::SpeculativeStep| Output {
             accepted: step.accepted,
+            drafts: step.drafts,
             token: Some(step.next),
             logits: None,
         };
@@ -116,6 +117,14 @@ pub(super) fn execute(
         execution.checkpoint_prefix(row.request)?;
     }
     Ok(Some(result))
+}
+
+/// Whether a decode row verifies drafts: beside prompt chunks, and not
+/// under a token mask, whose rows the host masks only in scalar steps.
+fn verifies(row: &DecodeSequence, speculate: bool) -> bool {
+    speculate
+        && row.speculation.is_some()
+        && !matches!(row.sampling_logits, runtime::backend::SamplingLogits::Masked { .. })
 }
 
 /// Rows the packed pass samples on the device, without vision offsets or a

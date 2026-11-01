@@ -77,6 +77,7 @@ pub(super) fn execute(
             .ok_or(Error::InvalidExecutionPlan("mixed step did not sample outputs"))?;
         let output = |token| Output {
             accepted: Vec::new(),
+            drafts: Vec::new(),
             token: Some(token),
             logits: None,
         };

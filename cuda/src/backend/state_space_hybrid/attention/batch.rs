@@ -25,9 +25,23 @@ impl CudaAttentionHybridExecution {
         let [first, ..] = states else {
             return Err(Error::InvalidDecoderKernel("attention packed step has no rows"));
         };
-        if states.len() != self.tokens || paging.active() != self.tokens {
+        if states.len() != self.tokens {
             return Err(Error::InvalidDecoderKernel("attention packed rows differ from the plan"));
         }
+        self.prepare_rows(first, paging)
+    }
+
+    /// Host-side preparation of a packed step whose rows all use the pages
+    /// of `state`, such as one sequence's verification rows.
+    pub(crate) fn prepare_rows(
+        &mut self,
+        state: &DecodeAttentionBf16,
+        paging: &PagedDecodeBatch,
+    ) -> Result<()> {
+        if paging.active() != self.tokens {
+            return Err(Error::InvalidDecoderKernel("attention packed rows differ from the plan"));
+        }
+        let first = state;
         if let Some(batch) = &mut self.batch {
             return batch.bind_cache(&first.cache);
         }

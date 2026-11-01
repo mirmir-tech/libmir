@@ -11,9 +11,7 @@ use runtime::{
 use uuid::Uuid;
 
 use super::{
-    super::{plan::SharedRoutedExecutionPlan, position::text_positions},
-    CudaSharedRoutedModelSession,
-    pass::{Drafting, Pass},
+    super::plan::SharedRoutedExecutionPlan, CudaSharedRoutedModelSession, verify::VerifyPass,
 };
 use crate::{Error, Result};
 
@@ -25,6 +23,8 @@ pub struct SpeculativeStep {
     pub accepted: Vec<u32>,
     /// The decoder's token after them, fed to the next step.
     pub next: u32,
+    /// The drafts after `next`, read for a masked step's host.
+    pub drafts: Vec<u32>,
 }
 
 impl CudaSharedRoutedModelSession {
@@ -33,7 +33,9 @@ impl CudaSharedRoutedModelSession {
     /// tokens. `table` holds the session through `token` and has blocks for
     /// the drafts of this step and the next. Greedy steps keep drafts equal
     /// to the decoder's argmax; sampled steps keep them by rejection
-    /// sampling, so tokens follow `sampling` exactly.
+    /// sampling, so tokens follow `sampling` exactly. Under a token mask,
+    /// each row chooses within its mask and the step verifies only the
+    /// host's masked drafts, reading the next drafts back for it.
     pub fn decode_speculative(
         &mut self,
         session_id: Uuid,
@@ -44,20 +46,22 @@ impl CudaSharedRoutedModelSession {
         table: &BlockTable,
     ) -> Result<SpeculativeStep> {
         let start = self.position;
-        let verified = self.drafted.min(draft_tokens);
+        let mask = match sampling {
+            SamplingLogits::Masked { mask, sampling } => Some((mask, *sampling)),
+            _ => None,
+        };
+        let limit = mask.map_or(draft_tokens, |_| draft_tokens.min(bounds.masked.len()));
+        let verified = self.drafted.min(limit);
         let rows = verified + 1;
-        let mut tokens = vec![0; rows];
-        tokens[0] = token;
-        self.arm_rollback(verified)?;
         let mut pass = table.clone();
         pass.set_token_len(start + rows);
-        let positions = text_positions(start, rows, self.position_delta)?;
-        self.prefill_inner(Pass {
-            drafting: Drafting::Rows,
-            device_drafts: verified,
-            ..Pass::text(session_id, &tokens, &positions, &pass)
-        })?;
-        let (drafts, accepted, next) = self.verify(rows, sampling, start)?;
+        let pass_kind = self.verify_pass(session_id, token, rows, &pass)?;
+        let (drafts, accepted, next) = match mask {
+            Some((mask, masked)) => {
+                self.verify_masked(rows, mask, masked, &bounds.masked, start)?
+            },
+            None => self.verify(rows, sampling, start)?,
+        };
         let (accepted, next) = bounds.apply(&drafts, accepted, next);
         // The token after every row: a kept draft, then the verified token;
         // rows after it are dropped and only fill the shape.
@@ -67,11 +71,23 @@ impl CudaSharedRoutedModelSession {
             .chain(std::iter::repeat_n(next, rows - accepted))
             .collect::<Vec<_>>();
         self.predict(session_id, rows, &following, &pass)?;
-        self.roll_back(start, accepted + 1)?;
+        match pass_kind {
+            VerifyPass::Graphed => self.commit_verified(rows, start, accepted + 1)?,
+            VerifyPass::Scalar => self.roll_back(start, accepted + 1)?,
+        }
         self.draft(session_id, rows, accepted, start + accepted, draft_tokens, table)?;
+        let next_drafts = match (&self.drafts, mask) {
+            (Some(buffer), Some(_)) if self.drafted > 0 => {
+                let mut drafts = self.template.backend.read_tokens(buffer)?;
+                drafts.truncate(self.drafted);
+                drafts
+            },
+            _ => Vec::new(),
+        };
         Ok(SpeculativeStep {
             accepted: drafts[..accepted].to_vec(),
             next,
+            drafts: next_drafts,
         })
     }
 

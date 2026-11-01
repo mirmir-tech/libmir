@@ -131,6 +131,7 @@ impl GenerationExecution for GraphExecution {
             .iter()
             .map(|token| Output {
                 accepted: Vec::new(),
+                drafts: Vec::new(),
                 token: Some(*token),
                 logits: None,
             })
@@ -213,6 +214,7 @@ fn device_outputs(chunks: &[PrefillChunk<'_>], tokens: &[u32]) -> Result<Vec<Opt
                 .ok_or_else(|| crate::Error::InvalidSampling("missing packed token row".into()))?;
             Ok(Some(Output {
                 accepted: Vec::new(),
+                drafts: Vec::new(),
                 token: Some(token),
                 logits: None,
             }))
