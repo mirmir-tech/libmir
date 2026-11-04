@@ -74,6 +74,9 @@ impl Model {
         cancellation: &CancellationToken,
     ) -> Result<GenerationOutput> {
         cancellation.check()?;
+        request
+            .response_format
+            .validate_tool_choice(&request.conversation.tool_choice)?;
         let mut metrics = GenerationMetricsRecorder::new();
         let descriptor = self.descriptor();
         let settings = descriptor.resolve_generation(request.options)?;
@@ -123,13 +126,13 @@ impl Model {
         while token_ids.len() < settings.max_tokens {
             cancellation.check()?;
             next = constraints::transition_stop(constraints.as_ref(), next, &stop_token_ids);
+            let delta = stream.step(next, constraints.as_ref())?;
             let constrained_stop =
                 constraints::advance_generation(&mut constraints, next, &mut cycle)?;
             token_ids.push(next);
             if let Some(history) = history.as_mut() {
                 history.push(next);
             }
-            let delta = stream.step(next)?;
             if let Some(delta) = delta.as_ref() {
                 append_delta(delta, &mut text, &mut reasoning, &mut tool_calls);
             }

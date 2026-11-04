@@ -219,3 +219,5 @@ fn constrained_reasoning_keeps_channels_and_literal_json_markers_separate() {
     );
     assert_eq!(n.finish("tail".into()).map(|t| t.channel), None);
 }
+
+mod literal;

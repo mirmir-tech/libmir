@@ -86,3 +86,19 @@ fn unfinished_content_is_rejected() -> TestResult {
     assert!(validate_content(c.as_mut(), r#"{"verdict": "sup"#).is_err());
     Ok(())
 }
+
+#[test]
+fn content_routing_follows_the_grammar_phase_not_literal_markers() -> TestResult {
+    use models::generation::GenerationChannel::{Content, Reasoning};
+    let mut c = constraint()?;
+    assert_eq!(c.output_channel(256), None);
+    c.consume(256)?;
+    assert_eq!(c.output_channel(65), Some(Reasoning));
+    assert_eq!(c.output_channel(257), None);
+    c.consume(257)?;
+    assert_eq!(c.output_channel(256), Some(Content));
+    assert_eq!(c.output_channel(257), Some(Content));
+    let c = constraint()?;
+    assert_eq!(c.output_channel(u32::from(b'{')), Some(Content));
+    Ok(())
+}

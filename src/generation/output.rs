@@ -116,9 +116,18 @@ impl<'a> TokenStream<'a> {
         Self { decoder: tokenizer.decoder(), normalizer }
     }
 
-    pub(super) fn step(&mut self, token: u32) -> crate::Result<Option<GenerationToken>> {
+    pub(super) fn step(
+        &mut self,
+        token: u32,
+        constraint: Option<&super::constraints::OutputConstraint>,
+    ) -> crate::Result<Option<GenerationToken>> {
         let piece = self.decoder.step(token)?.unwrap_or_default();
-        Ok(self.normalizer.push(token, piece))
+        Ok(match constraint {
+            Some(constraint) => {
+                self.normalizer.push_literal(token, piece, constraint.output_channel(token))
+            },
+            None => self.normalizer.push(token, piece),
+        })
     }
 
     /// Releases text withheld as a partial UTF-8 sequence with its ids.

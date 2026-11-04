@@ -38,6 +38,26 @@ pub(super) fn invalid(message: impl Into<String>) -> crate::Error {
 }
 
 impl OutputConstraint {
+    /// The grammar phase owns channel routing, so literal protocol markers
+    /// inside constrained JSON cannot switch channels or disappear.
+    pub(super) fn output_channel(
+        &self,
+        token: u32,
+    ) -> Option<models::generation::GenerationChannel> {
+        use models::generation::GenerationChannel;
+        if self.phase.end_token() == Some(token) || self.phase.openers().any(|open| open == token) {
+            return None;
+        }
+        Some(if self.phase.is_reasoning() {
+            GenerationChannel::Reasoning
+        } else {
+            match self.target {
+                Target::Tool => GenerationChannel::ToolCalls,
+                Target::Content => GenerationChannel::Content,
+            }
+        })
+    }
+
     /// The reasoning delimiter and the tokens the budget still allows, while
     /// the model reasons unconstrained; `None` once the grammar or the budget
     /// exit takes over.

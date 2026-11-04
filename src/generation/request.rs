@@ -57,6 +57,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn json_content_rejects_forced_tools_but_keeps_optional_tools() -> crate::Result<()> {
+        use foundation::conversation::ToolChoice;
+        let json = ResponseFormat::JsonSchema(serde_json::json!({"type":"object"}));
+        for choice in [ToolChoice::Required, ToolChoice::Function("emit".into())] {
+            assert!(json.validate_tool_choice(&choice).is_err());
+            ResponseFormat::Text.validate_tool_choice(&choice)?;
+        }
+        for choice in [ToolChoice::Auto, ToolChoice::None] {
+            json.validate_tool_choice(&choice)?;
+        }
+        Ok(())
+    }
+
+    #[test]
     fn reasoning_exit_is_default() {
         assert_eq!(
             ReasoningCyclePolicy::default(),
@@ -85,4 +99,25 @@ pub enum ResponseFormat {
     /// One JSON value matching the schema, decoded under its grammar and
     /// validated before it is returned.
     JsonSchema(serde_json::Value),
+}
+
+impl ResponseFormat {
+    /// JSON content cannot simultaneously satisfy a required tool call.
+    /// Optional tools may remain in the conversation as prompt context.
+    pub fn validate_tool_choice(
+        &self,
+        choice: &foundation::conversation::ToolChoice,
+    ) -> crate::Result<()> {
+        use foundation::conversation::ToolChoice;
+        if matches!(self, Self::JsonSchema(_))
+            && matches!(choice, ToolChoice::Required | ToolChoice::Function(_))
+        {
+            return Err(models::ModelsError::InvalidConfig(
+                "a JSON response_format cannot be combined with a required or named tool_choice"
+                    .into(),
+            )
+            .into());
+        }
+        Ok(())
+    }
 }
