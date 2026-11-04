@@ -37,6 +37,8 @@ impl CudaSharedRoutedModelSession {
         if rows < 2 || self.position_delta != 0 || !self.graphs_verification() {
             let mut tokens = vec![0; rows];
             tokens[0] = token;
+            // Any later failure retires the session; a partially executed
+            // pass cannot safely be retried by merely clearing the arm flag.
             self.arm_rollback(rows - 1)?;
             let positions = text_positions(self.position, rows, self.position_delta)?;
             self.prefill_inner(Pass {

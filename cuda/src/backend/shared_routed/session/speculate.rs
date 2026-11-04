@@ -36,6 +36,10 @@ impl CudaSharedRoutedModelSession {
     /// sampling, so tokens follow `sampling` exactly. Under a token mask,
     /// each row chooses within its mask and the step verifies only the
     /// host's masked drafts, reading the next drafts back for it.
+    ///
+    /// On error, discard this session: a pass may already have advanced
+    /// recurrent buffers. The runtime retires failed sessions rather than
+    /// retrying verification against partially updated state.
     pub fn decode_speculative(
         &mut self,
         session_id: Uuid,

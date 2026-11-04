@@ -81,7 +81,12 @@ pub(in crate::generation) fn advance(
         return Ok(false);
     };
     constraint.consume(token)?;
-    constraint.complete()
+    if constraint.target == Target::Content {
+        // Accepting means EOS is allowed; a numeric root may still continue.
+        Ok(constraint.phase.is_grammar() && constraint.matcher.is_stopped())
+    } else {
+        constraint.complete()
+    }
 }
 
 /// Neither recovery nor cycle exits may override a budget delimiter or the

@@ -15,14 +15,20 @@ pub(super) fn draft_bounds(
     sampling: &SamplingLogits,
     stop_tokens: &[u32],
     drafts: &[u32],
+    remaining_tokens: usize,
 ) -> Result<Option<DraftBounds>> {
+    let completion_limit = remaining_tokens.saturating_sub(1);
     let stop_tokens = stop_tokens.to_vec();
     if let SamplingLogits::Masked { .. } = sampling {
         let masked = match constraint {
             Some(constraint) => constraint.draft_masks(drafts)?,
             None => None,
         };
-        return Ok(masked.map(|masked| DraftBounds { max_accepted: None, stop_tokens, masked }));
+        return Ok(masked.map(|masked| DraftBounds {
+            max_accepted: Some(completion_limit),
+            stop_tokens,
+            masked,
+        }));
     }
     let device = matches!(
         sampling,
@@ -44,8 +50,13 @@ pub(super) fn draft_bounds(
         },
     };
     Ok(Some(DraftBounds {
-        max_accepted,
+        max_accepted: Some(
+            max_accepted.map_or(completion_limit, |limit| limit.min(completion_limit)),
+        ),
         stop_tokens,
         masked: Vec::new(),
     }))
 }
+
+#[cfg(test)]
+mod tests;

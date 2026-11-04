@@ -74,6 +74,9 @@ impl CudaBackend {
 impl CudaMamba2VerifyState {
     /// Places `state` here unless it is already resident and unchanged; a
     /// displaced sequence is first written back to its own buffers.
+    /// A caller must retire the source session if verification fails before
+    /// commit: its resident buffers may already be mutated, so invalidating
+    /// only the stamp cannot reconstruct the state before the failed pass.
     pub fn pack(&mut self, state: &CudaMamba2State) -> Result<()> {
         if state.geometry() != self.kernels.geometry() {
             return Err(Error::InvalidDecoderKernel("Mamba-2 verification geometry differs"));

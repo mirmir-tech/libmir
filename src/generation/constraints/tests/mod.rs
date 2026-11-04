@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 use super::grammar;
 mod content;
 mod drafts;
+mod numbers;
 mod reasoning;
 use crate::model::constraints::tool_tokenizer;
 

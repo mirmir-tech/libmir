@@ -84,6 +84,8 @@ impl Session {
     }
 
     /// Appends one generated token and computes the following prediction.
+    /// Discard the session after an execution error; device state may be
+    /// partial.
     pub fn decode(&mut self, token: u32, sampling: SamplingLogits) -> Result<DecodeOutput> {
         let pending = self.start_decode(token, sampling, None)?;
         self.finish_decode(pending)
@@ -100,18 +102,11 @@ impl Session {
     ) -> Result<PendingSessionDecode> {
         let speculation = speculation.filter(|_| self.model.draft_tokens().is_some());
         let drafts = speculation.as_ref().and_then(|_| self.model.draft_tokens());
-        let request = self.model.clone().with_cache_wait(|cache| {
-            let step = self.state.append_decode_in_place(cache, token)?;
-            if let Some(drafts) = drafts {
-                // This step's drafts and the next step's, from the token after
-                // the verified ones.
-                let tokens = self.state.token_len() + 2 * drafts + 1;
-                self.state.reserve_capacity_in_place(cache, tokens)?;
-            }
-            Ok(step)
-        })?;
+        self.model
+            .clone()
+            .with_cache_wait(|cache| reserve_decode(&mut self.state, cache, token, drafts))?;
         let pending = self.model.start_decode_sequence(DecodeSequence {
-            session_id: request.session_id,
+            session_id: self.state.session_id(),
             token_id: token,
             block_table: self.state.table().clone(),
             sampling_logits: sampling,
@@ -154,3 +149,21 @@ impl Drop for Session {
         self.model.notify_cache_waiters();
     }
 }
+
+/// Cache-pressure retries must not append the fed token more than once.
+fn reserve_decode(
+    state: &mut KvSessionState,
+    cache: &mut runtime::kv::KvCache,
+    token: u32,
+    drafts: Option<usize>,
+) -> Result<usize> {
+    if let Some(drafts) = drafts {
+        // The fed token, this step's drafts, and the next step's drafts.
+        let capacity = state.token_len().saturating_add(2 * drafts + 2);
+        state.reserve_capacity_in_place(cache, capacity)?;
+    }
+    Ok(state.append_decode_in_place(cache, token)?.token_offset)
+}
+
+#[cfg(test)]
+mod tests;

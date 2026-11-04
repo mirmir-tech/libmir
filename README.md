@@ -146,6 +146,11 @@ work starts; HTTP adapters can use it before opening streams. Schema mode uses
 neutral repetition/EOS/minimum-token defaults and rejects explicit incompatible
 values. Token masks and completed-output schema validation remain active.
 
+For Rust source changes from 0.5.2 (new enum variants and request/backend
+fields), see the [migration guide](https://docs.mirmir.tech/getting-started/upgrade-0.5.5.html).
+Sampled MTP verification currently copies target logits to the host; greedy
+and masked paths have different costs. MTP is not a throughput guarantee.
+
 ## Laya decisions
 
 `libmir::decision::DecisionModel` loads a Laya checkpoint independently of the

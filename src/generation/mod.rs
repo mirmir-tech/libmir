@@ -154,6 +154,7 @@ impl Model {
                     &sampling,
                     &stop_token_ids,
                     &drafts,
+                    settings.max_tokens - token_ids.len(),
                 )?;
                 Some((started, session.start_decode(next, sampling, bounds)?))
             };

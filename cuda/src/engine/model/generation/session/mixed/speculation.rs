@@ -112,14 +112,22 @@ impl MixedMixerExecution {
         let session = required(&mut self.sessions, request.session_id)?;
         // This step verifies its drafts and drafts as many after them.
         let room = room(&request.block_table, session.position())?;
-        let step = session.decode_speculative(
+        let step = match session.decode_speculative(
             request.session_id,
             request.token_id,
             drafting.draft_tokens.min(room),
             &request.sampling_logits,
             &request.speculation.clone().unwrap_or_default(),
             &request.block_table,
-        )?;
+        ) {
+            Ok(step) => step,
+            Err(error) => {
+                // A failed GPU pass may have advanced recurrent buffers or
+                // left scalar snapshots armed. Never retry that session.
+                self.sessions.remove(&request.session_id);
+                return Err(error);
+            },
+        };
         Ok(Output {
             accepted: step.accepted,
             drafts: step.drafts,
