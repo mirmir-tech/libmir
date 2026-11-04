@@ -15,7 +15,7 @@
 //! reported and the next prompt goes on.
 #![allow(clippy::print_stdout)]
 
-use std::{env, fs, num::NonZeroUsize, path::PathBuf};
+use std::{env, fs, path::PathBuf};
 
 use libmir::{
     Conversation, GenerationOverrides, GenerationRequest, Library, Message, RuntimeConfig,
@@ -48,7 +48,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (mut rows, mut tool, mut only) = (None, false, None);
     for option in args.filter_map(|option| option.into_string().ok()) {
         if let Some(draft) = option.strip_prefix("draft=") {
-            let draft_tokens = NonZeroUsize::new(draft.parse()?).ok_or("draft=0")?;
+            let draft_tokens = libmir::DraftTokens::try_from(draft.parse::<usize>()?)?;
             config.scheduler.speculation = Some(Speculation { draft_tokens });
         } else if let Some(count) = option.strip_prefix("tokens=") {
             tokens = count.parse()?;

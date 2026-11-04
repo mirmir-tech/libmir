@@ -83,3 +83,38 @@ fn prices_mamba_state_and_convolution_history_per_sequence() -> crate::Result<()
     );
     Ok(())
 }
+
+#[test]
+fn prediction_cache_and_rollback_residency_are_cuda_only() -> crate::Result<()> {
+    use models::{
+        semantic::SemanticModelSpec,
+        weights::{TensorCatalog, WeightBindingPlan},
+    };
+    let decoder = DecoderConfig::from_value(&json!({
+        "hidden_size":128,"intermediate_size":256,"num_hidden_layers":1,
+        "num_attention_heads":2,"num_key_value_heads":1,"head_dim":64,
+        "vocab_size":256,"max_position_embeddings":1024
+    }))?;
+    let mut semantic = SemanticModelSpec::discover(&decoder, &TensorCatalog { tensors: vec![] })?;
+    semantic.decoder.prediction_layers = semantic.decoder.layers.clone();
+    let execution = DecoderExecutionContract {
+        semantic,
+        bindings: WeightBindingPlan { tensors: vec![] },
+    };
+    let mut config = RuntimeConfig::default();
+    config.scheduler.speculation =
+        Some(crate::Speculation { draft_tokens: crate::DraftTokens::MAX });
+    for target in [BackendTarget::Metal, BackendTarget::CpuReference] {
+        assert_eq!(prediction::kv_budget(Some(&execution), &config, &target), (0, 0));
+        assert_eq!(prediction::rollback_snapshots(Some(&execution), &config, &target), 0);
+    }
+    let (per_token, total) = prediction::kv_budget(Some(&execution), &config, &BackendTarget::Cuda);
+    assert!(per_token > 0 && total > per_token);
+    assert_eq!(
+        prediction::rollback_snapshots(Some(&execution), &config, &BackendTarget::Cuda),
+        8
+    );
+    config.scheduler.speculation = None;
+    assert_eq!(prediction::kv_budget(Some(&execution), &config, &BackendTarget::Cuda), (0, 0));
+    Ok(())
+}

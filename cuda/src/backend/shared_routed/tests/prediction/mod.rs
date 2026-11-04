@@ -6,7 +6,7 @@
 //! set; `--nocapture` prints the acceptance.
 #![allow(clippy::print_stdout, reason = "the gate reports its measurements")]
 
-use std::{num::NonZeroUsize, path::Path};
+use std::path::Path;
 
 use models::{
     layout::{DecoderConfig, ModelLayout},
@@ -49,7 +49,9 @@ fn prediction_module_drafts_the_decoder_greedy_token()
         crate::SharedRoutedModelLoadConfig {
             cache,
             max_sequence_blocks: 64,
-            speculation: Some(Speculation { draft_tokens: NonZeroUsize::MIN }),
+            speculation: Some(Speculation {
+                draft_tokens: runtime::speculation::DraftTokens::MIN,
+            }),
         },
     )?;
     let caches = template.allocate_shared_kv()?;

@@ -37,7 +37,7 @@ impl ModelDescriptor {
         config: &RuntimeConfig,
         target: &BackendTarget,
     ) -> ModelMemoryEstimate {
-        let speculation = config.scheduler.speculation.is_some();
+        let speculation = *target == BackendTarget::Cuda && config.scheduler.speculation.is_some();
         let weight_bytes =
             resident::weight_bytes(&self.layout, self.unloaded.as_ref(), speculation);
         let generation_decoder = match &self.task_plan {
@@ -52,7 +52,7 @@ impl ModelDescriptor {
         let (kv_bytes_per_token, kv_cache_bytes) = generation_decoder.map_or((0, 0), |decoder| {
             let (per_token, total) = kv_budget(decoder, config, target);
             let (prediction_per_token, prediction) =
-                prediction::kv_budget(self.execution.as_ref(), config);
+                prediction::kv_budget(self.execution.as_ref(), config, target);
             (per_token.saturating_add(prediction_per_token), total.saturating_add(prediction))
         });
         let workspace_bytes =
@@ -74,7 +74,7 @@ impl ModelDescriptor {
             session_state_bytes: generation_decoder.map_or(0, |decoder| {
                 session::state_bytes(
                     decoder,
-                    prediction::rollback_snapshots(self.execution.as_ref(), config),
+                    prediction::rollback_snapshots(self.execution.as_ref(), config, target),
                 )
             }),
         }

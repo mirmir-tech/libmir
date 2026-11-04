@@ -9,6 +9,20 @@ pub(super) mod prompt;
 mod tests;
 mod validation;
 
+pub(super) fn validate_schema(schema: &serde_json::Value) -> Result<()> {
+    let grammar = grammar::content(&validation::decoding_schema(schema.clone()))?;
+    let _validator =
+        jsonschema::validator_for(schema).map_err(|error| invalid(error.to_string()))?;
+    let (failed, messages) =
+        llguidance::api::GrammarInit::Serialized(TopLevelGrammar::from_lark(grammar))
+            .validate(None, llguidance::api::ParserLimits::default())
+            .into_tuple();
+    if failed || !messages.is_empty() {
+        return Err(invalid(format!("unsupported schema: {}", messages.join("; "))));
+    }
+    Ok(())
+}
+
 pub(super) use flow::{advance_generation, normalize, sampling, transition_stop, validate_content};
 use llguidance::{Matcher, api::TopLevelGrammar};
 use models::{chat::ToolCallPrefix, generation::GenerationSettings};

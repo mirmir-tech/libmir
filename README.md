@@ -139,6 +139,13 @@ This does not enable the checkpoint's vision tower or Metal state-space executio
 Gemma 4 CUDA gains sliding-window and 512-wide global-head prefill paths.
 Historical performance measurements remain tied to their recorded revisions.
 
+`Speculation::draft_tokens` uses `DraftTokens::try_from(count)` to enforce the
+1–8-token rollback window. Speculative residency is estimated only for CUDA.
+`GenerationRequest::validate()` checks model-independent output constraints before
+work starts; HTTP adapters can use it before opening streams. Schema mode uses
+neutral repetition/EOS/minimum-token defaults and rejects explicit incompatible
+values. Token masks and completed-output schema validation remain active.
+
 ## Laya decisions
 
 `libmir::decision::DecisionModel` loads a Laya checkpoint independently of the

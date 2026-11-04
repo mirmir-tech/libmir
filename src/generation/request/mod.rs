@@ -52,32 +52,10 @@ pub struct GenerationRequest {
     pub reasoning_token_budget: Option<std::num::NonZeroUsize>,
 }
 
+mod validation;
+
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn json_content_rejects_forced_tools_but_keeps_optional_tools() -> crate::Result<()> {
-        use foundation::conversation::ToolChoice;
-        let json = ResponseFormat::JsonSchema(serde_json::json!({"type":"object"}));
-        for choice in [ToolChoice::Required, ToolChoice::Function("emit".into())] {
-            assert!(json.validate_tool_choice(&choice).is_err());
-            ResponseFormat::Text.validate_tool_choice(&choice)?;
-        }
-        for choice in [ToolChoice::Auto, ToolChoice::None] {
-            json.validate_tool_choice(&choice)?;
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn reasoning_exit_is_default() {
-        assert_eq!(
-            ReasoningCyclePolicy::default(),
-            ReasoningCyclePolicy::ExitReasoning { min_tokens: 64 }
-        );
-    }
-}
+mod tests;
 
 /// Explicit request-scoped native tool output constraints.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]

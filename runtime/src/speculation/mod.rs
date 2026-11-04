@@ -1,8 +1,8 @@
 //! Speculative decoding with a checkpoint's multi-token prediction modules.
 
-use std::num::NonZeroUsize;
-
+mod tokens;
 use serde::{Deserialize, Serialize};
+pub use tokens::{DraftTokens, InvalidDraftTokens};
 
 use crate::backend::TokenMask;
 
@@ -10,7 +10,7 @@ use crate::backend::TokenMask;
 /// and verifies them, with the token after them, in one target pass.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Speculation {
-    pub draft_tokens: NonZeroUsize,
+    pub draft_tokens: DraftTokens,
 }
 
 /// What one speculative decode step may keep after the fed token. A host that

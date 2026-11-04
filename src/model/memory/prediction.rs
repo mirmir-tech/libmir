@@ -1,5 +1,6 @@
 //! Residency of the multi-token prediction modules a speculative load adds.
 
+use foundation::model::BackendTarget;
 use models::{execution::DecoderExecutionContract, semantic::MixerSpec};
 use runtime::kv::KvStorageSpec;
 
@@ -10,13 +11,14 @@ use crate::RuntimeConfig;
 pub(super) fn rollback_snapshots(
     execution: Option<&DecoderExecutionContract>,
     config: &RuntimeConfig,
+    target: &BackendTarget,
 ) -> usize {
     let drafts =
         execution.is_some_and(|execution| !execution.semantic.decoder.prediction_layers.is_empty());
     config
         .scheduler
         .speculation
-        .filter(|_| drafts)
+        .filter(|_| drafts && *target == BackendTarget::Cuda)
         .map_or(0, |speculation| speculation.draft_tokens.get())
 }
 
@@ -26,8 +28,9 @@ pub(super) fn rollback_snapshots(
 pub(super) fn kv_budget(
     execution: Option<&DecoderExecutionContract>,
     config: &RuntimeConfig,
+    target: &BackendTarget,
 ) -> (u64, u64) {
-    if config.scheduler.speculation.is_none() {
+    if *target != BackendTarget::Cuda || config.scheduler.speculation.is_none() {
         return (0, 0);
     }
     execution

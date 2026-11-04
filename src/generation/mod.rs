@@ -74,12 +74,10 @@ impl Model {
         cancellation: &CancellationToken,
     ) -> Result<GenerationOutput> {
         cancellation.check()?;
-        request
-            .response_format
-            .validate_tool_choice(&request.conversation.tool_choice)?;
+        request.validate()?;
         let mut metrics = GenerationMetricsRecorder::new();
         let descriptor = self.descriptor();
-        let settings = descriptor.resolve_generation(request.options)?;
+        let settings = descriptor.resolve_generation(request.sampling_options())?;
         let prepared =
             PreparedGeneration::new(self, request, settings, encoded_image, &mut metrics)?;
         let prompt_tokens = prepared.token_ids().len();
