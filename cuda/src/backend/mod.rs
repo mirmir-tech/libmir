@@ -129,7 +129,9 @@ pub use state_space_hybrid::{
     CudaAttentionHybridExecution, CudaAttentionHybridLayer, CudaMamba2HybridExecution,
     CudaMamba2HybridLayer,
 };
-pub use task::{CudaSequenceScoringModel, CudaTextEmbeddingModel};
+pub use task::{
+    CudaDecisionModel, CudaSequenceScoringModel, CudaTextEmbeddingModel, DecisionPrecision,
+};
 pub use tuning::{AttentionFamily, AttentionProfileRequest, CudaTuningConfig, CudaTuningMode};
 pub use vision::{CudaPooledVisionTower, CudaSpatialMergeVisionTower};
 

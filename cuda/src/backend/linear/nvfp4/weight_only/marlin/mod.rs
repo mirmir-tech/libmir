@@ -160,5 +160,5 @@ fn product(left: usize, right: usize) -> Result<usize> {
     left.checked_mul(right).ok_or(Error::InvalidNvFp4("dense Marlin size overflow"))
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests;

@@ -30,7 +30,7 @@ impl CudaGatedDeltaWorkspace {
 }
 
 impl CudaBackend {
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn poison_gated_delta_workspace(&self) -> Result<()> {
         let mut workspace =
             self.inner.gated_delta_workspace.lock().map_err(|_| {

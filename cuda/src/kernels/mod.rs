@@ -10,6 +10,7 @@ mod awq;
 mod bitsandbytes;
 mod clamped_routed;
 mod concat;
+mod decision;
 mod decoder;
 mod dense_cast;
 mod direct_fp8;
@@ -60,6 +61,10 @@ pub(crate) use clamped_routed::{
     ClampedRoutedSplitDecode,
 };
 pub use concat::ConcatColumnsBf16;
+pub use decision::{
+    DecisionAttention, DecisionAttentionInput, DecisionElement, DecisionElementwise,
+    DecisionLayout, DecisionWindow, HeadLayout, RopeTables, ScoreRows,
+};
 pub use decoder::{RmsNorm, RmsNormUnit, Rope, RopeSpec};
 pub(crate) use dense_cast::DenseCast;
 pub(crate) use direct_fp8::{

@@ -13,7 +13,7 @@ struct CachedExecutionPlan {
 }
 
 #[derive(Debug)]
-pub(in super::super) struct SharedRoutedExecutionPlanCache {
+pub(in crate::backend::shared_routed) struct SharedRoutedExecutionPlanCache {
     plans: HashMap<usize, CachedExecutionPlan>,
     clock: u64,
     /// Pool bytes one plan token cost so far, weighted over built plans.
@@ -23,7 +23,7 @@ pub(in super::super) struct SharedRoutedExecutionPlanCache {
 }
 
 impl SharedRoutedExecutionPlanCache {
-    pub(in super::super) fn new() -> Self {
+    pub(in crate::backend::shared_routed) fn new() -> Self {
         Self {
             plans: HashMap::new(),
             clock: 0,
@@ -36,7 +36,7 @@ impl SharedRoutedExecutionPlanCache {
     /// Pool bytes shape churn may take beyond the plans held now: an evicted
     /// plan's memory stays cached in the pool but seldom fits the next shape,
     /// so under traffic the whole budget can be held twice.
-    pub(in super::super) fn headroom_bytes(&self) -> u64 {
+    pub(in crate::backend::shared_routed) fn headroom_bytes(&self) -> u64 {
         let budget = u64::try_from(
             crate::backend::model::DEFAULT_PREFILL_CHUNK_TOKENS
                 .saturating_add(crate::backend::model::RETAINED_CHUNK_SLACK_TOKENS),
@@ -45,11 +45,11 @@ impl SharedRoutedExecutionPlanCache {
         budget.saturating_mul(self.bytes_per_token)
     }
 
-    pub(in super::super) const fn bytes_per_token(&self) -> u64 {
+    pub(in crate::backend::shared_routed) const fn bytes_per_token(&self) -> u64 {
         self.bytes_per_token
     }
 
-    pub(in super::super) fn get_mut(
+    pub(in crate::backend::shared_routed) fn get_mut(
         &mut self,
         tokens: usize,
     ) -> Option<&mut SharedRoutedExecutionPlan> {
@@ -61,7 +61,7 @@ impl SharedRoutedExecutionPlanCache {
         })
     }
 
-    pub(in super::super) fn reserve(&mut self, tokens: usize) {
+    pub(in crate::backend::shared_routed) fn reserve(&mut self, tokens: usize) {
         if self.plans.contains_key(&tokens) {
             return;
         }
@@ -104,7 +104,11 @@ impl SharedRoutedExecutionPlanCache {
             .fold(0_usize, |total, tokens| total.saturating_add(*tokens))
     }
 
-    pub(in super::super) fn insert(&mut self, tokens: usize, plan: SharedRoutedExecutionPlan) {
+    pub(in crate::backend::shared_routed) fn insert(
+        &mut self,
+        tokens: usize,
+        plan: SharedRoutedExecutionPlan,
+    ) {
         self.reserve(tokens);
         self.clock = self.clock.wrapping_add(1);
         // Only chunk-sized plans price a token; a one-token decode plan is
@@ -124,12 +128,12 @@ impl SharedRoutedExecutionPlanCache {
         self.plans.insert(tokens, CachedExecutionPlan { plan, last_used: self.clock });
     }
 
-    pub(in super::super) fn clear(&mut self) {
+    pub(in crate::backend::shared_routed) fn clear(&mut self) {
         self.plans.clear();
     }
 
-    #[cfg(test)]
-    pub(in super::super) fn len(&self) -> usize {
+    #[cfg(all(test, target_os = "linux"))]
+    pub(in crate::backend::shared_routed) fn len(&self) -> usize {
         self.plans.len()
     }
 }

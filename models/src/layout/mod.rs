@@ -2,6 +2,7 @@ mod decoder;
 mod encoder;
 mod files;
 mod metadata;
+mod modernbert;
 mod vision;
 
 pub use decoder::{
@@ -13,6 +14,7 @@ pub use decoder::{
 pub use encoder::{EncoderConfig, EncoderPositionEmbedding, EncoderRopeScaling, NormKind};
 pub use files::{ModelLayout, WeightFile};
 pub use metadata::ModelMetadata;
+pub use modernbert::{ModernBertAttention, ModernBertConfig};
 pub use vision::{
     ImageProcessorConfig, PooledImageProcessorConfig, PooledVisionConfig,
     SpatialMergeImageProcessorConfig, SpatialMergeVisionConfig, VisionConfig, VisionPipeline,

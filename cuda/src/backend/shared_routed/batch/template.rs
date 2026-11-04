@@ -23,7 +23,7 @@ impl CudaSharedRoutedModelTemplate {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn prepare_ragged_prefill_batch(
         &self,
         counts: &[usize],

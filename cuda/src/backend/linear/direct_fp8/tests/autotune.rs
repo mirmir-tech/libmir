@@ -4,14 +4,22 @@ use mircuda::{DeviceBuffer, DeviceElement, bf16};
 use uuid::Uuid;
 
 use super::super::*;
-use crate::{CudaConfig, CudaTuningConfig, CudaTuningMode};
+use crate::{
+    CudaConfig, CudaTuningConfig, CudaTuningMode,
+    backend::tuning::{
+        DirectFp8ScaleDType, DirectFp8WeightScale, QuantizedProfileExecution,
+        QuantizedProfileRequest,
+    },
+};
+
+type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
 const PREFILL_TOKENS: usize = 64;
 const INPUT: usize = 896;
 const OUTPUT: usize = 4_864;
 
 #[test]
-fn profiles_and_persists_dynamic_e4m3_tensor_core() -> Result<()> {
+fn profiles_and_persists_dynamic_e4m3() -> TestResult {
     let (backend, directory) = backend()?;
     let weight = checkpoint_weight(
         &backend,
@@ -25,39 +33,56 @@ fn profiles_and_persists_dynamic_e4m3_tensor_core() -> Result<()> {
         DirectFp8Activation::DynamicE4M3Token,
     )?;
     execute_and_validate(&backend, &weight, PREFILL_TOKENS)?;
-    validate_profile(&directory, "DirectFp8DynamicE4M3OutputChannel", "TensorCore")
+    validate_profile(
+        &directory,
+        QuantizedProfileRequest::direct_fp8_dynamic_e4m3(
+            PREFILL_TOKENS,
+            INPUT,
+            OUTPUT,
+            DirectFp8ScaleDType::F32,
+            false,
+        ),
+    )
 }
 
 #[test]
-fn profiles_and_persists_static_e4m3_tensor_core() -> Result<()> {
+fn profiles_and_persists_static_e4m3() -> TestResult {
     let (backend, directory) = backend()?;
     let weight = static_weight(&backend)?;
     execute_and_validate(&backend, &weight, PREFILL_TOKENS)?;
-    validate_profile(&directory, "DirectFp8StaticE4M3", "TensorCore")
+    validate_profile(&directory, static_request(PREFILL_TOKENS))
 }
 
 #[test]
-fn profiles_static_e4m3_decode_independently() -> Result<()> {
+fn profiles_static_e4m3_decode_independently() -> TestResult {
     let (backend, directory) = backend()?;
     let weight = static_weight(&backend)?;
     execute_and_validate(&backend, &weight, 1)?;
-    validate_profile(&directory, "DirectFp8StaticE4M3", "Portable")
+    validate_profile(&directory, static_request(1))
 }
 
 #[test]
-fn profiles_unscaled_e5m2_weight_only_tensor_core() -> Result<()> {
+fn profiles_unscaled_e5m2_weight_only() -> TestResult {
     let (backend, directory) = backend()?;
     let weight = e5m2_weight(&backend)?;
     execute_and_validate(&backend, &weight, PREFILL_TOKENS)?;
-    validate_profile(&directory, "DirectFp8Bf16E5M2WeightOnly", "TensorCore")
+    validate_profile(
+        &directory,
+        QuantizedProfileRequest::direct_fp8_bf16_e5m2_weight_only(
+            PREFILL_TOKENS, INPUT, OUTPUT, false,
+        ),
+    )
 }
 
 #[test]
-fn profiles_unscaled_e5m2_decode_independently() -> Result<()> {
+fn profiles_unscaled_e5m2_decode_independently() -> TestResult {
     let (backend, directory) = backend()?;
     let weight = e5m2_weight(&backend)?;
     execute_and_validate(&backend, &weight, 1)?;
-    validate_profile(&directory, "DirectFp8Bf16E5M2WeightOnly", "Portable")
+    validate_profile(
+        &directory,
+        QuantizedProfileRequest::direct_fp8_bf16_e5m2_weight_only(1, INPUT, OUTPUT, false),
+    )
 }
 
 fn backend() -> Result<(CudaBackend, std::path::PathBuf)> {
@@ -144,14 +169,41 @@ fn execute_and_validate(
     Ok(())
 }
 
-fn validate_profile(directory: &std::path::Path, format: &str, execution: &str) -> Result<()> {
+fn static_request(tokens: usize) -> QuantizedProfileRequest {
+    QuantizedProfileRequest::direct_fp8_static_e4m3(
+        tokens,
+        INPUT,
+        OUTPUT,
+        DirectFp8WeightScale::Tensor,
+        DirectFp8ScaleDType::Bf16,
+        false,
+    )
+}
+
+#[derive(serde::Deserialize)]
+struct Profiles {
+    quantized: Vec<Profile>,
+}
+
+#[derive(serde::Deserialize)]
+struct Profile {
+    request: QuantizedProfileRequest,
+    execution: QuantizedProfileExecution,
+    average_ns: u64,
+}
+
+fn validate_profile(directory: &std::path::Path, request: QuantizedProfileRequest) -> TestResult {
     let profile = fs::read_dir(directory)?
         .next()
         .ok_or(Error::InvalidExecutionPlan("missing direct FP8 profile"))??
         .path();
-    let payload = fs::read_to_string(profile)?;
-    assert!(payload.contains(format));
-    assert!(payload.contains(execution));
+    let payload: Profiles = serde_json::from_slice(&fs::read(profile)?)?;
+    assert_eq!(payload.quantized.len(), 1);
+    let entry = &payload.quantized[0];
+    assert_eq!(entry.request, request);
+    // The fastest valid implementation depends on the device and measured load.
+    assert!(matches!(entry.execution, QuantizedProfileExecution::DirectFp8(_)));
+    assert!(entry.average_ns > 0);
     fs::remove_dir_all(directory)?;
     Ok(())
 }

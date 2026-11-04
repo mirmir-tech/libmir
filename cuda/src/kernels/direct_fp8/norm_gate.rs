@@ -13,7 +13,7 @@ cuda_export!(DynamicE4M3NormGateKernel = "libmir_cuda_dynamic_e4m3_norm_gate_bf1
     output: &mut DeviceBuffer<u8>, scales: &mut DeviceBuffer<f32>, tokens: u32, columns: u32,
     value_heads: u32, gate_stride: u32, gate_offset: u32, epsilon: f32, weight_shift: f32,
 ));
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 cuda_export!(ReferenceDynamicE4M3Kernel = "libmir_cuda_dynamic_e4m3_quantize_bf16"(
     input: &DeviceBuffer<bf16>, output: &mut DeviceBuffer<u8>, scales: &mut DeviceBuffer<f32>,
     tokens: u32, columns: u32,
@@ -22,7 +22,7 @@ cuda_export!(ReferenceDynamicE4M3Kernel = "libmir_cuda_dynamic_e4m3_quantize_bf1
 #[derive(Debug)]
 pub struct DirectFp8NormGate {
     kernel: TypedKernel<DynamicE4M3NormGateKernel>,
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     reference: TypedKernel<ReferenceDynamicE4M3Kernel>,
 }
 
@@ -32,7 +32,7 @@ impl DirectFp8NormGate {
         let module = compiler.compile(source, &CompileOptions::default())?;
         Ok(Self {
             kernel: module.kernel()?,
-            #[cfg(test)]
+            #[cfg(all(test, target_os = "linux"))]
             reference: module.kernel()?,
         })
     }
@@ -95,7 +95,7 @@ impl DirectFp8NormGate {
         )?)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn quantize_reference(
         &self,
         stream: &Stream,
