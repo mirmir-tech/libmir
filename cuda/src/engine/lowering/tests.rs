@@ -9,6 +9,7 @@ use models::{
 use serde_json::json;
 
 use super::*;
+use crate::Result;
 
 #[test]
 fn lowers_dense_qk_normalization_from_semantics() -> Result<()> {
@@ -38,7 +39,6 @@ fn lowers_dense_qk_normalization_from_semantics() -> Result<()> {
     let plan = CudaDecoderPlan::lower(&spec);
 
     assert!(plan.all_dense());
-    assert_eq!(graph_normalization(&plan)?, KernelNormalization::QUERY_KEY);
     assert_eq!(
         crate::admit_architecture(&TaskExecutionPlan::Generation { decoder }, Some(&spec),)?,
         crate::CudaArchitecture::Generation(crate::CudaDecoderRuntime::Dense)

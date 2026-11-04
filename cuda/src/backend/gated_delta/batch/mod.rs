@@ -5,10 +5,7 @@ use std::{
 
 use mircuda::{DeviceBuffer, bf16};
 
-use super::{
-    CudaGatedDeltaState, GatedDeltaInputs, GatedDeltaStateConfig, channels,
-    residency::GatedDeltaDestination,
-};
+use super::{CudaGatedDeltaState, GatedDeltaInputs, GatedDeltaStateConfig, channels};
 use crate::{CudaBackend, Error, Result, kernels::GatedDeltaKernelInputs};
 
 mod kernels;
@@ -38,7 +35,7 @@ pub struct CudaGatedDeltaBatchState {
     history: DeviceBuffer<bf16>,
     kernels: HashMap<usize, BatchKernels>,
     sources: Vec<(u64, u64)>,
-    destinations: Vec<GatedDeltaDestination>,
+    destinations: Vec<crate::backend::recurrent::RecurrentDestination>,
     identity: u64,
 }
 

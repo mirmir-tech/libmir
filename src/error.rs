@@ -12,6 +12,9 @@ pub enum Error {
     /// Generated tool output was malformed or violated the requested tool
     /// choice.
     InvalidToolCall(String),
+    #[error("invalid model response format output: {0}")]
+    /// Generated content violated the requested JSON response format.
+    InvalidResponseFormat(String),
     #[error("generation was cancelled")]
     /// Generation stopped after its cancellation token was signalled.
     Cancelled,

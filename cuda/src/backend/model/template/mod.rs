@@ -1,4 +1,3 @@
-use mircuda::bf16;
 use models::layout::DecoderConfig;
 
 use super::layer::DecoderLayerTemplate;
@@ -28,6 +27,7 @@ impl CudaMoeModelTemplate {
     pub(crate) fn new(
         backend: &CudaBackend,
         decoder: DecoderConfig,
+        embedding_scale: f32,
         embedding: CudaTensor,
         final_norm: CudaTensor,
         output_head: CudaTensor,
@@ -37,7 +37,6 @@ impl CudaMoeModelTemplate {
             .into_iter()
             .map(|layer| DecoderLayerTemplate::Moe(Box::new(layer)))
             .collect();
-        let scale = bf16::from_f32(f32::from(u16::try_from(decoder.hidden_size)?).sqrt()).to_f32();
         Self::new_layers(
             backend,
             decoder,
@@ -45,13 +44,14 @@ impl CudaMoeModelTemplate {
             final_norm,
             CheckpointProjectionWeight::Dense(output_head),
             layers,
-            scale,
+            embedding_scale,
         )
     }
 
     pub(crate) fn new_dense_bound(
         backend: &CudaBackend,
         decoder: DecoderConfig,
+        embedding_scale: f32,
         embedding: CheckpointProjectionWeight,
         final_norm: CudaTensor,
         output_head: CheckpointProjectionWeight,
@@ -61,7 +61,9 @@ impl CudaMoeModelTemplate {
             .into_iter()
             .map(|layer| DecoderLayerTemplate::Dense(Box::new(layer)))
             .collect();
-        Self::new_layers(backend, decoder, embedding, final_norm, output_head, layers, 1.0)
+        Self::new_layers(
+            backend, decoder, embedding, final_norm, output_head, layers, embedding_scale,
+        )
     }
 
     fn new_layers(

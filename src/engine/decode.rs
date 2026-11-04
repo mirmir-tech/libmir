@@ -33,6 +33,7 @@ impl Engine {
                 token_id,
                 block_table: block_table.clone(),
                 sampling_logits: sampling,
+                speculation: None,
             })?),
             #[cfg(feature = "metal")]
             EngineInner::Metal(metal) => {

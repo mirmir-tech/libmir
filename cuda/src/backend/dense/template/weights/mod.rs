@@ -1,6 +1,8 @@
 use mircuda::{DeviceBuffer, bf16};
 
-use super::super::{DenseSwiGluConfig, DenseSwiGluWeights};
+use super::super::{
+    DenseSandwichWeights, DenseSwiGluConfig, DenseSwiGluWeights, sandwich::DenseSandwichOwned,
+};
 use crate::{
     AffineQuantizedWeight, Bf16LinearPackWeights, Bf16LinearPairWeights, CudaBackend, CudaTensor,
     DecodeAttentionWeights, DecodeQkvWeights, DirectFp8CheckpointWeight, MxFp4CheckpointWeight,
@@ -87,6 +89,7 @@ pub struct DenseWeightSource<'a> {
     pub key_norm: Option<&'a CudaTensor>,
     pub output: DenseOutputSource<'a>,
     pub post_attention_norm: &'a CudaTensor,
+    pub sandwich: Option<DenseSandwichWeights<'a>>,
     pub gate_up: DenseGateUpSource<'a>,
     pub down: DenseDownSource<'a>,
 }
@@ -99,6 +102,7 @@ pub(super) struct DenseWeights {
     key_norm: DeviceBuffer<bf16>,
     output: DenseOutputOwned,
     post_attention_norm: CudaTensor,
+    sandwich: Option<DenseSandwichOwned>,
     gate_up: DenseGateUpOwned,
     down: DenseDownOwned,
 }
@@ -138,6 +142,7 @@ impl DenseWeights {
             )?,
             output: DenseOutputOwned::new(backend, source.output)?,
             post_attention_norm: source.post_attention_norm.clone(),
+            sandwich: source.sandwich.map(DenseSandwichOwned::new).transpose()?,
             gate_up: DenseGateUpOwned::new(backend, source.gate_up)?,
             down: DenseDownOwned::new(backend, source.down)?,
         })
@@ -153,6 +158,7 @@ impl DenseWeights {
                 output: self.output.borrow(),
             },
             post_attention_norm: &self.post_attention_norm,
+            sandwich: self.sandwich.as_ref().map(DenseSandwichOwned::borrow),
             gate_up: self.gate_up.borrow(),
             down: self.down.borrow(),
         }

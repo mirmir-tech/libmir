@@ -1,9 +1,12 @@
-use models::layout::{AttentionLayerType, DecoderConfig, RotaryEmbeddingLayout};
+use models::{
+    layout::{AttentionLayerType, DecoderConfig, RotaryEmbeddingLayout},
+    semantic::{AttentionSpec, MixerSpec, SemanticModelSpec},
+};
 use runtime::kv::{CacheConfig, KvStorageSpec};
 
 use crate::{
     DecodeAttentionConfig, DecodeMoeBlockConfig, DenseSwiGluConfig, Error, GatedActivation, Result,
-    kernels::QkvNormalization,
+    kernels::RotaryEmbedding,
 };
 
 /// Session-independent policy used to prepare one BF16 dense `SwiGLU` layer.
@@ -11,24 +14,31 @@ use crate::{
 pub struct DenseSwiGluLayerLoadConfig {
     pub cache: CacheConfig,
     pub max_sequence_blocks: usize,
-    pub qkv_normalization: QkvNormalization,
+    /// Storage of the feed-forward projections, and of the attention
+    /// projections unless the checkpoint keeps those in BF16.
     pub projection_format: crate::ProjectionFormat,
 }
 
 impl DenseSwiGluLayerLoadConfig {
-    pub(super) fn block(self, decoder: &DecoderConfig, layer: usize) -> Result<DenseSwiGluConfig> {
+    pub(super) fn block(
+        self,
+        decoder: &DecoderConfig,
+        semantic: &SemanticModelSpec,
+        layer: usize,
+    ) -> Result<DenseSwiGluConfig> {
         validate_common(decoder, layer, self.max_sequence_blocks)?;
         Ok(DenseSwiGluConfig {
             attention: attention_config(
                 decoder,
+                semantic,
                 layer,
                 self.cache,
                 self.max_sequence_blocks,
-                self.qkv_normalization,
                 self.projection_format,
             )?,
             intermediate_size: decoder.intermediate_size,
             activation: GatedActivation::try_from(decoder)?,
+            feed_forward_format: self.projection_format,
         })
     }
 }
@@ -45,12 +55,15 @@ pub struct NvFp4MoeLayerLoadConfig {
 pub struct SharedRoutedModelLoadConfig {
     pub cache: CacheConfig,
     pub max_sequence_blocks: usize,
+    /// Loads the checkpoint's multi-token prediction module for drafting.
+    pub speculation: Option<runtime::speculation::Speculation>,
 }
 
 impl NvFp4MoeLayerLoadConfig {
     pub(super) fn block(
         self,
         decoder: &DecoderConfig,
+        semantic: &SemanticModelSpec,
         layer: usize,
     ) -> Result<DecodeMoeBlockConfig> {
         validate_common(decoder, layer, self.max_sequence_blocks)?;
@@ -59,15 +72,14 @@ impl NvFp4MoeLayerLoadConfig {
         let expert_intermediate = decoder
             .moe_intermediate_size
             .ok_or_else(|| unsupported("missing moe_intermediate_size"))?;
-        let mut attention = attention_config(
+        let attention = attention_config(
             decoder,
+            semantic,
             layer,
             self.cache,
             self.max_sequence_blocks,
-            QkvNormalization::ALL,
             crate::ProjectionFormat::Bf16,
         )?;
-        attention.attention_scale = 1.0;
         Ok(DecodeMoeBlockConfig {
             attention,
             dense_intermediate: decoder.intermediate_size,
@@ -80,14 +92,17 @@ impl NvFp4MoeLayerLoadConfig {
     }
 }
 
+/// Attention geometry from the checkpoint configuration; scale and Q/K/V
+/// normalization from the layer's semantic spec.
 fn attention_config(
     decoder: &DecoderConfig,
+    semantic: &SemanticModelSpec,
     layer: usize,
     cache: CacheConfig,
     max_sequence_blocks: usize,
-    qkv_normalization: QkvNormalization,
     projection_format: crate::ProjectionFormat,
 ) -> Result<DecodeAttentionConfig> {
+    let spec = softmax_attention(semantic, layer)?;
     let head_dim = decoder.layer_head_dim(layer);
     let rotary_dim = rotary_dim(decoder, layer, head_dim)?;
     let rope_theta = decoder
@@ -97,19 +112,26 @@ fn attention_config(
         layer,
         hidden_size: decoder.hidden_size,
         query_heads: decoder.num_attention_heads,
-        rotary_dim,
-        rope_pairing_dim: pairing_dim(decoder, layer, head_dim, rotary_dim)?,
-        rope_theta: to_f32("RoPE theta", rope_theta)?,
+        rotary: Some(RotaryEmbedding {
+            dimensions: rotary_dim,
+            pairing: pairing_dim(decoder, layer, head_dim, rotary_dim)?,
+            theta: to_f32("RoPE theta", rope_theta)?,
+        }),
         rms_norm_epsilon: to_f32("RMS norm epsilon", decoder.rms_norm_eps)?,
-        attention_scale: decoder
-            .attention_scale
-            .map_or_else(|| attention_scale(head_dim), |scale| to_f32("attention scale", scale))?,
+        attention_scale: to_f32("attention scale", spec.scale)?,
         projection_format,
-        qkv_normalization,
+        qkv_normalization: spec.qk_normalization.into(),
         sliding_window: decoder.layer_sliding_window(layer),
         max_sequence_blocks,
         cache: KvStorageSpec::new(cache, decoder.layer_key_value_heads(layer), head_dim),
     })
+}
+
+fn softmax_attention(semantic: &SemanticModelSpec, layer: usize) -> Result<&AttentionSpec> {
+    match semantic.decoder.layers.get(layer).map(|spec| &spec.mixer) {
+        Some(MixerSpec::SoftmaxAttention(attention)) => Ok(attention),
+        _ => Err(unsupported("layer is not softmax attention in the model spec")),
+    }
 }
 
 fn validate_common(

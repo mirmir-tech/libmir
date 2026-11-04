@@ -10,8 +10,11 @@ mod gptq;
 mod grammar;
 mod hybrid;
 mod packed_integer;
+mod prediction;
 mod roles;
 mod shapes;
+mod slot;
+mod state_space;
 mod types;
 mod validation;
 mod view;
@@ -29,7 +32,7 @@ pub use block::{
     BlockActivationMode, BlockFormat, BlockInputPadding, BlockProjectionLayout, BlockQuantization,
     BlockScale, BlockScaleEncoding, BlockStorageDType,
 };
-pub use dense::{DenseDecoderLayerBindings, DenseSoftmaxBindings};
+pub use dense::{DenseDecoderLayerBindings, DenseSandwichBindings, DenseSoftmaxBindings};
 pub use float8::{
     Float8ActivationScale, Float8Format, Float8ParameterDType, Float8Quantization,
     Float8ScaleGranularity, Float8ScaleMode,
@@ -51,9 +54,16 @@ pub use packed_integer::{
     CompressedIntegerQuantization, CompressedIntegerScaleDType, CompressedIntegerScaleStrategy,
     CompressedIntegerSignedness, CompressedIntegerStorageDType, CompressedIntegerZeroPointMode,
 };
+pub use prediction::PredictionLayerBindings;
 pub use roles::{
-    AttentionProjectionRole, ExpertProjectionRole, FeedForwardProjectionRole, LayerTensorRole,
-    LinearAttentionTensorRole, LogicalTensorRole,
+    AttentionProjectionRole, ExpertProjectionRole, FeedForwardProjectionRole, LatentProjectionRole,
+    LayerTensorRole, LinearAttentionTensorRole, LogicalTensorRole, PredictionTensorRole,
+    StateSpaceTensorRole,
+};
+pub use slot::LayerSlot;
+pub use state_space::{
+    AttentionProjectionBindings, LatentRoutedBindings, StateSpaceHybridLayerBindings,
+    StateSpaceHybridMixerBindings, StateSpaceMixerBindings, UngatedExpertBindings,
 };
 pub use types::{
     BindingTransform, ExpertProjectionLayout, TensorBinding, TensorPacking, TensorStorage,

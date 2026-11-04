@@ -72,6 +72,7 @@ fn admission_cancellation_retires_prefill_while_collecting_decode() -> crate::Re
             token_id: 7,
             block_table: table(&[]),
             sampling_logits: SamplingLogits::None,
+            speculation: None,
         },
         response: Arc::new(DecodeResponse::new()),
         enqueued: Instant::now(),

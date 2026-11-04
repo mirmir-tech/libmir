@@ -55,6 +55,12 @@ impl CudaBackend {
 }
 
 impl BatchedDecodeMoeBlockBf16 {
+    pub(in crate::backend::block) fn capture_partitions(&self, batch: &PagedDecodeBatch) -> usize {
+        self.attention.capture_partitions(batch)
+    }
+}
+
+impl BatchedDecodeMoeBlockBf16 {
     fn new(
         backend: &CudaBackend,
         config: DecodeMoeBlockConfig,

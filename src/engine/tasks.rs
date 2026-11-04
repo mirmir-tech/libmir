@@ -38,3 +38,18 @@ impl Engine {
         }
     }
 }
+
+impl Engine {
+    /// Whether top-p without a top-k bound samples on the device. Elsewhere
+    /// such requests read full logits and sample on the host.
+    pub(crate) const fn samples_unbounded_nucleus(&self) -> bool {
+        match &self.inner {
+            #[cfg(feature = "cuda")]
+            EngineInner::Cuda(_) => true,
+            #[cfg(feature = "metal")]
+            EngineInner::Metal(_) => false,
+            #[cfg(not(any(feature = "cuda", feature = "metal")))]
+            EngineInner::Unavailable => false,
+        }
+    }
+}

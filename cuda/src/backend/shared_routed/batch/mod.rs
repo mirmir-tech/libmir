@@ -10,10 +10,12 @@ mod output;
 mod prefill;
 mod states;
 mod template;
+mod verify;
 mod workspace;
 
 use graph::DecodeResources;
-pub use prefill::CudaSharedRoutedPrefillBatch;
+pub use prefill::{CudaSharedRoutedPrefillBatch, DraftingRow};
+pub(super) use verify::CudaSharedRoutedVerifyBatch;
 pub(in crate::backend) use workspace::DecodeWorkspaceKey;
 
 #[derive(Debug)]

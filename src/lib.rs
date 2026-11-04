@@ -27,7 +27,9 @@ pub use foundation::{
     },
     model::BackendTarget,
 };
-pub use generation::{GenerationOutput, GenerationRequest, ReasoningCyclePolicy, ToolConstraints};
+pub use generation::{
+    GenerationOutput, GenerationRequest, ReasoningCyclePolicy, ResponseFormat, ToolConstraints,
+};
 pub use memory::{MemorySnapshot, ModelMemoryEstimate};
 #[cfg(feature = "metal")]
 pub use metal::DecodeReservation as MetalDecodeReservation;
@@ -36,10 +38,10 @@ pub use model::{
     CheckpointEncoding, IMAGE_PLACEHOLDER, Library, MODEL_FORMAT_REGISTRY_SCHEMA_VERSION, Model,
     ModelDescriptor, ModelLoadOptions, PreparedPrompt, PreparedVisionPrompt,
     PromptPreparationTimings, RemoteModelContract, RemoteTaskMetadata, RemoteVisionContract,
-    WeightEncoding,
+    UnloadedTensors, WeightEncoding,
 };
 pub use models::{
-    chat::{ReasoningMode, TemplateKind},
+    chat::{ReasoningEffort, ReasoningHistory, ReasoningMode, TemplateKind},
     execution::{
         ArchitectureCapability, ArchitectureRequirements, CausalScoringTask, EmbeddingTask,
         ModelTask, PoolingMode, TaskExecutionPlan,
@@ -59,6 +61,7 @@ pub use runtime::{
     metrics::GenerationMetrics,
     progress::{ProgressCount, ProgressEvent, ProgressStage, ProgressUnit},
     scheduler::{CachedPrefillPolicy, PrefillDecodePolicy, PrefillRefillPolicy},
+    speculation::Speculation,
 };
 pub use session::Session;
 pub use telemetry::DeviceTelemetrySnapshot;

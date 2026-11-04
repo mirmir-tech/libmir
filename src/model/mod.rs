@@ -31,6 +31,7 @@ use foundation::{
     conversation::Conversation,
     model::{BackendTarget, ModelManifest},
 };
+pub use memory::UnloadedTensors;
 use models::{
     chat::ChatTemplate,
     execution::{DecoderExecutionContract, ModelTask, TaskExecutionPlan},
@@ -62,6 +63,7 @@ pub struct ModelDescriptor {
     generation: GenerationSettings,
     vision: Option<VisionConfig>,
     vision_readiness: Option<TensorReadiness>,
+    unloaded: Option<UnloadedTensors>,
     image_processor: Option<ImageProcessorConfig>,
     template: ChatTemplate,
     tokenizer: TextTokenizer,
@@ -122,6 +124,7 @@ impl ModelDescriptor {
         let vision_readiness = vision
             .as_ref()
             .map(|config| VisionTensorSchema::discover(config).readiness(&catalog));
+        let unloaded = memory::unloaded(&catalog, execution.as_ref(), vision.as_ref());
         let image_processor = vision
             .as_ref()
             .map(|vision| ImageProcessorConfig::from_layout(&layout, vision.pipeline()))
@@ -137,6 +140,7 @@ impl ModelDescriptor {
             generation: generation_config.resolve(overrides)?,
             vision,
             vision_readiness,
+            unloaded,
             image_processor,
             template: ChatTemplate::from_layout(&layout)?,
             tokenizer,
@@ -209,6 +213,15 @@ impl Model {
     /// Creates an independent generation session with its own K/V state.
     pub fn session(&self) -> Session {
         Session::new(self.clone(), self.inner.config.kv_cache.block_size)
+    }
+
+    /// Drafts each speculative decode step verifies, when the model drafts.
+    pub(crate) fn draft_tokens(&self) -> Option<usize> {
+        self.inner
+            .config
+            .scheduler
+            .speculation
+            .map(|speculation| speculation.draft_tokens.get())
     }
 
     /// Renders, tokenizes, and validates a chat request for this model.

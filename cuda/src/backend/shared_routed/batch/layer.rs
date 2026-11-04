@@ -1,20 +1,25 @@
 use mircuda::{DeviceBuffer, bf16};
 
-use super::super::SharedRoutedLayerTemplate;
+use super::{
+    super::{CudaSharedRoutedLayerState, SharedRoutedLayerTemplate},
+    states::{attention_states, full_states, linear_states, mamba_states},
+};
 use crate::{
     CudaAffineGatedDeltaMoeExecution, CudaAffineGatedFullAttentionMoeExecution,
-    CudaSharedRoutedModelSession, ExecutionPhase, PagedDecodeBatch, Result,
-    kernels::BatchedSplitAttentionWorkspace,
+    CudaAttentionHybridExecution, CudaMamba2HybridExecution, CudaSharedRoutedModelSession, Error,
+    ExecutionPhase, PagedDecodeBatch, Result, kernels::BatchedSplitAttentionWorkspace,
 };
 
 #[derive(Debug)]
 pub(super) enum SharedRoutedBatchLayer {
     Linear(Box<CudaAffineGatedDeltaMoeExecution>),
     Full(Box<CudaAffineGatedFullAttentionMoeExecution>),
+    Mamba2(Box<CudaMamba2HybridExecution>),
+    Attention(Box<CudaAttentionHybridExecution>),
 }
 
 impl SharedRoutedBatchLayer {
-    /// `capacity` is the row count the linear layers' shared packed states
+    /// `capacity` is the row count the recurrent layers' shared packed states
     /// are allocated for, so every batch up to it reuses one allocation.
     pub(super) fn new(
         template: &SharedRoutedLayerTemplate,
@@ -23,17 +28,26 @@ impl SharedRoutedBatchLayer {
         phase: ExecutionPhase,
         workspace: Option<BatchedSplitAttentionWorkspace>,
     ) -> Result<Self> {
-        match template {
+        Ok(match template {
             SharedRoutedLayerTemplate::Linear(layer) => {
                 let mut execution = layer.prepare_phase(rows, phase)?;
                 execution.set_batch_capacity(capacity);
-                Ok(Self::Linear(Box::new(execution)))
+                Self::Linear(Box::new(execution))
             },
-            SharedRoutedLayerTemplate::Full(layer) => layer
-                .prepare_phase_with_workspace(rows, phase, workspace)
-                .map(Box::new)
-                .map(Self::Full),
-        }
+            SharedRoutedLayerTemplate::Full(layer) => {
+                Self::Full(Box::new(layer.prepare_phase_with_workspace(rows, phase, workspace)?))
+            },
+            SharedRoutedLayerTemplate::Mamba2(layer) => {
+                let mut execution = layer.prepare_phase(rows, phase)?;
+                execution.set_batch_capacity(capacity);
+                Self::Mamba2(Box::new(execution))
+            },
+            SharedRoutedLayerTemplate::Attention(layer) => {
+                let mut execution = layer.prepare_phase(rows, phase)?;
+                execution.set_workspace(workspace);
+                Self::Attention(Box::new(execution))
+            },
+        })
     }
 
     /// Follows a K/V resize to `block_count` blocks.
@@ -53,12 +67,14 @@ impl SharedRoutedBatchLayer {
     ) -> Result<()> {
         match self {
             Self::Linear(execution) => {
-                let states = super::states::linear_states(sessions, layer)?;
-                execution.prepare_packed(input, &states, output)
+                execution.prepare_packed(input, &linear_states(sessions, layer)?, output)
             },
             Self::Full(execution) => {
-                let states = super::states::full_states(sessions, layer)?;
-                execution.prepare_packed(input, &states, paging, output)
+                execution.prepare_packed(input, &full_states(sessions, layer)?, paging, output)
+            },
+            Self::Mamba2(execution) => execution.prepare_packed(&mamba_states(sessions, layer)?),
+            Self::Attention(execution) => {
+                execution.prepare_packed(&attention_states(sessions, layer)?, paging)
             },
         }
     }
@@ -75,6 +91,8 @@ impl SharedRoutedBatchLayer {
             Self::Full(execution) => {
                 execution.execute_prepared_packed(input, positions, paging, output)
             },
+            Self::Mamba2(execution) => execution.execute_prepared_packed(input, output),
+            Self::Attention(execution) => execution.execute_prepared_packed(input, paging, output),
         }
     }
 
@@ -83,17 +101,70 @@ impl SharedRoutedBatchLayer {
         sessions: &mut [&mut CudaSharedRoutedModelSession],
         layer: usize,
     ) -> Result<()> {
-        if let Self::Linear(execution) = self {
-            let mut states = super::states::linear_states(sessions, layer)?;
-            execution.commit_packed(&mut states)?;
+        match self {
+            Self::Linear(execution) => {
+                execution.commit_packed(&mut linear_states(sessions, layer)?)
+            },
+            Self::Mamba2(execution) => execution.commit_packed(&mut mamba_states(sessions, layer)?),
+            Self::Full(_) | Self::Attention(_) => Ok(()),
         }
-        Ok(())
+    }
+
+    /// Host-side preparation of a verification pass over one session's
+    /// rows: its recurrent state stays resident in the layer, and every row
+    /// uses its pages.
+    pub(super) fn prepare_verify(
+        &mut self,
+        session: &CudaSharedRoutedModelSession,
+        layer: usize,
+        paging: &PagedDecodeBatch,
+    ) -> Result<()> {
+        match (self, &session.states[layer]) {
+            (Self::Mamba2(execution), CudaSharedRoutedLayerState::Mamba2(state)) => {
+                execution.prepare_verify(state)
+            },
+            (Self::Attention(execution), CudaSharedRoutedLayerState::Attention(state)) => {
+                execution.prepare_rows(state, paging)
+            },
+            _ => Err(Error::InvalidDecoderKernel("verification layer state kind mismatch")),
+        }
+    }
+
+    pub(super) fn execute_prepared_verify(
+        &mut self,
+        input: &DeviceBuffer<bf16>,
+        paging: &PagedDecodeBatch,
+        output: &mut DeviceBuffer<bf16>,
+    ) -> Result<()> {
+        match self {
+            Self::Mamba2(execution) => execution.execute_prepared_verify(input, output),
+            Self::Attention(execution) => execution.execute_prepared_packed(input, paging, output),
+            Self::Linear(_) | Self::Full(_) => {
+                Err(Error::InvalidDecoderKernel("verification graphs need Mamba-2 and attention"))
+            },
+        }
+    }
+
+    /// Keeps the session's recurrent state after `kept` verified tokens.
+    pub(super) fn commit_verify(
+        &mut self,
+        session: &mut CudaSharedRoutedModelSession,
+        layer: usize,
+        kept: usize,
+    ) -> Result<()> {
+        match (self, &mut session.states[layer]) {
+            (Self::Mamba2(execution), CudaSharedRoutedLayerState::Mamba2(state)) => {
+                execution.commit_verify(state, kept)
+            },
+            _ => Ok(()),
+        }
     }
 
     pub(super) fn capture_partitions(&self, paging: &PagedDecodeBatch) -> usize {
         match self {
-            Self::Linear(_) => 0,
+            Self::Linear(_) | Self::Mamba2(_) => 0,
             Self::Full(execution) => execution.packed_capture_partitions(paging),
+            Self::Attention(execution) => execution.packed_capture_partitions(paging),
         }
     }
 }

@@ -16,14 +16,54 @@ pub(super) fn validate(spec: &SemanticModelSpec) -> Result<()> {
         return Err(invalid("decoder dimensions and layer list must be non-empty"));
     }
     norm(decoder.final_norm.epsilon)?;
-    for (expected, layer) in decoder.layers.iter().enumerate() {
+    layers(&decoder.layers, "decoder")?;
+    layers(&decoder.prediction_layers, "prediction")?;
+    if decoder.prediction_layers.iter().any(|layer| {
+        !matches!(layer.mixer, MixerSpec::SoftmaxAttention(_))
+            || layer.feed_forward == FeedForwardSpec::None
+    }) {
+        return Err(invalid("prediction layers must pair attention with a feed-forward"));
+    }
+    block_layout(decoder)
+}
+
+fn layers(layers: &[super::DecoderLayerSpec], kind: &str) -> Result<()> {
+    for (expected, layer) in layers.iter().enumerate() {
         if layer.index != expected {
-            return Err(invalid("decoder layer indices must be contiguous and ordered"));
+            return Err(invalid(format!("{kind} layer indices must be contiguous and ordered")));
         }
         norm(layer.input_norm.epsilon)?;
         norm(layer.post_attention_norm.epsilon)?;
         mixer(&layer.mixer)?;
         feed_forward(&layer.feed_forward)?;
+    }
+    Ok(())
+}
+
+/// A paired layout must cover every checkpoint block exactly once: each
+/// layer's mixer block directly follows the previous layer's last block.
+fn block_layout(decoder: &super::DecoderSpec) -> Result<()> {
+    let super::BlockLayoutSpec::Paired { physical_blocks, mixer_blocks } = &decoder.block_layout
+    else {
+        return Ok(());
+    };
+    if mixer_blocks.len() != decoder.layers.len() {
+        return Err(invalid("paired block layout must name one mixer block per layer"));
+    }
+    let mut next = 0;
+    for (mixer, layer) in mixer_blocks.iter().zip(&decoder.layers) {
+        if *mixer != next {
+            return Err(invalid("paired block layout must cover blocks contiguously"));
+        }
+        next = mixer
+            + if layer.feed_forward == FeedForwardSpec::None {
+                1
+            } else {
+                2
+            };
+    }
+    if next != *physical_blocks {
+        return Err(invalid("paired block layout does not cover every checkpoint block"));
     }
     Ok(())
 }
@@ -70,6 +110,31 @@ fn mixer(mixer: &MixerSpec) -> Result<()> {
                 return Err(invalid("invalid linear attention specification"));
             }
         },
+        MixerSpec::StateSpace(state) => state_space(state)?,
+    }
+    Ok(())
+}
+
+fn state_space(state: &super::StateSpaceSpec) -> Result<()> {
+    let dimensions = [
+        state.heads,
+        state.head_dim,
+        state.state_size,
+        state.groups,
+        state.convolution_kernel_size,
+        state.chunk_size,
+    ];
+    if dimensions.contains(&0) || !state.heads.is_multiple_of(state.groups) {
+        return Err(invalid("invalid state-space mixer specification"));
+    }
+    let minimum = state.time_step_minimum;
+    if !minimum.is_finite()
+        || minimum < 0.0
+        || state
+            .time_step_maximum
+            .is_some_and(|maximum| !maximum.is_finite() || maximum < minimum)
+    {
+        return Err(invalid("invalid state-space time step limit"));
     }
     Ok(())
 }
@@ -97,6 +162,24 @@ fn feed_forward(feed_forward: &FeedForwardSpec) -> Result<()> {
             activation_spec(dense_activation)?;
             routed_spec(routed)
         },
+        FeedForwardSpec::LatentRouted {
+            latent_size,
+            routed,
+            shared,
+            routed_scale,
+        } => {
+            nonzero(*latent_size)?;
+            routed_spec(routed)?;
+            if let Some(shared) = shared {
+                nonzero(shared.intermediate_size)?;
+                activation_spec(&shared.activation)?;
+            }
+            if !routed_scale.is_finite() || *routed_scale <= 0.0 {
+                return Err(invalid("routed scale must be finite and positive"));
+            }
+            Ok(())
+        },
+        FeedForwardSpec::None => Ok(()),
     }
 }
 

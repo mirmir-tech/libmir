@@ -203,7 +203,7 @@ pub(super) fn exercise(model: &mut LoadedModel) -> Result<()> {
         if packed_bytes > 0 {
             assert!(
                 scalar_bytes <= packed_bytes,
-                "survivor recurrence grew after shrinking the cohort"
+                "survivor recurrence grew after shrinking the cohort: {packed_bytes} -> {scalar_bytes} bytes"
             );
         }
         for _ in 0..7 {

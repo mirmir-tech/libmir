@@ -18,7 +18,12 @@ impl PrefillAttentionBf16 {
         let mut prefill_config = self.config;
         state_config.layer = 0;
         prefill_config.layer = 0;
-        if state_config != prefill_config || batch.tokens() != self.tokens {
+        // A packed pass may pad its rows to the plan; padding rows are
+        // projected but neither stored nor attended.
+        if state_config != prefill_config
+            || batch.tokens() > self.tokens
+            || batch.positions().len() < self.tokens
+        {
             return Err(Error::InvalidPagedKv(
                 "prefill attention batch state or token count differs",
             ));

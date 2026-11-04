@@ -28,7 +28,7 @@ impl CombinedBatches {
         self.batches.clear();
     }
 
-    pub(super) fn prepare(
+    pub(in super::super) fn prepare(
         &mut self,
         template: &CudaSharedRoutedModelTemplate,
         counts: &[usize],
@@ -115,7 +115,7 @@ impl CombinedBatches {
         budget.saturating_mul(per_token)
     }
 
-    pub(super) fn current(&mut self) -> Result<&mut CudaSharedRoutedPrefillBatch> {
+    pub(in super::super) fn current(&mut self) -> Result<&mut CudaSharedRoutedPrefillBatch> {
         self.batches
             .back_mut()
             .map(|retained| &mut retained.batch)

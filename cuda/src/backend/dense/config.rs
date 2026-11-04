@@ -10,14 +10,38 @@ pub struct DenseSwiGluConfig {
     pub attention: DecodeAttentionConfig,
     pub intermediate_size: usize,
     pub activation: crate::GatedActivation,
+    /// Storage of the gate, up and down projections; attention projections
+    /// follow `attention.projection_format`.
+    pub feed_forward_format: crate::ProjectionFormat,
+}
+
+impl DenseSwiGluConfig {
+    /// NVFP4 attention projections keep their layer's prepared weights, so
+    /// such executors cannot be shared between layers. Feed-forward
+    /// projections take each layer's weights at execution.
+    #[must_use]
+    pub const fn binds_layer_weights(&self) -> bool {
+        matches!(self.attention.projection_format, crate::ProjectionFormat::NvFp4)
+    }
 }
 
 #[derive(Clone, Copy)]
 pub struct DenseSwiGluWeights<'a> {
     pub attention: DecodeAttentionWeights<'a>,
+    /// Normalizes the residual stream before the feed-forward projections.
     pub post_attention_norm: &'a CudaTensor,
+    pub sandwich: Option<DenseSandwichWeights<'a>>,
     pub gate_up: DenseGateUpWeights<'a>,
     pub down: DenseDownWeight<'a>,
+}
+
+/// Gemma-style norms on each sub-block's output before its residual add, and
+/// a learned BF16 scalar on the layer output.
+#[derive(Clone, Copy)]
+pub struct DenseSandwichWeights<'a> {
+    pub attention_output_norm: &'a CudaTensor,
+    pub feed_forward_output_norm: &'a CudaTensor,
+    pub layer_scalar: &'a CudaTensor,
 }
 
 #[derive(Clone, Copy)]

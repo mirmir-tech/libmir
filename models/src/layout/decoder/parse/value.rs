@@ -25,7 +25,10 @@ pub(in crate::layout::decoder) fn optional_usize(
     Ok(None)
 }
 
-pub(super) fn optional_f64(value: &Value, keys: &[&str]) -> Result<Option<f64>> {
+pub(in crate::layout::decoder) fn optional_f64(
+    value: &Value,
+    keys: &[&str],
+) -> Result<Option<f64>> {
     for key in keys {
         let Some(raw) = value.get(*key) else {
             continue;
@@ -41,7 +44,7 @@ pub(super) fn optional_f64(value: &Value, keys: &[&str]) -> Result<Option<f64>> 
     Ok(None)
 }
 
-pub(super) fn optional_bool(value: &Value, key: &str) -> Result<Option<bool>> {
+pub(in crate::layout::decoder) fn optional_bool(value: &Value, key: &str) -> Result<Option<bool>> {
     let Some(raw) = value.get(key) else {
         return Ok(None);
     };
@@ -53,7 +56,10 @@ pub(super) fn optional_bool(value: &Value, key: &str) -> Result<Option<bool>> {
         .ok_or_else(|| invalid(format!("{key} must be a boolean")))
 }
 
-pub(super) fn optional_string(value: &Value, key: &str) -> Result<Option<String>> {
+pub(in crate::layout::decoder) fn optional_string(
+    value: &Value,
+    key: &str,
+) -> Result<Option<String>> {
     let Some(raw) = value.get(key) else {
         return Ok(None);
     };

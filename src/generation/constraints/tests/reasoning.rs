@@ -4,11 +4,11 @@ use runtime::backend::SamplingLogits;
 use serde_json::json;
 
 use super::{
-    super::{ToolConstraint, advance, grammar, phase::Phase, sampling},
+    super::{OutputConstraint, Target, flow::advance, grammar, phase::Phase, sampling},
     TestResult, factory,
 };
 
-fn constraint() -> TestResult<ToolConstraint> {
+fn constraint() -> TestResult<OutputConstraint> {
     let factory = factory(true)?;
     let schema = json!({"type":"object","required":["verdict"],"additionalProperties":false,
         "properties":{"verdict":{"enum":["supported","contradicted"]}}});
@@ -16,7 +16,7 @@ fn constraint() -> TestResult<ToolConstraint> {
         &grammar::compile(&schema, None)?,
         &ToolCallPrefix::XmlFunction("verify".into()),
     )?;
-    Ok(ToolConstraint {
+    Ok(OutputConstraint {
         matcher: Matcher::new(factory.create_parser(TopLevelGrammar::from_lark(grammar))),
         phase: Phase::Reasoning {
             end: 258,
@@ -24,10 +24,11 @@ fn constraint() -> TestResult<ToolConstraint> {
         },
         vocab: 258,
         validator: jsonschema::validator_for(&schema)?,
+        target: Target::Tool,
     })
 }
 
-fn validate(constraint: Option<&mut ToolConstraint>, calls: &str) -> crate::Result<String> {
+fn validate(constraint: Option<&mut OutputConstraint>, calls: &str) -> crate::Result<String> {
     use foundation::conversation::{Conversation, FunctionDefinition, Tool, ToolChoice};
     let conversation = Conversation {
         tools: vec![Tool {
@@ -56,7 +57,7 @@ fn reasoning_transitions_once_then_schema_owns_envelope_arguments_and_stop() -> 
         assert!(!advance(&mut c, id)?);
     }
     assert!(!advance(&mut c, 258)?);
-    assert!(c.as_ref().ok_or("missing constraint")?.is_tool());
+    assert!(c.as_ref().ok_or("missing constraint")?.phase.is_grammar());
     assert!(matches!(sampling(&mut c, SamplingLogits::None)?, SamplingLogits::Masked { .. }));
     let text = "<tool_call>\n<function=verify>\n<parameter=verdict>\"supported\"</parameter>\n</function>\n</tool_call>";
     let tokens = factory.tok_env().tokenize(text);
@@ -155,7 +156,7 @@ fn budget_masks_only_the_delimiter_then_releases_to_the_tool_grammar() -> TestRe
         assert_eq!(mask.words()[255 / 32], 1 << (255 % 32));
     }
     assert!(!advance(&mut c, 255)?);
-    assert!(c.as_ref().ok_or("missing constraint")?.is_tool());
+    assert!(c.as_ref().ok_or("missing constraint")?.phase.is_grammar());
     assert!(c.as_ref().ok_or("missing constraint")?.phase.budget_exit().is_none());
     assert!(matches!(sampling(&mut c, SamplingLogits::None)?, SamplingLogits::Masked { .. }));
     assert!(validate(c.as_mut(), "[]").is_err());
@@ -171,7 +172,7 @@ fn natural_reasoning_end_cancels_unused_allowance() -> TestResult {
     };
     c.consume(65)?;
     c.consume(258)?;
-    assert!(c.is_tool());
+    assert!(c.phase.is_grammar());
     assert!(c.phase.budget_exit().is_none());
     Ok(())
 }
@@ -189,12 +190,12 @@ fn native_stop_closes_reasoning_without_accepting_its_draft_tool() -> TestResult
         assert_eq!(transition_stop(c.as_ref(), token, &[256]), token);
         assert!(!advance(&mut c, token)?);
     }
-    assert!(!c.as_ref().ok_or("constraint")?.is_tool());
+    assert!(!c.as_ref().ok_or("constraint")?.phase.is_grammar());
     assert!(validate(c.as_mut(), "").is_err());
     let delimiter = transition_stop(c.as_ref(), 256, &[256]);
     assert_eq!(delimiter, 258);
     assert!(!advance(&mut c, delimiter)?);
-    assert!(c.as_ref().ok_or("constraint")?.is_tool());
+    assert!(c.as_ref().ok_or("constraint")?.phase.is_grammar());
     assert!(validate(c.as_mut(), "").is_err());
     assert_eq!(transition_stop(c.as_ref(), 256, &[256]), 256);
     assert_eq!(transition_stop(None, 256, &[256]), 256);

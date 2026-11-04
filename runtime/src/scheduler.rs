@@ -86,6 +86,8 @@ pub struct SchedulerConfig {
     pub cached_prefill_policy: CachedPrefillPolicy,
     pub prefill_decode_policy: PrefillDecodePolicy,
     pub prefill_refill_policy: PrefillRefillPolicy,
+    /// Speculative decoding with the checkpoint's prediction module.
+    pub speculation: Option<crate::speculation::Speculation>,
 }
 
 #[derive(Debug, Clone)]
@@ -165,6 +167,7 @@ impl Default for SchedulerConfig {
             cached_prefill_policy: CachedPrefillPolicy::default(),
             prefill_decode_policy: PrefillDecodePolicy::default(),
             prefill_refill_policy: PrefillRefillPolicy::default(),
+            speculation: None,
         }
     }
 }

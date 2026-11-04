@@ -2,7 +2,7 @@ use super::{
     BlockTable, Configs, DecodeAttentionBf16, DecodeAttentionWeights, DeviceBuffer, Dynamic, Error,
     Geometry, Kernels, KvWritePlan, LaunchConfig, Nodes, Result, bf16,
 };
-use crate::backend::attention::qkv::QkvProjectionBuffers;
+use crate::{backend::attention::qkv::QkvProjectionBuffers, kernels::RotaryEmbedding};
 
 impl Dynamic {
     pub(in crate::backend) fn new(
@@ -39,6 +39,7 @@ impl Dynamic {
 impl Geometry {
     pub(in crate::backend) fn new(attention: &DecodeAttentionBf16) -> Result<Self> {
         let config = attention.config;
+        let (rotary_dim, pairing_dim, theta) = RotaryEmbedding::arguments(config.rotary)?;
         Ok(Self {
             layer: config.layer,
             block_size: config.cache.cache.block_size,
@@ -48,12 +49,12 @@ impl Geometry {
             kv_heads: u32::try_from(config.cache.kv_heads)?,
             head_dim: u32::try_from(config.cache.key_head_dim)?,
             value_head_dim: u32::try_from(config.cache.value_head_dim)?,
-            rotary_dim: u32::try_from(config.rotary_dim)?,
-            pairing_dim: u32::try_from(config.rope_pairing_dim)?,
+            rotary_dim,
+            pairing_dim,
             window: u32::try_from(config.sliding_window.unwrap_or(0))?,
             scale: config.attention_scale,
             split_threshold: attention.attention.split_threshold(),
-            theta: config.rope_theta,
+            theta,
             epsilon: config.rms_norm_epsilon,
             normalization: config.qkv_normalization,
             separate_qkv: config.projection_format != crate::ProjectionFormat::Bf16,

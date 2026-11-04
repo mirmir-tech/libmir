@@ -10,9 +10,9 @@ use crate::{Result, scheduler::scheduler_error};
 /// decode step while the accelerator waits for the next token. The waiter
 /// therefore wakes by timer shortly before the expected completion and polls.
 #[cfg(any(feature = "cuda", feature = "metal"))]
-const POLL_LEAD: Duration = Duration::from_micros(1_000);
+const POLL_LEAD: Duration = Duration::from_millis(1);
 #[cfg(any(feature = "cuda", feature = "metal"))]
-const POLL_LIMIT: Duration = Duration::from_micros(3_000);
+const POLL_LIMIT: Duration = Duration::from_millis(3);
 
 pub(super) struct DecodeResponse {
     value: Mutex<Option<std::result::Result<DecodeOutput, String>>>,
@@ -106,6 +106,8 @@ mod tests {
         thread::spawn(move || {
             thread::sleep(delay);
             completer.complete(Ok(DecodeOutput {
+                accepted: Vec::new(),
+                drafts: Vec::new(),
                 event: TokenEvent {
                     token_id: Some(7),
                     text: String::new(),

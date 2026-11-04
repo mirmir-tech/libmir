@@ -174,3 +174,32 @@ impl MixedMixerExecution {
         Ok(())
     }
 }
+
+impl MixedMixerExecution {
+    /// Starts the request's session from the longest stored prefix
+    /// checkpoint between `minimum` and `maximum` tokens.
+    pub(super) fn restore_prefix_session(
+        &mut self,
+        request: &runtime::backend::PrefillRequest,
+        minimum: usize,
+        maximum: usize,
+    ) -> Result<Option<usize>> {
+        let Some(checkpoint) =
+            self.checkpoints
+                .lookup(&request.model.id, &request.prompt_tokens, minimum, maximum)
+        else {
+            return Ok(None);
+        };
+        let mut session = self.template.instantiate_with_caches(&self.caches)?;
+        session.restore_checkpoint(checkpoint)?;
+        let position = session.position();
+        self.sessions.insert(request.session_id, session);
+        tracing::debug!(
+            backend = "cuda",
+            session = %request.session_id,
+            prefix_checkpoint_tokens = position,
+            "restored CUDA mixed-mixer prefix checkpoint"
+        );
+        Ok(Some(position))
+    }
+}

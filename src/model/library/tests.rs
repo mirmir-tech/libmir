@@ -1,6 +1,6 @@
 use runtime::kv::{CacheConfig, KvCacheDType};
 
-use super::*;
+use super::{resolve::engine_cache_compatible, *};
 
 #[test]
 fn metal_reuses_an_engine_when_only_logical_capacity_changes() {

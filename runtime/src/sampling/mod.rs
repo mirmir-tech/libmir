@@ -4,10 +4,12 @@ use crate::{
 };
 
 mod candidate;
+mod speculative;
 use candidate::{
     Candidate, WeightedCandidate, candidates, compact_candidates, penalized_score, top_k_limit,
     truncate_top_p,
 };
+pub use speculative::{DraftSampling, verify_drafts};
 
 #[derive(Debug, Clone, Copy)]
 pub struct SamplerConfig {

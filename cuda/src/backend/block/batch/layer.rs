@@ -25,4 +25,9 @@ impl BatchedDecodeMoeLayer {
     ) -> Result<()> {
         self.block.execute(input, self.weights.borrow(), batch, output)
     }
+
+    /// Split-attention partitions a captured graph of this layer launches.
+    pub(in crate::backend) fn capture_partitions(&self, batch: &PagedDecodeBatch) -> usize {
+        self.block.capture_partitions(batch)
+    }
 }

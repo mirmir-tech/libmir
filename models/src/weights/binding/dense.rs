@@ -8,10 +8,21 @@ use crate::error::{ModelsError, Result};
 pub struct DenseDecoderLayerBindings<'a> {
     pub input_norm: &'a TensorBinding,
     pub attention: DenseSoftmaxBindings<'a>,
+    /// Normalizes the residual stream before the feed-forward projections.
     pub post_attention_norm: &'a TensorBinding,
+    pub sandwich: Option<DenseSandwichBindings<'a>>,
     pub gate: &'a TensorBinding,
     pub up: &'a TensorBinding,
     pub down: &'a TensorBinding,
+}
+
+/// Gemma-style norms on each sub-block's output before its residual add, and
+/// a learned scalar on the layer output.
+#[derive(Debug, Clone, Copy)]
+pub struct DenseSandwichBindings<'a> {
+    pub attention_output_norm: &'a TensorBinding,
+    pub feed_forward_output_norm: &'a TensorBinding,
+    pub layer_scale: &'a TensorBinding,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -29,19 +40,43 @@ impl WeightBindingPlan {
         let projection = |projection| attention(self, index, projection);
         let feed_forward =
             |projection| layer(self, index, LayerTensorRole::FeedForwardProjection { projection });
+        let key = projection(AttentionProjectionRole::Key)?;
+        let sandwich = optional(self, index, LayerTensorRole::PostFeedForwardNorm)
+            .map(|feed_forward_output_norm| {
+                Ok::<_, ModelsError>(DenseSandwichBindings {
+                    attention_output_norm: layer(self, index, LayerTensorRole::PostAttentionNorm)?,
+                    feed_forward_output_norm,
+                    layer_scale: layer(self, index, LayerTensorRole::LayerScale)?,
+                })
+            })
+            .transpose()?;
+        let post_attention_norm = if sandwich.is_some() {
+            layer(self, index, LayerTensorRole::PreDenseNorm)?
+        } else {
+            optional(self, index, LayerTensorRole::PostAttentionNorm)
+                .or_else(|| optional(self, index, LayerTensorRole::PreDenseNorm))
+                .ok_or_else(|| invalid(index, "post-attention norm is unbound"))?
+        };
         Ok(DenseDecoderLayerBindings {
             input_norm: layer(self, index, LayerTensorRole::InputNorm)?,
             attention: DenseSoftmaxBindings {
                 query: projection(AttentionProjectionRole::Query)?,
-                key: projection(AttentionProjectionRole::Key)?,
-                value: projection(AttentionProjectionRole::Value)?,
+                key,
+                // Layers whose keys double as values have no value projection.
+                value: optional(
+                    self,
+                    index,
+                    LayerTensorRole::AttentionProjection {
+                        projection: AttentionProjectionRole::Value,
+                    },
+                )
+                .unwrap_or(key),
                 output: projection(AttentionProjectionRole::Output)?,
                 query_norm: optional(self, index, LayerTensorRole::QueryNorm),
                 key_norm: optional(self, index, LayerTensorRole::KeyNorm),
             },
-            post_attention_norm: optional(self, index, LayerTensorRole::PostAttentionNorm)
-                .or_else(|| optional(self, index, LayerTensorRole::PreDenseNorm))
-                .ok_or_else(|| invalid(index, "post-attention norm is unbound"))?,
+            post_attention_norm,
+            sandwich,
             gate: feed_forward(FeedForwardProjectionRole::Gate)?,
             up: feed_forward(FeedForwardProjectionRole::Up)?,
             down: feed_forward(FeedForwardProjectionRole::Down)?,
@@ -63,6 +98,13 @@ impl<'a> DenseDecoderLayerBindings<'a> {
             self.up,
             self.down,
         ];
+        bindings.extend(self.sandwich.into_iter().flat_map(|sandwich| {
+            [
+                sandwich.attention_output_norm,
+                sandwich.feed_forward_output_norm,
+                sandwich.layer_scale,
+            ]
+        }));
         bindings.extend(self.attention.query_norm);
         bindings.extend(self.attention.key_norm);
         bindings.into_iter().flat_map(TensorBinding::physical_sources).collect()

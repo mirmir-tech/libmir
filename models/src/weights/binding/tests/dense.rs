@@ -53,6 +53,49 @@ fn accepts_pre_feed_forward_norm_as_the_dense_residual_norm() -> Result<()> {
 }
 
 #[test]
+fn resolves_gemma_sandwich_norms_and_shared_key_value_projection() -> Result<()> {
+    let mut plan = plan();
+    plan.tensors.retain(|binding| {
+        binding.role
+            != LogicalTensorRole::Layer {
+                index: 0,
+                tensor: LayerTensorRole::AttentionProjection {
+                    projection: AttentionProjectionRole::Value,
+                },
+            }
+    });
+    plan.tensors.extend([
+        layer(LayerTensorRole::PreDenseNorm, "custom.pre_mlp.scale"),
+        layer(LayerTensorRole::PostFeedForwardNorm, "custom.post_mlp.scale"),
+        layer(LayerTensorRole::LayerScale, "custom.layer.scalar"),
+    ]);
+
+    let layer = plan.dense_decoder_layer(0)?;
+    let sandwich = layer
+        .sandwich
+        .ok_or_else(|| crate::ModelsError::InvalidConfig("missing sandwich".into()))?;
+
+    assert_eq!(layer.attention.value.source, "custom.key.kernel");
+    assert_eq!(layer.post_attention_norm.source, "custom.pre_mlp.scale");
+    assert_eq!(sandwich.attention_output_norm.source, "custom.post.scale");
+    assert_eq!(sandwich.feed_forward_output_norm.source, "custom.post_mlp.scale");
+    assert_eq!(sandwich.layer_scale.source, "custom.layer.scalar");
+    assert!(layer.physical_sources().contains(&"custom.layer.scalar"));
+    Ok(())
+}
+
+#[test]
+fn rejects_sandwich_norms_without_a_layer_scalar() {
+    let mut plan = plan();
+    plan.tensors.extend([
+        layer(LayerTensorRole::PreDenseNorm, "custom.pre_mlp.scale"),
+        layer(LayerTensorRole::PostFeedForwardNorm, "custom.post_mlp.scale"),
+    ]);
+
+    assert!(plan.dense_decoder_layer(0).is_err());
+}
+
+#[test]
 fn rejects_incomplete_dense_layer_views() {
     let mut plan = plan();
     plan.tensors.retain(|binding| {

@@ -26,7 +26,7 @@ impl DownProjection {
         tokens: usize,
         weight: Option<DenseDownWeight<'_>>,
     ) -> Result<Self> {
-        match config.attention.projection_format {
+        match config.feed_forward_format {
             ProjectionFormat::Affine => {
                 let DenseDownWeight::Affine(weight) = weight.ok_or(Error::InvalidExecutionPlan(
                     "affine MLP requires prepared down weight",
@@ -180,7 +180,7 @@ impl DownProjection {
                 )),
             },
             Self::NvFp4(operation) => match weight {
-                DenseDownWeight::NvFp4(_) => operation.execute(input, output),
+                DenseDownWeight::NvFp4(weight) => operation.execute_with(weight, input, output),
                 _ => Err(Error::InvalidExecutionPlan("NVFP4 down operation received other weight")),
             },
             Self::BlockFp8 => match weight {
@@ -217,8 +217,8 @@ impl DownProjection {
             | (Self::PackedInteger(_), DenseDownWeight::PackedInteger(_))
             | (Self::BlockFp8, DenseDownWeight::BlockFp8 { .. })
             | (Self::Fp8Int4, DenseDownWeight::Fp8Int4 { .. }) => Ok(false),
-            (Self::NvFp4(operation), DenseDownWeight::NvFp4(_)) => {
-                operation.execute_gated(gate, up, activation.into(), output)?;
+            (Self::NvFp4(operation), DenseDownWeight::NvFp4(weight)) => {
+                operation.execute_gated(weight, gate, up, activation.into(), output)?;
                 Ok(true)
             },
             _ => Err(Error::InvalidExecutionPlan(

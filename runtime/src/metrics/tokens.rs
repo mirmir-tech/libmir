@@ -6,6 +6,9 @@ pub struct GenerationTokenCounts {
     pub prefill: usize,
     pub generated: usize,
     pub decode_steps: usize,
+    /// Tokens the decode steps yielded; above the steps with speculation.
+    #[serde(default)]
+    pub decode_tokens: usize,
     pub first_published_after_tokens: usize,
     #[serde(default)]
     pub recovery_attempts: usize,

@@ -115,6 +115,23 @@ impl KvSessionState {
         })
     }
 
+    /// Allocates blocks until `tokens` positions fit, without adding tokens:
+    /// speculative decoding writes drafts past the session's last token.
+    pub fn reserve_capacity_in_place(&mut self, cache: &mut KvCache, tokens: usize) -> Result<()> {
+        while self.table.capacity(cache.block_size()) < tokens {
+            self.table.push(cache.allocate()?);
+        }
+        Ok(())
+    }
+
+    /// Appends tokens the backend already processed, such as verified drafts.
+    pub fn append_processed_in_place(&mut self, cache: &mut KvCache, tokens: &[u32]) -> Result<()> {
+        for token in tokens {
+            self.append_decode_in_place(cache, *token)?;
+        }
+        Ok(())
+    }
+
     pub fn reserve_decode_in_place(&mut self, cache: &mut KvCache) -> Result<KvDecodeStep> {
         self.append_decode_in_place(cache, 0)
     }

@@ -85,33 +85,47 @@ impl Session {
 
     /// Appends one generated token and computes the following prediction.
     pub fn decode(&mut self, token: u32, sampling: SamplingLogits) -> Result<DecodeOutput> {
-        let pending = self.start_decode(token, sampling)?;
+        let pending = self.start_decode(token, sampling, None)?;
         self.finish_decode(pending)
     }
 
+    /// Starts decoding after `token`. With `speculation`, the caller takes
+    /// the backend's tokens as they are, and a drafting model may return
+    /// verified drafts within those bounds before its prediction.
     pub(crate) fn start_decode(
         &mut self,
         token: u32,
         sampling: SamplingLogits,
+        speculation: Option<runtime::speculation::DraftBounds>,
     ) -> Result<PendingSessionDecode> {
-        let request = self
-            .model
-            .clone()
-            .with_cache_wait(|cache| Ok(self.state.append_decode_in_place(cache, token)?))?;
+        let speculation = speculation.filter(|_| self.model.draft_tokens().is_some());
+        let drafts = speculation.as_ref().and_then(|_| self.model.draft_tokens());
+        let request = self.model.clone().with_cache_wait(|cache| {
+            let step = self.state.append_decode_in_place(cache, token)?;
+            if let Some(drafts) = drafts {
+                // This step's drafts and the next step's, from the token after
+                // the verified ones.
+                let tokens = self.state.token_len() + 2 * drafts + 1;
+                self.state.reserve_capacity_in_place(cache, tokens)?;
+            }
+            Ok(step)
+        })?;
         let pending = self.model.start_decode_sequence(DecodeSequence {
             session_id: request.session_id,
             token_id: token,
             block_table: self.state.table().clone(),
             sampling_logits: sampling,
+            speculation,
         })?;
         Ok(PendingSessionDecode { pending })
     }
 
     pub(crate) fn finish_decode(&mut self, pending: PendingSessionDecode) -> Result<DecodeOutput> {
         let output = self.model.finish_decode_sequence(pending.pending)?;
-        self.model
-            .clone()
-            .with_cache(|cache| Ok(self.state.commit_ready_prefix_blocks(cache)?))?;
+        self.model.clone().with_cache(|cache| {
+            self.state.append_processed_in_place(cache, &output.accepted)?;
+            Ok(self.state.commit_ready_prefix_blocks(cache)?)
+        })?;
         Ok(output)
     }
 

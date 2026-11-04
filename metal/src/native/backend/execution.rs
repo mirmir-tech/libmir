@@ -158,6 +158,8 @@ pub(super) fn execute_decode(
         "native MLX decode completed"
     );
     Ok(DecodeOutput {
+        accepted: Vec::new(),
+        drafts: Vec::new(),
         event: TokenEvent {
             token_id: output.next_token,
             text: trace,

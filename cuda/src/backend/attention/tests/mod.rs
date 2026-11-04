@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use ::runtime::kv::{BlockId, BlockTable, CacheConfig, KvCacheDType, KvStorageSpec, KvWritePlan};
-use mircuda::{DeviceBuffer, DeviceElement, bf16};
+use mircuda::{DeviceBuffer, bf16};
 use models::{
     layout::ModelLayout,
     weights::{TensorCatalog, TensorInfo},
@@ -13,7 +13,8 @@ use crate::{Bf16LinearPackWeights, CudaConfig, CudaTensorSet};
 mod batch;
 mod io;
 mod mrope;
-pub(super) use io::read;
+mod position;
+pub(super) use io::{copy, read};
 const BASE: &str = "model.language_model.layers.0";
 
 #[test]
@@ -118,9 +119,11 @@ pub(super) fn config() -> DecodeAttentionConfig {
         layer: 0,
         hidden_size: 2_816,
         query_heads: 16,
-        rotary_dim: 256,
-        rope_pairing_dim: 256,
-        rope_theta: 10_000.0,
+        rotary: Some(crate::kernels::RotaryEmbedding {
+            dimensions: 256,
+            pairing: 256,
+            theta: 10_000.0,
+        }),
         rms_norm_epsilon: 1.0e-6,
         attention_scale: 0.0625,
         projection_format: ProjectionFormat::Bf16,
@@ -238,13 +241,4 @@ pub(super) fn assert_close(actual: &[bf16], expected: &[bf16]) {
 fn assert_valid(values: &[bf16]) {
     assert!(values.iter().all(|value| value.to_f32().is_finite()));
     assert!(values.iter().any(|value| value.to_f32() != 0.0));
-}
-
-fn copy<T: DeviceElement>(backend: &CudaBackend, values: &[T]) -> Result<DeviceBuffer<T>> {
-    let mut host = backend.inner.context.allocate_pinned::<T>(values.len())?;
-    host.copy_from_slice(values)?;
-    let mut device = backend.inner.pool.allocate::<T>(&backend.inner.stream, values.len())?;
-    backend.inner.stream.copy_to_device(&mut host, &mut device)?;
-    backend.synchronize()?;
-    Ok(device)
 }

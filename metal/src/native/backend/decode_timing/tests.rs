@@ -64,6 +64,7 @@ fn exercise(path: String) -> Result<()> {
             token_id: output.next_token.ok_or("no token")?,
             block_table: request.block_table,
             sampling_logits: SamplingLogits::None,
+            speculation: None,
         });
     }
     backend.with_model(&model.id, move |loaded| {

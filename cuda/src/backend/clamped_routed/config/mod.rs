@@ -42,7 +42,9 @@ impl ClampedRoutedConfig {
             validate_uniform(layer_contract(layer)?, attention, intermediate, experts, top_k)?;
             let position = rotary(match &layer.mixer {
                 MixerSpec::SoftmaxAttention(attention) => attention,
-                MixerSpec::LinearAttention(_) => unreachable!("validated clamped-routed mixer"),
+                MixerSpec::LinearAttention(_) | MixerSpec::StateSpace(_) => {
+                    unreachable!("validated clamped-routed mixer")
+                },
             })?;
             if position != (theta, factor, initial_context, beta_fast, beta_slow, rope_truncate) {
                 return Err(Error::UnsupportedDecoderLayer(format!(

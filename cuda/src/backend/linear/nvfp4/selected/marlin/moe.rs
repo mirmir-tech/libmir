@@ -154,7 +154,7 @@ impl MarlinNvFp4MoeBf16 {
     }
 }
 
-fn prepare_routes(
+pub(super) fn prepare_routes(
     context: &Context,
     stream: &Stream,
     spec: MarlinNvFp4MoeSpec,
@@ -176,12 +176,13 @@ fn prepare_routes(
 }
 
 #[derive(Clone, Copy)]
-enum ProjectionOutput {
+pub(super) enum ProjectionOutput {
     GateUp,
+    Intermediate,
     Down,
 }
 
-fn execute_projection(
+pub(super) fn execute_projection(
     context: &Context,
     stream: &Stream,
     spec: MarlinNvFp4MoeSpec,
@@ -192,6 +193,7 @@ fn execute_projection(
 ) -> Result<()> {
     let output = match destination {
         ProjectionOutput::GateUp => &mut scratch.gate_up,
+        ProjectionOutput::Intermediate => &mut scratch.intermediate,
         ProjectionOutput::Down => &mut scratch.down,
     };
     Ok(context.marlin_nvfp4_moe(
@@ -215,6 +217,6 @@ fn execute_projection(
     )?)
 }
 
-fn product(left: usize, right: usize) -> Result<usize> {
+pub(super) fn product(left: usize, right: usize) -> Result<usize> {
     left.checked_mul(right).ok_or(Error::InvalidNvFp4("Marlin MoE size overflow"))
 }

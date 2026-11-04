@@ -1,24 +1,17 @@
 mod cache;
+mod layer;
 
-pub(super) use cache::SharedRoutedExecutionPlanCache;
 use mircuda::{DeviceBuffer, PinnedBuffer, bf16};
-use runtime::kv::{BlockTable, KvWritePlan};
+use runtime::kv::BlockTable;
 use uuid::Uuid;
 
+pub(super) use self::cache::SharedRoutedExecutionPlanCache;
+use self::layer::{PlanStep, SharedRoutedLayerExecution};
 use super::{
-    CudaSharedRoutedLayerState, CudaSharedRoutedModelTemplate, SharedRoutedLayerTemplate,
-    boundary::SharedRoutedEmbedding,
+    CudaSharedRoutedLayerState, CudaSharedRoutedModelTemplate, boundary::SharedRoutedEmbedding,
+    prediction::PredictionExecution,
 };
-use crate::{
-    CudaAffineGatedDeltaMoeExecution, CudaAffineGatedFullAttentionMoeExecution, Error, Result,
-    kernels::VisionEmbeddingSplice,
-};
-
-#[derive(Debug)]
-enum SharedRoutedLayerExecution {
-    Linear(Box<CudaAffineGatedDeltaMoeExecution>),
-    Full(Box<CudaAffineGatedFullAttentionMoeExecution>),
-}
+use crate::{Error, Result, kernels::VisionEmbeddingSplice};
 
 #[derive(Debug)]
 pub(super) struct SharedRoutedExecutionPlan {
@@ -32,6 +25,11 @@ pub(super) struct SharedRoutedExecutionPlan {
     first: DeviceBuffer<bf16>,
     second: DeviceBuffer<bf16>,
     layers: Vec<SharedRoutedLayerExecution>,
+    /// The prediction module over the same rows, when the model drafts.
+    pub(super) prediction: Option<PredictionExecution>,
+    /// The graphed decoder pass of lone speculative steps of these rows,
+    /// built on first use.
+    pub(super) verify: Option<super::batch::CudaSharedRoutedVerifyBatch>,
 }
 
 impl SharedRoutedExecutionPlan {
@@ -50,15 +48,13 @@ impl SharedRoutedExecutionPlan {
         let layers = template
             .layers
             .iter()
-            .map(|layer| match layer {
-                SharedRoutedLayerTemplate::Linear(layer) => {
-                    layer.prepare(tokens).map(Box::new).map(SharedRoutedLayerExecution::Linear)
-                },
-                SharedRoutedLayerTemplate::Full(layer) => {
-                    layer.prepare(tokens).map(Box::new).map(SharedRoutedLayerExecution::Full)
-                },
-            })
+            .map(|layer| SharedRoutedLayerExecution::new(layer, tokens))
             .collect::<Result<Vec<_>>>()?;
+        let prediction = template
+            .prediction
+            .as_ref()
+            .map(|prediction| PredictionExecution::new(template, prediction, tokens))
+            .transpose()?;
         let mut plan = Self {
             tokens,
             bytes: 0,
@@ -69,6 +65,8 @@ impl SharedRoutedExecutionPlan {
             first: backend.inner.pool.allocate(&backend.inner.stream, elements)?,
             second: backend.inner.pool.allocate(&backend.inner.stream, elements)?,
             layers,
+            prediction,
+            verify: None,
         };
         plan.bytes = backend.pool().stats()?.used.saturating_sub(used_before);
         Ok(plan)
@@ -88,6 +86,26 @@ impl SharedRoutedExecutionPlan {
         let stream = &template.backend.inner.stream;
         stream.copy_to_device(&mut self.token_staging, &mut self.token_ids)?;
         stream.copy_to_device(&mut self.position_staging, &mut self.positions)?;
+        Ok(())
+    }
+
+    /// Replaces the last `count` uploaded tokens with device tokens.
+    pub(super) fn load_tail_tokens(
+        &mut self,
+        template: &CudaSharedRoutedModelTemplate,
+        source: &DeviceBuffer<u32>,
+        count: usize,
+    ) -> Result<()> {
+        let start = self
+            .tokens
+            .checked_sub(count)
+            .ok_or(Error::InvalidDecoderKernel("device tokens exceed the plan"))?;
+        template.backend.inner.stream.copy_device_range(
+            source,
+            0..count,
+            &mut self.token_ids,
+            start,
+        )?;
         Ok(())
     }
 
@@ -122,47 +140,38 @@ impl SharedRoutedExecutionPlan {
         if self.layers.len() != states.len() {
             return Err(Error::InvalidDecoderKernel("shared-routed layer state count mismatch"));
         }
+        let step = PlanStep {
+            session_id,
+            table,
+            start_position,
+            tokens: self.tokens,
+            positions: &self.positions,
+            image_span,
+        };
         for (index, (layer, state)) in self.layers.iter_mut().zip(states).enumerate() {
             let (input, output) = if index.is_multiple_of(2) {
                 (&self.first, &mut self.second)
             } else {
                 (&self.second, &mut self.first)
             };
-            match (layer, state) {
-                (
-                    SharedRoutedLayerExecution::Linear(layer),
-                    CudaSharedRoutedLayerState::Linear(state),
-                ) => {
-                    if state.offset() != start_position {
-                        return Err(Error::InvalidDecoderKernel(
-                            "Gated Delta session position mismatch",
-                        ));
-                    }
-                    layer.execute(input, state, output)?;
-                },
-                (
-                    SharedRoutedLayerExecution::Full(layer),
-                    CudaSharedRoutedLayerState::Full(state),
-                ) => {
-                    let write = KvWritePlan::prefill(
-                        session_id, index, table, start_position, self.tokens,
-                    )?;
-                    layer.execute_with_image_span(
-                        input, &self.positions, state, &write, table, start_position, None,
-                        image_span, output,
-                    )?;
-                },
-                _ => {
-                    return Err(Error::InvalidDecoderKernel(
-                        "shared-routed execution and state kinds differ",
-                    ));
-                },
-            }
+            layer.execute(index, state, &step, input, output)?;
         }
         Ok(if self.layers.len().is_multiple_of(2) {
             &self.first
         } else {
             &self.second
         })
+    }
+
+    /// The last pass's decoder output and the prediction module.
+    pub(super) fn output_and_prediction(
+        &mut self,
+    ) -> (&DeviceBuffer<bf16>, Option<&mut PredictionExecution>) {
+        let output = if self.layers.len().is_multiple_of(2) {
+            &self.first
+        } else {
+            &self.second
+        };
+        (output, self.prediction.as_mut())
     }
 }

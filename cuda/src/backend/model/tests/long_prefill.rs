@@ -2,7 +2,6 @@ use std::path::Path;
 
 use models::{
     layout::{DecoderConfig, ModelLayout},
-    semantic::SemanticModelSpec,
     weights::TensorCatalog,
 };
 use runtime::kv::{BlockId, BlockTable, CacheConfig};
@@ -144,8 +143,6 @@ fn load_template(
     cache_blocks: usize,
     sequence_blocks: usize,
 ) -> Result<crate::CudaMoeModelTemplate> {
-    let semantic = SemanticModelSpec::discover(decoder, catalog)?;
-    let plan = crate::engine::lowering::CudaDecoderPlan::lower(&semantic);
     let mut ignored = |_completed, _detail| {};
     backend.load_dense_swiglu_model_template_with_progress(
         decoder,
@@ -153,7 +150,6 @@ fn load_template(
         DenseSwiGluLayerLoadConfig {
             cache: CacheConfig::new(u32::try_from(cache_blocks)?),
             max_sequence_blocks: sequence_blocks,
-            qkv_normalization: crate::engine::lowering::graph_normalization(&plan)?,
             projection_format: ProjectionFormat::Bf16,
         },
         &mut ignored,

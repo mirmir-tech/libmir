@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::{collections::VecDeque, time::Instant};
 
 use models::generation::GenerationToken;
 use runtime::{metrics::GenerationMetricsRecorder, sampling::Sampler};
@@ -11,6 +11,7 @@ mod input;
 mod output;
 mod request;
 mod sampling;
+mod speculation;
 mod telemetry;
 mod tools;
 
@@ -18,8 +19,9 @@ use cycle::CycleRecovery;
 use input::PreparedGeneration;
 pub use output::GenerationOutput;
 use output::{append_delta, finalize_output, finish_metrics, should_stop};
-pub use request::{GenerationRequest, ReasoningCyclePolicy, ToolConstraints};
+pub use request::{GenerationRequest, ReasoningCyclePolicy, ResponseFormat, ToolConstraints};
 use sampling::{choose_prefill, request_sampling, sampler_config};
+use speculation::draft_bounds;
 use telemetry::record_publish;
 
 impl Model {
@@ -60,6 +62,9 @@ impl Model {
         self.generate_inner(request, Some(encoded_image), progress, token, cancellation)
     }
 
+    // One loop drives prefill, decode, streaming and stops; splitting it
+    // would thread a dozen locals through helpers.
+    #[allow(clippy::too_many_lines)]
     fn generate_inner(
         &self,
         request: &GenerationRequest,
@@ -69,6 +74,9 @@ impl Model {
         cancellation: &CancellationToken,
     ) -> Result<GenerationOutput> {
         cancellation.check()?;
+        request
+            .response_format
+            .validate_tool_choice(&request.conversation.tool_choice)?;
         let mut metrics = GenerationMetricsRecorder::new();
         let descriptor = self.descriptor();
         let settings = descriptor.resolve_generation(request.options)?;
@@ -86,8 +94,8 @@ impl Model {
         let session_started = Instant::now();
         let mut session = self.session();
         let mut constraints =
-            constraints::ToolConstraint::prepare(self, request, &prepared, settings)?;
-        let sampling = request_sampling(settings, vocab_size, &mut sampler);
+            constraints::OutputConstraint::prepare(self, request, &prepared, settings)?;
+        let sampling = request_sampling(self, settings, vocab_size, &mut sampler);
         let sampling = constraints::sampling(&mut constraints, sampling)?;
         let harmony_exit = reasoning_exit(request, descriptor, constraints.as_ref())?;
         let mut cycle =
@@ -106,19 +114,25 @@ impl Model {
         let mut history = sampling.requires_history().then(|| prepared.token_ids().to_vec());
         let mut next = choose_prefill(&prefill, history.as_deref(), &mut sampler, &mut metrics)?;
         let mut token_ids = Vec::with_capacity(settings.max_tokens);
+        // Verified speculative drafts and the prediction after them, in order;
+        // the backend has processed all but the last.
+        let mut ahead = VecDeque::new();
+        // Drafts the backend reported for the next step, for the grammar to
+        // mask.
+        let mut drafts = Vec::new();
         let (mut text, mut reasoning, mut tool_calls) =
             (String::new(), String::new(), prepared.initial_tool_calls());
         let mut finish_reason = "max_tokens";
         while token_ids.len() < settings.max_tokens {
             cancellation.check()?;
             next = constraints::transition_stop(constraints.as_ref(), next, &stop_token_ids);
+            let delta = stream.step(next, constraints.as_ref())?;
             let constrained_stop =
                 constraints::advance_generation(&mut constraints, next, &mut cycle)?;
             token_ids.push(next);
             if let Some(history) = history.as_mut() {
                 history.push(next);
             }
-            let delta = stream.step(next)?;
             if let Some(delta) = delta.as_ref() {
                 append_delta(delta, &mut text, &mut reasoning, &mut tool_calls);
             }
@@ -128,15 +142,22 @@ impl Model {
                 finish_reason = "stop";
             }
             let finished = stopped || token_ids.len() == settings.max_tokens;
-            let pending = if finished {
+            let pending = if finished || !ahead.is_empty() {
                 None
             } else {
                 cycle.observe(prepared.token_ids(), &token_ids);
                 let started = Instant::now();
-                let sampling = request_sampling(settings, vocab_size, &mut sampler);
+                let sampling = request_sampling(self, settings, vocab_size, &mut sampler);
                 let sampling = cycle.sampling(sampling);
                 let sampling = constraints::sampling(&mut constraints, sampling)?;
-                Some((started, session.start_decode(next, sampling)?))
+                let bounds = draft_bounds(
+                    constraints.as_mut(),
+                    &cycle,
+                    &sampling,
+                    &stop_token_ids,
+                    &drafts,
+                )?;
+                Some((started, session.start_decode(next, sampling, bounds)?))
             };
             if token_ids.len() == 1 {
                 progress(ProgressEvent::decode_tokens(0, settings.max_tokens));
@@ -149,21 +170,26 @@ impl Model {
             if finished {
                 break;
             }
-            let Some((decode_started, pending)) = pending else {
+            if let Some(pending) = pending {
+                let step = Step {
+                    metrics: &mut metrics,
+                    cycle: &mut cycle,
+                    sampler: &mut sampler,
+                };
+                let (tokens, next_drafts) =
+                    step.receive(&mut session, pending, history.as_deref())?;
+                ahead.extend(tokens);
+                drafts = next_drafts;
+            }
+            let Some(token) = ahead.pop_front() else {
                 break;
             };
-            let output = session.finish_decode(pending)?;
-            metrics.record_decode(decode_started.elapsed());
-            next = cycle.choose(
-                &mut metrics,
-                &output,
-                history.as_deref().unwrap_or_default(),
-                &mut sampler,
-            )?;
+            next = token;
         }
         stream.finish_into(&mut text, &mut reasoning, &mut tool_calls, token)?;
         let tool_calls =
             constraints::normalize(constraints.as_mut(), &tool_calls, &request.conversation)?;
+        constraints::validate_content(constraints.as_mut(), &text)?;
         let metrics = finish_metrics(&mut metrics, token_ids.len(), &session);
         Ok(finalize_output(
             text, reasoning, tool_calls, token_ids, prompt_tokens, finish_reason, metrics,
@@ -171,10 +197,36 @@ impl Model {
     }
 }
 
+/// The state a finished decode step updates.
+struct Step<'a> {
+    metrics: &'a mut GenerationMetricsRecorder,
+    cycle: &'a mut CycleRecovery,
+    sampler: &'a mut Sampler,
+}
+
+impl Step<'_> {
+    /// Finishes a decode step: the verified drafts, then the chosen token,
+    /// and the drafts reported for the next step.
+    fn receive(
+        self,
+        session: &mut crate::Session,
+        (started, pending): (Instant, crate::session::PendingSessionDecode),
+        history: Option<&[u32]>,
+    ) -> Result<(Vec<u32>, Vec<u32>)> {
+        let output = session.finish_decode(pending)?;
+        self.metrics.record_decode(started.elapsed(), output.accepted.len() + 1);
+        let history = history.unwrap_or_default();
+        let chosen = self.cycle.choose(self.metrics, &output, history, self.sampler)?;
+        let mut tokens = output.accepted;
+        tokens.push(chosen);
+        Ok((tokens, output.drafts))
+    }
+}
+
 fn reasoning_exit(
     request: &GenerationRequest,
     descriptor: &crate::ModelDescriptor,
-    constraint: Option<&constraints::ToolConstraint>,
+    constraint: Option<&constraints::OutputConstraint>,
 ) -> Result<Option<(usize, Vec<u32>)>> {
     if let Some(exit) = constraint.and_then(|c| c.reasoning_exit(request)) {
         return Ok(Some(exit));

@@ -148,10 +148,21 @@ pub struct DecodeRequest {
     pub token_id: u32,
     pub block_table: BlockTable,
     pub sampling_logits: SamplingLogits,
+    /// Set when the caller takes the backend's tokens as they are, so a
+    /// backend with a prediction module may verify drafts after `token_id`
+    /// within these bounds.
+    pub speculation: Option<crate::speculation::DraftBounds>,
 }
 
 #[derive(Debug, Clone)]
 pub struct DecodeOutput {
+    /// Speculative drafts the backend verified and processed after the fed
+    /// token, before `event`'s token; empty without speculation.
+    pub accepted: Vec<u32>,
+    /// The drafts the backend holds for the next step, after a masked
+    /// speculative step: the host masks them before that step verifies them
+    /// (see [`crate::speculation::DraftBounds::masked`]). Empty otherwise.
+    pub drafts: Vec<u32>,
     pub event: TokenEvent,
     pub logits: Option<LogitsTrace>,
     pub candidates: Option<CandidateLogitsTrace>,

@@ -36,8 +36,16 @@ pub struct GenerationRequest {
     /// Controls the prompt thinking mode; output limits still count all
     /// channels.
     pub reasoning: crate::ReasoningMode,
+    /// Requests shorter reasoning from templates that declare the switch.
+    pub reasoning_effort: crate::ReasoningEffort,
+    /// Keeps or drops earlier turns' reasoning in templates that declare
+    /// the choice.
+    pub reasoning_history: crate::ReasoningHistory,
     /// Opt-in schema-constrained native tool decoding.
     pub tool_constraints: ToolConstraints,
+    /// Shape of the final content; a JSON schema constrains it like the
+    /// arguments of a schema tool, without any tool-call syntax.
+    pub response_format: ResponseFormat,
     /// Optional reasoning-token cap for enabled schema-constrained XML tools.
     /// The native delimiter is forced after this many reasoning tokens; the
     /// total completion budget still includes the delimiter and tool output.
@@ -47,6 +55,20 @@ pub struct GenerationRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json_content_rejects_forced_tools_but_keeps_optional_tools() -> crate::Result<()> {
+        use foundation::conversation::ToolChoice;
+        let json = ResponseFormat::JsonSchema(serde_json::json!({"type":"object"}));
+        for choice in [ToolChoice::Required, ToolChoice::Function("emit".into())] {
+            assert!(json.validate_tool_choice(&choice).is_err());
+            ResponseFormat::Text.validate_tool_choice(&choice)?;
+        }
+        for choice in [ToolChoice::Auto, ToolChoice::None] {
+            json.validate_tool_choice(&choice)?;
+        }
+        Ok(())
+    }
 
     #[test]
     fn reasoning_exit_is_default() {
@@ -66,4 +88,36 @@ pub enum ToolConstraints {
     None,
     /// Enforce the named tool's schema while sampling its native XML arguments.
     Schema,
+}
+
+/// Request-scoped shape of the final assistant content.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ResponseFormat {
+    /// Ordinary text.
+    #[default]
+    Text,
+    /// One JSON value matching the schema, decoded under its grammar and
+    /// validated before it is returned.
+    JsonSchema(serde_json::Value),
+}
+
+impl ResponseFormat {
+    /// JSON content cannot simultaneously satisfy a required tool call.
+    /// Optional tools may remain in the conversation as prompt context.
+    pub fn validate_tool_choice(
+        &self,
+        choice: &foundation::conversation::ToolChoice,
+    ) -> crate::Result<()> {
+        use foundation::conversation::ToolChoice;
+        if matches!(self, Self::JsonSchema(_))
+            && matches!(choice, ToolChoice::Required | ToolChoice::Function(_))
+        {
+            return Err(models::ModelsError::InvalidConfig(
+                "a JSON response_format cannot be combined with a required or named tool_choice"
+                    .into(),
+            )
+            .into());
+        }
+        Ok(())
+    }
 }

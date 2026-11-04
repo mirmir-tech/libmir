@@ -2,6 +2,11 @@ use super::DecoderExecution;
 use crate::engine::{Array, DecoderCache, Result, Stream, clamped_routed::ClampedRoutedModel};
 
 impl DecoderExecution for ClampedRoutedModel {
+    #[cfg(test)]
+    fn prefill_logits(&self, last_hidden: &Array, stream: &Stream) -> Result<Array> {
+        self.project_prefill_output(last_hidden, stream)
+    }
+
     fn new_cache(&self, stream: &Stream) -> Result<DecoderCache> {
         self.new_cache(stream)
     }

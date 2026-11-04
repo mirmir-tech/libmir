@@ -2,6 +2,8 @@ use llguidance::{Matcher, ParserFactory, api::TopLevelGrammar};
 use serde_json::{Value, json};
 
 use super::grammar;
+mod content;
+mod drafts;
 mod reasoning;
 use crate::model::constraints::tool_tokenizer;
 
@@ -101,6 +103,27 @@ fn strings_support_unicode_escapes_and_optional_parameters() -> TestResult {
     Ok(())
 }
 
+/// Models may spell non-ASCII text as JSON escapes. When only control escapes
+/// (`\u00XX`) were allowed, Nemotron-H's `\u2014` became `\u0014`.
+#[test]
+fn strings_accept_printable_unicode_escapes_within_length_limits() -> TestResult {
+    let call =
+        |value: &str| format!("<parameter=text>\"{value}\"</parameter>\n</function>\n</tool_call>");
+    let schema =
+        |text: Value| json!({"type":"object","properties":{"text":text},"required":["text"]});
+    for text in [json!({"type":"string"}), json!({"type":"string","maxLength":5})] {
+        assert!(
+            accepts(&schema(text.clone()), &call("a\\u2014b"))?,
+            "rejected an em dash escape"
+        );
+        assert!(accepts(&schema(text), &call("a\u{2014}b"))?);
+    }
+    let short = schema(json!({"type":"string","maxLength":3}));
+    assert!(accepts(&short, &call("a\\u2014b"))?, "an escape counts as one character");
+    assert!(!accepts(&short, &call("ab\\u2014b"))?);
+    Ok(())
+}
+
 #[test]
 fn named_tool_closes_with_added_token_in_real_tokenizer_shape() -> TestResult {
     let factory = factory(true)?;
@@ -185,5 +208,20 @@ fn optional_nested_properties_follow_declared_order_before_extensions() -> TestR
     }
     // JSON permits this order, but llguidance cannot revisit an omitted key.
     assert!(!accepts(&schema, &envelope(r#"{"payload":"source","confidence":0.95}"#))?);
+    Ok(())
+}
+
+#[test]
+fn trie_masks_drop_the_spare_word_of_word_aligned_vocabularies() -> TestResult {
+    for vocab in [64_u32, 70] {
+        let size = vocab as usize;
+        let mut bits = llguidance::toktrie::SimpleVob::alloc_with_capacity(size, size + 1);
+        bits.allow_token(vocab - 1);
+        let words = super::flow::mask_words(&bits, size)?;
+        assert_eq!(words.len(), size.div_ceil(32));
+        runtime::backend::TokenMask::new(words, size)?;
+    }
+    let bits = llguidance::toktrie::SimpleVob::alloc(63);
+    assert!(super::flow::mask_words(&bits, 64).is_err());
     Ok(())
 }

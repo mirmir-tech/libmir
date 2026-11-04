@@ -5,6 +5,12 @@ use mircuda::{Compiler, Context, DeviceBuffer, DeviceElement, Driver, MemoryPool
 use super::*;
 use crate::kernels::{RmsNorm, RmsNormUnit, Rope, RopeSpec};
 
+const ROTARY: RotaryEmbedding = RotaryEmbedding {
+    dimensions: 6,
+    pairing: 8,
+    theta: 10_000.0,
+};
+
 #[test]
 fn fused_qkv_matches_individual_norm_and_rope_kernels() -> Result<()> {
     let runtime = Runtime::new()?;
@@ -14,9 +20,7 @@ fn fused_qkv_matches_individual_norm_and_rope_kernels() -> Result<()> {
         kv_heads: 1,
         head_dim: 8,
         value_head_dim: 8,
-        rotary_dim: 6,
-        pairing_dim: 8,
-        theta: 10_000.0,
+        rotary: Some(ROTARY),
         epsilon: 1.0e-6,
         normalization: QkvNormalization::ALL,
     };
@@ -31,7 +35,7 @@ fn fused_qkv_matches_individual_norm_and_rope_kernels() -> Result<()> {
     }
     let query_weight = test_values(8, 2)?;
     let key_weight = test_values(8, 5)?;
-    let actual = fused(&runtime, spec, &packed, &query_weight, &key_weight)?;
+    let actual = fused(&runtime, spec, &packed, &query_weight, &key_weight, 3)?;
     let expected = composed(&runtime, spec, &query, &key, &value, &query_weight, &key_weight)?;
     assert_eq!(actual, expected);
     Ok(())
@@ -46,9 +50,7 @@ fn batched_packed_qkv_matches_independent_rows() -> Result<()> {
         kv_heads: 1,
         head_dim: 8,
         value_head_dim: 8,
-        rotary_dim: 6,
-        pairing_dim: 8,
-        theta: 10_000.0,
+        rotary: Some(ROTARY),
         epsilon: 1.0e-6,
         normalization: QkvNormalization::ALL,
     };
@@ -56,7 +58,30 @@ fn batched_packed_qkv_matches_independent_rows() -> Result<()> {
     let query_weight = test_values(8, 2)?;
     let key_weight = test_values(8, 5)?;
     let actual = batched(&runtime, spec, &packed, &query_weight, &key_weight)?;
-    let expected = fused(&runtime, spec, &packed, &query_weight, &key_weight)?;
+    let expected = fused(&runtime, spec, &packed, &query_weight, &key_weight, 3)?;
+    assert_eq!(actual, expected);
+    Ok(())
+}
+
+/// Heads without positional encoding equal rotary heads at zero angles.
+#[test]
+fn unrotated_qkv_matches_rotary_at_position_zero() -> Result<()> {
+    let runtime = Runtime::new()?;
+    let rotary = QkvPostprocessSpec {
+        tokens: 1,
+        query_heads: 2,
+        kv_heads: 1,
+        head_dim: 8,
+        value_head_dim: 8,
+        rotary: Some(ROTARY),
+        epsilon: 1.0e-6,
+        normalization: QkvNormalization::QUERY_KEY,
+    };
+    let unrotated = QkvPostprocessSpec { rotary: None, ..rotary };
+    let packed = test_values(32, 0)?;
+    let (query_weight, key_weight) = (test_values(8, 2)?, test_values(8, 5)?);
+    let actual = fused(&runtime, unrotated, &packed, &query_weight, &key_weight, 9)?;
+    let expected = fused(&runtime, rotary, &packed, &query_weight, &key_weight, 0)?;
     assert_eq!(actual, expected);
     Ok(())
 }
@@ -106,15 +131,17 @@ fn fused(
     packed: &[bf16],
     query_weight: &[bf16],
     key_weight: &[bf16],
+    position: usize,
 ) -> Result<Outputs> {
     let packed = runtime.copy(packed)?;
     let query_weight = runtime.copy(query_weight)?;
     let key_weight = runtime.copy(key_weight)?;
-    let mut query = runtime.allocate(32)?;
-    let mut key = runtime.allocate(16)?;
-    let mut value = runtime.allocate(16)?;
+    let mut query = runtime.allocate(spec.tokens * spec.query_heads * spec.head_dim)?;
+    let mut key = runtime.allocate(spec.tokens * spec.kv_heads * spec.head_dim)?;
+    let mut value = runtime.allocate(spec.tokens * spec.kv_heads * spec.value_head_dim)?;
     QkvPostprocess::compile(&runtime.compiler, spec)?.execute(
-        &runtime.stream, &packed, &query_weight, &key_weight, &mut query, &mut key, &mut value, 3,
+        &runtime.stream, &packed, &query_weight, &key_weight, &mut query, &mut key, &mut value,
+        position,
     )?;
     Ok((runtime.read(&query)?, runtime.read(&key)?, runtime.read(&value)?))
 }
@@ -165,9 +192,9 @@ const fn rope(spec: QkvPostprocessSpec, heads: usize) -> RopeSpec {
         tokens: spec.tokens,
         heads,
         head_dim: spec.head_dim,
-        rotary_dim: spec.rotary_dim,
-        pairing_dim: spec.pairing_dim,
-        theta: spec.theta,
+        rotary_dim: ROTARY.dimensions,
+        pairing_dim: ROTARY.pairing,
+        theta: ROTARY.theta,
     }
 }
 

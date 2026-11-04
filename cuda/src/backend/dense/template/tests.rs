@@ -17,11 +17,13 @@ use runtime::kv::{BlockId, BlockTable, CacheConfig, KvCacheDType};
 use super::*;
 use crate::{
     CudaConfig, DensePlanRequest, DenseRole, DenseSwiGluLayerLoadConfig, ExecutionPhase,
-    ProjectionFormat, kernels::QkvNormalization,
+    ProjectionFormat,
 };
 
 #[path = "tests/fp8_stages.rs"]
 mod fp8_stages;
+#[path = "tests/gemma.rs"]
+mod gemma;
 #[path = "tests/mxfp4.rs"]
 mod mxfp4;
 
@@ -44,7 +46,6 @@ fn qwen2_stack_matches_dynamic_fp8_activation_reference() -> TestResult<()> {
             dtype: KvCacheDType::BFloat16,
         },
         max_sequence_blocks: 2,
-        qkv_normalization: QkvNormalization::NONE,
         projection_format: ProjectionFormat::DirectFp8,
     };
     let input_values = embedding_row(&catalog, 785, decoder.hidden_size)?;
@@ -63,6 +64,7 @@ fn qwen2_stack_matches_dynamic_fp8_activation_reference() -> TestResult<()> {
     for index in 0..decoder.num_hidden_layers {
         let (template, _bytes) = backend.load_dense_swiglu_layer_tracked(
             &decoder,
+            &spec,
             &catalog,
             index,
             bindings.dense_decoder_layer(index)?,

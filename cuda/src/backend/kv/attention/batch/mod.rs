@@ -11,6 +11,7 @@ use crate::{
     },
 };
 
+mod capture;
 mod fmha;
 mod tuning;
 
@@ -174,16 +175,6 @@ impl BatchedPagedAttentionBf16 {
             self.split_threshold,
             batch.maximum_tokens(),
         )
-    }
-
-    pub(crate) fn capture_partitions(&self, batch: &PagedDecodeBatch) -> usize {
-        if self.fmha.is_some() {
-            return PagedFmhaDecode::capture_key(batch);
-        }
-        batch
-            .maximum_tokens()
-            .div_ceil(self.split.partition_tokens())
-            .min(self.split.max_partitions())
     }
 }
 

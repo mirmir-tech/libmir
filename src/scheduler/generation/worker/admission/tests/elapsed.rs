@@ -27,6 +27,27 @@ fn expired_prefill_admission_does_not_start_another_collection_window()
 }
 
 #[test]
+fn settled_companions_retire_the_long_collection_window() -> Result<(), Box<dyn std::error::Error>>
+{
+    let (mut worker, sender) = worker()?;
+    let _first = worker.preparing.announce();
+    let _second = worker.preparing.announce();
+    let arrival = Instant::now().checked_sub(Duration::from_millis(5)).ok_or("clock")?;
+    worker.prefill.push_back(pending(arrival, 0));
+    assert_eq!(worker.prefill_collection_wait(), Duration::from_millis(30));
+    sender.send(Command::Prefill(pending(arrival, 0)))?;
+    sender.send(Command::Stop)?;
+    worker.collect_prefill_admission();
+    assert_eq!(worker.prefill.len(), 2);
+    assert_eq!(worker.prefill_collection_wait(), Duration::from_millis(3));
+    assert!(
+        !worker.stopping,
+        "settled cohort continued receiving in the obsolete long window"
+    );
+    Ok(())
+}
+
+#[test]
 #[ignore = "explicit host-only admission timing diagnostic"]
 fn measures_aged_prefill_collection() -> Result<(), Box<dyn std::error::Error>> {
     let (mut worker, _sender) = worker()?;
@@ -49,6 +70,29 @@ fn measures_aged_prefill_collection() -> Result<(), Box<dyn std::error::Error>> 
     Ok(())
 }
 
+#[test]
+fn unsettled_or_active_work_retains_the_long_collection_window()
+-> Result<(), Box<dyn std::error::Error>> {
+    for active in [false, true] {
+        let (mut worker, sender) = worker()?;
+        let _first = worker.preparing.announce();
+        let _second = worker.preparing.announce();
+        let _third = (!active).then(|| worker.preparing.announce());
+        if active {
+            worker.active_decode.insert(uuid::Uuid::new_v4(), Vec::new());
+        }
+        let arrival = Instant::now().checked_sub(Duration::from_millis(5)).ok_or("clock")?;
+        worker.prefill.push_back(pending(arrival, 0));
+        sender.send(Command::Prefill(pending(arrival, 0)))?;
+        sender.send(Command::Stop)?;
+        worker.collect_prefill_admission();
+        assert_eq!(worker.prefill.len(), 2);
+        assert_eq!(worker.prefill_collection_wait(), Duration::from_millis(30));
+        assert!(worker.stopping, "active or incomplete cohort lost its collection window");
+    }
+    Ok(())
+}
+
 pub(super) fn worker() -> crate::Result<(Worker, mpsc::Sender<Command>)> {
     let config = RuntimeConfig::default();
     let (sender, commands) = mpsc::channel();
@@ -62,4 +106,27 @@ pub(super) fn worker() -> crate::Result<(Worker, mpsc::Sender<Command>)> {
         crate::scheduler::PreparingRequests::default(),
     );
     Ok((worker, sender))
+}
+
+#[test]
+#[ignore = "host-only settled admission latency; compare original and fixed window builds"]
+fn measures_settled_prefill_collection() -> Result<(), Box<dyn std::error::Error>> {
+    let (mut worker, sender) = worker()?;
+    let mut elapsed = Vec::new();
+    for _ in 0..16 {
+        worker.prefill.clear();
+        let _first = worker.preparing.announce();
+        let _second = worker.preparing.announce();
+        let arrival = Instant::now();
+        worker.prefill.push_back(pending(arrival, 0));
+        sender.send(Command::Prefill(pending(arrival, 0)))?;
+        assert_eq!(worker.prefill_collection_wait(), Duration::from_millis(30));
+        let started = Instant::now();
+        worker.collect_prefill_admission();
+        elapsed.push(started.elapsed().as_secs_f64() * 1000.0);
+        assert_eq!(worker.prefill.len(), 2);
+        assert!(!worker.stopping);
+    }
+    writeln!(std::io::stdout(), "settled_prefill_collection_ms: {elapsed:?}")?;
+    Ok(())
 }

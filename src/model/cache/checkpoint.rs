@@ -15,19 +15,19 @@ impl ModelDescriptor {
         conversation: &Conversation,
         full_text: &str,
         token_ends: &[usize],
-        reasoning: crate::ReasoningMode,
+        controls: models::chat::TemplateControls,
     ) -> Vec<usize> {
         let mut checkpoints = Vec::new();
         for message_count in 1..conversation.messages.len() {
             let mut prefix = conversation.clone();
             prefix.messages.truncate(message_count);
-            let prompt = self.template.render_with_reasoning(&prefix, reasoning).or_else(|_| {
+            let prompt = self.template.render_with_controls(&prefix, controls).or_else(|_| {
                 let mut boundary = conversation.messages[message_count].clone();
                 boundary.content.clear();
                 boundary.reasoning_content = None;
                 boundary.tool_calls = None;
                 prefix.messages.push(boundary);
-                self.template.render_with_reasoning(&prefix, reasoning)
+                self.template.render_with_controls(&prefix, controls)
             });
             let Ok(prompt) = prompt else {
                 continue;

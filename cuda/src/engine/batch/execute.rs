@@ -127,6 +127,7 @@ impl CudaEngine {
                 token_id: sequence.token_id,
                 block_table: sequence.block_table.clone(),
                 sampling_logits: sequence.sampling_logits.clone(),
+                speculation: sequence.speculation.clone(),
             },
         )
     }

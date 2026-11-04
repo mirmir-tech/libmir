@@ -26,6 +26,7 @@ fn staged_checkpoint_continues_like_a_split_prefill() -> Result<()> {
         crate::SharedRoutedModelLoadConfig {
             cache,
             max_sequence_blocks: BLOCKS as usize,
+            speculation: None,
         },
     )?;
     let tokens = (0..PROMPT)

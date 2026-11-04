@@ -90,3 +90,45 @@ fn reads_compressed_tensors_w8a16_contract() {
     });
     assert_eq!(read_quantization(&value), Quantization::Int8);
 }
+
+#[test]
+fn reads_modelopt_mixed_precision_as_its_narrowest_algorithm() {
+    let value = json!({
+        "quantization_config": {
+            "quant_algo": "MIXED_PRECISION",
+            "quant_method": "modelopt_mixed",
+            "config_groups": {
+                "group_0": { "weights": { "num_bits": 8, "type": "float" } }
+            },
+            "quantized_layers": {
+                "layers.0.mixer.in_proj": { "quant_algo": "FP8" },
+                "layers.1.mixer.experts.0.up_proj": { "quant_algo": "NVFP4", "group_size": 16 }
+            }
+        }
+    });
+    assert_eq!(read_quantization(&value), Quantization::NvFp4);
+}
+
+#[test]
+fn reads_float8_config_groups_as_fp8() {
+    let value = json!({
+        "quantization_config": {
+            "quant_method": "compressed-tensors",
+            "config_groups": {
+                "group_0": { "weights": { "num_bits": 8, "type": "float", "strategy": "tensor" } }
+            }
+        }
+    });
+    assert_eq!(read_quantization(&value), Quantization::Fp8);
+}
+
+#[test]
+fn reads_context_len_from_a_nested_llm_config() -> Result<()> {
+    let value = json!({
+        "model_type": "nemotron_h_omni",
+        "llm_config": { "max_position_embeddings": 1_048_576, "dtype": "bfloat16" }
+    });
+    assert_eq!(read_context_len(&value)?, Some(1_048_576));
+    assert_eq!(read_dtype(&value).as_deref(), Some("bfloat16"));
+    Ok(())
+}

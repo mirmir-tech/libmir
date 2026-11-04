@@ -17,6 +17,7 @@ mod awq;
 mod bitsandbytes;
 mod block;
 mod companions;
+mod coverage;
 mod float8;
 mod gptq;
 mod packed_integer;
@@ -72,7 +73,7 @@ fn discover_with_hints(
     catalog: &TensorCatalog,
     hints: DiscoveryHints,
 ) -> Result<WeightBindingPlan> {
-    validate_layer_coverage(spec, catalog)?;
+    coverage::validate(spec, catalog)?;
     let mut consumed = BTreeSet::new();
     let mut tensors = Vec::new();
     for tensor in &catalog.tensors {
@@ -89,19 +90,6 @@ fn discover_with_hints(
     Ok(plan)
 }
 
-fn validate_layer_coverage(spec: &SemanticModelSpec, catalog: &TensorCatalog) -> Result<()> {
-    for layer in &spec.decoder.layers {
-        let needle = format!("layers.{}.", layer.index);
-        if !catalog.tensors.iter().any(|tensor| tensor.name.contains(&needle)) {
-            return Err(ModelsError::InvalidConfig(format!(
-                "checkpoint has no tensors for semantic layer {}",
-                layer.index
-            )));
-        }
-    }
-    Ok(())
-}
-
 fn bind(
     spec: &SemanticModelSpec,
     tensor: &TensorInfo,
@@ -110,7 +98,7 @@ fn bind(
     hints: DiscoveryHints,
 ) -> Result<TensorBinding> {
     let _inserted = consumed.insert(tensor.name.clone());
-    let role = roles::parse(&tensor.name);
+    let role = roles::parse(&tensor.name, &spec.decoder);
     let logical_shape = shapes::logical(spec, &role, hints.vision_projection);
     let storage = if let Some(prefix) = tensor.name.strip_suffix("_blocks") {
         block::mxfp4_storage(prefix, catalog, consumed)
