@@ -140,14 +140,15 @@ pub enum CudaArchitecture {
     SequenceScoring,
 }
 
+/// The one Q/K/V normalization of every graph-decoder layer. Layers whose
+/// keys double as values bind the key projection twice, so the K/V relation
+/// may differ between layers.
 pub fn graph_normalization(plan: &CudaDecoderPlan) -> Result<CudaQkvNormalization> {
-    let softmax = plan
+    let normalizations = plan
         .layers
         .iter()
         .map(|layer| match layer.mixer {
-            CudaMixerLowering::Softmax { normalization, key_value_relation, .. } => {
-                Ok((normalization, key_value_relation))
-            },
+            CudaMixerLowering::Softmax { normalization, .. } => Ok(normalization),
             CudaMixerLowering::Linear | CudaMixerLowering::StateSpace => {
                 Err(ArchitectureError::invalid(
                     "CUDA graph decoder requires softmax attention in every layer",
@@ -155,24 +156,19 @@ pub fn graph_normalization(plan: &CudaDecoderPlan) -> Result<CudaQkvNormalizatio
             },
         })
         .collect::<Result<Vec<_>>>()?;
-    if softmax.iter().all(|value| *value == (QkNormalization::None, value.1)) {
-        return Ok(CudaQkvNormalization::None);
+    let Some(&first) = normalizations.first() else {
+        return Err(ArchitectureError::invalid("CUDA graph decoder has no layers"));
+    };
+    if normalizations.iter().any(|normalization| *normalization != first) {
+        return Err(ArchitectureError::invalid(
+            "CUDA graph decoder requires uniform Q/K/V normalization",
+        ));
     }
-    if softmax
-        .iter()
-        .all(|value| *value == (QkNormalization::QueryKeyRms, KeyValueRelation::KeyEqualsValue))
-    {
-        return Ok(CudaQkvNormalization::All);
-    }
-    if softmax
-        .iter()
-        .all(|value| *value == (QkNormalization::QueryKeyRms, KeyValueRelation::Separate))
-    {
-        return Ok(CudaQkvNormalization::QueryKey);
-    }
-    Err(ArchitectureError::invalid(
-        "CUDA graph decoder requires uniform Q/K normalization and K/V relation",
-    ))
+    Ok(match first {
+        QkNormalization::None => CudaQkvNormalization::None,
+        QkNormalization::QueryKeyRms => CudaQkvNormalization::QueryKey,
+        QkNormalization::QueryKeyValueRms => CudaQkvNormalization::All,
+    })
 }
 
 fn lower_mixer(spec: &MixerSpec) -> CudaMixerLowering {

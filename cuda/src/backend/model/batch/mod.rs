@@ -1,4 +1,4 @@
-use mircuda::{DeviceBuffer, Graph, PinnedBuffer, Stream, bf16};
+use mircuda::{DeviceBuffer, PinnedBuffer, Stream, bf16};
 use runtime::{backend::SamplingLogits, kv::BlockTable};
 
 use super::layer::{BatchedLayer, DecoderLayerTemplate, allocate_batch_attention_workspace};
@@ -9,6 +9,10 @@ use crate::{
         ModelBatchOutputHead, ModelEmbedding, ModelEmbeddingTemplate, ModelOutputHeadTemplate,
     },
 };
+
+mod capture;
+
+use capture::BatchState;
 
 /// Fixed-capacity model decode bucket with device-resident row state.
 pub struct CudaDecodeBatch {
@@ -32,11 +36,6 @@ struct BatchResources {
     normalized: DeviceBuffer<bf16>,
     logits: DeviceBuffer<bf16>,
     logit_softcap: Option<crate::kernels::LogitSoftcap>,
-}
-
-enum BatchState {
-    Direct(BatchResources),
-    Captured(Graph<BatchResources>),
 }
 
 pub(super) struct DecodeBatchSource<'a> {
@@ -127,31 +126,6 @@ impl CudaDecodeBatch {
         })
     }
 
-    pub fn decode(
-        &mut self,
-        tokens: &[u32],
-        tables: &[&BlockTable],
-    ) -> Result<&DeviceBuffer<bf16>> {
-        self.prepare(tokens, tables)?;
-        let state = self
-            .state
-            .take()
-            .ok_or(Error::InvalidDecoderKernel("CUDA batch state is unavailable"))?;
-        self.state = Some(match state {
-            BatchState::Direct(mut resources) => {
-                execute(&mut resources)?;
-                let graph = self.stream.capture(resources, execute)?;
-                tracing::debug!(rows = self.batch_size, "captured CUDA model decode batch");
-                BatchState::Captured(graph)
-            },
-            BatchState::Captured(mut graph) => {
-                graph.launch(&self.stream)?;
-                BatchState::Captured(graph)
-            },
-        });
-        self.logits_result()
-    }
-
     pub fn sample(&mut self, policies: &[SamplingLogits]) -> Result<&DeviceBuffer<u32>> {
         self.with_state_mut(|resources| {
             resources.sampler.sample(&resources.logits, policies)?;
@@ -207,7 +181,7 @@ impl CudaDecodeBatch {
             .ok_or(Error::InvalidDecoderKernel("CUDA batch state is unavailable"))?
         {
             BatchState::Direct(resources) => Ok(resources),
-            BatchState::Captured(graph) => Ok(graph.resources()),
+            BatchState::Captured { graph, .. } => Ok(graph.resources()),
         }
     }
 
@@ -221,7 +195,7 @@ impl CudaDecodeBatch {
             .ok_or(Error::InvalidDecoderKernel("CUDA batch state is unavailable"))?
         {
             BatchState::Direct(resources) => operation(resources),
-            BatchState::Captured(graph) => graph.with_resources_mut(operation),
+            BatchState::Captured { graph, .. } => graph.with_resources_mut(operation),
         }
     }
 }

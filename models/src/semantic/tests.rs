@@ -63,6 +63,47 @@ fn key_equals_value_applies_only_to_full_attention() -> Result<()> {
 }
 
 #[test]
+fn checkpoint_tensors_never_imply_value_normalization() -> Result<()> {
+    let decoder = DecoderConfig::from_value(&configuration("any", &[]))?;
+    let tensors = catalog(&[
+        "model.layers.0.layer_scalar",
+        "model.layers.0.self_attn.k_norm.weight",
+        "model.layers.0.self_attn.q_norm.weight",
+    ]);
+
+    let spec = SemanticModelSpec::discover(&decoder, &tensors)?;
+
+    let MixerSpec::SoftmaxAttention(attention) = &spec.decoder.layers[0].mixer else {
+        return Err(crate::error::ModelsError::InvalidConfig("expected attention".into()));
+    };
+    assert_eq!(attention.qk_normalization, QkNormalization::QueryKeyRms);
+    assert!((attention.scale - 8.0_f64.sqrt().recip()).abs() < f64::EPSILON);
+    assert!((spec.decoder.embedding_multiplier - 1.0).abs() < f64::EPSILON);
+    Ok(())
+}
+
+#[test]
+fn model_spec_declares_value_normalization_scale_and_embedding_multiplier() -> Result<()> {
+    let decoder = DecoderConfig::from_value(&configuration("any", &[]))?;
+    let mut spec = SemanticModelSpec::discover(&decoder, &attention_sink_catalog())?;
+    spec.decoder.embedding_multiplier = 73.5;
+    for layer in &mut spec.decoder.layers {
+        if let MixerSpec::SoftmaxAttention(attention) = &mut layer.mixer {
+            attention.qk_normalization = QkNormalization::QueryKeyValueRms;
+            attention.scale = 1.0;
+        }
+    }
+    let path = temp_dir("declared").with_extension("toml");
+    fs::write(&path, spec.to_toml()?)?;
+
+    let read = sidecar::read(&path)?;
+    fs::remove_file(path)?;
+
+    assert_eq!(read, spec);
+    Ok(())
+}
+
+#[test]
 fn toml_sidecar_round_trips_complete_semantics() -> Result<()> {
     let decoder = DecoderConfig::from_value(&configuration("unrelated", &[]))?;
     let spec = SemanticModelSpec::discover(&decoder, &attention_sink_catalog())?;

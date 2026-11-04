@@ -93,6 +93,10 @@ pub enum KeyValueRelation {
 pub enum QkNormalization {
     None,
     QueryKeyRms,
+    /// Learned RMS norms on queries and keys and an RMS norm without a learned
+    /// scale on values. No checkpoint tensor shows the value norm, so only a
+    /// model spec declares this variant.
+    QueryKeyValueRms,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -18,6 +18,9 @@ pub struct DecoderSpec {
     pub vocab_size: usize,
     pub tie_word_embeddings: bool,
     pub final_norm: NormalizationSpec,
+    /// Factor applied to token embeddings before the first layer.
+    #[serde(default = "unit_multiplier", skip_serializing_if = "is_unit_multiplier")]
+    pub embedding_multiplier: f64,
     pub layers: Vec<DecoderLayerSpec>,
     #[serde(default, skip_serializing_if = "BlockLayoutSpec::is_unified")]
     pub block_layout: BlockLayoutSpec,
@@ -25,6 +28,15 @@ pub struct DecoderSpec {
     /// mixer with the routed block after it; empty when the model has none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub prediction_layers: Vec<DecoderLayerSpec>,
+}
+
+const fn unit_multiplier() -> f64 {
+    1.0
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref, clippy::float_cmp)]
+const fn is_unit_multiplier(value: &f64) -> bool {
+    *value == 1.0
 }
 
 /// How checkpoint blocks map to semantic decoder layers.

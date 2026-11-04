@@ -138,6 +138,13 @@ impl BatchedLayer {
             Self::Dense(layer) => layer.execute(input, batch, output),
         }
     }
+
+    pub(super) fn capture_partitions(&self, batch: &PagedDecodeBatch) -> usize {
+        match self {
+            Self::Moe(layer) => layer.capture_partitions(batch),
+            Self::Dense(layer) => layer.capture_partitions(batch),
+        }
+    }
 }
 
 impl SessionLayer {

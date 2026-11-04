@@ -1,4 +1,5 @@
 mod bank;
+mod linear;
 mod native;
 #[cfg(all(test, target_os = "linux"))]
 mod reference;
@@ -10,7 +11,7 @@ mod weight_only;
 
 pub(in crate::backend) use bank::MarlinNvFp4Bank;
 pub use bank::{NvFp4ExpertBank, NvFp4ExpertBankConfig, NvFp4ExpertSource};
-use mircuda::{DeviceBuffer, bf16};
+use mircuda::DeviceBuffer;
 pub use scale::NvFp4ScaleMode;
 pub use selected::{
     BucketedNvFp4MoeBf16, DirectNvFp4MoeBf16, GroupedNvFp4MoeBf16, HybridNvFp4MoeBf16,
@@ -73,90 +74,6 @@ impl NvFp4LinearWeight {
     #[must_use]
     pub const fn config(&self) -> NvFp4Config {
         self.prepared.config
-    }
-}
-
-impl NvFp4Bf16Linear {
-    pub(in crate::backend) fn new(
-        backend: &CudaBackend,
-        tokens: usize,
-        config: NvFp4Config,
-        tensors: NvFp4Tensors<'_>,
-    ) -> Result<Self> {
-        Ok(Self {
-            execution: native::NativeNvFp4::new(backend, tokens, config, tensors)?,
-        })
-    }
-
-    pub fn from_weight(
-        backend: &CudaBackend,
-        tokens: usize,
-        weight: NvFp4LinearWeight,
-    ) -> Result<Self> {
-        Ok(Self {
-            execution: native::NativeNvFp4::from_weight(backend, tokens, weight.prepared)?,
-        })
-    }
-
-    /// Quantizes input and enqueues one native FP4 projection without host
-    /// sync.
-    pub fn execute(
-        &mut self,
-        input: &DeviceBuffer<bf16>,
-        output: &mut DeviceBuffer<bf16>,
-    ) -> Result<()> {
-        self.execution.execute(input, output)
-    }
-
-    pub fn output_elements(&self) -> Result<usize> {
-        self.execution.output_elements()
-    }
-
-    pub(in crate::backend) fn execute_gated(
-        &mut self,
-        gate: &DeviceBuffer<bf16>,
-        up: &DeviceBuffer<bf16>,
-        activation: crate::kernels::GatedActivation,
-        output: &mut DeviceBuffer<bf16>,
-    ) -> Result<()> {
-        self.execution.execute_gated(gate, up, activation, output)
-    }
-}
-
-impl<const N: usize> NvFp4Bf16Pack<N> {
-    pub fn from_weights(
-        backend: &CudaBackend,
-        tokens: usize,
-        weights: [NvFp4LinearWeight; N],
-    ) -> Result<Self> {
-        Ok(Self {
-            execution: native::NativeNvFp4Pack::new(
-                backend,
-                tokens,
-                weights.map(|weight| weight.prepared),
-            )?,
-        })
-    }
-
-    /// Quantizes input once and enqueues every projection without host sync.
-    pub fn execute(
-        &mut self,
-        input: &DeviceBuffer<bf16>,
-        outputs: &mut [DeviceBuffer<bf16>; N],
-    ) -> Result<()> {
-        self.execution.execute(input, outputs)
-    }
-
-    /// Normalizes and quantizes input in one CUDA kernel before executing all
-    /// projections.
-    pub fn execute_rms_norm(
-        &mut self,
-        input: &DeviceBuffer<bf16>,
-        norm_weight: &DeviceBuffer<bf16>,
-        epsilon: f32,
-        outputs: &mut [DeviceBuffer<bf16>; N],
-    ) -> Result<()> {
-        self.execution.execute_rms_norm(input, norm_weight, epsilon, outputs)
     }
 }
 

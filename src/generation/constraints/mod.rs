@@ -1,5 +1,7 @@
 mod budget;
+mod content;
 mod drafts;
+mod flow;
 mod grammar;
 mod phase;
 pub(super) mod prompt;
@@ -7,25 +9,35 @@ pub(super) mod prompt;
 mod tests;
 mod validation;
 
-use llguidance::{Matcher, api::TopLevelGrammar, toktrie::SimpleVob};
+pub(super) use flow::{advance_generation, normalize, sampling, transition_stop, validate_content};
+use llguidance::{Matcher, api::TopLevelGrammar};
 use models::{chat::ToolCallPrefix, generation::GenerationSettings};
-use runtime::backend::{DeviceSampling, SamplingLogits, TokenMask};
 
-use super::{GenerationRequest, PreparedGeneration, ToolConstraints};
+use super::{GenerationRequest, PreparedGeneration, ResponseFormat, ToolConstraints};
 use crate::{Model, Result};
 
-pub(super) struct ToolConstraint {
+/// What the grammar constrains.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Target {
+    /// The arguments of the named tool, inside its native call syntax.
+    Tool,
+    /// The final content, a JSON value of the response format's schema.
+    Content,
+}
+
+pub(super) struct OutputConstraint {
     matcher: Matcher,
     phase: phase::Phase,
     vocab: usize,
     validator: jsonschema::Validator,
+    target: Target,
 }
 
 pub(super) fn invalid(message: impl Into<String>) -> crate::Error {
     models::ModelsError::InvalidConfig(format!("tool constraints: {}", message.into())).into()
 }
 
-impl ToolConstraint {
+impl OutputConstraint {
     /// The reasoning delimiter and the tokens the budget still allows, while
     /// the model reasons unconstrained; `None` once the grammar or the budget
     /// exit takes over.
@@ -40,9 +52,14 @@ impl ToolConstraint {
         settings: GenerationSettings,
     ) -> Result<Option<Self>> {
         budget::validate(request, settings.max_tokens)?;
-        if request.tool_constraints == ToolConstraints::None {
-            return Ok(None);
-        }
+        let schema = match (request.tool_constraints, &request.response_format) {
+            (ToolConstraints::None, ResponseFormat::Text) => return Ok(None),
+            (ToolConstraints::Schema, ResponseFormat::JsonSchema(_)) => {
+                return Err(invalid("schema tools and a JSON response format are exclusive"));
+            },
+            (ToolConstraints::Schema, ResponseFormat::Text) => None,
+            (ToolConstraints::None, ResponseFormat::JsonSchema(schema)) => Some(schema),
+        };
         if !matches!(
             model.engine().target(),
             foundation::model::BackendTarget::Cuda | foundation::model::BackendTarget::Metal
@@ -56,6 +73,17 @@ impl ToolConstraint {
             return Err(invalid(
                 "schema mode requires repetition_penalty=1, min_tokens=0 and ignore_eos=false",
             ));
+        }
+        let vocab = model.descriptor().tokenizer().vocab_size();
+        if let Some(schema) = schema {
+            let (matcher, phase, validator) = content::prepare(model, request, prepared, schema)?;
+            return Ok(Some(Self {
+                matcher,
+                phase,
+                vocab,
+                validator,
+                target: Target::Content,
+            }));
         }
         let (prefix, phase) = phase::Phase::prepare(model, request, prepared)?;
         let ToolCallPrefix::XmlFunction(name) = &prefix;
@@ -76,36 +104,26 @@ impl ToolConstraint {
         } else {
             grammar
         };
-        let parser = factory
-            .create_parser(TopLevelGrammar::from_lark(grammar))
-            .map_err(|error| invalid(error.to_string()))?;
-        let mut matcher = Matcher::new(Ok(parser));
-        let warnings = matcher.grammar_warnings();
-        if !warnings.is_empty() {
-            return Err(invalid(format!("unsupported schema: {}", warnings.join("; "))));
-        }
+        let matcher = matcher(model, grammar)?;
         Ok(Some(Self {
             matcher,
             phase,
+            vocab,
             validator,
-            vocab: model.descriptor().tokenizer().vocab_size(),
+            target: Target::Tool,
         }))
     }
 
-    /// Masks for the drafts after the token just consumed, while the tool
-    /// grammar holds; `None` outside it.
+    /// Masks for the drafts after the token just consumed, while the grammar
+    /// holds; `None` outside it.
     pub(super) fn draft_masks(
         &mut self,
         drafts: &[u32],
     ) -> Result<Option<Vec<runtime::speculation::MaskedDraft>>> {
-        if !self.is_tool() {
+        if !self.phase.is_grammar() {
             return Ok(None);
         }
         drafts::masks(&mut self.matcher, drafts, self.vocab).map(Some)
-    }
-
-    pub(super) fn is_tool(&self) -> bool {
-        !self.phase.is_reasoning()
     }
 
     pub(super) fn reasoning_exit(&self, request: &GenerationRequest) -> Option<(usize, Vec<u32>)> {
@@ -116,124 +134,34 @@ impl ToolConstraint {
         self.phase.end_token().map(|end| (min_tokens, vec![end]))
     }
 
-    pub(super) fn consume(&mut self, token: u32) -> Result<()> {
+    fn consume(&mut self, token: u32) -> Result<()> {
         if self.phase.observe(token) {
             return Ok(());
         }
         self.matcher.consume_token(token).map_err(|error| invalid(error.to_string()))
     }
 
-    pub(super) fn complete(&mut self) -> Result<bool> {
-        if self.phase.is_reasoning() {
+    fn complete(&mut self) -> Result<bool> {
+        if !self.phase.is_grammar() {
             return Ok(false);
         }
         self.matcher.is_accepting().map_err(|error| invalid(error.to_string()))
     }
 }
 
-pub(super) fn sampling(
-    constraint: &mut Option<ToolConstraint>,
-    policy: SamplingLogits,
-) -> Result<SamplingLogits> {
-    let Some(constraint) = constraint else {
-        return Ok(policy);
-    };
-    if let Some(end) = constraint.phase.budget_exit() {
-        tracing::warn!("reasoning token budget exit activated");
-        return budget::sampling(end, constraint.vocab);
-    }
-    if constraint.phase.is_reasoning() {
-        return Ok(policy);
-    }
-    let sampling = match policy {
-        SamplingLogits::None => DeviceSampling::Greedy,
-        SamplingLogits::SampleTopK { k, temperature, draw, .. } => {
-            DeviceSampling::Random { top_k: k, top_p: 1.0, temperature, draw }
-        },
-        SamplingLogits::Sample { top_k, top_p, temperature, draw, .. } => {
-            DeviceSampling::Random { top_k, top_p, temperature, draw }
-        },
-        _ => return Err(invalid("schema mode requires device sampling without history")),
-    };
-    let bits = constraint.matcher.compute_mask().map_err(|error| invalid(error.to_string()))?;
-    let mask = TokenMask::new(mask_words(&bits, constraint.vocab)?, constraint.vocab)?;
-    Ok(SamplingLogits::Masked { mask, sampling })
-}
-
-/// llguidance allocates one spare bit past the vocabulary, which adds a whole
-/// word when the vocabulary is a multiple of 32 (Nemotron-H's 131 072).
-fn mask_words(bits: &SimpleVob, vocab: usize) -> Result<Vec<u32>> {
-    if bits.len() != vocab {
-        return Err(invalid("token mask vocabulary mismatch"));
-    }
-    Ok(bits.as_slice()[..vocab.div_ceil(32)].to_vec())
-}
-
-/// A required schema tool cannot finish on the reasoning channel. Use the
-/// native delimiter when the model requests end-of-turn there, then generate
-/// and validate a fresh tool call. Draft calls inside reasoning stay private.
-/// This uses the already-selected token; it adds no accelerator readback.
-pub(super) fn transition_stop(
-    constraint: Option<&ToolConstraint>,
-    token: u32,
-    stop_tokens: &[u32],
-) -> u32 {
-    if let Some(end) = constraint.and_then(|c| c.phase.end_token())
-        && stop_tokens.contains(&token)
-    {
-        tracing::warn!(
-            stop_token = token,
-            "required tool reasoning stop changed to native delimiter"
-        );
-        end
+/// A grammar matcher over the model's tokenizer; rejects grammars llguidance
+/// only partially supports.
+fn matcher(model: &Model, grammar: String) -> Result<Matcher> {
+    let parser = model
+        .descriptor()
+        .tool_parser_factory()?
+        .create_parser(TopLevelGrammar::from_lark(grammar))
+        .map_err(|error| invalid(error.to_string()))?;
+    let mut matcher = Matcher::new(Ok(parser));
+    let warnings = matcher.grammar_warnings();
+    if warnings.is_empty() {
+        Ok(matcher)
     } else {
-        token
+        Err(invalid(format!("unsupported schema: {}", warnings.join("; "))))
     }
-}
-
-pub(super) fn advance(constraint: &mut Option<ToolConstraint>, token: u32) -> Result<bool> {
-    let Some(constraint) = constraint else {
-        return Ok(false);
-    };
-    constraint.consume(token)?;
-    constraint.complete()
-}
-
-/// Neither recovery nor cycle exits may override a budget delimiter or the
-/// tool grammar's device mask.
-pub(super) fn advance_generation(
-    constraint: &mut Option<ToolConstraint>,
-    token: u32,
-    cycle: &mut super::CycleRecovery,
-) -> Result<bool> {
-    let complete = advance(constraint, token)?;
-    if constraint
-        .as_ref()
-        .is_some_and(|c| c.is_tool() || c.phase.budget_exit().is_some())
-    {
-        cycle.disable();
-    }
-    Ok(complete)
-}
-
-/// Check grammar completion before parsing an XML/JSON fragment. A token-limit
-/// exit can leave delimiters inside an unfinished string; parsing that fragment
-/// first misreports a generation truncation as malformed complete arguments.
-pub(super) fn normalize(
-    mut constraint: Option<&mut ToolConstraint>,
-    payload: &str,
-    conversation: &foundation::conversation::Conversation,
-) -> Result<String> {
-    if let Some(constraint) = constraint.as_mut()
-        && !constraint.complete()?
-    {
-        return Err(crate::Error::InvalidToolCall(
-            "schema-constrained tool generation ended before completion".into(),
-        ));
-    }
-    let calls = super::tools::normalize(payload, conversation)?;
-    if let Some(constraint) = constraint {
-        validation::validate(&constraint.validator, &calls)?;
-    }
-    Ok(calls)
 }

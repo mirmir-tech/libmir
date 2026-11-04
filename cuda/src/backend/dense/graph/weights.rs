@@ -2,13 +2,15 @@ use crate::{
     AffineQuantizedWeight, Bf16LinearPairWeights, BlockFp8LinearWeight, CudaTensor,
     DenseDownWeight, DenseGateUpWeights, DenseSwiGluWeights, DirectFp8CheckpointWeight,
     Fp8ResidualLinearWeight, MxFp4CheckpointWeight, MxFp8CheckpointWeight, NvFp4LinearWeight,
-    PackedIntegerWeight, Result, backend::attention::graph::CapturedAttentionWeights,
+    PackedIntegerWeight, Result,
+    backend::{attention::graph::CapturedAttentionWeights, dense::sandwich::DenseSandwichOwned},
 };
 
 #[derive(Clone)]
 pub(super) struct CapturedDenseWeights {
     attention: CapturedAttentionWeights,
     post_attention_norm: CudaTensor,
+    sandwich: Option<DenseSandwichOwned>,
     gate_up: CapturedGateUp,
     down: CapturedDown,
 }
@@ -74,6 +76,7 @@ impl CapturedDenseWeights {
         DenseSwiGluWeights {
             attention: self.attention.borrow(),
             post_attention_norm: &self.post_attention_norm,
+            sandwich: self.sandwich.as_ref().map(DenseSandwichOwned::borrow),
             gate_up: self.gate_up.borrow(),
             down: self.down.borrow(),
         }
@@ -87,6 +90,7 @@ impl TryFrom<DenseSwiGluWeights<'_>> for CapturedDenseWeights {
         Ok(Self {
             attention: weights.attention.into(),
             post_attention_norm: weights.post_attention_norm.clone(),
+            sandwich: weights.sandwich.map(DenseSandwichOwned::new).transpose()?,
             gate_up: weights.gate_up.into(),
             down: weights.down.into(),
         })

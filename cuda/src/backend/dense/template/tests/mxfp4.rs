@@ -35,6 +35,7 @@ fn executes_complete_dense_layer_from_mxfp4_checkpoint_blocks() -> Result<()> {
             key_norm: None,
             output: DenseOutputSource::MxFp4(&weight),
             post_attention_norm: norm,
+            sandwich: None,
             gate_up: DenseGateUpSource::MxFp4 { gate: &weight, up: &weight },
             down: DenseDownSource::MxFp4(&weight),
         },
@@ -86,6 +87,7 @@ fn config() -> DenseSwiGluConfig {
         },
         intermediate_size: 32,
         activation: GatedActivation::Silu,
+        feed_forward_format: ProjectionFormat::MxFp4,
     }
 }
 

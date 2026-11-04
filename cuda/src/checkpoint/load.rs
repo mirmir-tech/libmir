@@ -26,19 +26,22 @@ impl CudaBackend {
         let bindings = WeightBindingPlan::discover(&spec, catalog)?;
         let layer_bindings = bindings.hybrid_moe_layer(layer)?;
         Ok(self
-            .load_nvfp4_moe_layer_template_tracked(decoder, catalog, layer, &layer_bindings, load)?
+            .load_nvfp4_moe_layer_template_tracked(
+                decoder, &spec, catalog, layer, &layer_bindings, load,
+            )?
             .0)
     }
 
     pub(super) fn load_nvfp4_moe_layer_template_tracked(
         &self,
         decoder: &DecoderConfig,
+        semantic: &SemanticModelSpec,
         catalog: &TensorCatalog,
         layer: usize,
         bindings: &HybridMoeLayerBindings<'_>,
         load: NvFp4MoeLayerLoadConfig,
     ) -> Result<(DecodeMoeLayerTemplate, u64)> {
-        let block = load.block(decoder, layer)?;
+        let block = load.block(decoder, semantic, layer)?;
         let source = LayerSource::discover(catalog, bindings)?;
         let tensors = upload(self, &source)?;
         let gate = self.prepare_nvfp4_expert_bank(

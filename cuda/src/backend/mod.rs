@@ -50,8 +50,8 @@ pub use clamped_routed::{CudaClampedRoutedModelSession, CudaClampedRoutedModelTe
 pub use decoder::{RmsNormBf16, RopeBf16};
 pub use dense::{
     DecodeDenseSwiGlu, DenseDownSource, DenseDownWeight, DenseGateUpSource, DenseGateUpWeights,
-    DenseOutputSource, DenseQkvSource, DenseSwiGluConfig, DenseSwiGluLayerTemplate,
-    DenseSwiGluWeights, DenseWeightSource, PrefillDenseSwiGlu,
+    DenseOutputSource, DenseQkvSource, DenseSandwichWeights, DenseSwiGluConfig,
+    DenseSwiGluLayerTemplate, DenseSwiGluWeights, DenseWeightSource, PrefillDenseSwiGlu,
 };
 pub use embedding::{AffineQuantizedEmbedding, Bf16Embedding};
 use gated_delta::workspace::CudaGatedDeltaWorkspace;

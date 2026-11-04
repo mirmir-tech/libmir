@@ -44,6 +44,7 @@ fn spec(
             vocab_size: 128,
             tie_word_embeddings: false,
             final_norm: norm,
+            embedding_multiplier: 1.0,
             layers: vec![DecoderLayerSpec {
                 index: 0,
                 input_norm: norm,

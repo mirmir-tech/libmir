@@ -48,14 +48,21 @@ impl DecodeAttentionConfig {
             rms_norm_epsilon: narrow("RMS norm epsilon", spec.input_norm.epsilon)?,
             attention_scale: narrow("attention scale", attention.scale)?,
             projection_format: policy.projection_format,
-            qkv_normalization: match attention.qk_normalization {
-                QkNormalization::None => QkvNormalization::NONE,
-                QkNormalization::QueryKeyRms => QkvNormalization::QUERY_KEY,
-            },
+            qkv_normalization: attention.qk_normalization.into(),
             sliding_window: attention.window,
             max_sequence_blocks: policy.max_sequence_blocks,
             cache: KvStorageSpec::new(policy.cache, attention.key_value_heads, attention.head_dim),
         })
+    }
+}
+
+impl From<QkNormalization> for QkvNormalization {
+    fn from(normalization: QkNormalization) -> Self {
+        match normalization {
+            QkNormalization::None => Self::NONE,
+            QkNormalization::QueryKeyRms => Self::QUERY_KEY,
+            QkNormalization::QueryKeyValueRms => Self::ALL,
+        }
     }
 }
 

@@ -50,6 +50,8 @@ pub struct DecoderConfig {
     pub shared_expert_intermediate_size: Option<usize>,
     pub hidden_activation: Option<String>,
     pub final_logit_softcapping: Option<f64>,
+    /// Factor applied to token embeddings, when the configuration declares one.
+    pub embedding_multiplier: Option<f64>,
     pub attention_bias: bool,
     pub attention_sinks: bool,
     pub swiglu_limit: Option<f64>,

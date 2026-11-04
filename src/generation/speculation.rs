@@ -10,7 +10,7 @@ use crate::Result;
 /// and within its token budget, and under the tool grammar at the reported
 /// `drafts` the grammar allows, each verified within its mask.
 pub(super) fn draft_bounds(
-    constraint: Option<&mut super::constraints::ToolConstraint>,
+    constraint: Option<&mut super::constraints::OutputConstraint>,
     cycle: &super::CycleRecovery,
     sampling: &SamplingLogits,
     stop_tokens: &[u32],

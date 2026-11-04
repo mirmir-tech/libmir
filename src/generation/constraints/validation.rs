@@ -65,6 +65,17 @@ pub(super) fn validate(validator: &jsonschema::Validator, output: &str) -> Resul
     Ok(())
 }
 
+pub(super) fn validate_content(validator: &jsonschema::Validator, content: &str) -> Result<()> {
+    let value: Value = serde_json::from_str(content.trim())
+        .map_err(|error| Error::InvalidResponseFormat(error.to_string()))?;
+    validator.validate(&value).map_err(|error| {
+        Error::InvalidResponseFormat(format!(
+            "content violates schema at {} (constraint {})",
+            error.instance_path, error.schema_path
+        ))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;

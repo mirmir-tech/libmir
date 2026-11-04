@@ -70,8 +70,12 @@ pub(super) fn compile(schema: &Value, tool_end: Option<u32>) -> Result<String> {
         } else {
             json!({"allOf":[value]})
         };
+        // Printable `\uXXXX` escapes stay valid JSON. Otherwise only control
+        // escapes (`\u00XX`) are allowed, so a model spelling an em dash as
+        // `—` is forced into `\u0014`.
         JsonCompileOptions {
             whitespace_pattern: Some(r"[ \t\r\n]{1,16}".into()),
+            json_allow_general_unicode_escapes: true,
             ..JsonCompileOptions::default()
         }
         .apply_to(&mut value);
@@ -94,6 +98,22 @@ pub(super) fn compile(schema: &Value, tool_end: Option<u32>) -> Result<String> {
     );
     writeln!(start, " {close}").map_err(|error| invalid(error.to_string()))?;
     Ok(format!("{start}{rules}"))
+}
+
+/// One JSON value of the response format's schema, with bounded leading
+/// whitespace; the grammar accepts as soon as the value closes.
+pub(super) fn content(schema: &Value) -> Result<String> {
+    if !schema.is_object() || schema.to_string().len() > 512_000 {
+        return Err(invalid("response format schema must be an object within constraint limits"));
+    }
+    let mut value = schema.clone();
+    JsonCompileOptions {
+        whitespace_pattern: Some(r"[ \t\r\n]{1,16}".into()),
+        json_allow_general_unicode_escapes: true,
+        ..JsonCompileOptions::default()
+    }
+    .apply_to(&mut value);
+    Ok(format!("start: _ws value\n_ws: /[ \\t\\r\\n]{{0,16}}/\nvalue: %json {value}\n"))
 }
 
 /// Add a named native envelope when it was not prefilled before reasoning.

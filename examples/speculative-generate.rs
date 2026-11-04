@@ -165,6 +165,7 @@ fn request(prompt: &str, tokens: usize, temperature: f32, tool: bool) -> Generat
         } else {
             libmir::ToolConstraints::None
         },
+        response_format: libmir::ResponseFormat::Text,
         reasoning_token_budget: None,
         conversation: Conversation {
             messages: vec![Message {

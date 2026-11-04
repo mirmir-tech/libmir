@@ -19,7 +19,7 @@ use cycle::CycleRecovery;
 use input::PreparedGeneration;
 pub use output::GenerationOutput;
 use output::{append_delta, finalize_output, finish_metrics, should_stop};
-pub use request::{GenerationRequest, ReasoningCyclePolicy, ToolConstraints};
+pub use request::{GenerationRequest, ReasoningCyclePolicy, ResponseFormat, ToolConstraints};
 use sampling::{choose_prefill, request_sampling, sampler_config};
 use speculation::draft_bounds;
 use telemetry::record_publish;
@@ -91,7 +91,7 @@ impl Model {
         let session_started = Instant::now();
         let mut session = self.session();
         let mut constraints =
-            constraints::ToolConstraint::prepare(self, request, &prepared, settings)?;
+            constraints::OutputConstraint::prepare(self, request, &prepared, settings)?;
         let sampling = request_sampling(self, settings, vocab_size, &mut sampler);
         let sampling = constraints::sampling(&mut constraints, sampling)?;
         let harmony_exit = reasoning_exit(request, descriptor, constraints.as_ref())?;
@@ -186,6 +186,7 @@ impl Model {
         stream.finish_into(&mut text, &mut reasoning, &mut tool_calls, token)?;
         let tool_calls =
             constraints::normalize(constraints.as_mut(), &tool_calls, &request.conversation)?;
+        constraints::validate_content(constraints.as_mut(), &text)?;
         let metrics = finish_metrics(&mut metrics, token_ids.len(), &session);
         Ok(finalize_output(
             text, reasoning, tool_calls, token_ids, prompt_tokens, finish_reason, metrics,
@@ -222,7 +223,7 @@ impl Step<'_> {
 fn reasoning_exit(
     request: &GenerationRequest,
     descriptor: &crate::ModelDescriptor,
-    constraint: Option<&constraints::ToolConstraint>,
+    constraint: Option<&constraints::OutputConstraint>,
 ) -> Result<Option<(usize, Vec<u32>)>> {
     if let Some(exit) = constraint.and_then(|c| c.reasoning_exit(request)) {
         return Ok(Some(exit));

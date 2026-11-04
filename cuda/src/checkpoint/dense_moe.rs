@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use models::{
     layout::DecoderConfig,
+    semantic::SemanticModelSpec,
     weights::{HybridMoeLayerBindings, TensorCatalog, TensorInfo},
 };
 
@@ -19,12 +20,13 @@ impl CudaBackend {
     pub(super) fn load_dense_moe_layer_template_tracked(
         &self,
         decoder: &DecoderConfig,
+        semantic: &SemanticModelSpec,
         catalog: &TensorCatalog,
         layer: usize,
         bindings: &HybridMoeLayerBindings<'_>,
         load: NvFp4MoeLayerLoadConfig,
     ) -> Result<(DecodeMoeLayerTemplate, u64)> {
-        let block = load.block(decoder, layer)?;
+        let block = load.block(decoder, semantic, layer)?;
         let physical = dense_sources(catalog, bindings)?;
         let tensors = upload(self, &physical)?;
         let names = common(bindings)

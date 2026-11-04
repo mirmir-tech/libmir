@@ -1,4 +1,5 @@
 mod state_space;
+mod tensors;
 
 use super::{
     ActivationSpec, AttentionOutputSpec, AttentionSpec, DecoderLayerSpec, DecoderSpec,
@@ -36,6 +37,7 @@ pub(super) fn compile(
             vocab_size: decoder.vocab_size,
             tie_word_embeddings: decoder.tie_word_embeddings,
             final_norm: norm,
+            embedding_multiplier: decoder.embedding_multiplier.unwrap_or(1.0),
             layers,
             block_layout: super::BlockLayoutSpec::Unified,
             prediction_layers: Vec::new(),
@@ -86,14 +88,10 @@ fn mixer(decoder: &DecoderConfig, tensors: &TensorCatalog, index: usize) -> Resu
         } else {
             KeyValueRelation::Separate
         },
-        qk_normalization: if has_qk_norm(tensors, index) {
-            QkNormalization::QueryKeyRms
-        } else {
-            QkNormalization::None
-        },
+        qk_normalization: tensors::qk_normalization(tensors, index),
         projection_bias: decoder.attention_bias,
         output: attention_output(decoder.attention_output),
-        sinks: decoder.attention_sinks || has_attention_sinks(tensors, index),
+        sinks: decoder.attention_sinks || tensors::has_attention_sinks(tensors, index),
         scale: decoder.attention_scale.unwrap_or_else(|| head_dim_f64.sqrt().recip()),
         window: decoder.layer_sliding_window(index),
         position: rotary(decoder, index),
@@ -211,28 +209,6 @@ const fn attention_output(output: AttentionOutput) -> AttentionOutputSpec {
         AttentionOutput::Direct => AttentionOutputSpec::Direct,
         AttentionOutput::Gated => AttentionOutputSpec::Gated,
     }
-}
-
-fn has_qk_norm(tensors: &TensorCatalog, index: usize) -> bool {
-    layer_roots(index).into_iter().any(|root| {
-        tensors.contains(&format!("{root}.self_attn.q_norm.weight"))
-            && tensors.contains(&format!("{root}.self_attn.k_norm.weight"))
-    })
-}
-
-fn has_attention_sinks(tensors: &TensorCatalog, index: usize) -> bool {
-    layer_roots(index)
-        .into_iter()
-        .any(|root| tensors.contains(&format!("{root}.self_attn.sinks")))
-}
-
-fn layer_roots(index: usize) -> [String; 4] {
-    [
-        format!("model.layers.{index}"),
-        format!("layers.{index}"),
-        format!("language_model.model.layers.{index}"),
-        format!("model.language_model.layers.{index}"),
-    ]
 }
 
 fn invalid(message: impl Into<String>) -> ModelsError {

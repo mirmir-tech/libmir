@@ -1,4 +1,4 @@
-use mircuda::{DeviceBuffer, bf16};
+use mircuda::{DeviceBuffer, FmhaCausalWindow, bf16};
 use runtime::kv::BlockTable;
 
 use super::{PagedAttentionBf16, pages::contiguous_page_token};
@@ -42,23 +42,28 @@ impl PagedAttentionBf16 {
         let context = start_position
             .checked_add(query_tokens)
             .ok_or(crate::Error::InvalidPagedKv("prefill attention context overflow"))?;
+        // Paged FlashAttention skips the key blocks a sliding window hides.
+        if image.is_none()
+            && let Some(fmha) = &mut self.paged_fmha
+        {
+            let window = window.map_or(Ok(FmhaCausalWindow::Full), FmhaCausalWindow::sliding)?;
+            return fmha.execute(
+                query,
+                cache.key_pages(),
+                cache.value_pages(),
+                output,
+                &self.table_device,
+                query_tokens,
+                context,
+                window,
+                scale,
+            );
+        }
         if window.is_none() && image.is_none() {
-            if let Some(fmha) = &mut self.paged_fmha {
-                return fmha.execute(
-                    query,
-                    cache.key_pages(),
-                    cache.value_pages(),
-                    output,
-                    &self.table_device,
-                    query_tokens,
-                    context,
-                    scale,
-                );
-            }
             if let (Some(first_page_token), Some(fmha)) =
-                (contiguous_page_token(table, context), &self.fmha)
+                (contiguous_page_token(table, context), &mut self.fmha)
             {
-                return Ok(fmha.execute(
+                return fmha.execute(
                     &self.stream,
                     query,
                     cache.key_pages(),
@@ -68,7 +73,7 @@ impl PagedAttentionBf16 {
                     context,
                     first_page_token,
                     scale,
-                )?);
+                );
             }
             if self.fmha.is_some() {
                 return self.execute_gathered_fmha(

@@ -1,7 +1,5 @@
 use ::runtime::kv::{BlockTable, KvStorageSpec};
-use mircuda::{
-    Context, DeviceBuffer, FmhaBf16Plan, KernelNode, MemoryPool, PinnedBuffer, Stream, TypedKernel,
-};
+use mircuda::{Context, DeviceBuffer, KernelNode, MemoryPool, PinnedBuffer, Stream, TypedKernel};
 
 use super::{
     super::{AttentionExecution, AttentionPlanRequest, CudaBackend, PlanSource},
@@ -25,7 +23,7 @@ mod pages;
 mod prefill_batch;
 
 pub use batch::BatchedPagedAttentionBf16;
-use fmha::PagedFmhaPrefill;
+use fmha::{FixedFmha, PagedFmhaPrefill};
 use pages::FmhaPageWorkspace;
 pub use prefill_batch::BatchedPrefillPagedAttentionBf16;
 
@@ -42,7 +40,7 @@ pub struct PagedAttentionBf16 {
     profile_allowed: bool,
     tuning_complete: bool,
     prefill: PagedPrefillAttention,
-    fmha: Option<FmhaBf16Plan>,
+    fmha: Option<FixedFmha>,
     paged_fmha: Option<PagedFmhaPrefill>,
     gather: Option<PagedKvGather>,
     fmha_workspace: Option<FmhaPageWorkspace>,

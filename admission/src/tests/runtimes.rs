@@ -1,4 +1,4 @@
-use models::semantic::MixerSpec;
+use models::semantic::{KeyValueRelation, MixerSpec, QkNormalization};
 
 use super::fixtures::{
     AnyResult, clamped_routed, dense_and_routed, dense_contract, mixed_unsupported, shared_routed,
@@ -87,5 +87,30 @@ fn admits_dense_mixed_attention_only_on_cuda() -> AnyResult<()> {
         cuda::CudaArchitecture::Generation(cuda::CudaDecoderRuntime::DenseMixed)
     );
     assert!(metal::admit(&task, Some(&semantic)).is_err());
+    Ok(())
+}
+
+#[test]
+fn graph_normalization_ignores_shared_key_value_layers() -> AnyResult<()> {
+    let (task, mut semantic) = dense_contract()?;
+    for (index, layer) in semantic.decoder.layers.iter_mut().enumerate() {
+        if let MixerSpec::SoftmaxAttention(attention) = &mut layer.mixer {
+            attention.qk_normalization = QkNormalization::QueryKeyValueRms;
+            if index == 0 {
+                attention.key_value_relation = KeyValueRelation::KeyEqualsValue;
+            }
+        }
+    }
+    let plan = cuda::CudaDecoderPlan::lower(&semantic);
+
+    assert_eq!(cuda::graph_normalization(&plan)?, cuda::CudaQkvNormalization::All);
+    assert_eq!(
+        cuda::admit(&task, Some(&semantic))?,
+        cuda::CudaArchitecture::Generation(cuda::CudaDecoderRuntime::Dense)
+    );
+    if let MixerSpec::SoftmaxAttention(attention) = &mut semantic.decoder.layers[0].mixer {
+        attention.qk_normalization = QkNormalization::QueryKeyRms;
+    }
+    assert!(cuda::graph_normalization(&cuda::CudaDecoderPlan::lower(&semantic)).is_err());
     Ok(())
 }

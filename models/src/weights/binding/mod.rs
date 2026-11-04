@@ -32,7 +32,7 @@ pub use block::{
     BlockActivationMode, BlockFormat, BlockInputPadding, BlockProjectionLayout, BlockQuantization,
     BlockScale, BlockScaleEncoding, BlockStorageDType,
 };
-pub use dense::{DenseDecoderLayerBindings, DenseSoftmaxBindings};
+pub use dense::{DenseDecoderLayerBindings, DenseSandwichBindings, DenseSoftmaxBindings};
 pub use float8::{
     Float8ActivationScale, Float8Format, Float8ParameterDType, Float8Quantization,
     Float8ScaleGranularity, Float8ScaleMode,

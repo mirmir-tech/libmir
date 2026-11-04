@@ -126,6 +126,7 @@ impl DecoderConfig {
             hidden_activation: optional_string(decoder, "hidden_activation")?
                 .or(optional_string(decoder, "hidden_act")?),
             final_logit_softcapping: optional_f64(decoder, &["final_logit_softcapping"])?,
+            embedding_multiplier: optional_f64(decoder, &["embedding_multiplier"])?,
             attention_bias: optional_bool(decoder, "attention_bias")?.unwrap_or(false),
             attention_sinks: optional_bool(decoder, "attention_sinks")?.unwrap_or(false),
             swiglu_limit: optional_f64(decoder, &["swiglu_limit"])?,

@@ -18,6 +18,6 @@ impl BatchedDecodeAttentionBf16 {
     }
 
     pub(in crate::backend) fn capture_partitions(&self, batch: &PagedDecodeBatch) -> usize {
-        self.attention.capture_partitions(batch)
+        self.attention.capture_partitions(batch, self.config.sliding_window)
     }
 }

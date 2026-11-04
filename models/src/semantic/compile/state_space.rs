@@ -58,6 +58,7 @@ pub(super) fn compile(
             vocab_size: decoder.vocab_size,
             tie_word_embeddings: decoder.tie_word_embeddings,
             final_norm: norm,
+            embedding_multiplier: decoder.embedding_multiplier.unwrap_or(1.0),
             layers,
             block_layout: BlockLayoutSpec::Paired {
                 physical_blocks: hybrid.blocks.physical().len(),

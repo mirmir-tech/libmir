@@ -112,21 +112,31 @@ impl CudaEngine {
         };
         let template = if runtime == CudaDecoderRuntime::DenseAndRouted && nvfp4 {
             self.backend.load_nvfp4_moe_model_template_with_bindings(
-                decoder, bindings, catalog, moe_load, report,
+                decoder,
+                &contract.semantic,
+                bindings,
+                catalog,
+                moe_load,
+                report,
             )?
         } else if runtime == CudaDecoderRuntime::DenseAndRouted {
             self.backend.load_dense_moe_model_template_with_bindings(
-                decoder, bindings, catalog, moe_load, report,
+                decoder,
+                &contract.semantic,
+                bindings,
+                catalog,
+                moe_load,
+                report,
             )?
         } else if runtime == CudaDecoderRuntime::Dense {
             self.backend.load_dense_swiglu_model_template_with_bindings(
                 decoder,
+                &contract.semantic,
                 bindings,
                 catalog,
                 DenseSwiGluLayerLoadConfig {
                     cache: self.cache,
                     max_sequence_blocks: blocks,
-                    qkv_normalization: crate::engine::lowering::graph_normalization(plan)?,
                     projection_format,
                 },
                 report,

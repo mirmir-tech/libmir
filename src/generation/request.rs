@@ -43,6 +43,9 @@ pub struct GenerationRequest {
     pub reasoning_history: crate::ReasoningHistory,
     /// Opt-in schema-constrained native tool decoding.
     pub tool_constraints: ToolConstraints,
+    /// Shape of the final content; a JSON schema constrains it like the
+    /// arguments of a schema tool, without any tool-call syntax.
+    pub response_format: ResponseFormat,
     /// Optional reasoning-token cap for enabled schema-constrained XML tools.
     /// The native delimiter is forced after this many reasoning tokens; the
     /// total completion budget still includes the delimiter and tool output.
@@ -71,4 +74,15 @@ pub enum ToolConstraints {
     None,
     /// Enforce the named tool's schema while sampling its native XML arguments.
     Schema,
+}
+
+/// Request-scoped shape of the final assistant content.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ResponseFormat {
+    /// Ordinary text.
+    #[default]
+    Text,
+    /// One JSON value matching the schema, decoded under its grammar and
+    /// validated before it is returned.
+    JsonSchema(serde_json::Value),
 }

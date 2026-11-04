@@ -2,7 +2,7 @@ use std::num::NonZeroUsize;
 
 use runtime::backend::{DeviceSampling, SamplingLogits, TokenMask};
 
-use super::{GenerationRequest, ToolConstraints, invalid};
+use super::{GenerationRequest, ResponseFormat, ToolConstraints, invalid};
 use crate::{ReasoningMode, Result};
 
 pub(super) enum Allowance {
@@ -27,11 +27,11 @@ pub(super) fn validate(request: &GenerationRequest, total: usize) -> Result<()> 
     let Some(limit) = request.reasoning_token_budget else {
         return Ok(());
     };
-    if request.reasoning != ReasoningMode::Enabled
-        || request.tool_constraints != ToolConstraints::Schema
-    {
+    let constrained = request.tool_constraints == ToolConstraints::Schema
+        || matches!(request.response_format, ResponseFormat::JsonSchema(_));
+    if request.reasoning != ReasoningMode::Enabled || !constrained {
         return Err(invalid(
-            "a reasoning token budget requires enabled reasoning and schema tools",
+            "a reasoning token budget requires enabled reasoning and a schema tool or format",
         ));
     }
     if limit.get().checked_add(2).is_none_or(|minimum| minimum > total) {

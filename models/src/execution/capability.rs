@@ -136,7 +136,7 @@ fn mixer(mixer: &MixerSpec, capabilities: &mut BTreeSet<ArchitectureCapability>)
             if attention.sinks {
                 capabilities.insert(ArchitectureCapability::AttentionSinks);
             }
-            if attention.qk_normalization == QkNormalization::QueryKeyRms {
+            if attention.qk_normalization != QkNormalization::None {
                 capabilities.insert(ArchitectureCapability::QueryKeyRmsNormalization);
             }
             if attention.key_value_relation == crate::semantic::KeyValueRelation::KeyEqualsValue {

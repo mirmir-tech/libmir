@@ -16,7 +16,7 @@ impl SessionLayer {
             },
             Self::Dense(layer) => {
                 let mut config = layer.template.config();
-                if !matches!(config.attention.projection_format, crate::ProjectionFormat::NvFp4) {
+                if !config.binds_layer_weights() {
                     config.attention.layer = 0;
                 }
                 PrefillSignature::Dense(config)

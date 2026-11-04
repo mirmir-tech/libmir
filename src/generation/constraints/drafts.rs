@@ -3,7 +3,7 @@
 use llguidance::Matcher;
 use runtime::{backend::TokenMask, speculation::MaskedDraft};
 
-use super::{invalid, mask_words};
+use super::{flow::mask_words, invalid};
 use crate::Result;
 
 /// The leading `drafts` the grammar allows, each with the mask of the token
