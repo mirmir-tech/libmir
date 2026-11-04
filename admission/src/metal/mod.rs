@@ -7,6 +7,7 @@ use models::{
 use crate::{ArchitectureError, Result};
 
 mod operations;
+mod semantics;
 
 pub use operations::{
     FeedForwardLowering, LayerLowering, MixerLowering, NormalizationLowering, lower_layer,
@@ -50,11 +51,14 @@ pub fn admit(
     semantic: Option<&SemanticModelSpec>,
 ) -> Result<MetalArchitecture> {
     match task {
-        TaskExecutionPlan::Generation { .. } | TaskExecutionPlan::CausalScoring { .. } => {
+        TaskExecutionPlan::Generation { decoder }
+        | TaskExecutionPlan::CausalScoring { decoder, .. } => {
             let semantic = semantic.ok_or_else(|| {
                 ArchitectureError::invalid("Metal generation semantic contract is missing")
             })?;
-            Ok(MetalArchitecture::Generation(plan(semantic)?.runtime()))
+            let runtime = plan(semantic)?.runtime();
+            semantics::validate(decoder, semantic, runtime)?;
+            Ok(MetalArchitecture::Generation(runtime))
         },
         TaskExecutionPlan::Embedding { task, .. }
             if task.pooling == PoolingMode::LastToken && task.normalize =>

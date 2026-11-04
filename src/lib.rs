@@ -34,7 +34,7 @@ pub use memory::{MemorySnapshot, ModelMemoryEstimate};
 #[cfg(feature = "metal")]
 pub use metal::DecodeReservation as MetalDecodeReservation;
 pub use model::{
-    AdmissionCheck, AdmissionCheckKind, AdmissionStatus, BackendAdmissionReport,
+    AdmissionCheck, AdmissionCheckKind, AdmissionStatus, BackendAdmissionReport, CacheStatsReader,
     CheckpointEncoding, IMAGE_PLACEHOLDER, Library, MODEL_FORMAT_REGISTRY_SCHEMA_VERSION, Model,
     ModelDescriptor, ModelLoadOptions, PreparedPrompt, PreparedVisionPrompt,
     PromptPreparationTimings, RemoteModelContract, RemoteTaskMetadata, RemoteVisionContract,
@@ -64,4 +64,4 @@ pub use runtime::{
     speculation::{DraftTokens, InvalidDraftTokens, Speculation},
 };
 pub use session::Session;
-pub use telemetry::DeviceTelemetrySnapshot;
+pub use telemetry::{DeviceTelemetryReader, DeviceTelemetrySnapshot};

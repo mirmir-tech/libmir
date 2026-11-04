@@ -39,6 +39,13 @@ pub(super) fn dense_contract() -> AnyResult<(TaskExecutionPlan, SemanticModelSpe
 }
 
 pub(super) fn dense_and_routed(mut semantic: SemanticModelSpec) -> SemanticModelSpec {
+    semantic.decoder.embedding_multiplier = 8.0_f64.sqrt();
+    for layer in &mut semantic.decoder.layers {
+        if let MixerSpec::SoftmaxAttention(attention) = &mut layer.mixer {
+            attention.scale = 1.0;
+            attention.qk_normalization = models::semantic::QkNormalization::QueryKeyValueRms;
+        }
+    }
     for layer in &mut semantic.decoder.layers {
         layer.feed_forward = FeedForwardSpec::DenseAndRouted {
             dense_intermediate_size: 16,
@@ -68,6 +75,11 @@ pub(super) fn clamped_routed(mut semantic: SemanticModelSpec) -> SemanticModelSp
 }
 
 pub(super) fn shared_routed(mut semantic: SemanticModelSpec) -> SemanticModelSpec {
+    for layer in &mut semantic.decoder.layers {
+        if let MixerSpec::SoftmaxAttention(attention) = &mut layer.mixer {
+            attention.qk_normalization = models::semantic::QkNormalization::QueryKeyRms;
+        }
+    }
     for layer in &mut semantic.decoder.layers {
         layer.feed_forward = FeedForwardSpec::Routed {
             routed: routed(swiglu()),

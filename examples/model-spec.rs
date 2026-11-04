@@ -47,7 +47,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn declare_value_rms(spec: &mut SemanticModelSpec) -> Result<(), Box<dyn std::error::Error>> {
     for attention in attentions(spec) {
-        if attention.qk_normalization != QkNormalization::QueryKeyRms {
+        if attention.qk_normalization == QkNormalization::None {
             return Err("value-rms needs Q/K-normalized attention in every layer".into());
         }
         attention.qk_normalization = QkNormalization::QueryKeyValueRms;

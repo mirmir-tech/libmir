@@ -22,7 +22,11 @@ fn materializes_dense_layers_without_model_identity() -> Result<()> {
             index: 0,
             input_norm: NormalizationLowering::Rms,
             post_attention_norm: NormalizationLowering::Rms,
-            mixer: MixerLowering::Softmax { sinks: false, window: None },
+            mixer: MixerLowering::Softmax {
+                normalization: models::semantic::QkNormalization::None,
+                sinks: false,
+                window: None
+            },
             feed_forward: FeedForwardLowering::Dense,
         }]
     );
@@ -76,7 +80,11 @@ fn preserves_windows_and_rejects_them_from_the_dense_runtime() -> Result<()> {
 
     assert_eq!(
         lower_layer(&spec.decoder.layers[0])?.mixer,
-        MixerLowering::Softmax { sinks: false, window: Some(128) }
+        MixerLowering::Softmax {
+            normalization: models::semantic::QkNormalization::None,
+            sinks: false,
+            window: Some(128)
+        }
     );
     assert!(plan(&spec).is_err());
     Ok(())

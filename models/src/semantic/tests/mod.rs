@@ -1,3 +1,4 @@
+mod defaults;
 use std::{fs, path::PathBuf};
 
 use serde_json::json;
@@ -206,7 +207,7 @@ fn temp_dir(label: &str) -> PathBuf {
 }
 
 #[test]
-fn yarn_serialization_preserves_truncation_and_defaults_legacy_specs() -> crate::error::Result<()> {
+fn yarn_serialization_preserves_truncation_and_defaults_legacy_specs() -> Result<()> {
     let value = serde_json::json!({
         "kind": "yarn", "factor": 32.0, "beta_fast": 32.0, "beta_slow": 1.0,
         "original_context_len": 4096, "attention_factor": 1.0

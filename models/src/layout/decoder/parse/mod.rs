@@ -3,7 +3,7 @@ use std::{fs, path::Path};
 use serde_json::Value;
 
 use super::{
-    AttentionLayerType, DecoderConfig, StateSpaceHybridConfig, attention, features, rope,
+    AttentionLayerType, DecoderConfig, StateSpaceHybridConfig, attention, defaults, features, rope,
     state_space,
 };
 use crate::{error::Result, layout::ModelLayout};
@@ -44,6 +44,7 @@ impl DecoderConfig {
             return Err(invalid("num_attention_heads must be greater than zero"));
         }
         let hidden_size = require_usize(decoder, &["hidden_size", "n_embd"])?;
+        let defaults = defaults::for_checkpoint(decoder);
         let state_space = state_space::state_space_hybrid(decoder, hidden_size)?;
         let num_hidden_layers = match &state_space {
             Some(hybrid) => hybrid.blocks.layers().len(),
@@ -106,7 +107,8 @@ impl DecoderConfig {
                 .or(optional_bool(value, "tie_word_embeddings")?)
                 .unwrap_or(false),
             attention_k_eq_v: optional_bool(decoder, "attention_k_eq_v")?.unwrap_or(false),
-            attention_scale: attention_scale(decoder)?,
+            attention_scale: attention_scale(decoder)?.or(defaults.attention_scale),
+            qk_normalization: defaults.normalization(decoder)?,
             attention_output: features::attention_output(decoder)?,
             sliding_window: optional_usize(decoder, &["sliding_window"])?,
             linear_attention: features::linear_attention(decoder)?,
@@ -126,7 +128,8 @@ impl DecoderConfig {
             hidden_activation: optional_string(decoder, "hidden_activation")?
                 .or(optional_string(decoder, "hidden_act")?),
             final_logit_softcapping: optional_f64(decoder, &["final_logit_softcapping"])?,
-            embedding_multiplier: optional_f64(decoder, &["embedding_multiplier"])?,
+            embedding_multiplier: optional_f64(decoder, &["embedding_multiplier"])?
+                .or(defaults.embedding_multiplier(hidden_size)?),
             attention_bias: optional_bool(decoder, "attention_bias")?.unwrap_or(false),
             attention_sinks: optional_bool(decoder, "attention_sinks")?.unwrap_or(false),
             swiglu_limit: optional_f64(decoder, &["swiglu_limit"])?,

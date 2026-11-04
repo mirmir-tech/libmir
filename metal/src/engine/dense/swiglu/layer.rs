@@ -80,7 +80,12 @@ impl DenseSwiGluLayer {
         config: DenseSwiGluLayerConfig,
         stream: &Stream,
     ) -> Result<Self> {
-        let weights = DenseSwiGluWeights::load_bindings(tensors, bindings, config, stream)?;
+        let crate::engine::lowering::MixerLowering::Softmax { normalization, .. } = lowering.mixer
+        else {
+            return Err(Error::InvalidModel("dense layer requires softmax attention".into()));
+        };
+        let weights =
+            DenseSwiGluWeights::load_bindings(tensors, bindings, config, normalization, stream)?;
         let fusion = FusionPlanner::new(stream).projections(
             lowering.feed_forward,
             ProjectionBiases::new(

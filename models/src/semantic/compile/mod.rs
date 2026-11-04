@@ -88,7 +88,9 @@ fn mixer(decoder: &DecoderConfig, tensors: &TensorCatalog, index: usize) -> Resu
         } else {
             KeyValueRelation::Separate
         },
-        qk_normalization: tensors::qk_normalization(tensors, index),
+        qk_normalization: decoder
+            .qk_normalization
+            .unwrap_or_else(|| tensors::qk_normalization(tensors, index)),
         projection_bias: decoder.attention_bias,
         output: attention_output(decoder.attention_output),
         sinks: decoder.attention_sinks || tensors::has_attention_sinks(tensors, index),

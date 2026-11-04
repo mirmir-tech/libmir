@@ -1,6 +1,6 @@
 use models::semantic::{
     ActivationSpec, DecoderLayerSpec, FeedForwardSpec, MixerSpec, NormalizationKind,
-    NormalizationSpec,
+    NormalizationSpec, QkNormalization,
 };
 
 use crate::{ArchitectureError, Result};
@@ -12,7 +12,11 @@ pub enum NormalizationLowering {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MixerLowering {
-    Softmax { sinks: bool, window: Option<usize> },
+    Softmax {
+        sinks: bool,
+        window: Option<usize>,
+        normalization: QkNormalization,
+    },
     Linear,
 }
 
@@ -64,6 +68,7 @@ fn lower_mixer(layer: usize, mixer: &MixerSpec) -> Result<MixerLowering> {
     match mixer {
         MixerSpec::SoftmaxAttention(attention) => Ok(MixerLowering::Softmax {
             sinks: attention.sinks,
+            normalization: attention.qk_normalization,
             window: attention.window,
         }),
         MixerSpec::LinearAttention(_) => Ok(MixerLowering::Linear),

@@ -1,4 +1,5 @@
 mod attention;
+mod defaults;
 mod features;
 mod parse;
 mod rope;
@@ -41,6 +42,8 @@ pub struct DecoderConfig {
     pub tie_word_embeddings: bool,
     pub attention_k_eq_v: bool,
     pub attention_scale: Option<f64>,
+    /// Explicit or built-in normalization; absent means tensor-based discovery.
+    pub qk_normalization: Option<crate::semantic::QkNormalization>,
     pub attention_output: AttentionOutput,
     pub sliding_window: Option<usize>,
     pub linear_attention: Option<LinearAttentionConfig>,

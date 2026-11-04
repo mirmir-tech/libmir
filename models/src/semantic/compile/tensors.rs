@@ -2,7 +2,8 @@ use super::QkNormalization;
 use crate::weights::TensorCatalog;
 
 /// Q/K normalization of one attention layer, from its checkpoint tensors.
-/// Value normalization has no tensor, so only a model spec declares it.
+/// Value normalization has no tensor; import defaults or a model spec declare
+/// it.
 pub(super) fn qk_normalization(tensors: &TensorCatalog, index: usize) -> QkNormalization {
     let has = |name: &str| {
         layer_roots(index)

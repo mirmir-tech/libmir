@@ -15,6 +15,9 @@ pub(super) fn validate(spec: &SemanticModelSpec) -> Result<()> {
     if decoder.hidden_size == 0 || decoder.vocab_size == 0 || decoder.layers.is_empty() {
         return Err(invalid("decoder dimensions and layer list must be non-empty"));
     }
+    if !decoder.embedding_multiplier.is_finite() || decoder.embedding_multiplier <= 0.0 {
+        return Err(invalid("embedding multiplier must be finite and positive"));
+    }
     norm(decoder.final_norm.epsilon)?;
     layers(&decoder.layers, "decoder")?;
     layers(&decoder.prediction_layers, "prediction")?;

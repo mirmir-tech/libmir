@@ -43,8 +43,9 @@ repository = "https://github.com/mirmir-tech/libmir"
 async-trait = "0.1"
 blake3 = "1"
 image = { version = "0.25.10", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
-minijinja = { version = "2", features = ["builtins", "json"] }
-minijinja-contrib = { version = "2", features = ["pycompat"] }
+# Template output is part of the tokenization contract; upgrade both after parity checks.
+minijinja = { version = "=2.21.0", features = ["builtins", "json"] }
+minijinja-contrib = { version = "=2.21.0", features = ["pycompat"] }
 mircuda = "0.5.5"
 mircup = "0.5.5"
 mirtal = "0.5.5"

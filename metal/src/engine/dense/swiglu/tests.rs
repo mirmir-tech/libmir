@@ -13,14 +13,19 @@ use crate::engine::{Array, ModelTensors, Result, Stream, lowering};
 #[test]
 fn executes_complete_dense_models_without_affine_group_size() -> Result<()> {
     for dtype in ["F32", "F16", "BF16"] {
-        execute_model(dtype)?;
+        execute_model(dtype, None)?;
     }
     Ok(())
 }
 
-fn execute_model(dtype: &str) -> Result<()> {
-    let root = std::env::temp_dir()
-        .join(format!("libmir-metal-dense-model-{}-{dtype}", std::process::id()));
+fn execute_model(
+    dtype: &str,
+    normalization: Option<models::semantic::QkNormalization>,
+) -> Result<()> {
+    let root = std::env::temp_dir().join(format!(
+        "libmir-metal-dense-model-{}-{dtype}-{normalization:?}",
+        std::process::id()
+    ));
     fs::create_dir_all(&root)?;
     write_config(&root)?;
     write_weights(&root.join("model.safetensors"), dtype)?;
@@ -28,7 +33,14 @@ fn execute_model(dtype: &str) -> Result<()> {
     let layout = ModelLayout::inspect(&root)?;
     let decoder = DecoderConfig::from_layout(&layout)?;
     let catalog = TensorCatalog::from_layout(&layout)?;
-    let contract = DecoderExecutionContract::discover(&layout, &decoder, &catalog)?;
+    let mut contract = DecoderExecutionContract::discover(&layout, &decoder, &catalog)?;
+    if let Some(normalization) = normalization {
+        for layer in &mut contract.semantic.decoder.layers {
+            if let models::semantic::MixerSpec::SoftmaxAttention(attention) = &mut layer.mixer {
+                attention.qk_normalization = normalization;
+            }
+        }
+    }
     let lowering = lowering::plan(&contract.semantic)?;
     let stream = Stream::new_cpu()?;
     let tensors = ModelTensors::load(&root, &stream)?;
@@ -40,6 +52,9 @@ fn execute_model(dtype: &str) -> Result<()> {
         16,
         &stream,
     )?;
+    let normalized = normalization != Some(models::semantic::QkNormalization::None);
+    assert_eq!(model.layers[0].weights.attention.query_norm.is_some(), normalized);
+    assert_eq!(model.layers[0].weights.attention.key_norm.is_some(), normalized);
     let mut cache = model.new_cache(&stream)?;
     let logits = model.forward_decode(&Array::from_u32(&[1], &[1, 1])?, &mut cache, 0, &stream)?;
 
@@ -86,6 +101,8 @@ fn write_weights(path: &Path, dtype: &str) -> Result<()> {
         ("lm_head.weight", vec![4, 2]),
         ("model.layers.0.input_layernorm.weight", vec![2]),
         ("model.layers.0.self_attn.q_proj.weight", vec![4, 2]),
+        ("model.layers.0.self_attn.q_norm.weight", vec![4]),
+        ("model.layers.0.self_attn.k_norm.weight", vec![4]),
         ("model.layers.0.self_attn.k_proj.weight", vec![4, 2]),
         ("model.layers.0.self_attn.v_proj.weight", vec![4, 2]),
         ("model.layers.0.self_attn.o_proj.weight", vec![2, 4]),
@@ -128,5 +145,14 @@ fn write_weights(path: &Path, dtype: &str) -> Result<()> {
     bytes.extend_from_slice(header.as_bytes());
     bytes.extend_from_slice(&payload);
     fs::write(path, bytes)?;
+    Ok(())
+}
+
+#[test]
+fn honors_explicit_dense_normalization_even_when_checkpoint_contains_norm_weights() -> Result<()> {
+    use models::semantic::QkNormalization;
+    for normalization in [QkNormalization::None, QkNormalization::QueryKeyRms] {
+        execute_model("F32", Some(normalization))?;
+    }
     Ok(())
 }
