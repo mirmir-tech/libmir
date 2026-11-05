@@ -18,11 +18,15 @@ fn thinking_mode_is_request_scoped_and_default_rendering_is_preserved() -> Resul
     let original = template.render(&conversation)?.text;
     assert_eq!(original, "assistant\n<think>\n");
     assert_eq!(
-        template.render_with_reasoning(&conversation, ReasoningMode::Enabled)?.text,
+        template
+            .render_with_controls(&conversation, ReasoningMode::Enabled.into())?
+            .text,
         original
     );
     assert_eq!(
-        template.render_with_reasoning(&conversation, ReasoningMode::Disabled)?.text,
+        template
+            .render_with_controls(&conversation, ReasoningMode::Disabled.into())?
+            .text,
         "assistant\n<think>\n\n</think>\n\n"
     );
     assert_eq!(
@@ -44,7 +48,7 @@ fn unsupported_templates_reject_explicit_modes_instead_of_ignoring_them() {
         assert!(template.render(&request("Hi")).is_ok());
         for mode in [ReasoningMode::Enabled, ReasoningMode::Disabled] {
             assert!(matches!(
-                template.render_with_reasoning(&request("Hi"), mode),
+                template.render_with_controls(&request("Hi"), mode.into()),
                 Err(crate::ModelsError::UnsupportedReasoningControl)
             ));
         }
@@ -62,7 +66,7 @@ fn qwen_fallback_closes_the_thinking_block_only_when_requested() -> Result<()> {
     assert!(template.render(&request("Hi"))?.text.ends_with("<think>\n"));
     assert!(
         template
-            .render_with_reasoning(&request("Hi"), ReasoningMode::Disabled)?
+            .render_with_controls(&request("Hi"), ReasoningMode::Disabled.into())?
             .text
             .ends_with("<think>\n\n</think>\n\n")
     );
@@ -83,7 +87,7 @@ fn gemma_fallback_omits_only_the_reasoning_control_and_preserves_the_system_mess
     system.role = "system".into();
     system.content = "Be concise".into();
     conversation.messages.insert(0, system);
-    let prompt = template.render_with_reasoning(&conversation, ReasoningMode::Disabled)?;
+    let prompt = template.render_with_controls(&conversation, ReasoningMode::Disabled.into())?;
     assert!(!prompt.text.contains("<|think|>"));
     assert!(prompt.text.contains("system\nBe concise<turn|>"));
     assert!(prompt.text.ends_with("<|turn>model\n"));
@@ -99,7 +103,7 @@ fn generic_fallback_rejects_an_explicit_thinking_switch() {
         template: None,
     };
     assert!(matches!(
-        template.render_with_reasoning(&request("Hi"), ReasoningMode::Disabled),
+        template.render_with_controls(&request("Hi"), ReasoningMode::Disabled.into()),
         Err(crate::ModelsError::UnsupportedReasoningControl)
     ));
 }
@@ -125,7 +129,7 @@ fn named_xml_tools_prefill_only_in_explicit_no_thinking_mode() -> Result<()> {
             parameters: serde_json::json!({"type":"object"}),
         },
     }];
-    let disabled = template.render_with_reasoning(&conversation, ReasoningMode::Disabled)?;
+    let disabled = template.render_with_controls(&conversation, ReasoningMode::Disabled.into())?;
     assert!(disabled.text.ends_with("<tool_call>\n<function=emit>\n"));
     assert!(disabled.tool_prefix.is_some());
     assert_eq!(
@@ -134,7 +138,7 @@ fn named_xml_tools_prefill_only_in_explicit_no_thinking_mode() -> Result<()> {
     );
     assert!(
         template
-            .render_with_reasoning(&conversation, ReasoningMode::Enabled)?
+            .render_with_controls(&conversation, ReasoningMode::Enabled.into())?
             .tool_prefix
             .is_none()
     );
@@ -142,11 +146,15 @@ fn named_xml_tools_prefill_only_in_explicit_no_thinking_mode() -> Result<()> {
     assert!(template.named_tool_prefix(&conversation)?.is_none());
     assert!(
         template
-            .render_with_reasoning(&conversation, ReasoningMode::Disabled)?
+            .render_with_controls(&conversation, ReasoningMode::Disabled.into())?
             .tool_prefix
             .is_none()
     );
     conversation.tool_choice = ToolChoice::Function("missing".into());
-    assert!(template.render_with_reasoning(&conversation, ReasoningMode::Disabled).is_err());
+    assert!(
+        template
+            .render_with_controls(&conversation, ReasoningMode::Disabled.into())
+            .is_err()
+    );
     Ok(())
 }

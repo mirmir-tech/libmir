@@ -15,9 +15,9 @@ pub struct DecodeAttentionConfig {
     pub layer: usize,
     pub hidden_size: usize,
     pub query_heads: usize,
-    pub rotary_dim: usize,
-    pub rope_pairing_dim: usize,
-    pub rope_theta: f32,
+    /// Rotary position embedding of queries and keys; `None` for attention
+    /// layers without positional encoding.
+    pub rotary: Option<crate::kernels::RotaryEmbedding>,
     pub rms_norm_epsilon: f32,
     pub attention_scale: f32,
     pub projection_format: ProjectionFormat,

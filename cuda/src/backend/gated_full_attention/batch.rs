@@ -157,6 +157,6 @@ impl GatedFullAttentionBatch {
     }
 
     fn capture_partitions(&self, paging: &PagedDecodeBatch) -> usize {
-        self.attention.capture_partitions(paging)
+        self.attention.capture_partitions(paging, None)
     }
 }

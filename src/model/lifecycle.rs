@@ -4,6 +4,13 @@ use super::{Library, Model};
 use crate::{DeviceTelemetrySnapshot, Error, MemorySnapshot, Result};
 
 impl Library {
+    /// Creates an OS telemetry observer without initializing or retaining the
+    /// engine.
+    #[must_use]
+    pub fn device_telemetry_reader(&self) -> crate::DeviceTelemetryReader {
+        crate::DeviceTelemetryReader::from_config(&self.config)
+    }
+
     /// Returns current memory information from the lazily initialized backend.
     pub fn memory_snapshot(&self) -> Result<MemorySnapshot> {
         Ok(self.engine()?.memory_snapshot()?)

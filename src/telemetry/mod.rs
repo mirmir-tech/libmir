@@ -2,6 +2,9 @@
 mod apple;
 #[cfg(all(feature = "cuda", target_os = "linux"))]
 mod nvidia;
+mod reader;
+
+pub use reader::{DeviceTelemetryReader, Source};
 
 /// Best-effort dynamic readings for the accelerator selected by a library.
 #[derive(Clone, Debug, Default, PartialEq)]

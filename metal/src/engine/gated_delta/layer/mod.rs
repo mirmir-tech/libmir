@@ -104,11 +104,23 @@ impl GatedDeltaLayer {
         {
             return Ok(output);
         }
-        let mixed = state.convolve_silu(
-            &self.in_proj_qkv.forward(input, stream)?,
-            &self.conv_weight,
-            stream,
+        #[cfg(test)]
+        crate::engine::probe::detail(crate::engine::probe::Stage::GatedDeltaInput, input)?;
+        #[cfg(test)]
+        crate::engine::probe::Projection::capture(
+            crate::engine::probe::ProjectionKind::GatedDeltaQkv,
+            &self.in_proj_qkv,
+            input,
         )?;
+        let projected = self.in_proj_qkv.forward(input, stream)?;
+        #[cfg(test)]
+        crate::engine::probe::detail(
+            crate::engine::probe::Stage::GatedDeltaProjection,
+            &projected,
+        )?;
+        let mixed = state.convolve_silu(&projected, &self.conv_weight, stream)?;
+        #[cfg(test)]
+        crate::engine::probe::detail(crate::engine::probe::Stage::GatedDeltaConvolution, &mixed)?;
         let (query, key, value) =
             split_qkv(&mixed, usize::try_from(key_width)?, usize::try_from(value_width)?, stream)?;
         let query = query
@@ -147,12 +159,19 @@ impl GatedDeltaLayer {
         } else {
             normalized_update(state, inputs, self.config.key_head_dim, false, stream)?
         };
+        #[cfg(test)]
+        crate::engine::probe::detail(
+            crate::engine::probe::Stage::GatedDeltaRecurrence,
+            &recurrent,
+        )?;
         let normalized = self.norm_weight.apply(&recurrent, self.config.rms_norm_eps, stream)?;
         let output = Array::from_native(stream.precise_silu_mul(
             recurrent.native(),
             gate.native(),
             normalized.native(),
         )?)?;
+        #[cfg(test)]
+        crate::engine::probe::detail(crate::engine::probe::Stage::GatedDeltaOutput, &output)?;
         project_output(&output.reshape(&[batch, sequence, value_width], stream)?)
     }
 

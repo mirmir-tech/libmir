@@ -119,6 +119,12 @@ impl CycleRecovery {
         });
     }
 
+    /// Whether the next token is the backend's own choice: no recovery
+    /// sampling and no forced reasoning exit.
+    pub(super) const fn takes_backend_tokens(&self) -> bool {
+        matches!(self.state, RecoveryState::Disabled | RecoveryState::Watching { .. })
+    }
+
     pub(super) fn sampling(&self, normal: SamplingLogits) -> SamplingLogits {
         match self.state {
             RecoveryState::Active(_) => SamplingLogits::Full,

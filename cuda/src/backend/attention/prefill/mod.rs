@@ -68,9 +68,7 @@ impl PrefillAttentionBf16 {
             kv_heads: config.cache.kv_heads,
             head_dim: config.cache.key_head_dim,
             value_head_dim: config.cache.value_head_dim,
-            rotary_dim: config.rotary_dim,
-            pairing_dim: config.rope_pairing_dim,
-            theta: config.rope_theta,
+            rotary: config.rotary,
             epsilon,
             normalization: config.qkv_normalization,
         };

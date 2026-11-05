@@ -74,7 +74,7 @@ fn read_context_len(value: &Value) -> Result<Option<usize>> {
 }
 
 fn config_sections(value: &Value) -> Vec<&Value> {
-    let mut sections: Vec<&Value> = ["text_config", "language_config"]
+    let mut sections: Vec<&Value> = ["text_config", "language_config", "llm_config"]
         .into_iter()
         .filter_map(|key| value.get(key))
         .filter(|section| section.is_object())
@@ -111,6 +111,12 @@ fn config_quantization(config: Option<&Value>) -> Option<Quantization> {
         if name.eq_ignore_ascii_case("mxfp8") {
             return Some(Quantization::MxFp8);
         }
+        if name.eq_ignore_ascii_case("mixed_precision") {
+            return Some(mixed_precision(config));
+        }
+    }
+    if float_weight_groups(config) {
+        return Some(Quantization::Fp8);
     }
     let bits = config
         .get("bits")
@@ -128,6 +134,41 @@ fn config_quantization(config: Option<&Value>) -> Option<Quantization> {
         Some(other) => Some(Quantization::Custom(format!("{other}bit"))),
         None => None,
     }
+}
+
+/// Headline encoding of a `ModelOpt` mixed-precision checkpoint: the narrowest
+/// per-layer algorithm it uses. Per-binding encodings remain authoritative.
+fn mixed_precision(config: &Value) -> Quantization {
+    let algorithms = config
+        .get("quantized_layers")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter_map(|(_, layer)| layer.get("quant_algo").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    if algorithms.iter().any(|algorithm| algorithm.eq_ignore_ascii_case("nvfp4")) {
+        Quantization::NvFp4
+    } else if algorithms.iter().any(|algorithm| algorithm.eq_ignore_ascii_case("fp8")) {
+        Quantization::Fp8
+    } else {
+        Quantization::Custom("mixed_precision".into())
+    }
+}
+
+/// Whether every weight config group declares 8-bit floating-point values.
+fn float_weight_groups(config: &Value) -> bool {
+    let mut groups = config
+        .get("config_groups")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter_map(|(_, group)| group.get("weights"))
+        .peekable();
+    groups.peek().is_some()
+        && groups.all(|weights| {
+            weights.get("type").and_then(Value::as_str) == Some("float")
+                && weights.get("num_bits").and_then(Value::as_u64) == Some(8)
+        })
 }
 
 fn quantization_name(config: &Value) -> Option<&str> {

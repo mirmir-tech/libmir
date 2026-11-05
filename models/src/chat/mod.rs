@@ -1,5 +1,6 @@
 mod template;
 
 pub use template::{
-    ChatPrompt, ChatTemplate, ReasoningMode, TemplateKind, TemplateSource, ToolCallPrefix,
+    ChatPrompt, ChatTemplate, ReasoningEffort, ReasoningHistory, ReasoningMode, TemplateControls,
+    TemplateKind, TemplateSource, ToolCallPrefix,
 };

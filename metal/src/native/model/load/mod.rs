@@ -60,6 +60,11 @@ impl LoadedModel {
         let catalog = TensorCatalog::from_layout(&layout)?;
         let task_plan = TaskExecutionPlan::discover(&layout, &catalog)?;
         let (decoder, encoder, contract) = execution_metadata(&task_plan, &layout, &catalog)?;
+        architecture::metal::admit(
+            &task_plan,
+            contract.as_ref().map(|contract| &contract.semantic),
+        )
+        .map_err(|error| Error::UnsupportedModel(error.to_string()))?;
         let decoder_lowering = matches!(
             task_plan,
             TaskExecutionPlan::Generation { .. } | TaskExecutionPlan::CausalScoring { .. }

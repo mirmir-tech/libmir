@@ -1,4 +1,4 @@
-use models::generation::GenerationSettings;
+use models::{chat::TemplateControls, generation::GenerationSettings};
 use runtime::backend::{PrefillOutput, SamplingLogits};
 
 #[cfg(any(feature = "cuda", feature = "metal"))]
@@ -120,13 +120,20 @@ impl Prepared {
                 &request.conversation,
                 request.tool_constraints,
             );
-            return Ok(Self::Text(model.descriptor().prepare_with_reasoning(
+            return Ok(Self::Text(model.descriptor().prepare_with_controls(
                 &conversation,
                 settings,
-                request.reasoning,
+                TemplateControls {
+                    reasoning: request.reasoning,
+                    effort: request.reasoning_effort,
+                    history: request.reasoning_history,
+                },
             )?));
         };
-        if request.reasoning != crate::ReasoningMode::ModelDefault {
+        if request.reasoning != crate::ReasoningMode::ModelDefault
+            || request.reasoning_effort != crate::ReasoningEffort::ModelDefault
+            || request.reasoning_history != crate::ReasoningHistory::ModelDefault
+        {
             return Err(models::ModelsError::InvalidConfig(
                 "explicit reasoning mode is not supported for image requests".into(),
             )

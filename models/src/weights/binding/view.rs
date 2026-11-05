@@ -1,6 +1,6 @@
 use super::{
     AttentionProjectionRole, ExpertProjectionRole, LayerTensorRole, LogicalTensorRole,
-    TensorBinding, WeightBindingPlan,
+    TensorBinding, WeightBindingPlan, slot::LayerSlot,
 };
 use crate::error::{ModelsError, Result};
 
@@ -37,7 +37,7 @@ pub enum RoutedExpertBindings<'a> {
     },
     Individual {
         tensors: &'a [TensorBinding],
-        layer: usize,
+        layer: LayerSlot,
     },
 }
 
@@ -47,21 +47,16 @@ impl<'a> RoutedExpertBindings<'a> {
         let Self::Individual { tensors, layer } = self else {
             return Vec::new();
         };
-        let mut found =
-            tensors
-                .iter()
-                .filter_map(|binding| match binding.role {
-                    LogicalTensorRole::Layer {
-                        index,
-                        tensor:
-                            LayerTensorRole::ExpertProjection {
-                                expert: Some(expert),
-                                projection: value,
-                            },
-                    } if index == layer && value == projection => Some((expert, binding)),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
+        let mut found = tensors
+            .iter()
+            .filter_map(|binding| match layer.layer_tensor(&binding.role) {
+                Some(LayerTensorRole::ExpertProjection {
+                    expert: Some(expert),
+                    projection: value,
+                }) if *value == projection => Some((*expert, binding)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
         found.sort_by_key(|(expert, _)| *expert);
         found.into_iter().map(|(_, binding)| binding).collect()
     }
@@ -74,11 +69,8 @@ impl<'a> RoutedExpertBindings<'a> {
                 .iter()
                 .filter(|binding| {
                     matches!(
-                        binding.role,
-                        LogicalTensorRole::Layer {
-                            index,
-                            tensor: LayerTensorRole::ExpertProjection { expert: Some(_), .. },
-                        } if index == layer
+                        layer.layer_tensor(&binding.role),
+                        Some(LayerTensorRole::ExpertProjection { expert: Some(_), .. })
                     )
                 })
                 .collect(),
@@ -162,7 +154,10 @@ fn experts(plan: &WeightBindingPlan, index: usize) -> Result<RoutedExpertBinding
             down,
         });
     }
-    let individual = RoutedExpertBindings::Individual { tensors: &plan.tensors, layer: index };
+    let individual = RoutedExpertBindings::Individual {
+        tensors: &plan.tensors,
+        layer: LayerSlot::Decoder(index),
+    };
     let gate = individual.individual(ExpertProjectionRole::Gate);
     let up = individual.individual(ExpertProjectionRole::Up);
     let down = individual.individual(ExpertProjectionRole::Down);

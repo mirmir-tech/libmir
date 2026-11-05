@@ -17,6 +17,14 @@ pub(super) enum Family {
 }
 
 pub(super) fn load_family(family: Family, prefixes: usize) -> Result<(LoadedModel, PathBuf)> {
+    load_family_with_paging(family, prefixes, 1)
+}
+
+pub(super) fn load_family_with_paging(
+    family: Family,
+    prefixes: usize,
+    page_min_context: usize,
+) -> Result<(LoadedModel, PathBuf)> {
     let directory = std::env::temp_dir().join(format!("libmir-prefill-budget-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&directory)?;
     match family {
@@ -31,7 +39,12 @@ pub(super) fn load_family(family: Family, prefixes: usize) -> Result<(LoadedMode
             write_weights(&directory.join("model.safetensors"))?;
         },
     }
-    let model = load_path(directory.to_string_lossy().into_owned(), prefixes)?;
+    let model = load_path_with_paging(
+        directory.to_string_lossy().into_owned(),
+        prefixes,
+        256,
+        page_min_context,
+    )?;
     Ok((model, directory))
 }
 

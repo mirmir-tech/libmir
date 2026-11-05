@@ -1,8 +1,10 @@
 mod checkpoint;
 mod pool;
+mod telemetry;
 
 pub(super) use pool::{KvCachePools, SharedCacheMemory, SharedKvCache};
 use runtime::kv::{CacheStats, KvCache};
+pub use telemetry::CacheStatsReader;
 
 use super::{Model, cache_cohort::FillClaim};
 use crate::Result;

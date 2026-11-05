@@ -11,13 +11,14 @@ inference service or adding a Python runtime.
 ## What it provides
 
 - checkpoint, tokenizer, chat-template, and architecture discovery;
-- text, vision, embedding, and reranking tasks;
+- text, vision, embedding, reranking, and typed Laya decision tasks;
 - streamed generation, sampling, cancellation, and reasoning channels;
 - independent sessions and concurrent request scheduling;
 - paged K/V storage, prefix caching, sliding windows, and quantized caches;
 - explicit memory estimation and runtime telemetry;
 - Metal execution through `mirtal`;
-- CUDA execution through `mircuda`.
+- CUDA execution through `mircuda`;
+- CPU decisions through `mircup` (not a general CPU generation backend).
 
 Model admission is derived from checkpoint configuration, tensor layout,
 quantization, and backend capabilities rather than a model-name allowlist.
@@ -28,14 +29,14 @@ For Apple Metal:
 
 ```toml
 [dependencies]
-libmir = { version = "0.5.2", features = ["metal"] }
+libmir = { version = "0.5.5", features = ["metal"] }
 ```
 
 For NVIDIA CUDA:
 
 ```toml
 [dependencies]
-libmir = { version = "0.5.2", default-features = false, features = ["cuda"] }
+libmir = { version = "0.5.5", default-features = false, features = ["cuda"] }
 ```
 
 ## Generate from a local checkpoint
@@ -119,6 +120,46 @@ cargo run --release -- /path/to/model
 Libmir does not select models from environment variables or command-line
 arguments. The embedding application owns configuration and uses the public
 `Library`, `Model`, and `Session` APIs to build the desired lifecycle.
+
+## Structured output and Nemotron-H
+
+`GenerationRequest::response_format = ResponseFormat::JsonSchema(schema)`
+constrains final JSON content on Metal or CUDA. Native reasoning remains a
+separate channel, and literal protocol markers in JSON strings are preserved.
+JSON content rejects schema-tool mode and required/named tool choices. Sampling
+requires repetition penalty 1, minimum tokens 0, and normal EOS handling.
+The original schema is checked at completion; invalid or truncated content
+returns `Error::InvalidResponseFormat`. Streaming callbacks may already have
+received partial content. See the [JSON guide](https://docs.mirmir.tech/api/structured-output.html).
+
+Nemotron-H text generation uses CUDA Mamba-2, attention without `RoPE`, and
+latent routed experts. Optional `RuntimeConfig::scheduler.speculation` enables
+MTP with the checkpoint's prediction head, including grammar-masked verification.
+This does not enable the checkpoint's vision tower or Metal state-space execution.
+Gemma 4 CUDA gains sliding-window and 512-wide global-head prefill paths.
+Historical performance measurements remain tied to their recorded revisions.
+
+`Speculation::draft_tokens` uses `DraftTokens::try_from(count)` to enforce the
+1–8-token rollback window. Speculative residency is estimated only for CUDA.
+`GenerationRequest::validate()` checks model-independent output constraints before
+work starts; HTTP adapters can use it before opening streams. Schema mode uses
+neutral repetition/EOS/minimum-token defaults and rejects explicit incompatible
+values. Token masks and completed-output schema validation remain active.
+
+For Rust source changes from 0.5.2 (new enum variants and request/backend
+fields), see the [migration guide](https://docs.mirmir.tech/getting-started/upgrade-0.5.5.html).
+Sampled MTP verification currently copies target logits to the host; greedy
+and masked paths have different costs. MTP is not a throughput guarantee.
+
+## Laya decisions
+
+`libmir::decision::DecisionModel` loads a Laya checkpoint independently of the
+chat scheduler. Its typed questions return options, probabilities, boolean
+verdicts, and scale scores; `decide_schema` projects a supported flat schema.
+Enable `cpu`, `metal`, or `cuda`, then choose `DecisionBackend::Cpu`, `Metal`,
+or `Cuda(DecisionPrecision::F32)` / `Bf16`. The CPU backend uses Apple Accelerate
+on macOS and multithreaded GEMM elsewhere. See the
+[decision guide](https://docs.mirmir.tech/libmir/decisions.html).
 
 ## Typical uses
 

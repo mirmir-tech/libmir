@@ -1,6 +1,6 @@
 use models::semantic::{
     ActivationSpec, DecoderLayerSpec, FeedForwardSpec, MixerSpec, NormalizationKind,
-    NormalizationSpec,
+    NormalizationSpec, QkNormalization,
 };
 
 use crate::{ArchitectureError, Result};
@@ -12,7 +12,11 @@ pub enum NormalizationLowering {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MixerLowering {
-    Softmax { sinks: bool, window: Option<usize> },
+    Softmax {
+        sinks: bool,
+        window: Option<usize>,
+        normalization: QkNormalization,
+    },
     Linear,
 }
 
@@ -42,7 +46,7 @@ pub fn lower_layer(layer: &DecoderLayerSpec) -> Result<LayerLowering> {
             "post-attention",
             layer.post_attention_norm,
         )?,
-        mixer: lower_mixer(&layer.mixer),
+        mixer: lower_mixer(layer.index, &layer.mixer)?,
         feed_forward: lower_feed_forward(layer.index, &layer.feed_forward)?,
     })
 }
@@ -60,13 +64,17 @@ fn lower_normalization(
     }
 }
 
-const fn lower_mixer(mixer: &MixerSpec) -> MixerLowering {
+fn lower_mixer(layer: usize, mixer: &MixerSpec) -> Result<MixerLowering> {
     match mixer {
-        MixerSpec::SoftmaxAttention(attention) => MixerLowering::Softmax {
+        MixerSpec::SoftmaxAttention(attention) => Ok(MixerLowering::Softmax {
             sinks: attention.sinks,
+            normalization: attention.qk_normalization,
             window: attention.window,
-        },
-        MixerSpec::LinearAttention(_) => MixerLowering::Linear,
+        }),
+        MixerSpec::LinearAttention(_) => Ok(MixerLowering::Linear),
+        MixerSpec::StateSpace(_) => Err(ArchitectureError::invalid(format!(
+            "Metal cannot lower layer {layer} state-space mixer"
+        ))),
     }
 }
 

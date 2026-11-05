@@ -212,3 +212,121 @@ extern "C" __global__ void libmir_cuda_sampling_full_finalize_bf16(
     }
   }
 }
+
+namespace {
+constexpr unsigned int kNucleusThreads = 1024;
+constexpr unsigned int kNucleusItems = 8;
+constexpr unsigned int kNucleusTile = kNucleusThreads * kNucleusItems;
+constexpr unsigned int kKeyCount = 1u << 16;
+
+// Orders BF16 scores as unsigned keys: a larger key is a larger score.
+__device__ unsigned int score_key(__nv_bfloat16 value) {
+  const unsigned int bits = __bfloat16_as_ushort(value);
+  return (bits & 0x8000u) == 0u ? bits | 0x8000u : ~bits & 0xffffu;
+}
+
+struct Minimum {
+  __device__ unsigned int operator()(unsigned int left, unsigned int right) const {
+    return left < right ? left : right;
+  }
+};
+
+__device__ float nucleus_weight(__nv_bfloat16 value, float maximum,
+                                float temperature) {
+  const float score = __bfloat162float(value);
+  return finite(score) ? expf((score - maximum) / temperature) : 0.0f;
+}
+}  // namespace
+
+// Exact nucleus sampling over the whole vocabulary in one block per row.
+// Tempered weights are summed for scores at or above a BF16 key, and a binary
+// search over the 2^16 keys finds the highest key whose kept mass still
+// reaches `top_p` of the total: the same set the host keeps by walking scores
+// in descending order. Every sum runs in a fixed order, so a row and draw
+// always select the same token. The draw then walks the kept tokens in
+// vocabulary order, as the full sampler does.
+extern "C" __global__ void __launch_bounds__(kNucleusThreads)
+libmir_cuda_sampling_nucleus_bf16(
+    const __nv_bfloat16* logits, const unsigned long long* candidates,
+    unsigned int* output, float top_p, float temperature, float draw,
+    unsigned int vocab, unsigned int logits_stride, unsigned int row,
+    unsigned int workspace_stride) {
+  using Reduce = cub::BlockReduce<float, kNucleusThreads>;
+  using Select = cub::BlockReduce<unsigned int, kNucleusThreads>;
+  using Scan = cub::BlockScan<float, kNucleusThreads>;
+  __shared__ union {
+    typename Reduce::TempStorage reduce;
+    typename Select::TempStorage select;
+    typename Scan::TempStorage scan;
+  } storage;
+  __shared__ float shared_mass;
+  __shared__ unsigned int shared_token;
+  logits += static_cast<unsigned long long>(row) * logits_stride;
+  candidates += static_cast<unsigned long long>(row) * workspace_stride;
+  const unsigned int first = token(candidates[0]);
+  const float maximum = __bfloat162float(logits[first]);
+  auto mass_from = [&](unsigned int threshold) {
+    float local = 0.0f;
+    for (unsigned int index = threadIdx.x; index < vocab; index += kNucleusThreads) {
+      const __nv_bfloat16 value = logits[index];
+      if (score_key(value) >= threshold) local += nucleus_weight(value, maximum, temperature);
+    }
+    const float total = Reduce(storage.reduce).Sum(local);
+    if (threadIdx.x == 0) shared_mass = total;
+    __syncthreads();
+    const float mass = shared_mass;
+    __syncthreads();
+    return mass;
+  };
+  const float target = mass_from(0u) * top_p;
+  unsigned int low = 0u;
+  unsigned int high = kKeyCount - 1u;
+  while (low < high) {
+    const unsigned int middle = low + (high - low + 1u) / 2u;
+    if (mass_from(middle) >= target) {
+      low = middle;
+    } else {
+      high = middle - 1u;
+    }
+  }
+  const float threshold = mass_from(low) * draw;
+  float offset = 0.0f;
+  for (unsigned int base = 0; base < vocab; base += kNucleusTile) {
+    const unsigned int begin = base + threadIdx.x * kNucleusItems;
+    float weights[kNucleusItems];
+    float local = 0.0f;
+    #pragma unroll
+    for (unsigned int item = 0; item < kNucleusItems; ++item) {
+      const unsigned int index = begin + item;
+      weights[item] = index < vocab && score_key(logits[index]) >= low
+                          ? nucleus_weight(logits[index], maximum, temperature)
+                          : 0.0f;
+      local += weights[item];
+    }
+    float prefix = 0.0f;
+    float tile = 0.0f;
+    Scan(storage.scan).ExclusiveSum(local, prefix, tile);
+    __syncthreads();
+    unsigned int candidate = 0xffffffffu;
+    float cumulative = offset + prefix;
+    #pragma unroll
+    for (unsigned int item = 0; item < kNucleusItems; ++item) {
+      cumulative += weights[item];
+      if (candidate == 0xffffffffu && weights[item] > 0.0f && threshold <= cumulative) {
+        candidate = begin + item;
+      }
+    }
+    const unsigned int selected = Select(storage.select).Reduce(candidate, Minimum());
+    if (threadIdx.x == 0) shared_token = selected;
+    __syncthreads();
+    const unsigned int found = shared_token;
+    __syncthreads();
+    if (found != 0xffffffffu) {
+      if (threadIdx.x == 0) output[row] = found;
+      return;
+    }
+    offset += tile;
+  }
+  // Rounding left the draw beyond the kept mass: the top token is always kept.
+  if (threadIdx.x == 0) output[row] = first;
+}

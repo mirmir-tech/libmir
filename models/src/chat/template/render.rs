@@ -1,5 +1,7 @@
+use std::collections::BTreeMap;
+
 use foundation::conversation::{Conversation, ToolChoice};
-use minijinja::{Environment, Error, ErrorKind, context};
+use minijinja::{Environment, Error, ErrorKind, Value};
 use minijinja_contrib::pycompat::unknown_method_callback;
 use time::OffsetDateTime;
 
@@ -10,29 +12,65 @@ pub(super) fn render_model_template(
     body: &str,
     conversation: &Conversation,
     tokens: &TemplateTokens,
-    reasoning: super::ReasoningMode,
+    controls: super::TemplateControls,
 ) -> Result<String> {
     let mut environment = Environment::new();
     environment.set_unknown_method_callback(unknown_method_callback);
     environment.add_function("strftime_now", strftime_now);
     environment.add_function("raise_exception", raise_exception);
+    environment.add_test("iterable", is_iterable);
     environment.add_template("chat", body)?;
     let template = environment.get_template("chat")?;
-    if reasoning != super::ReasoningMode::ModelDefault
-        && !template.undeclared_variables(false).contains("enable_thinking")
-    {
-        return Err(crate::ModelsError::UnsupportedReasoningControl);
-    }
+    let undeclared = template.undeclared_variables(false);
+    // A switch is a template input when the template reads it without
+    // assigning it, or when it defaults it with the Hugging Face pattern
+    // `{% set name = name if name is defined else default %}`, which the
+    // analysis counts as an assignment.
+    let declares =
+        |name: &str| undeclared.contains(name) || body.contains(&format!("{name} is defined"));
+    let switch = |name: &'static str, requested: bool| {
+        if requested && !declares(name) {
+            Err(crate::ModelsError::UnsupportedReasoningControl)
+        } else {
+            Ok(())
+        }
+    };
+    switch("enable_thinking", controls.reasoning != super::ReasoningMode::ModelDefault)?;
+    switch("medium_effort", controls.effort != super::ReasoningEffort::ModelDefault)?;
+    switch(
+        "truncate_history_thinking",
+        controls.history != super::ReasoningHistory::ModelDefault,
+    )?;
     let enabled = !matches!(conversation.tool_choice, ToolChoice::None);
     let tools = (enabled && !conversation.tools.is_empty()).then_some(&conversation.tools);
-    Ok(template.render(context! {
-        messages => &conversation.messages,
-        tools => tools,
-        bos_token => tokens.bos(),
-        eos_token => tokens.eos(),
-        add_generation_prompt => true,
-        enable_thinking => reasoning.thinking_enabled(),
-    })?)
+    let mut variables = BTreeMap::from([
+        ("messages", Value::from_serialize(&conversation.messages)),
+        ("tools", Value::from_serialize(tools)),
+        ("bos_token", Value::from_serialize(tokens.bos())),
+        ("eos_token", Value::from_serialize(tokens.eos())),
+        ("add_generation_prompt", Value::from(true)),
+        ("enable_thinking", Value::from(controls.reasoning.thinking_enabled())),
+    ]);
+    // Undefined values keep the template's own defaults.
+    if controls.effort == super::ReasoningEffort::Efficient {
+        variables.insert("medium_effort", Value::from(true));
+    }
+    match controls.history {
+        super::ReasoningHistory::ModelDefault => {},
+        super::ReasoningHistory::Keep => {
+            variables.insert("truncate_history_thinking", Value::from(false));
+        },
+        super::ReasoningHistory::Truncate => {
+            variables.insert("truncate_history_thinking", Value::from(true));
+        },
+    }
+    Ok(template.render(variables)?)
+}
+
+/// Jinja2's `iterable` test: `none` and undefined values are not iterable.
+/// Templates guard `tools | length` with it when no tools are passed.
+fn is_iterable(value: &Value) -> bool {
+    !value.is_none() && !value.is_undefined() && value.try_iter().is_ok()
 }
 
 fn raise_exception(message: &str) -> std::result::Result<String, Error> {
@@ -64,7 +102,7 @@ mod tests {
                 tool_choice: ToolChoice::default(),
             },
             &TemplateTokens::default(),
-            super::super::ReasoningMode::ModelDefault,
+            super::super::ReasoningMode::ModelDefault.into(),
         )?;
 
         assert_eq!(rendered.len(), 10);
@@ -93,7 +131,7 @@ mod tests {
             body,
             &request("Explain Rust ownership."),
             &TemplateTokens::new("<s>", "</s>"),
-            super::super::ReasoningMode::ModelDefault,
+            super::super::ReasoningMode::ModelDefault.into(),
         )?;
 
         assert_eq!(rendered, "<s>[INST] Explain Rust ownership.[/INST]");
@@ -109,7 +147,7 @@ mod tests {
                 body,
                 &request,
                 &TemplateTokens::default(),
-                super::super::ReasoningMode::ModelDefault
+                super::super::ReasoningMode::ModelDefault.into()
             )?,
             ""
         );
@@ -125,7 +163,7 @@ mod tests {
             body,
             &request,
             &TemplateTokens::default(),
-            super::super::ReasoningMode::ModelDefault,
+            super::super::ReasoningMode::ModelDefault.into(),
         )?;
         assert!(rendered.starts_with("[AVAILABLE_TOOLS]["));
         assert!(rendered.contains(r#""name":"weather""#));
@@ -136,10 +174,24 @@ mod tests {
                 body,
                 &request,
                 &TemplateTokens::default(),
-                super::super::ReasoningMode::ModelDefault
+                super::super::ReasoningMode::ModelDefault.into()
             )?,
             ""
         );
+        Ok(())
+    }
+
+    #[test]
+    fn none_is_not_iterable() -> Result<()> {
+        let body = "{%- if tools is iterable and tools | length > 0 -%}tools{%- endif -%}\
+                    {%- if messages is iterable -%}messages{%- endif -%}";
+        let rendered = render_model_template(
+            body,
+            &request("Hello"),
+            &TemplateTokens::default(),
+            super::super::ReasoningMode::ModelDefault.into(),
+        )?;
+        assert_eq!(rendered, "messages");
         Ok(())
     }
 

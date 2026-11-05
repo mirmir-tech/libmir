@@ -215,6 +215,15 @@ impl LoadedModel {
     }
 
     pub(super) fn prefill_chunk_len(&self, position: usize, remaining: usize) -> usize {
+        #[cfg(test)]
+        if let Some(limit) = self.stream.config().diagnostics.prefill_chunk_limit {
+            return prefill::bounded_step_with_limit(
+                self.info.prefill_step,
+                position,
+                remaining,
+                limit.get(),
+            );
+        }
         prefill::bounded_prefill_step(self.info.prefill_step, position, remaining)
     }
 }

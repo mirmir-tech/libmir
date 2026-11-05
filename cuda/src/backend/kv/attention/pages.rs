@@ -54,9 +54,8 @@ impl PagedAttentionBf16 {
             context_tokens,
             block_count,
         )?;
-        Ok(self
-            .fmha
-            .as_ref()
+        self.fmha
+            .as_mut()
             .ok_or(Error::InvalidExecutionPlan("missing BF16 FMHA plan"))?
             .execute(
                 &self.stream,
@@ -68,7 +67,7 @@ impl PagedAttentionBf16 {
                 context_tokens,
                 0,
                 scale,
-            )?)
+            )
     }
 
     fn ensure_fmha_workspace(&mut self, context_tokens: usize) -> Result<()> {

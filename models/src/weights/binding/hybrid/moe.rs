@@ -1,8 +1,10 @@
 use super::{
-    AttentionProjectionRole, ExpertProjectionRole, FeedForwardProjectionRole, LayerTensorRole,
-    LogicalTensorRole, TensorBinding, WeightBindingPlan,
+    AttentionProjectionRole, LayerTensorRole, LogicalTensorRole, TensorBinding, WeightBindingPlan,
 };
-use crate::error::{ModelsError, Result};
+use crate::{
+    error::{ModelsError, Result},
+    weights::{ExpertProjectionRole, FeedForwardProjectionRole},
+};
 
 #[derive(Debug)]
 pub struct HybridMoeLayerBindings<'a> {

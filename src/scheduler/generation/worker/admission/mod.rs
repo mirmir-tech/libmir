@@ -96,11 +96,11 @@ impl Worker {
                         window.arrived(pending.enqueued);
                     }
                     self.admit(command);
-                    window.widen(self.prefill_collection_wait());
                 },
                 Err(RecvTimeoutError::Timeout) => break,
                 Err(RecvTimeoutError::Disconnected) => self.stopping = true,
             }
+            window.update(self.prefill_collection_wait());
         }
     }
 

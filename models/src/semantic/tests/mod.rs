@@ -1,0 +1,223 @@
+mod defaults;
+use std::{fs, path::PathBuf};
+
+use serde_json::json;
+
+use super::*;
+use crate::{
+    error::Result,
+    layout::{DecoderConfig, ModelLayout},
+    weights::{TensorCatalog, TensorInfo},
+};
+
+#[test]
+fn semantic_discovery_does_not_depend_on_model_type() -> Result<()> {
+    let named = DecoderConfig::from_value(&configuration("gpt_oss", &["GptOssForCausalLM"]))?;
+    let unrelated = DecoderConfig::from_value(&configuration(
+        "unrelated",
+        &["MisleadingRepositoryPrefixModel"],
+    ))?;
+    let tensors = attention_sink_catalog();
+
+    let named = SemanticModelSpec::discover(&named, &tensors)?;
+    let unrelated = SemanticModelSpec::discover(&unrelated, &tensors)?;
+
+    assert_eq!(named, unrelated);
+    let MixerSpec::SoftmaxAttention(attention) = &named.decoder.layers[0].mixer else {
+        return Err(crate::error::ModelsError::InvalidConfig("expected attention".into()));
+    };
+    let PositionEncodingSpec::Rotary(rotary) = &attention.position else {
+        return Err(crate::error::ModelsError::InvalidConfig("expected rotary positions".into()));
+    };
+    assert!(matches!(rotary.scaling, Some(RopeScalingSpec::Yarn { truncate: false, .. })));
+
+    assert!(matches!(
+        named.decoder.layers[0].mixer,
+        MixerSpec::SoftmaxAttention(AttentionSpec { sinks: true, .. })
+    ));
+    Ok(())
+}
+
+#[test]
+fn key_equals_value_applies_only_to_full_attention() -> Result<()> {
+    let mut config = configuration("hybrid", &[]);
+    config["attention_k_eq_v"] = json!(true);
+    config["global_head_dim"] = json!(16);
+    config["num_global_key_value_heads"] = json!(1);
+    let decoder = DecoderConfig::from_value(&config)?;
+    let spec = SemanticModelSpec::discover(&decoder, &TensorCatalog { tensors: Vec::new() })?;
+
+    let relations = spec
+        .decoder
+        .layers
+        .iter()
+        .map(|layer| match &layer.mixer {
+            MixerSpec::SoftmaxAttention(attention) => Some(attention.key_value_relation),
+            MixerSpec::LinearAttention(_) | MixerSpec::StateSpace(_) => None,
+        })
+        .collect::<Option<Vec<_>>>();
+    assert_eq!(
+        relations,
+        Some(vec![KeyValueRelation::Separate, KeyValueRelation::KeyEqualsValue])
+    );
+    Ok(())
+}
+
+#[test]
+fn checkpoint_tensors_never_imply_value_normalization() -> Result<()> {
+    let decoder = DecoderConfig::from_value(&configuration("any", &[]))?;
+    let tensors = catalog(&[
+        "model.layers.0.layer_scalar",
+        "model.layers.0.self_attn.k_norm.weight",
+        "model.layers.0.self_attn.q_norm.weight",
+    ]);
+
+    let spec = SemanticModelSpec::discover(&decoder, &tensors)?;
+
+    let MixerSpec::SoftmaxAttention(attention) = &spec.decoder.layers[0].mixer else {
+        return Err(crate::error::ModelsError::InvalidConfig("expected attention".into()));
+    };
+    assert_eq!(attention.qk_normalization, QkNormalization::QueryKeyRms);
+    assert!((attention.scale - 8.0_f64.sqrt().recip()).abs() < f64::EPSILON);
+    assert!((spec.decoder.embedding_multiplier - 1.0).abs() < f64::EPSILON);
+    Ok(())
+}
+
+#[test]
+fn model_spec_declares_value_normalization_scale_and_embedding_multiplier() -> Result<()> {
+    let decoder = DecoderConfig::from_value(&configuration("any", &[]))?;
+    let mut spec = SemanticModelSpec::discover(&decoder, &attention_sink_catalog())?;
+    spec.decoder.embedding_multiplier = 73.5;
+    for layer in &mut spec.decoder.layers {
+        if let MixerSpec::SoftmaxAttention(attention) = &mut layer.mixer {
+            attention.qk_normalization = QkNormalization::QueryKeyValueRms;
+            attention.scale = 1.0;
+        }
+    }
+    let path = temp_dir("declared").with_extension("toml");
+    fs::write(&path, spec.to_toml()?)?;
+
+    let read = sidecar::read(&path)?;
+    fs::remove_file(path)?;
+
+    assert_eq!(read, spec);
+    Ok(())
+}
+
+#[test]
+fn toml_sidecar_round_trips_complete_semantics() -> Result<()> {
+    let decoder = DecoderConfig::from_value(&configuration("unrelated", &[]))?;
+    let spec = SemanticModelSpec::discover(&decoder, &attention_sink_catalog())?;
+    let encoded = spec.to_toml()?;
+    assert!(encoded.contains("schema_version = 1"));
+    assert!(encoded.contains("[[decoder.layers]]"));
+
+    let path = temp_path();
+    fs::write(&path, encoded)?;
+    let restored = sidecar::read(&path)?;
+    let _removed = fs::remove_file(path);
+
+    assert_eq!(restored, spec);
+    Ok(())
+}
+
+#[test]
+fn config_and_sidecar_paths_produce_equal_semantics() -> Result<()> {
+    let root = temp_dir("misleading-gpt-oss-repository-prefix");
+    fs::create_dir_all(&root)?;
+    fs::write(
+        root.join("config.json"),
+        serde_json::to_vec(&configuration("renamed", &["UnrelatedArchitecture"]))?,
+    )?;
+    let layout = ModelLayout::inspect(&root)?;
+    let decoder = DecoderConfig::from_layout(&layout)?;
+    let catalog = attention_sink_catalog();
+    let derived = SemanticModelSpec::from_layout(&layout, &decoder, &catalog)?;
+
+    fs::write(root.join("mir-model-spec.toml"), derived.to_toml()?)?;
+    fs::write(
+        root.join("config.json"),
+        serde_json::to_vec(&configuration("another_name", &["AnotherArchitecture"]))?,
+    )?;
+    let sidecar_layout = ModelLayout::inspect(&root)?;
+    let sidecar_decoder = DecoderConfig::from_layout(&sidecar_layout)?;
+    let from_sidecar = SemanticModelSpec::from_layout(&sidecar_layout, &sidecar_decoder, &catalog)?;
+    fs::remove_dir_all(root)?;
+
+    assert_eq!(from_sidecar, derived);
+    Ok(())
+}
+
+fn configuration(model_type: &str, architectures: &[&str]) -> serde_json::Value {
+    json!({
+        "model_type": model_type,
+        "architectures": architectures,
+        "hidden_size": 32,
+        "intermediate_size": 16,
+        "num_hidden_layers": 2,
+        "num_attention_heads": 4,
+        "num_key_value_heads": 2,
+        "head_dim": 8,
+        "vocab_size": 64,
+        "num_local_experts": 8,
+        "num_experts_per_tok": 2,
+        "hidden_act": "silu",
+        "attention_bias": true,
+        "swiglu_limit": 7.0,
+        "sliding_window": 16,
+        "layer_types": ["sliding_attention", "full_attention"],
+        "rope_theta": 150_000.0,
+        "rope_scaling": {
+            "rope_type": "yarn",
+            "factor": 4.0,
+            "beta_fast": 32.0,
+            "beta_slow": 1.0,
+            "original_max_position_embeddings": 32,
+            "truncate": false
+        }
+    })
+}
+
+fn attention_sink_catalog() -> TensorCatalog {
+    catalog(&["model.layers.0.self_attn.sinks", "model.layers.1.self_attn.sinks"])
+}
+
+fn catalog(names: &[&str]) -> TensorCatalog {
+    TensorCatalog {
+        tensors: names
+            .iter()
+            .map(|name| TensorInfo {
+                name: (*name).to_owned(),
+                file: PathBuf::new(),
+                dtype: "F32".into(),
+                shape: vec![4],
+                data_start: 0,
+                data_offsets: [0, 0],
+            })
+            .collect(),
+    }
+}
+
+fn temp_path() -> PathBuf {
+    std::env::temp_dir().join(format!("mir-model-spec-{}.toml", std::process::id()))
+}
+
+fn temp_dir(label: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("mir-model-spec-{}-{label}", std::process::id()))
+}
+
+#[test]
+fn yarn_serialization_preserves_truncation_and_defaults_legacy_specs() -> Result<()> {
+    let value = serde_json::json!({
+        "kind": "yarn", "factor": 32.0, "beta_fast": 32.0, "beta_slow": 1.0,
+        "original_context_len": 4096, "attention_factor": 1.0
+    });
+    let legacy: RopeScalingSpec = serde_json::from_value(value.clone())?;
+    assert!(matches!(legacy, RopeScalingSpec::Yarn { truncate: true, .. }));
+    let mut explicit = value;
+    explicit["truncate"] = serde_json::json!(false);
+    let parsed: RopeScalingSpec = serde_json::from_value(explicit.clone())?;
+    assert!(matches!(parsed, RopeScalingSpec::Yarn { truncate: false, .. }));
+    assert_eq!(serde_json::to_value(parsed)?, explicit);
+    Ok(())
+}

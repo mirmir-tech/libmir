@@ -3,7 +3,13 @@ use super::*;
 #[test]
 #[ignore = "complete Qwen C3/2049 budget256 hardware-gated native prefill/decode; controller required"]
 fn qualifies_complete_qwen_budget256() -> std::result::Result<(), DriverError> {
-    run_driver(Workload::Complete256)
+    run_driver(Workload::Complete256, 300)
+}
+
+#[test]
+#[ignore = "complete Qwen reservation with externally controlled thermal recovery; controller required"]
+fn qualifies_cooled_qwen_budget256() -> std::result::Result<(), DriverError> {
+    run_driver(Workload::Complete256, 900)
 }
 
 pub(super) fn decode_complete(

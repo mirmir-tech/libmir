@@ -7,6 +7,7 @@ pub enum ProjectionKind {
     QueryGate,
     Output,
     KeyValue,
+    GatedDeltaQkv,
 }
 
 pub struct Projection {

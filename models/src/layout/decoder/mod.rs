@@ -1,11 +1,18 @@
 mod attention;
+mod defaults;
 mod features;
 mod parse;
 mod rope;
+mod state_space;
 
 pub use attention::AttentionLayerType;
 pub use features::{AttentionOutput, LinearAttentionConfig, RotaryEmbeddingLayout};
 pub use rope::RopeScaling;
+pub use state_space::{
+    HybridBlockKind, HybridBlockPattern, HybridLayer, HybridLayerBlock, LatentRoutedConfig,
+    Mamba2Config, PredictionModules, StateSpaceHybridConfig, StateSpaceStateDType, TimeStepBound,
+    TimeStepLimit,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::struct_excessive_bools)]
@@ -35,6 +42,8 @@ pub struct DecoderConfig {
     pub tie_word_embeddings: bool,
     pub attention_k_eq_v: bool,
     pub attention_scale: Option<f64>,
+    /// Explicit or built-in normalization; absent means tensor-based discovery.
+    pub qk_normalization: Option<crate::semantic::QkNormalization>,
     pub attention_output: AttentionOutput,
     pub sliding_window: Option<usize>,
     pub linear_attention: Option<LinearAttentionConfig>,
@@ -44,10 +53,13 @@ pub struct DecoderConfig {
     pub shared_expert_intermediate_size: Option<usize>,
     pub hidden_activation: Option<String>,
     pub final_logit_softcapping: Option<f64>,
+    /// Factor applied to token embeddings, when the configuration declares one.
+    pub embedding_multiplier: Option<f64>,
     pub attention_bias: bool,
     pub attention_sinks: bool,
     pub swiglu_limit: Option<f64>,
     pub initial_context_length: Option<usize>,
+    pub state_space: Option<StateSpaceHybridConfig>,
 }
 
 #[cfg(test)]

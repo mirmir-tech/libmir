@@ -23,6 +23,12 @@ pub struct ClampedRoutedModel {
 }
 
 impl ClampedRoutedModel {
+    #[cfg(test)]
+    pub(crate) fn project_prefill_output(&self, hidden: &Array, stream: &Stream) -> Result<Array> {
+        let hidden = self.final_norm.apply(hidden, self.config.epsilon, stream)?;
+        self.output.forward(&hidden, stream)
+    }
+
     pub fn load(
         tensors: &ModelTensors,
         decoder: &DecoderConfig,

@@ -6,6 +6,7 @@ pub mod progress;
 pub mod sampling;
 pub mod scheduler;
 pub mod session;
+pub mod speculation;
 pub mod trace;
 pub mod tuning;
 

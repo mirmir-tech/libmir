@@ -1,26 +1,19 @@
-use mircuda::{DeviceBuffer, Stream, bf16};
+use mircuda::{DeviceBuffer, bf16};
 
 use super::{
-    DenseScratch, DenseSwiGluConfig, DenseSwiGluLayerTemplate, DenseSwiGluWeights, DownProjection,
-    GateUpBuffers, GateUpProjection, validate,
+    DenseFeedForward, DenseScratch, DenseSwiGluConfig, DenseSwiGluLayerTemplate,
+    DenseSwiGluWeights, validate,
 };
 use crate::{
     BatchedDecodeAttentionBf16, CudaBackend, Error, PagedDecodeBatch, PagedKvCache, Result,
-    RmsNormBf16,
-    kernels::{BatchedSplitAttentionWorkspace, ElementwiseBf16, PackedGatedBf16},
+    kernels::BatchedSplitAttentionWorkspace,
 };
 
 /// Fixed-shape dense `SwiGLU` layer for independent decode rows.
 pub struct BatchedDecodeDenseSwiGlu {
     attention: BatchedDecodeAttentionBf16,
-    post_attention_norm: RmsNormBf16,
-    gate_up: GateUpProjection,
-    down: DownProjection,
-    activation: PackedGatedBf16,
-    hidden_ops: ElementwiseBf16,
+    feed_forward: DenseFeedForward,
     scratch: DenseScratch,
-    stream: Stream,
-    config: DenseSwiGluConfig,
     rows: usize,
 }
 
@@ -43,10 +36,6 @@ impl BatchedDecodeDenseSwiGlu {
         if rows == 0 {
             return Err(Error::InvalidDecoderKernel("batched dense decode is empty"));
         }
-        let hidden = config.attention.hidden_size;
-        let elements = rows
-            .checked_mul(hidden)
-            .ok_or(Error::InvalidDecoderKernel("batched dense hidden size overflow"))?;
         Ok(Self {
             attention: BatchedDecodeAttentionBf16::new_with_cache_weights_workspace(
                 backend,
@@ -56,23 +45,8 @@ impl BatchedDecodeDenseSwiGlu {
                 Some(weights.attention),
                 workspace,
             )?,
-            post_attention_norm: RmsNormBf16::new(
-                backend,
-                rows,
-                hidden,
-                config.attention.rms_norm_epsilon,
-            )?,
-            gate_up: GateUpProjection::new(backend, config, rows, Some(weights.gate_up))?,
-            down: DownProjection::new(backend, config, rows, Some(weights.down))?,
-            activation: PackedGatedBf16::compile(
-                &backend.inner.compiler,
-                rows,
-                config.intermediate_size,
-            )?,
-            hidden_ops: ElementwiseBf16::compile(&backend.inner.compiler, elements)?,
+            feed_forward: DenseFeedForward::new(backend, config, rows, weights)?,
             scratch: DenseScratch::new(backend, config, rows)?,
-            stream: backend.inner.stream.clone(),
-            config,
             rows,
         })
     }
@@ -89,58 +63,7 @@ impl BatchedDecodeDenseSwiGlu {
         }
         self.attention
             .execute(input, weights.attention, batch, &mut self.scratch.attention)?;
-        self.hidden_ops.add(
-            &self.stream,
-            input,
-            &self.scratch.attention,
-            &mut self.scratch.residual,
-        )?;
-        let separate = self.gate_up.execute(
-            &self.stream,
-            &self.scratch.residual,
-            &self.post_attention_norm,
-            weights.post_attention_norm,
-            weights.gate_up,
-            &mut GateUpBuffers {
-                normalized: &mut self.scratch.normalized,
-                packed: &mut self.scratch.gate_up,
-                separate: &mut self.scratch.gate_up_separate,
-            },
-        )?;
-        let fused_down = separate
-            && self.down.execute_gated(
-                &self.scratch.gate_up_separate[0],
-                &self.scratch.gate_up_separate[1],
-                self.config.activation,
-                weights.down,
-                &mut self.scratch.mlp,
-            )?;
-        if separate && !fused_down {
-            self.activation.execute_separate(
-                &self.stream,
-                &self.scratch.gate_up_separate[0],
-                &self.scratch.gate_up_separate[1],
-                &mut self.scratch.activated,
-                self.config.activation.into(),
-            )?;
-        } else if !fused_down {
-            self.activation.execute(
-                &self.stream,
-                &self.scratch.gate_up,
-                &mut self.scratch.activated,
-                self.config.activation.into(),
-            )?;
-        }
-        if !fused_down {
-            self.down.execute(
-                &self.stream,
-                &self.scratch.activated,
-                weights.down,
-                &mut self.scratch.mlp,
-            )?;
-        }
-        self.hidden_ops
-            .add(&self.stream, &self.scratch.residual, &self.scratch.mlp, output)
+        self.feed_forward.execute(input, weights, &mut self.scratch, output)
     }
 }
 
@@ -170,5 +93,10 @@ impl BatchedDecodeDenseLayer {
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
         self.block.execute(input, self.template.weights(), batch, output)
+    }
+
+    /// Split-attention partitions a captured graph of this layer launches.
+    pub(in crate::backend) fn capture_partitions(&self, batch: &PagedDecodeBatch) -> usize {
+        self.block.attention.capture_partitions(batch)
     }
 }

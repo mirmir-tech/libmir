@@ -77,7 +77,12 @@ fn decode_ordered(
             return Ok(Some(
                 sampled
                     .into_iter()
-                    .map(|token| Output { token: Some(token), logits: None })
+                    .map(|token| Output {
+                        accepted: Vec::new(),
+                        drafts: Vec::new(),
+                        token: Some(token),
+                        logits: None,
+                    })
                     .collect(),
             ));
         }
@@ -175,7 +180,14 @@ fn prefill_packed(
         Ok(sampled.map(|tokens| {
             tokens
                 .into_iter()
-                .map(|token| Some(Output { token: Some(token), logits: None }))
+                .map(|token| {
+                    Some(Output {
+                        accepted: Vec::new(),
+                        drafts: Vec::new(),
+                        token: Some(token),
+                        logits: None,
+                    })
+                })
                 .collect()
         }))
     })();

@@ -61,7 +61,11 @@ impl HybridMoeLayer {
             index: config.layer_index,
             input_norm: NormalizationLowering::Rms,
             post_attention_norm: NormalizationLowering::Rms,
-            mixer: MixerLowering::Softmax { sinks: false, window: config.max_context },
+            mixer: MixerLowering::Softmax {
+                normalization: models::semantic::QkNormalization::QueryKeyValueRms,
+                sinks: false,
+                window: config.max_context,
+            },
             feed_forward: FeedForwardLowering::DenseAndRouted,
         };
         Self::finish_load(weights, lowering, config, stream)

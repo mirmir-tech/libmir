@@ -1,4 +1,4 @@
-use models::weights::DenseDecoderLayerBindings;
+use models::{semantic::QkNormalization, weights::DenseDecoderLayerBindings};
 
 use super::{config::DenseSwiGluLayerConfig, projection::BoundLinear};
 use crate::engine::{Array, ModelTensors, NormWeight, Result, Stream};
@@ -34,9 +34,24 @@ impl DenseSwiGluWeights {
         tensors: &ModelTensors,
         bindings: DenseDecoderLayerBindings<'_>,
         config: DenseSwiGluLayerConfig,
+        normalization: QkNormalization,
         stream: &Stream,
     ) -> Result<Self> {
         let norm = |binding: Option<&models::weights::TensorBinding>| {
+            match normalization {
+                QkNormalization::None => return Ok(None),
+                QkNormalization::QueryKeyValueRms => {
+                    return Err(crate::engine::Error::InvalidModel(
+                        "dense Metal attention does not support value RMS normalization".into(),
+                    ));
+                },
+                QkNormalization::QueryKeyRms if binding.is_none() => {
+                    return Err(crate::engine::Error::InvalidModel(
+                        "declared Q/K RMS normalization is missing its weight".into(),
+                    ));
+                },
+                QkNormalization::QueryKeyRms => {},
+            }
             binding
                 .map(|binding| NormWeight::load_name(tensors, &binding.source))
                 .transpose()

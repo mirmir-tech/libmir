@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use recorder::ms;
 use serde::{Deserialize, Serialize};
+pub use throughput::{GenerationThroughput, ThroughputRate, ThroughputUnit};
 pub use tokens::GenerationTokenCounts;
 
 use crate::kv::CacheStats;
@@ -35,6 +36,7 @@ pub struct GenerationMetricsRecorder {
     prefill_tokens: usize,
     generated_tokens: usize,
     decode_steps: usize,
+    decode_tokens: usize,
     first_published_after_tokens: usize,
     recovery_attempts: usize,
     recovery_tokens: usize,
@@ -73,27 +75,6 @@ pub struct GenerationDurationsMs {
     pub sampling: f64,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct GenerationThroughput {
-    pub prefill: ThroughputRate,
-    pub decode: ThroughputRate,
-    pub generated: ThroughputRate,
-    pub generated_active: ThroughputRate,
-}
-
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
-pub struct ThroughputRate {
-    pub per_second: Option<f64>,
-    pub unit: ThroughputUnit,
-}
-
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ThroughputUnit {
-    #[default]
-    Token,
-}
-
 impl GenerationMetricsRecorder {
     #[must_use]
     pub fn new() -> Self {
@@ -120,6 +101,7 @@ impl GenerationMetricsRecorder {
             prefill_tokens: 0,
             generated_tokens: 0,
             decode_steps: 0,
+            decode_tokens: 0,
             first_published_after_tokens: 0,
             recovery_attempts: 0,
             recovery_tokens: 0,
@@ -176,9 +158,12 @@ impl GenerationMetricsRecorder {
         self.first_published_after_tokens = generated_tokens;
     }
 
-    pub fn record_decode(&mut self, duration: Duration) {
+    /// One decode step that yielded `tokens` tokens: one, or more when the
+    /// backend verified speculative drafts.
+    pub fn record_decode(&mut self, duration: Duration, tokens: usize) {
         self.decode += duration;
         self.decode_steps += 1;
+        self.decode_tokens += tokens;
     }
 
     pub fn record_sampling(&mut self, duration: Duration) {
@@ -220,6 +205,7 @@ impl GenerationMetricsRecorder {
                 prefill: self.prefill_tokens,
                 generated: self.generated_tokens,
                 decode_steps: self.decode_steps,
+                decode_tokens: self.decode_tokens,
                 first_published_after_tokens: self.first_published_after_tokens,
                 recovery_attempts: self.recovery_attempts,
                 recovery_tokens: self.recovery_tokens,
@@ -232,7 +218,7 @@ impl GenerationMetricsRecorder {
                     self.prefill,
                     ThroughputUnit::Token,
                 ),
-                decode: ThroughputRate::new(self.decode_steps, self.decode, ThroughputUnit::Token),
+                decode: ThroughputRate::new(self.decode_tokens, self.decode, ThroughputUnit::Token),
                 generated: ThroughputRate::new(self.generated_tokens, total, ThroughputUnit::Token),
                 generated_active: ThroughputRate::new(
                     self.generated_tokens,

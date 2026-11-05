@@ -55,7 +55,9 @@ impl CudaEngine {
             return Err(Error::State("CUDA admitted a non-generation runtime".into()));
         };
         match runtime {
-            CudaDecoderRuntime::SharedRouted | CudaDecoderRuntime::DenseMixed => {
+            CudaDecoderRuntime::SharedRouted
+            | CudaDecoderRuntime::DenseMixed
+            | CudaDecoderRuntime::StateSpaceHybrid => {
                 let template = self.backend.load_shared_routed_model_template_with_progress(
                     decoder,
                     &contract.semantic,
@@ -64,12 +66,15 @@ impl CudaEngine {
                     SharedRoutedModelLoadConfig {
                         cache: self.cache,
                         max_sequence_blocks: blocks,
+                        speculation: self.scheduler.speculation,
                     },
                     report,
                 )?;
+                let speculation = self.scheduler.speculation.filter(|_| template.drafts());
                 Ok(generation(MixedMixerExecution::new(
                     template.with_decode_rows(self.scheduler.max_batch_requests),
                     self.session_config.prefill_chunk_tokens,
+                    speculation,
                 )?))
             },
             CudaDecoderRuntime::ClampedRouted => {
@@ -107,21 +112,31 @@ impl CudaEngine {
         };
         let template = if runtime == CudaDecoderRuntime::DenseAndRouted && nvfp4 {
             self.backend.load_nvfp4_moe_model_template_with_bindings(
-                decoder, bindings, catalog, moe_load, report,
+                decoder,
+                &contract.semantic,
+                bindings,
+                catalog,
+                moe_load,
+                report,
             )?
         } else if runtime == CudaDecoderRuntime::DenseAndRouted {
             self.backend.load_dense_moe_model_template_with_bindings(
-                decoder, bindings, catalog, moe_load, report,
+                decoder,
+                &contract.semantic,
+                bindings,
+                catalog,
+                moe_load,
+                report,
             )?
         } else if runtime == CudaDecoderRuntime::Dense {
             self.backend.load_dense_swiglu_model_template_with_bindings(
                 decoder,
+                &contract.semantic,
                 bindings,
                 catalog,
                 DenseSwiGluLayerLoadConfig {
                     cache: self.cache,
                     max_sequence_blocks: blocks,
-                    qkv_normalization: crate::engine::lowering::graph_normalization(plan)?,
                     projection_format,
                 },
                 report,

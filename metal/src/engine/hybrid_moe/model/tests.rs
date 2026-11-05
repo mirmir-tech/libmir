@@ -55,6 +55,9 @@ fn write_config(root: &Path) -> Result<()> {
     let config = json!({
         "architectures": ["HybridForCausalLM"],
         "hidden_size": 4,
+        "attention_scale": 1.0,
+        "embedding_multiplier": 2.0,
+        "qk_normalization": "query_key_value_rms",
         "intermediate_size": 8,
         "num_hidden_layers": 1,
         "num_attention_heads": 1,

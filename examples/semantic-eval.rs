@@ -84,6 +84,7 @@ fn result_writer(path: Option<PathBuf>) -> std::io::Result<BufWriter<Box<dyn Wri
 fn request(case: &Case) -> GenerationRequest {
     GenerationRequest {
         tool_constraints: libmir::ToolConstraints::None,
+        response_format: libmir::ResponseFormat::Text,
         reasoning_token_budget: None,
         conversation: Conversation {
             messages: vec![Message {
@@ -106,6 +107,8 @@ fn request(case: &Case) -> GenerationRequest {
         },
         seed: Some(20_260_805),
         reasoning: libmir::ReasoningMode::ModelDefault,
+        reasoning_effort: libmir::ReasoningEffort::ModelDefault,
+        reasoning_history: libmir::ReasoningHistory::ModelDefault,
         reasoning_cycle: if env::var_os("MIRMIR_SEMANTIC_HARMONY_EXIT").is_some() {
             ReasoningCyclePolicy::ExitReasoning {
                 min_tokens: env::var("MIRMIR_SEMANTIC_HARMONY_EXIT_MIN_TOKENS")

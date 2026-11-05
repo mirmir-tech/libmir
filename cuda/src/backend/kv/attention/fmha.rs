@@ -1,4 +1,7 @@
-use mircuda::{DeviceBuffer, FmhaBf16Plan, FmhaBf16Spec, MemoryPool, PinnedBuffer, Stream, bf16};
+use mircuda::{
+    DeviceBuffer, FmhaBf16Plan, FmhaBf16Spec, FmhaCausalWindow, MemoryPool, PinnedBuffer, Stream,
+    bf16,
+};
 use runtime::kv::{KvCacheDType, KvStorageSpec};
 
 use crate::{CudaBackend, Error, Result};
@@ -8,9 +11,9 @@ pub(super) fn prepare(
     storage: KvStorageSpec,
     query_heads: usize,
     max_blocks: usize,
-) -> Result<(bool, Option<FmhaBf16Plan>, Option<PagedFmhaPrefill>)> {
+) -> Result<(bool, Option<FixedFmha>, Option<PagedFmhaPrefill>)> {
     let supported = matches!(storage.cache.dtype, KvCacheDType::Auto | KvCacheDType::BFloat16)
-        && matches!(storage.key_head_dim, 64 | 128 | 256)
+        && matches!(storage.key_head_dim, 64 | 128 | 256 | 512)
         && storage.value_head_dim == storage.key_head_dim;
     let plan = || {
         FmhaBf16Plan::new(
@@ -24,7 +27,9 @@ pub(super) fn prepare(
             )?,
         )
     };
-    let fixed = (supported && storage.key_head_dim != 256).then(plan).transpose()?;
+    let fixed = (supported && storage.key_head_dim != 256)
+        .then(|| Ok::<_, Error>(FixedFmha::new(backend, plan()?)))
+        .transpose()?;
     let paged = (supported && storage.key_head_dim == 256)
         .then(|| {
             PagedFmhaPrefill::new(
@@ -37,6 +42,58 @@ pub(super) fn prepare(
         })
         .transpose()?;
     Ok((supported, fixed, paged))
+}
+
+/// Fixed-layout fused attention over contiguous K/V; heads wider than 256 own
+/// the FP32 output accumulator the kernel needs.
+#[derive(Debug)]
+pub(super) struct FixedFmha {
+    plan: FmhaBf16Plan,
+    accumulator: Option<DeviceBuffer<f32>>,
+    pool: MemoryPool,
+}
+
+impl FixedFmha {
+    fn new(backend: &CudaBackend, plan: FmhaBf16Plan) -> Self {
+        Self {
+            plan,
+            accumulator: None,
+            pool: backend.inner.pool.clone(),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn execute(
+        &mut self,
+        stream: &Stream,
+        query: &DeviceBuffer<bf16>,
+        key_pages: &DeviceBuffer<u8>,
+        value_pages: &DeviceBuffer<u8>,
+        output: &mut DeviceBuffer<bf16>,
+        query_tokens: usize,
+        context_tokens: usize,
+        first_page_token: usize,
+        scale: f32,
+    ) -> Result<()> {
+        let required = self.plan.spec().accumulator_elements(query_tokens);
+        if required == 0 {
+            return Ok(self.plan.execute(
+                stream, query, key_pages, value_pages, output, query_tokens, context_tokens,
+                first_page_token, scale,
+            )?);
+        }
+        if self.accumulator.as_ref().is_none_or(|buffer| buffer.len() < required) {
+            self.accumulator = Some(self.pool.allocate(stream, required)?);
+        }
+        let accumulator = self
+            .accumulator
+            .as_mut()
+            .ok_or(Error::InvalidExecutionPlan("missing FMHA output accumulator"))?;
+        Ok(self.plan.execute_accumulated(
+            stream, query, key_pages, value_pages, output, accumulator, query_tokens,
+            context_tokens, first_page_token, scale,
+        )?)
+    }
 }
 
 #[derive(Debug)]
@@ -85,13 +142,14 @@ impl PagedFmhaPrefill {
         block_table: &DeviceBuffer<u32>,
         query_tokens: usize,
         context_tokens: usize,
+        window: FmhaCausalWindow,
         scale: f32,
     ) -> Result<()> {
         self.ensure_lse(query_tokens)?;
         self.query_starts.upload(&self.stream, &[0, u32::try_from(query_tokens)?])?;
         self.token_counts.upload(&self.stream, &[u32::try_from(context_tokens)?])?;
         self.context_starts.upload(&self.stream, &[0, u32::try_from(context_tokens)?])?;
-        Ok(self.plan.execute_paged_varlen(
+        Ok(self.plan.execute_paged_varlen_windowed(
             &self.stream,
             query,
             key_pages,
@@ -108,6 +166,7 @@ impl PagedFmhaPrefill {
             context_tokens,
             self.max_blocks,
             self.block_size,
+            window,
             scale,
         )?)
     }

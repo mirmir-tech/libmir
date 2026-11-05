@@ -75,7 +75,12 @@ pub(super) fn execute(
         let selected = batch
             .execute(&mut sessions, &tokens, &tables, &starts, Some(&policies))?
             .ok_or(Error::InvalidExecutionPlan("mixed step did not sample outputs"))?;
-        let output = |token| Output { token: Some(token), logits: None };
+        let output = |token| Output {
+            accepted: Vec::new(),
+            drafts: Vec::new(),
+            token: Some(token),
+            logits: None,
+        };
         Ok(CombinedOutputs {
             prefill: chunks
                 .iter()

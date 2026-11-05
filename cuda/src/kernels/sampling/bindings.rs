@@ -32,3 +32,8 @@ cuda_export!(pub(super) FullFinalizeKernel = "libmir_cuda_sampling_full_finalize
     temperature: f32, draw: f32, vocab: u32, logits_stride: u32, row: u32,
     workspace_stride: u32, block_count: u32,
 ));
+cuda_export!(pub(super) NucleusKernel = "libmir_cuda_sampling_nucleus_bf16"(
+    logits: &DeviceBuffer<bf16>, candidates: &DeviceBuffer<u64>,
+    output: &mut DeviceBuffer<u32>, top_p: f32, temperature: f32, draw: f32,
+    vocab: u32, logits_stride: u32, row: u32, workspace_stride: u32,
+));

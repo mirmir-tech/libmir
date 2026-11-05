@@ -1,12 +1,12 @@
 use models::{
     execution::TaskExecutionPlan,
     layout::{EncoderConfig, EncoderPositionEmbedding, EncoderRopeScaling, NormKind},
-    semantic::SemanticModelSpec,
+    semantic::{KeyValueRelation, QkNormalization, SemanticModelSpec},
 };
 
 use super::{
     CudaArchitecture, CudaDecoderPlan, CudaDecoderRuntime, CudaFeedForwardLowering,
-    graph_normalization,
+    CudaMixerLowering, graph_normalization,
 };
 use crate::{ArchitectureError, Result};
 
@@ -47,8 +47,9 @@ fn generation(semantic: Option<&SemanticModelSpec>) -> Result<CudaArchitecture> 
         ArchitectureError::invalid("CUDA generation semantic contract is missing")
     })?;
     let plan = CudaDecoderPlan::lower(semantic);
-    let runtime = if plan.all_shared_routed() && plan.has_linear_mixer() && plan.has_softmax_mixer()
-    {
+    let runtime = if plan.has_state_space_mixer() {
+        state_space_hybrid(&plan)?
+    } else if plan.all_shared_routed() && plan.has_linear_mixer() && plan.has_softmax_mixer() {
         CudaDecoderRuntime::SharedRouted
     } else if plan.has_linear_mixer()
         && plan.has_softmax_mixer()
@@ -72,4 +73,32 @@ fn generation(semantic: Option<&SemanticModelSpec>) -> Result<CudaArchitecture> 
         )));
     };
     Ok(CudaArchitecture::Generation(runtime))
+}
+
+/// Mamba-2 and attention mixers, without Q/K normalization, sinks, or a
+/// linear-attention layer; latent routed experts or no feed-forward.
+fn state_space_hybrid(plan: &CudaDecoderPlan) -> Result<CudaDecoderRuntime> {
+    let supported = plan.layers().iter().all(|layer| {
+        let mixer = match layer.mixer {
+            CudaMixerLowering::StateSpace => true,
+            CudaMixerLowering::Softmax { sinks, normalization, key_value_relation } => {
+                !sinks
+                    && normalization == QkNormalization::None
+                    && key_value_relation == KeyValueRelation::Separate
+            },
+            CudaMixerLowering::Linear => false,
+        };
+        mixer
+            && matches!(
+                layer.feed_forward,
+                CudaFeedForwardLowering::LatentRouted { .. } | CudaFeedForwardLowering::None
+            )
+    });
+    if supported && plan.has_softmax_mixer() {
+        Ok(CudaDecoderRuntime::StateSpaceHybrid)
+    } else {
+        Err(ArchitectureError::invalid(
+            "CUDA state-space hybrid runtime requires Mamba-2 and plain attention mixers with latent routed or no feed-forward",
+        ))
+    }
 }

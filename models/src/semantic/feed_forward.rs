@@ -16,6 +16,16 @@ pub enum FeedForwardSpec {
         dense_activation: ActivationSpec,
         routed: RoutedExpertsSpec,
     },
+    /// Routed experts operating in a projected latent space, plus an optional
+    /// shared expert at full width.
+    LatentRouted {
+        latent_size: usize,
+        routed: RoutedExpertsSpec,
+        shared: Option<SharedExpertSpec>,
+        routed_scale: f64,
+    },
+    /// The layer has no feed-forward sub-block.
+    None,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -48,6 +58,8 @@ pub enum ActivationSpec {
     NamedGated {
         name: String,
     },
+    /// Ungated `relu(x)^2`.
+    ReluSquared,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,4 +67,7 @@ pub enum ActivationSpec {
 pub enum RouterNormalization {
     SoftmaxTopK,
     UnitTopK,
+    /// Select by `sigmoid(logit) + correction_bias`, weight by the
+    /// renormalized `sigmoid(logit)` of the selected experts.
+    SigmoidBiasedTopK,
 }

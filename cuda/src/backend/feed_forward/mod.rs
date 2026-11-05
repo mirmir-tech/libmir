@@ -4,7 +4,8 @@ pub(super) use dense::{DenseFeedForward, scratch::DenseScratchPool};
 use mircuda::{DeviceBuffer, bf16};
 
 use crate::{
-    CudaAffineSharedExpertMoe, CudaAffineSharedExpertMoeExecution, ExecutionPhase, Result,
+    CudaAffineSharedExpertMoe, CudaAffineSharedExpertMoeExecution, CudaLatentMoe,
+    CudaLatentMoeExecution, ExecutionPhase, Result,
     kernels::{ElementwiseBf16, ShiftedRmsNorm},
 };
 
@@ -19,12 +20,14 @@ pub(super) struct LayerNormConfig {
 pub(super) enum FeedForward {
     Dense(Box<DenseFeedForward>),
     SharedRouted(Box<CudaAffineSharedExpertMoe>),
+    LatentRouted(Box<CudaLatentMoe>),
 }
 
 #[derive(Debug)]
 pub(super) enum FeedForwardExecution {
     Dense(Box<dense::DenseExecution>),
     SharedRouted(Box<CudaAffineSharedExpertMoeExecution>),
+    LatentRouted(Box<CudaLatentMoeExecution>),
 }
 
 impl FeedForward {
@@ -41,6 +44,9 @@ impl FeedForward {
                 .prepare_phase(tokens, phase)
                 .map(Box::new)
                 .map(FeedForwardExecution::SharedRouted),
+            Self::LatentRouted(value) => {
+                value.prepare(tokens).map(Box::new).map(FeedForwardExecution::LatentRouted)
+            },
         }
     }
 }
@@ -54,6 +60,7 @@ impl FeedForwardExecution {
         match self {
             Self::Dense(value) => value.execute(input, output),
             Self::SharedRouted(value) => value.execute(input, output),
+            Self::LatentRouted(value) => value.execute(input, output),
         }
     }
 
@@ -75,6 +82,12 @@ impl FeedForwardExecution {
                 norm, input, update, weight, residual, normalized, ff_output, output, residual_add,
             ),
             Self::Dense(value) => {
+                let stream = value.stream();
+                norm.execute_residual(&stream, input, update, weight, residual, normalized)?;
+                value.execute(normalized, ff_output)?;
+                residual_add.add(&stream, residual, ff_output, output)
+            },
+            Self::LatentRouted(value) => {
                 let stream = value.stream();
                 norm.execute_residual(&stream, input, update, weight, residual, normalized)?;
                 value.execute(normalized, ff_output)?;

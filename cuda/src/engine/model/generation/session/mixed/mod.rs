@@ -12,8 +12,11 @@ use crate::{
 mod batch;
 mod checkpoint;
 mod combined;
+mod drafting;
 mod memory;
 mod prefill_budget;
+mod speculation;
+mod vision;
 mod warm;
 use checkpoint::PrefixCheckpoints;
 use prefill_budget::reusable_prefill_budget;
@@ -29,12 +32,14 @@ pub(in crate::engine) struct MixedMixerExecution {
     combined: combined::CombinedBatches,
     /// Pool bytes one live session cost during concurrency warm-up.
     session_bytes: Option<u64>,
+    drafting: Option<speculation::Drafting>,
 }
 
 impl MixedMixerExecution {
     pub(in crate::engine) fn new(
         template: CudaSharedRoutedModelTemplate,
         prefill_chunk_tokens: usize,
+        speculation: Option<runtime::speculation::Speculation>,
     ) -> Result<Self> {
         if prefill_chunk_tokens == 0 {
             return Err(Error::InvalidDecoderKernel("shared-routed prefill chunk is empty"));
@@ -51,6 +56,7 @@ impl MixedMixerExecution {
             checkpoints,
             combined: combined::CombinedBatches::default(),
             session_bytes: None,
+            drafting: speculation.map(speculation::Drafting::new),
         })
     }
 }
@@ -82,23 +88,7 @@ impl GenerationExecution for MixedMixerExecution {
         minimum: usize,
         maximum: usize,
     ) -> Result<Option<usize>> {
-        let Some(checkpoint) =
-            self.checkpoints
-                .lookup(&request.model.id, &request.prompt_tokens, minimum, maximum)
-        else {
-            return Ok(None);
-        };
-        let mut session = self.template.instantiate_with_caches(&self.caches)?;
-        session.restore_checkpoint(checkpoint)?;
-        let position = session.position();
-        self.sessions.insert(request.session_id, session);
-        tracing::debug!(
-            backend = "cuda",
-            session = %request.session_id,
-            prefix_checkpoint_tokens = position,
-            "restored CUDA mixed-mixer prefix checkpoint"
-        );
-        Ok(Some(position))
+        self.restore_prefix_session(request, minimum, maximum)
     }
 
     fn terminal_cache_checkpoint(
@@ -136,6 +126,10 @@ impl GenerationExecution for MixedMixerExecution {
             self.sessions.insert(request.session_id, session);
         }
         self.arm_terminal_checkpoint(request, offset, tokens.len())?;
+        if self.drafting.is_some() {
+            return self
+                .prefill_drafting_chunk(backend, request, tokens, offset, table, final_chunk);
+        }
         let session = required(&mut self.sessions, request.session_id)?;
         session.prefill(request.session_id, tokens, table)?;
         self.checkpoint_prefix(request)?;
@@ -152,6 +146,9 @@ impl GenerationExecution for MixedMixerExecution {
         backend: &CudaBackend,
         chunks: &[super::super::PrefillChunk<'_>],
     ) -> Result<Vec<Option<Output>>> {
+        if self.drafting.is_some() {
+            return self.prefill_drafting_chunks(backend, chunks);
+        }
         batch::prefill(self, backend, chunks)
     }
 
@@ -161,6 +158,9 @@ impl GenerationExecution for MixedMixerExecution {
         request: &runtime::backend::DecodeRequest,
         _use_device_token: bool,
     ) -> Result<Output> {
+        if request.speculation.is_some() && self.drafting.is_some() {
+            return self.decode_speculative(request);
+        }
         let session = required(&mut self.sessions, request.session_id)?;
         session.decode(request.session_id, request.token_id, &request.block_table)?;
         generation_output(backend, session, request.sampling_logits.clone())
@@ -171,6 +171,15 @@ impl GenerationExecution for MixedMixerExecution {
         backend: &CudaBackend,
         sequences: &[runtime::backend::DecodeSequence],
     ) -> Result<Option<Vec<Output>>> {
+        if self.drafting.is_some() {
+            if sequences.len() < 2 {
+                return Ok(None);
+            }
+            if let Some(outputs) = drafting::execute(self, &[], sequences)? {
+                return Ok(Some(outputs.decode));
+            }
+            self.forget_drafts(sequences);
+        }
         batch::decode(self, backend, sequences)
     }
 
@@ -180,6 +189,9 @@ impl GenerationExecution for MixedMixerExecution {
         chunks: &[super::super::super::PrefillChunk<'_>],
         decode: &[runtime::backend::DecodeSequence],
     ) -> Result<Option<crate::engine::model::generation::CombinedOutputs>> {
+        if self.drafting.is_some() {
+            return drafting::execute(self, chunks, decode);
+        }
         combined::execute(self, backend, chunks, decode)
     }
 
@@ -222,19 +234,7 @@ impl GenerationExecution for MixedMixerExecution {
         backend: &CudaBackend,
         input: SpatialVisionPrefill<'_>,
     ) -> Result<Output> {
-        let mut session = self.template.instantiate_with_caches(&self.caches)?;
-        session.prefill_vision(
-            input.session,
-            input.tokens,
-            input.positions,
-            input.table,
-            input.image_span,
-            input.image,
-            input.position_delta,
-        )?;
-        let output = generation_output(backend, &mut session, input.sampling)?;
-        self.sessions.insert(input.session, session);
-        Ok(output)
+        self.prefill_vision_session(backend, input)
     }
 }
 

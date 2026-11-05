@@ -4,12 +4,13 @@ use models::{
     weights::{TensorBinding, TensorCatalog, TensorInfo, TensorStorage, WeightBindingPlan},
 };
 
-use super::{DenseSwiGluLayerLoadConfig, NvFp4MoeLayerLoadConfig};
+use super::DenseSwiGluLayerLoadConfig;
 use crate::{
     CudaBackend, CudaMoeModelTemplate, CudaTensor, CudaTensorSet, Error, Result,
     backend::CheckpointProjectionWeight as ProjectionWeight,
 };
 
+mod nvfp4_moe;
 #[cfg(test)]
 mod tests;
 
@@ -26,13 +27,14 @@ impl CudaBackend {
         let spec = SemanticModelSpec::discover(decoder, catalog)?;
         let bindings = WeightBindingPlan::discover(&spec, catalog)?;
         self.load_dense_swiglu_model_template_with_bindings(
-            decoder, &bindings, catalog, load, progress,
+            decoder, &spec, &bindings, catalog, load, progress,
         )
     }
 
     pub(crate) fn load_dense_swiglu_model_template_with_bindings(
         &self,
         decoder: &DecoderConfig,
+        semantic: &SemanticModelSpec,
         bindings: &WeightBindingPlan,
         catalog: &TensorCatalog,
         load: DenseSwiGluLayerLoadConfig,
@@ -49,6 +51,7 @@ impl CudaBackend {
         for layer in 0..decoder.num_hidden_layers {
             let (template, bytes) = self.load_dense_swiglu_layer_tracked(
                 decoder,
+                semantic,
                 catalog,
                 layer,
                 bindings.dense_decoder_layer(layer)?,
@@ -71,75 +74,12 @@ impl CudaBackend {
         CudaMoeModelTemplate::new_dense_bound(
             self,
             decoder.clone(),
+            embedding_multiplier(semantic)?,
             embedding,
             final_norm,
             output,
             layers,
         )
-    }
-
-    /// Loads all routed-MoE layers and model boundary tensors without host-side
-    /// tensor conversion.
-    pub fn load_nvfp4_moe_model_template(
-        &self,
-        decoder: &DecoderConfig,
-        catalog: &TensorCatalog,
-        load: NvFp4MoeLayerLoadConfig,
-    ) -> Result<CudaMoeModelTemplate> {
-        let mut ignored = |_completed, _detail| {};
-        self.load_nvfp4_moe_model_template_with_progress(decoder, catalog, load, &mut ignored)
-    }
-
-    pub(crate) fn load_nvfp4_moe_model_template_with_progress(
-        &self,
-        decoder: &DecoderConfig,
-        catalog: &TensorCatalog,
-        load: NvFp4MoeLayerLoadConfig,
-        progress: &mut dyn FnMut(u64, String),
-    ) -> Result<CudaMoeModelTemplate> {
-        let spec = SemanticModelSpec::discover(decoder, catalog)?;
-        let bindings = WeightBindingPlan::discover(&spec, catalog)?;
-        self.load_nvfp4_moe_model_template_with_bindings(
-            decoder, &bindings, catalog, load, progress,
-        )
-    }
-
-    pub(crate) fn load_nvfp4_moe_model_template_with_bindings(
-        &self,
-        decoder: &DecoderConfig,
-        bindings: &WeightBindingPlan,
-        catalog: &TensorCatalog,
-        load: NvFp4MoeLayerLoadConfig,
-        progress: &mut dyn FnMut(u64, String),
-    ) -> Result<CudaMoeModelTemplate> {
-        let source = ModelSource::discover(decoder, bindings, catalog)?;
-        let tensors = source.upload(self)?;
-        let mut completed = source.payload_bytes()?;
-        progress(completed, "model boundary tensors".into());
-        let embedding = tensor(&tensors, &source.embedding.source)?.clone();
-        let final_norm = tensor(&tensors, source.final_norm)?.clone();
-        let output = tensor(&tensors, &source.output.source)?.clone();
-        let mut layers = Vec::with_capacity(decoder.num_hidden_layers);
-        for layer in 0..decoder.num_hidden_layers {
-            let layer_bindings = bindings.hybrid_moe_layer(layer)?;
-            let (template, bytes) = self.load_nvfp4_moe_layer_template_tracked(
-                decoder, catalog, layer, &layer_bindings, load,
-            )?;
-            completed = completed
-                .checked_add(bytes)
-                .ok_or(Error::InvalidDecoderKernel("checkpoint progress byte overflow"))?;
-            progress(completed, format!("layer {}/{}", layer + 1, decoder.num_hidden_layers));
-            layers.push(template);
-        }
-        tracing::debug!(
-            backend = "cuda",
-            layers = layers.len(),
-            hidden = decoder.hidden_size,
-            vocab = decoder.vocab_size,
-            tied_output = decoder.tie_word_embeddings,
-            "loaded NVFP4 routed MoE model template"
-        );
-        CudaMoeModelTemplate::new(self, decoder.clone(), embedding, final_norm, output, layers)
     }
 }
 
@@ -226,6 +166,20 @@ fn packed_shape_source(binding: &TensorBinding) -> Option<&str> {
             Some(shape)
         },
         _ => None,
+    }
+}
+
+/// The model spec's embedding multiplier, narrowed for the embedding kernel.
+pub(super) fn embedding_multiplier(semantic: &SemanticModelSpec) -> Result<f32> {
+    let multiplier = semantic.decoder.embedding_multiplier;
+    #[allow(clippy::cast_possible_truncation)]
+    let narrowed = multiplier as f32;
+    if narrowed.is_finite() && narrowed > 0.0 {
+        Ok(narrowed)
+    } else {
+        Err(Error::UnsupportedDecoderLayer(format!(
+            "embedding multiplier {multiplier} is not a positive finite f32"
+        )))
     }
 }
 

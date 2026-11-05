@@ -213,7 +213,6 @@ pub(super) fn load_template_with_cache(
             DenseSwiGluLayerLoadConfig {
                 cache,
                 max_sequence_blocks,
-                qkv_normalization: crate::engine::lowering::graph_normalization(&plan)?,
                 projection_format,
             },
             &mut ignored,

@@ -36,7 +36,7 @@ impl GateUpProjection {
         } else {
             ExecutionPhase::Prefill
         };
-        match config.attention.projection_format {
+        match config.feed_forward_format {
             ProjectionFormat::Affine => {
                 let DenseGateUpWeights::Affine { gate, up } = weights.ok_or(
                     Error::InvalidExecutionPlan("affine MLP requires prepared gate/up weights"),
@@ -135,9 +135,7 @@ impl GateUpProjection {
                     Error::InvalidExecutionPlan("NVFP4 MLP requires prepared gate/up weights"),
                 )?
                 else {
-                    return Err(Error::InvalidExecutionPlan(
-                        "NVFP4 MLP received non-NVFP4 gate/up weights",
-                    ));
+                    return Err(Error::InvalidExecutionPlan("NVFP4 MLP got other gate/up weights"));
                 };
                 Ok(Self::NvFp4(Box::new(NvFp4Bf16Pack::from_weights(
                     backend,
@@ -212,12 +210,13 @@ impl GateUpProjection {
                 Ok(true)
             },
             Self::NvFp4(operation) => {
-                let DenseGateUpWeights::NvFp4 { .. } = weights else {
+                let DenseGateUpWeights::NvFp4 { gate, up } = weights else {
                     return Err(Error::InvalidExecutionPlan(
                         "NVFP4 MLP received BF16 gate/up weights",
                     ));
                 };
-                operation.execute_rms_norm(
+                operation.execute_rms_norm_with(
+                    [gate, up],
                     input,
                     input_norm.weight(norm_weight)?,
                     input_norm.epsilon(),

@@ -8,12 +8,15 @@ use crate::{Error, Result};
 mod bindings;
 mod bounded;
 mod full;
+mod nucleus;
 mod validation;
 use bindings::{
     CandidatesKernel, FinalizeKernel, FullFinalizeKernel, FullMassKernel, MassKernel, MergeKernel,
+    NucleusKernel,
 };
 use bounded::BoundedSampling;
 use full::FullSampling;
+use nucleus::NucleusSampling;
 use validation::{blocks, launch, validate};
 
 pub const MAX_TOP_K: usize = 64;
@@ -45,6 +48,7 @@ pub struct Sampling {
     finalize: TypedKernel<FinalizeKernel>,
     full_mass: TypedKernel<FullMassKernel>,
     full_finalize: TypedKernel<FullFinalizeKernel>,
+    nucleus: TypedKernel<NucleusKernel>,
     vocab: usize,
 }
 
@@ -66,6 +70,7 @@ impl Sampling {
             finalize: module.kernel()?,
             full_mass: module.kernel()?,
             full_finalize: module.kernel()?,
+            nucleus: module.kernel()?,
             vocab,
         })
     }
@@ -163,6 +168,17 @@ impl Sampling {
         } else {
             &*second
         };
+        if spec.top_k == 0 && spec.top_p < 1.0 {
+            return self.execute_nucleus(NucleusSampling {
+                stream,
+                logits,
+                candidates,
+                output,
+                spec,
+                row,
+                stride,
+            });
+        }
         if spec.top_k == 0 {
             return self.execute_full(FullSampling {
                 stream,

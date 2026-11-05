@@ -132,6 +132,7 @@ fn decode_preempts_chunked_prefill() -> Result<()> {
 fn request() -> GenerationRequest {
     GenerationRequest {
         tool_constraints: libmir::ToolConstraints::None,
+        response_format: libmir::ResponseFormat::Text,
         reasoning_token_budget: None,
         conversation: Conversation {
             messages: vec![Message {
@@ -155,6 +156,8 @@ fn request() -> GenerationRequest {
         seed: Some(7),
         reasoning_cycle: libmir::ReasoningCyclePolicy::default(),
         reasoning: libmir::ReasoningMode::ModelDefault,
+        reasoning_effort: libmir::ReasoningEffort::ModelDefault,
+        reasoning_history: libmir::ReasoningHistory::ModelDefault,
     }
 }
 

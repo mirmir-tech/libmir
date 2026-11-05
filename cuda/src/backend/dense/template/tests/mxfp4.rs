@@ -35,6 +35,7 @@ fn executes_complete_dense_layer_from_mxfp4_checkpoint_blocks() -> Result<()> {
             key_norm: None,
             output: DenseOutputSource::MxFp4(&weight),
             post_attention_norm: norm,
+            sandwich: None,
             gate_up: DenseGateUpSource::MxFp4 { gate: &weight, up: &weight },
             down: DenseDownSource::MxFp4(&weight),
         },
@@ -63,9 +64,11 @@ fn config() -> DenseSwiGluConfig {
             layer: 0,
             hidden_size: 32,
             query_heads: 1,
-            rotary_dim: 32,
-            rope_pairing_dim: 32,
-            rope_theta: 10_000.0,
+            rotary: Some(crate::kernels::RotaryEmbedding {
+                dimensions: 32,
+                pairing: 32,
+                theta: 10_000.0,
+            }),
             rms_norm_epsilon: 1.0e-6,
             attention_scale: 32.0_f32.sqrt().recip(),
             projection_format: ProjectionFormat::MxFp4,
@@ -84,6 +87,7 @@ fn config() -> DenseSwiGluConfig {
         },
         intermediate_size: 32,
         activation: GatedActivation::Silu,
+        feed_forward_format: ProjectionFormat::MxFp4,
     }
 }
 
