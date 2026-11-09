@@ -105,7 +105,8 @@ fn expected_digest(runtime: crate::engine::lowering::DecoderRuntime) -> Result<&
     match runtime {
         crate::engine::lowering::DecoderRuntime::DenseAndRouted => Ok(&GEMMA_4_GREEDY_DIGEST),
         crate::engine::lowering::DecoderRuntime::SharedRouted => Ok(&QWEN_3_6_GREEDY_DIGEST),
-        crate::engine::lowering::DecoderRuntime::Dense => {
+        crate::engine::lowering::DecoderRuntime::Dense
+        | crate::engine::lowering::DecoderRuntime::DenseGelu => {
             Err(Error::Benchmark("context matrix digest requires a hybrid MoE model".into()))
         },
         crate::engine::lowering::DecoderRuntime::ClampedRouted => {

@@ -1,10 +1,11 @@
 use models::weights::{
-    HybridMoeAttentionBindings, HybridMoeDenseBindings, HybridMoeExpertBindings,
-    HybridMoeLayerBindings, HybridMoeRouterBindings, TensorBinding,
+    DenseDecoderLayerBindings, HybridMoeAttentionBindings, HybridMoeDenseBindings,
+    HybridMoeExpertBindings, HybridMoeLayerBindings, HybridMoeRouterBindings, TensorBinding,
 };
 
 use super::{
-    AttentionWeights, DenseWeights, ExpertGateUpWeights, ExpertWeights, LayerWeights, RouterWeights,
+    AttentionWeights, DenseWeights, ExpertGateUpWeights, ExpertWeights, LayerWeights,
+    RoutedWeights, RouterWeights,
 };
 #[cfg(test)]
 use crate::engine::QuantizedLinear;
@@ -24,15 +25,65 @@ impl LayerWeights {
             input_norm: norm(tensors, bindings.input_norm)?,
             post_attention_norm: norm(tensors, bindings.post_attention_norm)?,
             pre_dense_norm: norm(tensors, bindings.pre_dense_norm)?,
-            post_dense_norm: norm(tensors, bindings.post_dense_norm)?,
-            pre_expert_norm: norm(tensors, bindings.pre_expert_norm)?,
-            post_expert_norm: norm(tensors, bindings.post_expert_norm)?,
             post_feed_forward_norm: norm(tensors, bindings.post_feed_forward_norm)?,
             layer_scalar: tensors.get(&bindings.layer_scale.source)?,
             attention: attention(tensors, bindings.attention, config, stream)?,
             dense: dense(tensors, bindings.dense, stream)?,
-            router: router(tensors, bindings.router, config, stream)?,
-            experts: experts(tensors, &bindings.experts, stream)?,
+            routed: Some(RoutedWeights {
+                post_dense_norm: norm(tensors, bindings.post_dense_norm)?,
+                pre_expert_norm: norm(tensors, bindings.pre_expert_norm)?,
+                post_expert_norm: norm(tensors, bindings.post_expert_norm)?,
+                router: router(tensors, bindings.router, config, stream)?,
+                experts: experts(tensors, &bindings.experts, stream)?,
+            }),
+        })
+    }
+
+    pub(in crate::engine::hybrid_moe) fn load_dense_bindings(
+        tensors: &ModelTensors,
+        bindings: &DenseDecoderLayerBindings<'_>,
+        config: HybridMoeLayerConfig,
+        stream: &Stream,
+    ) -> Result<Self> {
+        let sandwich = bindings.sandwich.ok_or_else(|| {
+            Error::InvalidModel("dense GELU layer needs output norms and a layer scale".into())
+        })?;
+        let attention_norm = |binding: Option<&TensorBinding>| {
+            binding.cloned().ok_or_else(|| {
+                Error::InvalidModel("dense GELU attention needs query and key norms".into())
+            })
+        };
+        let query_norm = attention_norm(bindings.attention.query_norm)?;
+        let key_norm = attention_norm(bindings.attention.key_norm)?;
+        Ok(Self {
+            input_norm: norm(tensors, bindings.input_norm)?,
+            post_attention_norm: norm(tensors, sandwich.attention_output_norm)?,
+            pre_dense_norm: norm(tensors, bindings.post_attention_norm)?,
+            post_feed_forward_norm: norm(tensors, sandwich.feed_forward_output_norm)?,
+            layer_scalar: tensors.get(&sandwich.layer_scale.source)?,
+            attention: attention(
+                tensors,
+                HybridMoeAttentionBindings {
+                    query: bindings.attention.query,
+                    key: bindings.attention.key,
+                    value: Some(bindings.attention.value),
+                    output: bindings.attention.output,
+                    query_norm: &query_norm,
+                    key_norm: &key_norm,
+                },
+                config,
+                stream,
+            )?,
+            dense: dense(
+                tensors,
+                HybridMoeDenseBindings {
+                    gate: bindings.gate,
+                    up: bindings.up,
+                    down: bindings.down,
+                },
+                stream,
+            )?,
+            routed: None,
         })
     }
 
@@ -47,20 +98,22 @@ impl LayerWeights {
             input_norm: legacy_norm(tensors, &layer, "input_layernorm")?,
             post_attention_norm: legacy_norm(tensors, &layer, "post_attention_layernorm")?,
             pre_dense_norm: legacy_norm(tensors, &layer, "pre_feedforward_layernorm")?,
-            post_dense_norm: legacy_norm(tensors, &layer, "post_feedforward_layernorm_1")?,
-            pre_expert_norm: legacy_norm(tensors, &layer, "pre_feedforward_layernorm_2")?,
-            post_expert_norm: legacy_norm(tensors, &layer, "post_feedforward_layernorm_2")?,
             post_feed_forward_norm: legacy_norm(tensors, &layer, "post_feedforward_layernorm")?,
             layer_scalar: tensors.get(&format!("{layer}.layer_scalar"))?,
             attention: legacy_attention(tensors, &format!("{layer}.self_attn"), config, stream)?,
             dense: legacy_dense(tensors, &format!("{layer}.mlp"), config.group_size)?,
-            router: legacy_router(tensors, &format!("{layer}.router"), config, stream)?,
-            experts: legacy_dense(
-                tensors,
-                &format!("{layer}.experts.switch_glu"),
-                config.group_size,
-            )?
-            .into(),
+            routed: Some(RoutedWeights {
+                post_dense_norm: legacy_norm(tensors, &layer, "post_feedforward_layernorm_1")?,
+                pre_expert_norm: legacy_norm(tensors, &layer, "pre_feedforward_layernorm_2")?,
+                post_expert_norm: legacy_norm(tensors, &layer, "post_feedforward_layernorm_2")?,
+                router: legacy_router(tensors, &format!("{layer}.router"), config, stream)?,
+                experts: legacy_dense(
+                    tensors,
+                    &format!("{layer}.experts.switch_glu"),
+                    config.group_size,
+                )?
+                .into(),
+            }),
         })
     }
 }

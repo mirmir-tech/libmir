@@ -18,7 +18,10 @@ pub(super) fn validate(
     spec: &SemanticModelSpec,
     runtime: MetalDecoderRuntime,
 ) -> Result<()> {
-    let embedding = if runtime == MetalDecoderRuntime::DenseAndRouted {
+    let embedding = if matches!(
+        runtime,
+        MetalDecoderRuntime::DenseAndRouted | MetalDecoderRuntime::DenseGelu
+    ) {
         f64::from(
             u32::try_from(decoder.hidden_size)
                 .map_err(|_| ArchitectureError::invalid("Metal hidden size exceeds u32"))?,
@@ -42,7 +45,7 @@ pub(super) fn validate(
                 attention.qk_normalization,
                 QkNormalization::None | QkNormalization::QueryKeyRms
             ),
-            MetalDecoderRuntime::DenseAndRouted => {
+            MetalDecoderRuntime::DenseAndRouted | MetalDecoderRuntime::DenseGelu => {
                 attention.qk_normalization == QkNormalization::QueryKeyValueRms
             },
             MetalDecoderRuntime::SharedRouted => {
@@ -61,7 +64,7 @@ pub(super) fn validate(
         let head_dim = u32::try_from(decoder.layer_head_dim(layer.index))
             .map_err(|_| ArchitectureError::invalid("Metal head dimension exceeds u32"))?;
         let scale = match runtime {
-            MetalDecoderRuntime::DenseAndRouted => 1.0,
+            MetalDecoderRuntime::DenseAndRouted | MetalDecoderRuntime::DenseGelu => 1.0,
             MetalDecoderRuntime::ClampedRouted => {
                 decoder.attention_scale.unwrap_or_else(|| f64::from(head_dim).sqrt().recip())
             },

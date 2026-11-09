@@ -1,4 +1,4 @@
-use models::weights::HybridMoeLayerBindings;
+use models::weights::{DenseDecoderLayerBindings, HybridMoeLayerBindings};
 
 use super::{HybridMoeLayerConfig, weights::LayerWeights};
 #[cfg(test)]
@@ -46,6 +46,18 @@ impl HybridMoeLayer {
     ) -> Result<Self> {
         let config = config.validate()?;
         let weights = LayerWeights::load_bindings(tensors, bindings, config, stream)?;
+        Self::finish_load(weights, lowering, config, stream)
+    }
+
+    pub fn load_dense_bindings(
+        tensors: &ModelTensors,
+        bindings: &DenseDecoderLayerBindings<'_>,
+        lowering: LayerLowering,
+        config: HybridMoeLayerConfig,
+        stream: &Stream,
+    ) -> Result<Self> {
+        let config = config.validate()?;
+        let weights = LayerWeights::load_dense_bindings(tensors, bindings, config, stream)?;
         Self::finish_load(weights, lowering, config, stream)
     }
 
@@ -126,7 +138,9 @@ impl HybridMoeLayer {
         if self.fused_expert_gate_up.is_some() {
             return Ok(true);
         }
-        let Some((gate, up)) = self.weights.experts.separate() else {
+        let Some((gate, up)) =
+            self.weights.routed.as_ref().and_then(|routed| routed.experts.separate())
+        else {
             return Ok(false);
         };
         self.fused_expert_gate_up = gate.fuse_expert_gate_up(up, stream)?;
@@ -135,7 +149,9 @@ impl HybridMoeLayer {
     }
 
     pub(super) fn fused_expert_gate_up_bytes(&self) -> Result<Option<usize>> {
-        let Some((gate, up)) = self.weights.experts.separate() else {
+        let Some((gate, up)) =
+            self.weights.routed.as_ref().and_then(|routed| routed.experts.separate())
+        else {
             return Ok(None);
         };
         gate.fused_expert_gate_up_bytes(up)

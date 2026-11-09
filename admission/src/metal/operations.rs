@@ -23,6 +23,8 @@ pub enum MixerLowering {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FeedForwardLowering {
     Dense,
+    /// Gemma-style gated GELU with output norms and a layer scale.
+    DenseGelu,
     DenseAndRouted,
     SharedRouted,
     ClampedRouted,
@@ -84,6 +86,9 @@ fn lower_feed_forward(layer: usize, feed_forward: &FeedForwardSpec) -> Result<Fe
             activation: ActivationSpec::SwiGlu { clamp: None, up_shift: 0.0, .. },
             ..
         } => Ok(FeedForwardLowering::Dense),
+        FeedForwardSpec::Dense { activation: ActivationSpec::GeluTanh, .. } => {
+            Ok(FeedForwardLowering::DenseGelu)
+        },
         FeedForwardSpec::DenseAndRouted {
             dense_activation: ActivationSpec::GeluTanh,
             routed,

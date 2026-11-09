@@ -16,6 +16,7 @@ pub use operations::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MetalDecoderRuntime {
     Dense,
+    DenseGelu,
     DenseAndRouted,
     SharedRouted,
     ClampedRouted,
@@ -102,6 +103,12 @@ fn select_runtime(layers: &[LayerLowering]) -> Result<MetalDecoderRuntime> {
             && matches!(layer.mixer, MixerLowering::Softmax { window: None, .. })
     }) {
         return Ok(MetalDecoderRuntime::Dense);
+    }
+    if layers.iter().all(|layer| {
+        layer.feed_forward == FeedForwardLowering::DenseGelu
+            && matches!(layer.mixer, MixerLowering::Softmax { .. })
+    }) {
+        return Ok(MetalDecoderRuntime::DenseGelu);
     }
     if layers.iter().all(|layer| {
         layer.feed_forward == FeedForwardLowering::DenseAndRouted

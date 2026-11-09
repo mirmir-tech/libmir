@@ -95,7 +95,9 @@ fn attention_layout(
         DecoderRuntime::ClampedRouted => {
             "biased grouped-query attention with learned sinks and semantic windowing"
         },
-        DecoderRuntime::DenseAndRouted => "RMS-normalized attention with shared K/V semantics",
+        DecoderRuntime::DenseAndRouted | DecoderRuntime::DenseGelu => {
+            "RMS-normalized attention with shared K/V semantics"
+        },
         DecoderRuntime::SharedRouted => {
             "linear recurrence plus gated RMS-normalized grouped-query attention"
         },
@@ -123,6 +125,7 @@ fn dense_attention_layout(spec: &models::semantic::SemanticModelSpec) -> &'stati
 fn mlp_layout(lowering: &DecoderLowering) -> &'static str {
     match lowering.runtime() {
         DecoderRuntime::Dense => "dense gated feed-forward",
+        DecoderRuntime::DenseGelu => "dense gated GELU",
         DecoderRuntime::DenseAndRouted => "dense GELU plus routed experts",
         DecoderRuntime::SharedRouted => "shared expert plus routed experts",
         DecoderRuntime::ClampedRouted => "clamped routed SwiGLU experts",

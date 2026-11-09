@@ -111,7 +111,7 @@ pub(super) fn load_decoder_model(
             KV_CACHE_STEP,
             stream,
         )?)),
-        DecoderRuntime::DenseAndRouted => {
+        DecoderRuntime::DenseAndRouted | DecoderRuntime::DenseGelu => {
             load_dense_routed(lowering, tensors, decoder, bindings, stream)
         },
         DecoderRuntime::Dense => load_dense(lowering, tensors, decoder, bindings, stream),
