@@ -88,12 +88,9 @@ impl HybridMoeLayer {
         input: &Array,
         stream: &Stream,
     ) -> Result<(Array, Array)> {
-        let normalized = input.rms_norm(
-            &self.weights.routed()?.router.norm_scale,
-            self.config.rms_norm_eps,
-            stream,
-        )?;
-        let scores = self.weights.routed()?.router.projection.forward(&normalized, stream)?;
+        let router = &self.weights.routed()?.router;
+        let normalized = input.rms_norm(&router.norm_scale, self.config.rms_norm_eps, stream)?;
+        let scores = router.projection.forward(&normalized, stream)?;
         Ok((normalized, scores))
     }
 

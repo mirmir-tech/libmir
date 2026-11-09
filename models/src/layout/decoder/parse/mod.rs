@@ -39,6 +39,10 @@ impl DecoderConfig {
 
     pub fn from_value(value: &Value) -> Result<Self> {
         let decoder = decoder_value(value);
+        // Later layers would reuse earlier K/V tensors, which neither backend models.
+        if optional_usize(decoder, &["num_kv_shared_layers"])?.is_some_and(|layers| layers > 0) {
+            return Err(invalid("shared K/V layers are not supported"));
+        }
         let num_attention_heads = require_usize(decoder, &["num_attention_heads", "n_head"])?;
         if num_attention_heads == 0 {
             return Err(invalid("num_attention_heads must be greater than zero"));
@@ -55,12 +59,7 @@ impl DecoderConfig {
             None => attention::layer_types(decoder, num_hidden_layers)?,
         };
         let partial_rotary_factor = partial_rotary_factor(decoder)?;
-        let explicit_head_dim =
-            optional_usize(decoder, &["head_dim", "attention_head_dim", "kv_channels"])?;
-        if explicit_head_dim.is_none() && !hidden_size.is_multiple_of(num_attention_heads) {
-            return Err(invalid("hidden_size must be divisible by num_attention_heads"));
-        }
-        let head_dim = explicit_head_dim.unwrap_or(hidden_size / num_attention_heads);
+        let head_dim = resolve_head_dim(decoder, hidden_size, num_attention_heads)?;
         let config = Self {
             hidden_size,
             intermediate_size: intermediate_size(decoder)?,
@@ -197,6 +196,22 @@ fn hybrid_layer_types(hybrid: &StateSpaceHybridConfig) -> Vec<AttentionLayerType
             }
         })
         .collect()
+}
+
+fn resolve_head_dim(
+    decoder: &Value,
+    hidden_size: usize,
+    num_attention_heads: usize,
+) -> Result<usize> {
+    if let Some(head_dim) =
+        optional_usize(decoder, &["head_dim", "attention_head_dim", "kv_channels"])?
+    {
+        return Ok(head_dim);
+    }
+    if !hidden_size.is_multiple_of(num_attention_heads) {
+        return Err(invalid("hidden_size must be divisible by num_attention_heads"));
+    }
+    Ok(hidden_size / num_attention_heads)
 }
 
 fn decoder_value(value: &Value) -> &Value {
