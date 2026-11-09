@@ -69,8 +69,7 @@ pub(super) fn history_pressure(memory: crate::engine::MemoryStats) -> bool {
     usable > 0 && memory.active > usable.saturating_mul(PREFIX_RECLAIM_PRESSURE_PERCENT) / 100
 }
 
-/// Batched history is a duplicate of paged K/V, so it may use half of the
-/// headroom.
+/// Batched history duplicates paged K/V, so it may use half of the headroom.
 pub(super) fn history_limit_bytes(memory: crate::engine::MemoryStats) -> usize {
     let usable = usable_memory(memory);
     let reserve = (usable / PREFILL_MEMORY_RESERVE_DIVISOR).max(PREFILL_MINIMUM_RESERVE);
@@ -102,8 +101,8 @@ fn pressure_bounded_budget(
     workspace_constrained: bool,
 ) -> usize {
     let usable = usable_memory(memory);
-    let retained = memory.active.saturating_add(memory.cached);
-    let available = usable.saturating_sub(retained);
+    // The allocator cache is reclaimable, so only live allocations shrink a chunk.
+    let available = usable.saturating_sub(memory.active);
     if workspace_constrained || usable > 0 && available < usable / PRESSURE_DIVISOR {
         budget.min(PRESSURE_PREFILL_TOKENS)
     } else {

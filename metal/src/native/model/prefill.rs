@@ -3,7 +3,7 @@ use models::semantic::{FeedForwardSpec, MixerSpec, SemanticModelSpec};
 const DEFAULT_PREFILL_STEP: usize = 512;
 const LARGE_PREFILL_STEP: usize = 2_048;
 const MAX_PREFILL_TOKEN_PAIRS: usize = 8 * 1_024 * 1_024;
-const MAX_PREFILL_CHUNK_TOKENS: usize = 512;
+const MAX_PREFILL_CHUNK_TOKENS: usize = 2_048;
 const NATIVE_PAGED_TAIL_CONTEXT: usize = 16 * 1_024;
 const NATIVE_PAGED_TAIL_TOKENS: usize = 16;
 
@@ -91,7 +91,7 @@ mod tests {
 
     #[test]
     fn bounds_long_context_chunks_by_attention_work() {
-        assert_eq!(bounded_prefill_step(2_048, 0, 4_096), 512);
+        assert_eq!(bounded_prefill_step(2_048, 0, 4_096), 2_048);
         assert_eq!(bounded_prefill_step(2_048, 16_384, 4_096), 511);
         assert_eq!(bounded_prefill_step(2_048, 32_768, 4_096), 255);
         assert_eq!(bounded_prefill_step(2_048, 32_767, 2), 1);

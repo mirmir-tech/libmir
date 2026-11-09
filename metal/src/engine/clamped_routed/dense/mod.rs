@@ -1,7 +1,6 @@
 use super::projection::BoundLinear;
 use crate::engine::{Array, Result, RouterOutput, Stream, kernels::MxFp4Shape};
 
-#[cfg(test)]
 mod prefill;
 #[cfg(test)]
 mod tests;
@@ -15,10 +14,7 @@ pub(super) fn dense_experts(
     stream: &Stream,
 ) -> Result<Array> {
     let [gate, up, down] = projections;
-    #[cfg(test)]
-    if shape.tokens > 1
-        && stream.config().diagnostics.moe_prefill == crate::config::MoePrefill::ClampedSorted
-    {
+    if shape.tokens > 1 {
         return prefill::forward(input, routing, down, limit, shape, stream, |input, indices| {
             Ok((
                 gate.gather(input, indices, true, stream)?,
@@ -43,10 +39,7 @@ pub(super) fn fused_dense_experts(
     shape: MxFp4Shape,
     stream: &Stream,
 ) -> Result<Array> {
-    #[cfg(test)]
-    if shape.tokens > 1
-        && stream.config().diagnostics.moe_prefill == crate::config::MoePrefill::ClampedSorted
-    {
+    if shape.tokens > 1 {
         return prefill::forward(input, routing, down, limit, shape, stream, |input, indices| {
             let output = gate_up.gather(input, indices, true, stream)?;
             split(&output, interleaved, shape.intermediate, stream)

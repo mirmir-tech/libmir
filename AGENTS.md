@@ -383,8 +383,8 @@ The target shape is:
   SortedGraph changes reduction arithmetic. Test-only MXFP4 bank gate/up
   fusion matches output bitwise but gives only 1.010x local 512 speedup and
   noisy 128 results. Do not enable it or repeat full-model series from that.
-  Clamped sorted prefill also remains test-only; retain gathered biases,
-  clamped activation, interleaving and graph reduction. See Workmir's
+  Clamped sorted prefill is now the production multi-token path; retain gathered
+  biases, clamped activation, interleaving and graph reduction. See Workmir's
   `2026-09-07-moe-prefill` report. The missing native LHS gather index contract
   is a separate hypothesis, not an established optimization.
 - Mirtal now exposes optional LHS/RHS gather indices for affine and MXFP4.
@@ -1223,7 +1223,7 @@ The target shape is:
   assertion. See Workmir's `2026-10-08-state-only-release` report.
 - DeferredToken preserves384 IDs but slightly worsens total time; do not promote.
   A separate1024-token chunk trial changes generated token3;2048 was not run.
-  Keep production512 cap. Actual C1 HTTP trace did not trigger the128-token
+  The prefill chunk cap is now 2048, matching MLX-LM's step; 1024 changed a greedy token, so judge answers rather than exact IDs. Actual C1 HTTP trace did not trigger the128-token
   pressure cap, so do not attribute current short-prefill cost to that policy.
 - Native activity assertions and canonical HTTP refresh do not establish stable
   conditions. The latter stops during startup on44 global Swapins, no measured
@@ -1299,3 +1299,10 @@ The target shape is:
   cohorts or left-padded history with per-row masks.
 - Admission is decided before any cache mutation. The budget follows half of the
   live memory headroom at each prefill boundary; an explicit `set_limit` pins it.
+
+## Prefill throughput
+
+- GPT-OSS sorted expert dispatch lifts prefill about 10x (0.08x to 0.83–0.94x of
+  MLX-LM); unsorted `gather` was the cost. The 2048-token chunk cap lifts Qwen3.6
+  C1 prefill from 0.81x to 1.13x. Scalar prefill pressure counts live allocations
+  only: the reclaimable allocator cache halved Gemma 26B's C1 prefill.
