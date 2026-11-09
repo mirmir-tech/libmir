@@ -36,7 +36,7 @@ fn rotate(
 
 /// Returns `None` before touching any cache when per-row attention must run.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn persistent_attention(
+pub(in crate::engine::dense::swiglu) fn persistent_attention(
     queries: &Array,
     keys: &Array,
     values: &Array,

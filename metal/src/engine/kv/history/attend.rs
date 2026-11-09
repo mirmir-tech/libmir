@@ -31,11 +31,15 @@ pub fn attend(
     };
     let selected = stream.config().batch.dense_history.persistent()
         && sequence == 1
-        && caches.len() > 1
         && caches
             .iter()
             .all(|cache| cache.max_context.is_none() && !cache.has_quantized_pages());
-    if !selected {
+    // A lone session gains only once fragmented pages would need a gather; below
+    // the paging threshold its contiguous K/V stays the single attention input.
+    if !selected
+        || (caches.len() == 1
+            && !caches[0].pages.as_ref().is_some_and(super::super::paged::PagedStore::active))
+    {
         return Ok(None);
     }
     let (kv_heads, head_dim) = (usize::try_from(kv_heads)?, usize::try_from(head_dim)?);

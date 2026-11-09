@@ -68,7 +68,7 @@ pub(in crate::native) fn materialize(
 ) -> Result<()> {
     let mut roots = vec![output];
     state.cache.extend_graph_roots(&mut roots);
-    measure(Stage::Evaluate, || Ok(loaded.stream.eval_many(&roots)?))?;
+    measure(Stage::Evaluate, || Ok(loaded.stream.eval_many_with_paged_arenas(&roots)?))?;
     loaded.settle_prefill_graph()?;
     measure(Stage::DetachState, || {
         Ok(state.cache.detach_evaluated_graphs(&loaded.stream)?)
@@ -85,7 +85,7 @@ pub(super) fn materialize_packed(
     for state in states {
         state.cache.extend_graph_roots(&mut roots);
     }
-    measure(Stage::Evaluate, || Ok(loaded.stream.eval_many(&roots)?))?;
+    measure(Stage::Evaluate, || Ok(loaded.stream.eval_many_with_paged_arenas(&roots)?))?;
     loaded.settle_prefill_graph()?;
     measure(Stage::DetachState, || {
         for state in states {

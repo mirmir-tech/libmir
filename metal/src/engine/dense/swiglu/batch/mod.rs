@@ -1,5 +1,6 @@
 mod attention;
 mod history;
+pub(super) use history::persistent_attention;
 #[cfg(test)]
 mod tests;
 

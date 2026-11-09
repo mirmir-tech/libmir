@@ -1295,8 +1295,13 @@ The target shape is:
   when positions match. Do not split rows into per-position cohorts: staggered
   prefill waves and prompts differing by one token fragment the batch, regressed
   long-context C5/C10 and produced an HTTP 500.
-- HTTP gains therefore stop where rows are ragged. Closing that gap needs aligned
-  cohorts or left-padded history with per-row masks.
+- Rows may also be ragged: history pads shorter rows and masks the tail. Dense,
+  shared-routed and clamped runtimes share `persistent_history::attend`; sinks are
+  passed through, sliding layers keep their ring and per-row attention.
+- A lone paged session uses the same history (`[1, H, T, D]`, as MLX-LM's K/V cache):
+  this removes the per-step page gather, lifting C1 at 8k from 0.77-0.85x to
+  1.06-1.18x of MLX-LM. Its page writes are no longer ancestors of the logits, so
+  every evaluation before `detach_paged_arena_graphs` must root the arenas.
 - Admission is decided before any cache mutation. The budget follows half of the
   live memory headroom at each prefill boundary; an explicit `set_limit` pins it.
 

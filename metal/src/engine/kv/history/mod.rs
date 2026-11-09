@@ -61,7 +61,6 @@ pub fn enabled(
 ) -> bool {
     !causal
         && sequence == 1
-        && caches.len() > 1
         && caches.iter().all(|c| c.max_context.is_none())
         && contexts.iter().all(|c| c.paged.is_none() && c.mask.is_none())
 }

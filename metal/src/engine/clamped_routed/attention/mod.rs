@@ -142,6 +142,16 @@ impl ClampedRoutedAttention {
         ] {
             crate::engine::probe::detail(stage, array)?;
         }
+        if !causal
+            && let Some(output) = self.attend_persistent(
+                [&queries, &keys, &values],
+                &mut [&mut *cache],
+                &[position],
+                stream,
+            )?
+        {
+            return Ok(output);
+        }
         let queries = self.rope(&queries, position, stream)?;
         let keys = self.rope(&keys, position, stream)?;
         let values = values.transpose(&[0, 2, 1, 3], stream)?;

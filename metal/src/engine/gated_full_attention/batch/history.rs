@@ -36,6 +36,35 @@ impl GatedFullAttention {
         self.project_output(&gate.sigmoid_mul(&attended, stream)?, stream).map(Some)
     }
 
+    /// The single-session form; `gate` is already flattened to `[1, 1, W]`.
+    pub(in crate::engine::gated_full_attention) fn forward_scalar_persistent(
+        &self,
+        [queries, gate, keys, values]: [&Array; 4],
+        cache: &mut KvCache,
+        position: i32,
+        stream: &Stream,
+    ) -> Result<Option<Array>> {
+        let Some(attended) = persistent_history::attend(
+            &persistent_history::Attend {
+                queries,
+                keys,
+                values,
+                scale: self.config.attention_scale,
+                sinks: None,
+            },
+            &mut [&mut *cache],
+            &[position],
+            |input| rope(input, &self.config, position, None, stream),
+            stream,
+        )?
+        else {
+            return Ok(None);
+        };
+        let shape = [1, 1, self.config.attention_heads * self.config.head_dim];
+        let attended = attended.transpose(&[0, 2, 1, 3], stream)?.reshape(&shape, stream)?;
+        self.project_output(&gate.sigmoid_mul(&attended, stream)?, stream).map(Some)
+    }
+
     fn rotate_rows(&self, input: &Array, positions: &[i32], stream: &Stream) -> Result<Array> {
         if let Some(position) = common_position(positions) {
             return rope(input, &self.config, position, None, stream);

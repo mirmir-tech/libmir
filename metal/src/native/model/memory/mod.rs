@@ -105,7 +105,8 @@ impl LoadedModel {
         for state in self.sessions.values() {
             state.cache.extend_graph_roots(&mut roots);
         }
-        self.stream.eval_many(&roots)?;
+        // Persistent history leaves K/V page writes outside the output graph.
+        self.stream.eval_many_with_paged_arenas(&roots)?;
         self.stream.synchronize()?;
         self.stream.detach_paged_arena_graphs()?;
         for state in self.sessions.values() {

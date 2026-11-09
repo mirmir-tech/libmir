@@ -15,6 +15,7 @@ use crate::{
 
 // Crosses the 128-token page promotion and one 256-token history growth.
 const STEPS: u32 = 300;
+const SCALAR_STEPS: u32 = 40;
 
 #[test]
 fn persistent_history_matches_per_row_decode() -> Result<()> {
@@ -79,6 +80,14 @@ fn decode(root: &Path, dense_history: DenseHistoryMode, lead: u32) -> Result<Vec
         first.extend_prefill_graph_roots(&mut roots);
         second.extend_prefill_graph_roots(&mut roots);
         stream.eval_many_with_paged_arenas(&roots)?;
+        logits.extend(output.to_vec_f32(&stream)?);
+    }
+    // A lone session keeps attending over its own persistent history.
+    for step in 0..SCALAR_STEPS {
+        let token = Array::from_u32(&[step % 4], &[1, 1])?;
+        let position = i32::try_from(STEPS + lead + step)?;
+        let output = model.forward(&token, &mut first, position, false, &stream)?;
+        stream.eval_many_with_paged_arenas(&[&output])?;
         logits.extend(output.to_vec_f32(&stream)?);
     }
     Ok(logits)
