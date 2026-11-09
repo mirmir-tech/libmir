@@ -33,8 +33,8 @@ impl DecoderModel {
         self.execution.prefers_packed_decode(stream)
     }
 
-    pub(crate) fn orders_common_position_rows(&self, stream: &Stream) -> bool {
-        self.execution.orders_common_position_rows(stream)
+    pub(crate) fn keeps_persistent_row_order(&self, stream: &Stream) -> bool {
+        self.execution.keeps_persistent_row_order(stream)
     }
 
     pub(crate) fn has_decode_plan_candidates(&self) -> bool {

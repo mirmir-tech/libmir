@@ -27,7 +27,9 @@ pub struct Row {
 pub struct History {
     buffers: [Array; 2],
     shape: [usize; 4],
-    tokens: usize,
+    /// Valid tokens per row; rows may differ and are right-padded to
+    /// `shape[2]`.
+    tokens: Vec<usize>,
     reservation: Arc<budget::Lease>,
 }
 
@@ -66,7 +68,8 @@ pub fn enabled(
 /// callers can select per-row attention before any cache mutation.
 pub fn admits(
     previous: Option<&History>,
-    [rows, heads, tokens, dim]: [usize; 4],
+    [rows, heads, dim]: [usize; 3],
+    tokens: &[usize],
     dtype: mirtal::DType,
     stream: &Stream,
 ) -> Result<bool> {
@@ -74,7 +77,7 @@ pub fn admits(
     if previous.is_some_and(|history| history.extends_to(rows, heads, tokens, dim)) {
         return Ok(budget.allows_reuse());
     }
-    let capacity = buffer::capacity_for(tokens)?;
+    let capacity = buffer::capacity_for(tokens.iter().copied().max().unwrap_or(0))?;
     Ok(budget.admits(budget::storage_bytes([rows, heads, capacity, dim], dtype)?))
 }
 
@@ -110,24 +113,45 @@ pub fn execute(
     let history = match History::next(previous, contexts, updates, stream) {
         Ok(history) => Arc::new(history),
         Err(crate::engine::Error::HistoryBudgetUnavailable) => {
-            let keys = Array::concatenate(
-                &contexts.iter().map(|c| &c.keys).collect::<Vec<_>>(),
-                0,
-                stream,
-            )?;
-            let values = Array::concatenate(
-                &contexts.iter().map(|c| &c.values).collect::<Vec<_>>(),
-                0,
-                stream,
-            )?;
-            return queries.scaled_dot_product_attention(&keys, &values, scale, false, stream);
+            return row_attention(queries, contexts, scale, stream);
         },
         Err(error) => return Err(error),
     };
     let [keys, values] = history.views(stream)?;
-    let output = queries.scaled_dot_product_attention(&keys, &values, scale, false, stream)?;
+    let output = match history.padding_mask(queries, stream)? {
+        Some(mask) => {
+            queries.scaled_dot_product_attention_with_mask(&keys, &values, scale, &mask, stream)?
+        },
+        None => queries.scaled_dot_product_attention(&keys, &values, scale, false, stream)?,
+    };
     for (index, cache) in caches.iter_mut().enumerate() {
         cache.history = Some(Row { index, history: Arc::clone(&history) });
     }
     Ok(output)
+}
+
+/// Fallback when the budget refuses a batched history; rows may differ in
+/// length.
+fn row_attention(
+    queries: &Array,
+    contexts: &[KvContext],
+    scale: f32,
+    stream: &Stream,
+) -> Result<Array> {
+    let shape = queries.native().shape()?;
+    let dimensions = shape.dimensions();
+    let rows = contexts
+        .iter()
+        .enumerate()
+        .map(|(row, context)| {
+            queries
+                .slice(
+                    &[row, 0, 0, 0],
+                    &[row + 1, dimensions[1], dimensions[2], dimensions[3]],
+                    stream,
+                )?
+                .scaled_dot_product_attention(&context.keys, &context.values, scale, false, stream)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Array::concatenate(&rows.iter().collect::<Vec<_>>(), 0, stream)
 }

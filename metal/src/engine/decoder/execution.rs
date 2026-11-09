@@ -12,7 +12,7 @@ pub trait DecoderExecution: Debug + Send {
         true
     }
 
-    fn orders_common_position_rows(&self, _stream: &Stream) -> bool {
+    fn keeps_persistent_row_order(&self, _stream: &Stream) -> bool {
         false
     }
 

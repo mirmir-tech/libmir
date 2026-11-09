@@ -62,6 +62,13 @@ pub(super) fn prefix_reclamation_needed(memory: crate::engine::MemoryStats) -> b
             > usable.saturating_mul(PREFIX_RECLAIM_PRESSURE_PERCENT) / 100
 }
 
+/// Live allocations only: the allocator cache is reclaimable and must not
+/// suspend a batched history that fits.
+pub(super) fn history_pressure(memory: crate::engine::MemoryStats) -> bool {
+    let usable = usable_memory(memory);
+    usable > 0 && memory.active > usable.saturating_mul(PREFIX_RECLAIM_PRESSURE_PERCENT) / 100
+}
+
 /// Batched history is a duplicate of paged K/V, so it may use half of the
 /// headroom.
 pub(super) fn history_limit_bytes(memory: crate::engine::MemoryStats) -> usize {

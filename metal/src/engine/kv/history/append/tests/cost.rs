@@ -42,7 +42,7 @@ fn compares_history_append_graph_build() -> Result<()> {
             let outputs = match plan {
                 Plan::Prepared => append.execute(&history, [&updates[0], &updates[1]], &stream)?,
                 Plan::Fresh => {
-                    let geometry = Geometry::new(history.shape, history.tokens)?;
+                    let geometry = Geometry::new(history.shape, &history.tokens)?;
                     let [keys, values] = append
                         .library
                         .export("history_append")?

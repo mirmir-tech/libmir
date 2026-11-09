@@ -59,6 +59,26 @@ impl Array {
         .astype_like(self, stream)
     }
 
+    pub fn scaled_dot_product_attention_with_mask(
+        &self,
+        keys: &Self,
+        values: &Self,
+        scale: f32,
+        mask: &Self,
+        stream: &Stream,
+    ) -> Result<Self> {
+        Self::from_native(stream.native().graph().scaled_dot_product_attention(
+            self.native(),
+            keys.native(),
+            values.native(),
+            mirtal::ScaledDotProductAttention {
+                scale,
+                mask: mirtal::AttentionMask::Array(mask.native()),
+                sinks: None,
+            },
+        )?)
+    }
+
     pub fn scaled_dot_product_attention(
         &self,
         keys: &Self,

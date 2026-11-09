@@ -59,21 +59,14 @@ impl LoadedModel {
     }
 
     /// Persistent batch history reuses its buffers only for a stable row order,
-    /// while ready rows arrive in request-completion order. Rows at different
-    /// positions keep per-row attention, so their order does not matter.
+    /// while ready rows arrive in request-completion order.
     fn stable_packed_order(
         &self,
         inputs: &[DecodeInput],
         mut rows: Vec<usize>,
     ) -> Result<Vec<usize>> {
-        if self.execution.decoder()?.orders_common_position_rows(&self.stream) {
-            let positions = rows
-                .iter()
-                .map(|row| self.session(inputs[*row].session)?.model_position())
-                .collect::<Result<Vec<_>>>()?;
-            if positions.windows(2).all(|pair| pair[0] == pair[1]) {
-                rows.sort_unstable_by_key(|row| inputs[*row].session);
-            }
+        if self.execution.decoder()?.keeps_persistent_row_order(&self.stream) {
+            rows.sort_unstable_by_key(|row| inputs[*row].session);
         }
         Ok(rows)
     }

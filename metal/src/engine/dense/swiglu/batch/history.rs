@@ -13,6 +13,33 @@ use crate::engine::{
     persistent_history,
 };
 
+/// Rotates `[B, S, H, D]` rows into `[B, H, S, D]`, each at its own position.
+fn rotate(
+    input: &Array,
+    config: DenseSwiGluLayerConfig,
+    positions: &[i32],
+    stream: &Stream,
+) -> Result<Array> {
+    if let Some(position) =
+        positions.first().copied().filter(|first| positions.iter().all(|p| p == first))
+    {
+        return dense_attention::rope_layout(input, None, config, position, stream);
+    }
+    let offsets = positions.iter().map(|p| Ok(u32::try_from(*p)?)).collect::<Result<Vec<_>>>()?;
+    let offsets = mirtal::Array::from_slice(&offsets, [offsets.len()])?;
+    let input = input.transpose(&[0, 2, 1, 3], stream)?;
+    Array::from_native(stream.native().graph().rope_batched(
+        input.native(),
+        mirtal::RopeOptions {
+            dimensions: usize::try_from(config.head_dim)?,
+            traditional: false,
+            base: Some(config.rope_base),
+            scale: 1.0,
+            offset: &offsets,
+        },
+    )?)
+}
+
 /// Returns `None` before touching any cache when per-row attention must run.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn persistent_attention(
@@ -33,22 +60,27 @@ pub(super) fn persistent_attention(
         && config.rope_attention_factor.to_bits() == 1.0_f32.to_bits()
         && queries.shape()?[1] == 1
         && caches.iter().all(|cache| !cache.has_quantized_pages());
-    let common = positions.first().copied().filter(|first| positions.iter().all(|p| p == first));
-    let (true, Some(position)) = (selected, common) else {
-        return Ok(None);
-    };
-    let layout = [
-        caches.len(),
-        usize::try_from(config.kv_heads)?,
-        usize::try_from(position)? + 1,
-        usize::try_from(config.head_dim)?,
-    ];
-    let previous = persistent_history::take(caches);
-    if !persistent_history::admits(previous.as_deref(), layout, keys.native().dtype()?, stream)? {
+    if !selected {
         return Ok(None);
     }
-    let queries = dense_attention::rope_layout(queries, None, config, position, stream)?;
-    let keys = dense_attention::rope_layout(keys, None, config, position, stream)?;
+    let layout =
+        [caches.len(), usize::try_from(config.kv_heads)?, usize::try_from(config.head_dim)?];
+    let tokens = positions
+        .iter()
+        .map(|position| Ok(usize::try_from(*position)? + 1))
+        .collect::<Result<Vec<_>>>()?;
+    let previous = persistent_history::take(caches);
+    if !persistent_history::admits(
+        previous.as_deref(),
+        layout,
+        &tokens,
+        keys.native().dtype()?,
+        stream,
+    )? {
+        return Ok(None);
+    }
+    let queries = rotate(queries, config, positions, stream)?;
+    let keys = rotate(keys, config, positions, stream)?;
     let contexts = caches
         .iter_mut()
         .enumerate()

@@ -1,7 +1,6 @@
 use super::{KvCache, Result, Stream};
 
 impl KvCache {
-    #[cfg(test)]
     pub(crate) fn extend_graph_roots<'a>(&'a self, roots: &mut Vec<&'a super::Array>) {
         roots.extend([&self.keys, &self.values].into_iter().flatten());
     }

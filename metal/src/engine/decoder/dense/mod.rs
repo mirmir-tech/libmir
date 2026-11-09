@@ -8,7 +8,7 @@ impl DecoderExecution for DenseSwiGluModel {
         stream.config().batch.dense_decode.packed()
     }
 
-    fn orders_common_position_rows(&self, stream: &Stream) -> bool {
+    fn keeps_persistent_row_order(&self, stream: &Stream) -> bool {
         stream.config().batch.dense_history.persistent()
     }
 

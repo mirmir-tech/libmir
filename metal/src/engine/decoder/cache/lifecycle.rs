@@ -97,7 +97,8 @@ impl DecoderCache {
         }
     }
 
-    #[cfg(test)]
+    /// Includes contiguous and sliding K/V, which a batched history no longer
+    /// reads.
     pub(crate) fn extend_prefill_graph_roots<'a>(
         &'a self,
         roots: &mut Vec<&'a crate::engine::Array>,

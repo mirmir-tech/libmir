@@ -171,7 +171,7 @@ fn decode_states(
     }
     let mut roots = vec![&logits];
     for (_, state) in states.iter() {
-        state.cache.extend_graph_roots(&mut roots);
+        state.cache.extend_prefill_graph_roots(&mut roots);
     }
     stream.eval_many_with_paged_arenas(&roots)?;
     #[cfg(test)]
