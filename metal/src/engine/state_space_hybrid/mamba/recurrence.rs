@@ -106,7 +106,10 @@ fn decode(
 ) -> Result<[mirtal::Array; 2]> {
     let graph = stream.native().graph();
     let skip = graph.astype(weights.skip_scale.native(), x.dtype()?)?;
-    stream.state_space_decode([x, weights.decay_log.native(), b, c, &skip, dt, state])
+    stream.kernels().state_space_decode(
+        stream.native(),
+        [x, weights.decay_log.native(), b, c, &skip, dt, state],
+    )
 }
 
 #[allow(clippy::too_many_arguments)]

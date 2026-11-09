@@ -1,7 +1,19 @@
 use super::{CacheStorage, DecoderCache, hybrid};
-use crate::engine::{Result, Stream};
+use crate::engine::{Error, Result, Stream};
 
 impl DecoderCache {
+    pub(crate) fn state_space_state(
+        &mut self,
+        index: usize,
+    ) -> Result<&mut crate::engine::state_space_hybrid::StateSpaceState> {
+        match &mut self.storage {
+            CacheStorage::HybridLinear(layers) => hybrid::state_space_state(layers, index),
+            CacheStorage::Attention(_) => {
+                Err(Error::InvalidModel("expected hybrid linear cache".into()))
+            },
+        }
+    }
+
     pub(crate) fn release_history(&mut self) {
         match &mut self.storage {
             CacheStorage::Attention(caches) => {
@@ -81,7 +93,7 @@ impl DecoderCache {
                     && let Some(root) = state.convolution_root()
                 {
                     allocations.insert(root.native().allocation()?.ok_or_else(|| {
-                        crate::engine::Error::InvalidModel(
+                        Error::InvalidModel(
                             "convolution inventory requires materialized state".into(),
                         )
                     })?);
@@ -129,7 +141,7 @@ impl DecoderCache {
             .into_iter()
             .map(|array| {
                 array.native().allocation()?.ok_or_else(|| {
-                    crate::engine::Error::InvalidModel(
+                    Error::InvalidModel(
                         "recurrent prefix state must be materialized before accounting".into(),
                     )
                 })
