@@ -121,7 +121,7 @@ The target shape is:
   Qwen and synthetic clamped tests. Do not enable it by default from the first
   favorable pair; see Workmir's `2026-09-06-prefill-cohort-budget` report.
   Any candidate must retain scalar progress when the whole budget is tiny.
-- Use the latest stable MLX as the tuning baseline (currently 0.32.3, pinned
+- Use the latest stable MLX as the tuning baseline (currently 0.32.4, pinned
   by Workmir). Cross-version greedy differences alone do not establish a quality
   regression or justify reverting the baseline. Validate semantic correctness
   on the new version and compare tuning candidates within that same version.
