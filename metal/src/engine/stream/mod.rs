@@ -219,6 +219,13 @@ impl Stream {
         self.kernels.gated_delta_recurrence(&self.native, inputs)
     }
 
+    pub(super) fn state_space_decode(
+        &self,
+        inputs: [&mirtal::Array; 7],
+    ) -> Result<[mirtal::Array; 2]> {
+        self.kernels.state_space_decode(&self.native, inputs)
+    }
+
     pub(super) fn gated_delta_decode(
         &self,
         inputs: [&mirtal::Array; 8],

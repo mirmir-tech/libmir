@@ -13,6 +13,7 @@ use crate::{
         hybrid_linear_moe::HybridLinearMoeModel,
         hybrid_moe::HybridMoeModel,
         lowering::{DecoderLowering, DecoderRuntime, MixerLowering},
+        state_space_hybrid::StateSpaceHybridModel,
     },
     native::error::{Error, Result},
 };
@@ -115,6 +116,14 @@ pub(super) fn load_decoder_model(
             load_dense_routed(lowering, tensors, decoder, bindings, stream)
         },
         DecoderRuntime::Dense => load_dense(lowering, tensors, decoder, bindings, stream),
+        DecoderRuntime::StateSpaceHybrid => Ok(DecoderModel::new(StateSpaceHybridModel::load(
+            tensors,
+            decoder,
+            bindings,
+            lowering.layers(),
+            KV_CACHE_STEP,
+            stream,
+        )?)),
         DecoderRuntime::SharedRouted | DecoderRuntime::DenseMixed => {
             Ok(DecoderModel::new(HybridLinearMoeModel::load(
                 tensors,

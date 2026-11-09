@@ -101,6 +101,7 @@ fn attention_layout(
         DecoderRuntime::SharedRouted | DecoderRuntime::DenseMixed => {
             "linear recurrence plus gated RMS-normalized grouped-query attention"
         },
+        DecoderRuntime::StateSpaceHybrid => "Mamba-2 recurrence plus plain grouped-query attention",
         DecoderRuntime::Dense => dense_attention_layout(spec),
     }
 }
@@ -130,6 +131,7 @@ fn mlp_layout(lowering: &DecoderLowering) -> &'static str {
         DecoderRuntime::SharedRouted => "shared expert plus routed experts",
         DecoderRuntime::DenseMixed => "dense gated SwiGLU",
         DecoderRuntime::ClampedRouted => "clamped routed SwiGLU experts",
+        DecoderRuntime::StateSpaceHybrid => "sigmoid-routed relu² experts plus shared expert",
     }
 }
 

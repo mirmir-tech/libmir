@@ -1,6 +1,6 @@
 use models::semantic::{
     ActivationSpec, DecoderLayerSpec, FeedForwardSpec, MixerSpec, NormalizationKind,
-    NormalizationSpec, QkNormalization,
+    NormalizationSpec, QkNormalization, RouterNormalization,
 };
 
 use crate::{ArchitectureError, Result};
@@ -18,6 +18,7 @@ pub enum MixerLowering {
         normalization: QkNormalization,
     },
     Linear,
+    StateSpace,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -28,6 +29,10 @@ pub enum FeedForwardLowering {
     DenseAndRouted,
     SharedRouted,
     ClampedRouted,
+    /// Sigmoid-routed `relu²` experts with an optional projected latent space.
+    LatentRouted,
+    /// The layer has no feed-forward block.
+    None,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -48,7 +53,7 @@ pub fn lower_layer(layer: &DecoderLayerSpec) -> Result<LayerLowering> {
             "post-attention",
             layer.post_attention_norm,
         )?,
-        mixer: lower_mixer(layer.index, &layer.mixer)?,
+        mixer: lower_mixer(&layer.mixer),
         feed_forward: lower_feed_forward(layer.index, &layer.feed_forward)?,
     })
 }
@@ -66,17 +71,15 @@ fn lower_normalization(
     }
 }
 
-fn lower_mixer(layer: usize, mixer: &MixerSpec) -> Result<MixerLowering> {
+fn lower_mixer(mixer: &MixerSpec) -> MixerLowering {
     match mixer {
-        MixerSpec::SoftmaxAttention(attention) => Ok(MixerLowering::Softmax {
+        MixerSpec::SoftmaxAttention(attention) => MixerLowering::Softmax {
             sinks: attention.sinks,
             normalization: attention.qk_normalization,
             window: attention.window,
-        }),
-        MixerSpec::LinearAttention(_) => Ok(MixerLowering::Linear),
-        MixerSpec::StateSpace(_) => Err(ArchitectureError::invalid(format!(
-            "Metal cannot lower layer {layer} state-space mixer"
-        ))),
+        },
+        MixerSpec::LinearAttention(_) => MixerLowering::Linear,
+        MixerSpec::StateSpace(_) => MixerLowering::StateSpace,
     }
 }
 
@@ -105,6 +108,13 @@ fn lower_feed_forward(layer: usize, feed_forward: &FeedForwardSpec) -> Result<Fe
         {
             Ok(FeedForwardLowering::ClampedRouted)
         },
+        FeedForwardSpec::LatentRouted { routed, .. }
+            if routed.activation == ActivationSpec::ReluSquared
+                && routed.router_normalization == RouterNormalization::SigmoidBiasedTopK =>
+        {
+            Ok(FeedForwardLowering::LatentRouted)
+        },
+        FeedForwardSpec::None => Ok(FeedForwardLowering::None),
         _ => Err(ArchitectureError::invalid(format!(
             "Metal cannot lower layer {layer} feed-forward activation composition"
         ))),

@@ -22,6 +22,7 @@ mod paged_attention;
 pub(super) use paged_attention::{PagedExecution, partial_blocks, two_pass_supported};
 mod quantized_kv;
 mod registry;
+mod state_space;
 mod template;
 
 pub use direct_fp8::DirectFp8Spec;
@@ -213,6 +214,7 @@ pub(super) struct Kernels {
     expert_reduce: expert_reduce::ExpertReduceKernel,
     gated_delta_recurrence: mirtal::MetalKernel<6, 2>,
     gated_delta_decode: mirtal::MetalKernel<8, 2>,
+    state_space_decode: mirtal::MetalKernel<7, 2>,
     gptq: gptq::GptqKernels,
     paged_attention: mirtal::MetalKernel<6, 1>,
     paged_attention_batched: mirtal::MetalKernel<29, 1>,

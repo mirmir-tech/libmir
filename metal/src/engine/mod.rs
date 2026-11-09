@@ -48,6 +48,7 @@ mod scalar;
 mod sequence_scoring;
 mod shared_expert_moe;
 mod snapshot;
+pub mod state_space_hybrid;
 mod stream;
 mod tensors;
 #[cfg(test)]

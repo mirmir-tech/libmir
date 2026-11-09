@@ -51,7 +51,7 @@ pub(super) fn validate(
             MetalDecoderRuntime::SharedRouted | MetalDecoderRuntime::DenseMixed => {
                 attention.qk_normalization == QkNormalization::QueryKeyRms
             },
-            MetalDecoderRuntime::ClampedRouted => {
+            MetalDecoderRuntime::ClampedRouted | MetalDecoderRuntime::StateSpaceHybrid => {
                 attention.qk_normalization == QkNormalization::None
             },
         };
@@ -65,7 +65,7 @@ pub(super) fn validate(
             .map_err(|_| ArchitectureError::invalid("Metal head dimension exceeds u32"))?;
         let scale = match runtime {
             MetalDecoderRuntime::DenseAndRouted | MetalDecoderRuntime::DenseGelu => 1.0,
-            MetalDecoderRuntime::ClampedRouted => {
+            MetalDecoderRuntime::ClampedRouted | MetalDecoderRuntime::StateSpaceHybrid => {
                 decoder.attention_scale.unwrap_or_else(|| f64::from(head_dim).sqrt().recip())
             },
             MetalDecoderRuntime::Dense

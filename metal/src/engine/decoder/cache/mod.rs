@@ -164,6 +164,18 @@ impl DecoderCache {
         }
     }
 
+    pub(crate) fn state_space_state(
+        &mut self,
+        index: usize,
+    ) -> Result<&mut crate::engine::state_space_hybrid::StateSpaceState> {
+        match &mut self.storage {
+            CacheStorage::HybridLinear(layers) => hybrid::state_space_state(layers, index),
+            CacheStorage::Attention(_) => {
+                Err(Error::InvalidModel("expected hybrid linear cache".into()))
+            },
+        }
+    }
+
     pub(crate) fn full_attention_cache(&mut self, index: usize) -> Result<&mut KvCache> {
         match &mut self.storage {
             CacheStorage::HybridLinear(layers) => hybrid::full_attention_cache(layers, index),

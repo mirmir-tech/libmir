@@ -61,7 +61,9 @@ impl<'a> FusionPlanner<'a> {
                 true,
             ),
             FeedForwardLowering::SharedRouted => (false, true, false),
-            FeedForwardLowering::ClampedRouted => (false, false, false),
+            FeedForwardLowering::ClampedRouted
+            | FeedForwardLowering::LatentRouted
+            | FeedForwardLowering::None => (false, false, false),
         };
         ProjectionFusion {
             attention: attention && !biases.attention,
@@ -76,7 +78,9 @@ impl<'a> FusionPlanner<'a> {
             FeedForwardLowering::SharedRouted => self.config.shared_expert_gate_up,
             FeedForwardLowering::Dense
             | FeedForwardLowering::DenseGelu
-            | FeedForwardLowering::ClampedRouted => FusionMode::Disabled,
+            | FeedForwardLowering::ClampedRouted
+            | FeedForwardLowering::LatentRouted
+            | FeedForwardLowering::None => FusionMode::Disabled,
         }
     }
 

@@ -22,6 +22,8 @@ pub enum MetalDecoderRuntime {
     /// Dense `SwiGLU` layers mixing linear and softmax attention.
     DenseMixed,
     ClampedRouted,
+    /// Mamba-2 and attention mixers with sigmoid-routed experts (Nemotron-H).
+    StateSpaceHybrid,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -135,6 +137,21 @@ fn select_runtime(layers: &[LayerLowering]) -> Result<MetalDecoderRuntime> {
             && matches!(layer.mixer, MixerLowering::Softmax { sinks: true, .. })
     }) {
         return Ok(MetalDecoderRuntime::ClampedRouted);
+    }
+    if layers.iter().any(|layer| layer.mixer == MixerLowering::StateSpace)
+        && layers.iter().any(|layer| matches!(layer.mixer, MixerLowering::Softmax { .. }))
+        && layers.iter().all(|layer| {
+            matches!(
+                layer.feed_forward,
+                FeedForwardLowering::LatentRouted | FeedForwardLowering::None
+            ) && matches!(
+                layer.mixer,
+                MixerLowering::StateSpace
+                    | MixerLowering::Softmax { sinks: false, window: None, .. }
+            )
+        })
+    {
+        return Ok(MetalDecoderRuntime::StateSpaceHybrid);
     }
     Err(ArchitectureError::invalid(
         "Metal has no runtime for the lowered decoder operation composition",

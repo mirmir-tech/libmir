@@ -8,6 +8,7 @@ mod layers;
 #[cfg(test)]
 mod prefill;
 mod shared_routed;
+mod state_space;
 
 pub use cache::DecoderCache;
 pub use execution::DecoderExecution;
