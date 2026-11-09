@@ -62,6 +62,14 @@ pub(super) fn prefix_reclamation_needed(memory: crate::engine::MemoryStats) -> b
             > usable.saturating_mul(PREFIX_RECLAIM_PRESSURE_PERCENT) / 100
 }
 
+/// Batched history is a duplicate of paged K/V, so it may use half of the
+/// headroom.
+pub(super) fn history_limit_bytes(memory: crate::engine::MemoryStats) -> usize {
+    let usable = usable_memory(memory);
+    let reserve = (usable / PREFILL_MEMORY_RESERVE_DIVISOR).max(PREFILL_MINIMUM_RESERVE);
+    usable.saturating_sub(memory.active).saturating_sub(reserve) / 2
+}
+
 fn prefill_token_budgets(
     memory: crate::engine::MemoryStats,
     kv_bytes_per_token: usize,

@@ -1282,3 +1282,20 @@ The target shape is:
   Global layers use fused padded attention; local layers multiply
   64-query blocks against their band only, so batches longer than one window
   are padded to whole blocks.
+
+
+## Dense persistent decode history
+
+- `MetalBatchConfig::dense_history` defaults to `Persistent`. Dense packed decode
+  then rotates common-position rows together, appends one `[B, H, T, D]` tensor
+  per layer and runs one SDPA call, the shape MLX-LM's batched K/V cache uses.
+  Workmir's Qwen3-4B native ABBA measures 1.35–1.71x on B=2/5/10 with 0–5% spread.
+- The path needs one shared position and a stable row order. Ready rows arrive in
+  request-completion order, so `stable_packed_order` sorts them by session only
+  when positions match. Do not split rows into per-position cohorts: staggered
+  prefill waves and prompts differing by one token fragment the batch, regressed
+  long-context C5/C10 and produced an HTTP 500.
+- HTTP gains therefore stop where rows are ragged. Closing that gap needs aligned
+  cohorts or left-padded history with per-row masks.
+- Admission is decided before any cache mutation. The budget follows half of the
+  live memory headroom at each prefill boundary; an explicit `set_limit` pins it.

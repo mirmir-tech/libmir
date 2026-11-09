@@ -3,6 +3,7 @@
 mod append;
 pub mod budget;
 mod buffer;
+#[cfg(test)]
 mod stats;
 #[cfg(test)]
 mod tests;
@@ -10,6 +11,7 @@ mod tests;
 use std::sync::Arc;
 
 pub use append::Append;
+#[cfg(test)]
 pub use stats::counts;
 
 use super::{KvCache, KvContext};
@@ -30,6 +32,7 @@ pub struct History {
 }
 
 impl Row {
+    #[cfg(test)]
     pub(super) fn extend_allocations(
         &self,
         allocations: &mut std::collections::HashSet<mirtal::memory::Allocation>,
@@ -51,14 +54,28 @@ pub fn enabled(
     contexts: &[KvContext],
     causal: bool,
     sequence: i32,
-    stream: &Stream,
 ) -> bool {
-    stream.config().diagnostics.history_batching == crate::config::HistoryBatching::Persistent
-        && !causal
+    !causal
         && sequence == 1
         && caches.len() > 1
         && caches.iter().all(|c| c.max_context.is_none())
         && contexts.iter().all(|c| c.paged.is_none() && c.mask.is_none())
+}
+
+/// Predicts whether the next step can keep a batched history within budget, so
+/// callers can select per-row attention before any cache mutation.
+pub fn admits(
+    previous: Option<&History>,
+    [rows, heads, tokens, dim]: [usize; 4],
+    dtype: mirtal::DType,
+    stream: &Stream,
+) -> Result<bool> {
+    let budget = stream.history_budget();
+    if previous.is_some_and(|history| history.extends_to(rows, heads, tokens, dim)) {
+        return Ok(budget.allows_reuse());
+    }
+    let capacity = buffer::capacity_for(tokens)?;
+    Ok(budget.admits(budget::storage_bytes([rows, heads, capacity, dim], dtype)?))
 }
 
 // Remove ownership BEFORE any cache mutation. Every ordinary update/reset

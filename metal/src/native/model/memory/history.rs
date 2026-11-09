@@ -1,4 +1,7 @@
-use super::{LoadedModel, clear_memory_cache, pressure::prefix_reclamation_needed};
+use super::{
+    LoadedModel, clear_memory_cache,
+    pressure::{history_limit_bytes, prefix_reclamation_needed},
+};
 use crate::{
     engine::{MemoryStats, persistent_history::budget::Admission},
     native::error::Result,
@@ -9,6 +12,7 @@ impl LoadedModel {
     // Keep optional duplicate histories suspended until a later prefill boundary
     // observes relief, rather than rebuilding them immediately under pressure.
     pub(in crate::native) fn apply_history_pressure(&mut self, memory: MemoryStats) -> Result<()> {
+        self.stream.history_budget().set_automatic_limit(history_limit_bytes(memory));
         if !prefix_reclamation_needed(memory) {
             self.stream.history_budget().set_admission(Admission::Open);
             return Ok(());

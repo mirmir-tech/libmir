@@ -12,6 +12,10 @@ pub trait DecoderExecution: Debug + Send {
         true
     }
 
+    fn orders_common_position_rows(&self, _stream: &Stream) -> bool {
+        false
+    }
+
     fn has_decode_plan_candidates(&self) -> bool {
         false
     }

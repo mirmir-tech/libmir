@@ -28,7 +28,6 @@ impl Stream {
         Ok(self.native.synchronize()?)
     }
 
-    #[cfg(test)]
     pub(crate) const fn history_budget(
         &self,
     ) -> &Arc<crate::engine::persistent_history::budget::Budget> {
@@ -135,7 +134,6 @@ impl Stream {
     ) -> Result<Self> {
         let native = device.new_stream()?;
         Ok(Self {
-            #[cfg(test)]
             history_budget: Arc::default(),
             compiled: CompiledGraphs::new(&native)?,
             kernels: Kernels::new()?,

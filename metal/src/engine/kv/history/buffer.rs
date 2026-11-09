@@ -1,5 +1,9 @@
-use super::*;
-use crate::engine::Error;
+use std::sync::Arc;
+
+#[cfg(test)]
+use super::stats;
+use super::{History, KvContext, budget};
+use crate::engine::{Array, Error, Result, Stream};
 
 impl History {
     pub(super) fn next(
@@ -38,15 +42,12 @@ impl History {
         if !stream.history_budget().allows_reuse() {
             return Err(Error::HistoryBudgetUnavailable);
         }
-        if let Some(previous) = previous.filter(|p| {
-            p.tokens + 1 == tokens
-                && p.shape[0] == contexts.len()
-                && p.shape[1] == heads
-                && p.shape[3] == dim
-                && tokens <= p.shape[2]
-        }) && previous.buffers[0].native().dtype()? == dtype
+        if let Some(previous) =
+            previous.filter(|p| p.extends_to(contexts.len(), heads, tokens, dim))
+            && previous.buffers[0].native().dtype()? == dtype
         {
             let buffers = stream.kernels().history_append.execute(previous, updates, stream)?;
+            #[cfg(test)]
             stats::record(true);
             return Ok(Self {
                 buffers,
@@ -55,7 +56,7 @@ impl History {
                 reservation: Arc::clone(&previous.reservation),
             });
         }
-        let capacity = tokens.checked_add(255).ok_or(Error::ShapeOverflow)? / 256 * 256;
+        let capacity = capacity_for(tokens)?;
         let shape = [contexts.len(), heads, capacity, dim];
         let bytes = budget::storage_bytes(shape, dtype)?;
         let reservation =
@@ -74,8 +75,23 @@ impl History {
             Array::concatenate(&[&keys, &empty], 2, stream)?,
             Array::concatenate(&[&values, &empty], 2, stream)?,
         ];
+        #[cfg(test)]
         stats::record(false);
         Ok(Self { buffers, shape, tokens, reservation })
+    }
+
+    pub(super) const fn extends_to(
+        &self,
+        rows: usize,
+        heads: usize,
+        tokens: usize,
+        dim: usize,
+    ) -> bool {
+        self.tokens + 1 == tokens
+            && self.shape[0] == rows
+            && self.shape[1] == heads
+            && self.shape[3] == dim
+            && tokens <= self.shape[2]
     }
 
     pub(super) fn views(&self, stream: &Stream) -> Result<[Array; 2]> {
@@ -86,6 +102,10 @@ impl History {
             self.buffers[1].slice(&[0; 4], &stop, stream)?,
         ])
     }
+}
+
+pub(super) fn capacity_for(tokens: usize) -> Result<usize> {
+    Ok(tokens.checked_add(255).ok_or(Error::ShapeOverflow)? / 256 * 256)
 }
 
 fn invalid() -> Error {

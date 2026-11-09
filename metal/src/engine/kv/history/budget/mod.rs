@@ -14,6 +14,8 @@ pub struct Snapshot {
     pub limit_bytes: usize,
     pub retained_bytes: usize,
     pub admission: Admission,
+    /// Set by an explicit limit; automatic memory sizing then leaves it alone.
+    pub pinned_limit: bool,
 }
 
 #[derive(Debug)]
@@ -31,6 +33,7 @@ impl Budget {
             limit_bytes,
             retained_bytes: 0,
             admission: Admission::Open,
+            pinned_limit: false,
         }))
     }
 
@@ -38,8 +41,25 @@ impl Budget {
         *self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    #[cfg(test)]
     pub fn set_limit(&self, limit_bytes: usize) {
-        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner).limit_bytes = limit_bytes;
+        let mut state = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.limit_bytes = limit_bytes;
+        state.pinned_limit = true;
+    }
+
+    /// Follows live memory headroom unless a caller pinned the limit.
+    pub fn set_automatic_limit(&self, limit_bytes: usize) {
+        let mut state = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !state.pinned_limit {
+            state.limit_bytes = limit_bytes;
+        }
+    }
+
+    pub fn admits(&self, bytes: usize) -> bool {
+        let state = self.snapshot();
+        state.admission == Admission::Open
+            && state.retained_bytes.checked_add(bytes).is_some_and(|t| t <= state.limit_bytes)
     }
 
     pub fn set_admission(&self, admission: Admission) {

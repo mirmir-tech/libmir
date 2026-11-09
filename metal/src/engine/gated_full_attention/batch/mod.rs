@@ -184,9 +184,10 @@ impl GatedFullAttention {
             })
             .collect::<Result<Vec<_>>>()?;
         #[cfg(test)]
-        let attended = if crate::engine::persistent_history::enabled(
-            caches, &contexts, causal, sequence, stream,
-        ) {
+        let attended = if stream.config().diagnostics.history_batching
+            == crate::config::HistoryBatching::Persistent
+            && crate::engine::persistent_history::enabled(caches, &contexts, causal, sequence)
+        {
             crate::engine::persistent_history::execute(
                 history.as_deref(),
                 caches,

@@ -50,4 +50,4 @@ impl MetalConfig {
         self.max_batch_requests
     }
 }
-pub use batch::{DenseBatchMode, MetalBatchConfig};
+pub use batch::{DenseBatchMode, DenseHistoryMode, MetalBatchConfig};

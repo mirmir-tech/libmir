@@ -2,7 +2,6 @@ use super::{CacheStorage, DecoderCache, hybrid};
 use crate::engine::{Result, Stream};
 
 impl DecoderCache {
-    #[cfg(test)]
     pub(crate) fn release_history(&mut self) {
         match &mut self.storage {
             CacheStorage::Attention(caches) => {

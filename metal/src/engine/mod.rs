@@ -32,7 +32,6 @@ pub mod hybrid_linear_moe;
 pub mod hybrid_moe;
 mod kernels;
 mod kv;
-#[cfg(test)]
 pub(crate) use kv::history as persistent_history;
 mod layer_norm;
 mod linear;

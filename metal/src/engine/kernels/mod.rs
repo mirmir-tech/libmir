@@ -195,7 +195,6 @@ mirtal::metal_kernel! {
 
 #[derive(Debug)]
 pub(super) struct Kernels {
-    #[cfg(test)]
     pub(crate) history_append: crate::engine::persistent_history::Append,
     #[cfg(test)]
     pub(crate) page_gather: page_gather::Gather,

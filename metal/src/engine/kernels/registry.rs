@@ -11,7 +11,6 @@ use super::{mxfp4_gathered_linear, mxfp4_linear};
 impl Kernels {
     pub(crate) fn new() -> Result<Self> {
         Ok(Self {
-            #[cfg(test)]
             history_append: crate::engine::persistent_history::Append::new()?,
             #[cfg(test)]
             page_gather: super::page_gather::Gather::new()?,

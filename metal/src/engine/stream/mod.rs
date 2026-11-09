@@ -18,7 +18,6 @@ mod tuning;
 
 #[derive(Debug)]
 pub struct Stream {
-    #[cfg(test)]
     history_budget: Arc<super::persistent_history::budget::Budget>,
     native: mirtal::Stream,
     compiled: CompiledGraphs,

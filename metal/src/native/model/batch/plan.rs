@@ -41,6 +41,7 @@ impl LoadedModel {
                     outputs.push((row, (output, DecodeExecution::Scalar)));
                 },
                 Group::Packed(rows) => {
+                    let rows = self.stable_packed_order(inputs, rows)?;
                     let selected = rows.iter().map(|row| inputs[*row].clone()).collect::<Vec<_>>();
                     let execution = DecodeExecution::Packed { rows: rows.len() };
                     for (row, output) in rows.into_iter().zip(self.decode_batch_admitted(
@@ -55,6 +56,26 @@ impl LoadedModel {
         }
         outputs.sort_unstable_by_key(|(row, _)| *row);
         Ok(outputs.into_iter().map(|(_, output)| output).collect())
+    }
+
+    /// Persistent batch history reuses its buffers only for a stable row order,
+    /// while ready rows arrive in request-completion order. Rows at different
+    /// positions keep per-row attention, so their order does not matter.
+    fn stable_packed_order(
+        &self,
+        inputs: &[DecodeInput],
+        mut rows: Vec<usize>,
+    ) -> Result<Vec<usize>> {
+        if self.execution.decoder()?.orders_common_position_rows(&self.stream) {
+            let positions = rows
+                .iter()
+                .map(|row| self.session(inputs[*row].session)?.model_position())
+                .collect::<Result<Vec<_>>>()?;
+            if positions.windows(2).all(|pair| pair[0] == pair[1]) {
+                rows.sort_unstable_by_key(|row| inputs[*row].session);
+            }
+        }
+        Ok(rows)
     }
 }
 

@@ -18,7 +18,6 @@ const PACKED_PREFILL_RESERVE_DIVISOR: usize = 8;
 const PACKED_PREFILL_MINIMUM_RESERVE: usize = 2 * 1024 * 1024 * 1024;
 const PACKED_PREFILL_WORKSPACE_COPIES: usize = 8;
 
-#[cfg(test)]
 mod history;
 mod pages;
 mod prefix;
