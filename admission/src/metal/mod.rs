@@ -19,6 +19,8 @@ pub enum MetalDecoderRuntime {
     DenseGelu,
     DenseAndRouted,
     SharedRouted,
+    /// Dense `SwiGLU` layers mixing linear and softmax attention.
+    DenseMixed,
     ClampedRouted,
 }
 
@@ -122,6 +124,11 @@ fn select_runtime(layers: &[LayerLowering]) -> Result<MetalDecoderRuntime> {
         && layers.iter().any(|layer| layer.mixer == MixerLowering::Linear)
     {
         return Ok(MetalDecoderRuntime::SharedRouted);
+    }
+    if layers.iter().all(|layer| layer.feed_forward == FeedForwardLowering::Dense)
+        && layers.iter().any(|layer| layer.mixer == MixerLowering::Linear)
+    {
+        return Ok(MetalDecoderRuntime::DenseMixed);
     }
     if layers.iter().all(|layer| {
         layer.feed_forward == FeedForwardLowering::ClampedRouted

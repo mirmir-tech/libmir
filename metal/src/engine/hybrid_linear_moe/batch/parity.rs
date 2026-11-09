@@ -122,18 +122,24 @@ fn diagnose(probe: Probe) -> std::result::Result<(), Box<dyn std::error::Error>>
         let input = layer.post_attention_norm.apply(&packed, layer.rms_norm_eps, &stream)?;
         match probe {
             Probe::MxFp4Cost => {
-                return Ok(layer.moe.probe_shared_projection_cost(&input, &stream)?);
+                return Ok(layer.moe.routed()?.probe_shared_projection_cost(&input, &stream)?);
             },
             Probe::MxFp4NativeCost => {
-                return Ok(layer.moe.probe_shared_projection_native_cost(&input, &stream)?);
+                return Ok(layer
+                    .moe
+                    .routed()?
+                    .probe_shared_projection_native_cost(&input, &stream)?);
             },
             Probe::MxFp4Accuracy => {
-                return Ok(layer.moe.probe_shared_projection_accuracy(&input, &stream)?);
+                return Ok(layer
+                    .moe
+                    .routed()?
+                    .probe_shared_projection_accuracy(&input, &stream)?);
             },
             Probe::Model | Probe::Float32 => {},
         }
         if precision == crate::config::RouterPrecision::Model {
-            layer.moe.diagnose_row_batching(&input, &stream)?;
+            layer.moe.routed()?.diagnose_row_batching(&input, &stream)?;
         }
         for hidden in &mut scalar {
             *hidden = layer.forward_feed_forward(hidden, context(&stream))?;
@@ -141,7 +147,7 @@ fn diagnose(probe: Probe) -> std::result::Result<(), Box<dyn std::error::Error>>
         packed = layer.feed_forward_packed_prefill(&packed, &stream)?;
         if !compare(&format!("layer={index},ffn"), &scalar, &packed, &stream)? {
             if precision == crate::config::RouterPrecision::Float32 {
-                layer.moe.diagnose_effective_rows(&input, &stream)?;
+                layer.moe.routed()?.diagnose_effective_rows(&input, &stream)?;
             }
             break;
         }

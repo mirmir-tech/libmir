@@ -115,14 +115,16 @@ pub(super) fn load_decoder_model(
             load_dense_routed(lowering, tensors, decoder, bindings, stream)
         },
         DecoderRuntime::Dense => load_dense(lowering, tensors, decoder, bindings, stream),
-        DecoderRuntime::SharedRouted => Ok(DecoderModel::new(HybridLinearMoeModel::load(
-            tensors,
-            decoder,
-            bindings,
-            lowering.layers(),
-            KV_CACHE_STEP,
-            stream,
-        )?)),
+        DecoderRuntime::SharedRouted | DecoderRuntime::DenseMixed => {
+            Ok(DecoderModel::new(HybridLinearMoeModel::load(
+                tensors,
+                decoder,
+                bindings,
+                lowering.layers(),
+                KV_CACHE_STEP,
+                stream,
+            )?))
+        },
     }
 }
 

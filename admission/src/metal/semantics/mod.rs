@@ -48,7 +48,7 @@ pub(super) fn validate(
             MetalDecoderRuntime::DenseAndRouted | MetalDecoderRuntime::DenseGelu => {
                 attention.qk_normalization == QkNormalization::QueryKeyValueRms
             },
-            MetalDecoderRuntime::SharedRouted => {
+            MetalDecoderRuntime::SharedRouted | MetalDecoderRuntime::DenseMixed => {
                 attention.qk_normalization == QkNormalization::QueryKeyRms
             },
             MetalDecoderRuntime::ClampedRouted => {
@@ -68,9 +68,9 @@ pub(super) fn validate(
             MetalDecoderRuntime::ClampedRouted => {
                 decoder.attention_scale.unwrap_or_else(|| f64::from(head_dim).sqrt().recip())
             },
-            MetalDecoderRuntime::Dense | MetalDecoderRuntime::SharedRouted => {
-                f64::from(head_dim).sqrt().recip()
-            },
+            MetalDecoderRuntime::Dense
+            | MetalDecoderRuntime::SharedRouted
+            | MetalDecoderRuntime::DenseMixed => f64::from(head_dim).sqrt().recip(),
         };
         if attention.scale != scale {
             return Err(ArchitectureError::invalid(format!(

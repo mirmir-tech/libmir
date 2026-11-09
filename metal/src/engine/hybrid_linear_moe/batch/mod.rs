@@ -85,7 +85,7 @@ impl HybridLinearMoeLayer {
         if let Some(probe) = stream.config().diagnostics.moe_decode_probe
             && [0, 20, 39].contains(&self.index)
         {
-            self.moe.diagnose_decode(&normalized, self.index, probe, stream)?;
+            self.moe.routed()?.diagnose_decode(&normalized, self.index, probe, stream)?;
         }
         input.add(&self.moe.forward(&normalized, stream)?, stream)
     }
