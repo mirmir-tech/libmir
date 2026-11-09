@@ -64,6 +64,7 @@ fn record(
     materialize(&hidden, &cache, stream)?;
     let mut generated = Vec::with_capacity(tokens);
     let mut margins = Vec::with_capacity(tokens);
+    let mut runners_up = Vec::with_capacity(tokens);
     let mut next = tail[0];
     for step in 0..tokens {
         let logits = model.forward_decode(
@@ -74,15 +75,13 @@ fn record(
         )?;
         materialize(&logits, &cache, stream)?;
         let values = logits.to_vec_f32(stream)?;
-        let (token, margin, top) = greedy(&values);
+        let (token, second, margin) = greedy(&values);
         generated.push(token);
+        runners_up.push(second);
         margins.push(margin);
         next = token;
-        if step == 0 {
-            tracing::debug!(top, "first decode logits");
-        }
     }
-    Ok(json!({ "generated": generated, "margins": margins }))
+    Ok(json!({ "generated": generated, "runners_up": runners_up, "margins": margins }))
 }
 
 fn materialize(array: &Array, cache: &DecoderCache, stream: &Stream) -> TestResult<()> {
@@ -94,16 +93,17 @@ fn materialize(array: &Array, cache: &DecoderCache, stream: &Stream) -> TestResu
     Ok(())
 }
 
-fn greedy(values: &[f32]) -> (u32, f32, f32) {
-    let (mut top, mut second, mut index) = (f32::NEG_INFINITY, f32::NEG_INFINITY, 0);
+/// The top token, the runner-up, and the logit margin between them.
+fn greedy(values: &[f32]) -> (u32, u32, f32) {
+    let (mut first, mut second) = ((f32::NEG_INFINITY, 0), (f32::NEG_INFINITY, 0));
     for (candidate, value) in values.iter().copied().enumerate() {
-        if value > top {
-            second = top;
-            top = value;
-            index = candidate;
-        } else if value > second {
-            second = value;
+        if value > first.0 {
+            second = first;
+            first = (value, candidate);
+        } else if value > second.0 {
+            second = (value, candidate);
         }
     }
-    (u32::try_from(index).unwrap_or_default(), top - second, top)
+    let token = |index| u32::try_from(index).unwrap_or_default();
+    (token(first.1), token(second.1), first.0 - second.0)
 }
