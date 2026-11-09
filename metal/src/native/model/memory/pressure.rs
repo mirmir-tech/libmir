@@ -75,7 +75,10 @@ fn prefill_token_budgets(
     let kv_bytes = kv_bytes_per_token.max(1);
     let wave_bytes = kv_bytes.saturating_mul(PREFILL_WORKSPACE_KV_COPIES).max(1);
     let wave_tokens = headroom.checked_div(wave_bytes).unwrap_or(0).max(1);
-    (wave_tokens, wave_tokens)
+    // A cohort only stores K/V; the workspace multiple applies to one physical
+    // wave.
+    let cohort_tokens = headroom.checked_div(kv_bytes).unwrap_or(0).max(wave_tokens);
+    (wave_tokens, cohort_tokens)
 }
 
 fn pressure_bounded_budget(
@@ -137,7 +140,7 @@ mod tests {
         );
         assert!(roomy_budget.0 > pressured_budget.0);
         assert!(roomy_budget.1 > pressured_budget.1);
-        assert_eq!(roomy_budget.1, roomy_budget.0);
+        assert!(roomy_budget.1 >= roomy_budget.0 * PREFILL_WORKSPACE_KV_COPIES);
         assert_eq!(cached_budget, roomy_budget);
     }
 
