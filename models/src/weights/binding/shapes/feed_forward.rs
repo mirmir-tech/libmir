@@ -25,8 +25,9 @@ pub(super) fn shared(feed_forward: &FeedForwardSpec) -> Option<&SharedExpertSpec
 /// otherwise the hidden size.
 pub(super) const fn expert_width(feed_forward: &FeedForwardSpec, hidden: usize) -> usize {
     match feed_forward {
-        FeedForwardSpec::LatentRouted { latent_size, .. } => *latent_size,
-        FeedForwardSpec::Dense { .. }
+        FeedForwardSpec::LatentRouted { latent_size: Some(latent), .. } => *latent,
+        FeedForwardSpec::LatentRouted { latent_size: None, .. }
+        | FeedForwardSpec::Dense { .. }
         | FeedForwardSpec::Routed { .. }
         | FeedForwardSpec::DenseAndRouted { .. }
         | FeedForwardSpec::None => hidden,

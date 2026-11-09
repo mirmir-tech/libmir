@@ -45,7 +45,7 @@ impl DecoderConfig {
         }
         let hidden_size = require_usize(decoder, &["hidden_size", "n_embd"])?;
         let defaults = defaults::for_checkpoint(decoder);
-        let state_space = state_space::state_space_hybrid(decoder, hidden_size)?;
+        let state_space = state_space::state_space_hybrid(decoder)?;
         let num_hidden_layers = match &state_space {
             Some(hybrid) => hybrid.blocks.layers().len(),
             None => require_usize(decoder, &["num_hidden_layers", "num_layers", "n_layer"])?,
