@@ -1,6 +1,7 @@
 // Experimental duplicate batch history. Cache rows own the cohort; no global
 // session identity or pointer-based session lookup is needed.
 mod append;
+mod attend;
 pub mod budget;
 mod buffer;
 #[cfg(test)]
@@ -11,6 +12,7 @@ mod tests;
 use std::sync::Arc;
 
 pub use append::Append;
+pub use attend::{Attend, attend};
 #[cfg(test)]
 pub use stats::counts;
 
@@ -108,21 +110,30 @@ pub fn execute(
     updates: [&Array; 2],
     queries: &Array,
     scale: f32,
+    sinks: Option<&Array>,
     stream: &Stream,
 ) -> Result<Array> {
     let history = match History::next(previous, contexts, updates, stream) {
         Ok(history) => Arc::new(history),
         Err(crate::engine::Error::HistoryBudgetUnavailable) => {
-            return row_attention(queries, contexts, scale, stream);
+            return row_attention(queries, contexts, scale, sinks, stream);
         },
         Err(error) => return Err(error),
     };
     let [keys, values] = history.views(stream)?;
-    let output = match history.padding_mask(queries, stream)? {
-        Some(mask) => {
-            queries.scaled_dot_product_attention_with_mask(&keys, &values, scale, &mask, stream)?
+    let mask = history.padding_mask(queries, stream)?;
+    let output = match (mask.as_ref(), sinks) {
+        (Some(mask), Some(sinks)) => queries.masked_scaled_dot_product_attention_with_sinks(
+            &keys, &values, scale, mask, sinks, stream,
+        )?,
+        (Some(mask), None) => {
+            queries.scaled_dot_product_attention_with_mask(&keys, &values, scale, mask, stream)?
         },
-        None => queries.scaled_dot_product_attention(&keys, &values, scale, false, stream)?,
+        (None, Some(sinks)) => queries
+            .scaled_dot_product_attention_with_sinks(&keys, &values, scale, false, sinks, stream)?,
+        (None, None) => {
+            queries.scaled_dot_product_attention(&keys, &values, scale, false, stream)?
+        },
     };
     for (index, cache) in caches.iter_mut().enumerate() {
         cache.history = Some(Row { index, history: Arc::clone(&history) });
@@ -136,6 +147,7 @@ fn row_attention(
     queries: &Array,
     contexts: &[KvContext],
     scale: f32,
+    sinks: Option<&Array>,
     stream: &Stream,
 ) -> Result<Array> {
     let shape = queries.native().shape()?;
@@ -144,13 +156,23 @@ fn row_attention(
         .iter()
         .enumerate()
         .map(|(row, context)| {
-            queries
-                .slice(
-                    &[row, 0, 0, 0],
-                    &[row + 1, dimensions[1], dimensions[2], dimensions[3]],
-                    stream,
-                )?
-                .scaled_dot_product_attention(&context.keys, &context.values, scale, false, stream)
+            let query = queries.slice(
+                &[row, 0, 0, 0],
+                &[row + 1, dimensions[1], dimensions[2], dimensions[3]],
+                stream,
+            )?;
+            sinks.map_or_else(
+                || {
+                    query.scaled_dot_product_attention(
+                        &context.keys, &context.values, scale, false, stream,
+                    )
+                },
+                |sinks| {
+                    query.scaled_dot_product_attention_with_sinks(
+                        &context.keys, &context.values, scale, false, sinks, stream,
+                    )
+                },
+            )
         })
         .collect::<Result<Vec<_>>>()?;
     Array::concatenate(&rows.iter().collect::<Vec<_>>(), 0, stream)

@@ -1,6 +1,6 @@
 use crate::engine::attention::{AttentionBias, AttentionRequest};
 mod batch;
-#[cfg(test)]
+mod history;
 mod offsets;
 
 use models::weights::RoutedDecoderLayerBindings;

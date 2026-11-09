@@ -47,7 +47,7 @@ fn pressure_releases_optional_history_and_preserves_nonempty_prefix_cache() -> R
         }
         model.stream.synchronize()?;
         let retained = model.stream.history_budget().snapshot().retained_bytes;
-        assert_eq!(retained > 0, matches!(family, Family::Hybrid));
+        assert!(retained > 0, "both families keep a batched K/V history");
         let groups = model.prefixes.group_count();
         assert!(groups > 0, "prefix preservation must not be vacuous");
         model.apply_history_pressure(MemoryStats {

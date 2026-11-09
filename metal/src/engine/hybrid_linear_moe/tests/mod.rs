@@ -8,6 +8,8 @@ use models::{
 use serde_json::{Map, Value, json};
 
 use super::HybridLinearMoeModel;
+
+mod history;
 use crate::engine::{Array, ModelTensors, Result, Stream, lowering};
 
 #[test]
