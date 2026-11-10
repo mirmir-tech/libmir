@@ -1,4 +1,7 @@
-use super::super::{HybridMoeLayerConfig, attention, weights::AttentionWeights};
+use super::{
+    super::{HybridMoeLayerConfig, attention, weights::AttentionWeights},
+    history,
+};
 use crate::engine::{
     Array, Error, FusedAttention, FusedKeyValue, KvCache, KvContext, PagedContextMode, Result,
     Stream, attention_batch_tuning, native_paged_attention_mode, paged_attention_min_context,
@@ -29,25 +32,20 @@ pub(super) fn packed_attention(
         raw_keys.reshape(&[batch, sequence, config.kv_heads, config.head_dim], stream)?;
     let values = values(&raw_keys, raw_values, batch, sequence, config, stream)?;
     let keys = weights.key_norm.apply(&raw_keys, config.rms_norm_eps, stream)?;
-    let rows = attention_rows(
-        &queries,
-        &keys,
-        &values,
-        caches,
-        AttentionRows {
-            weights,
-            config,
-            positions,
-            causal,
-            stream,
-        },
-    )?;
+    let context = AttentionRows {
+        weights,
+        config,
+        positions,
+        causal,
+        stream,
+    };
+    if let Some(attended) = history::persistent([&queries, &keys, &values], caches, context)? {
+        return history::project(&attended, weights, config, [batch, sequence], stream);
+    }
+    let rows = attention_rows(&queries, &keys, &values, caches, context)?;
     let rows = rows.iter().collect::<Vec<_>>();
-    let output = Array::concatenate(&rows, 0, stream)?.transpose(&[0, 2, 1, 3], stream)?;
-    let width = config.attention_heads * config.head_dim;
-    weights
-        .output
-        .forward(&output.reshape(&[batch, sequence, width], stream)?, stream)
+    let output = Array::concatenate(&rows, 0, stream)?;
+    history::project(&output, weights, config, [batch, sequence], stream)
 }
 fn projections(
     input: &Array,
@@ -209,12 +207,12 @@ fn grouped_attention(
 }
 
 #[derive(Clone, Copy)]
-struct AttentionRows<'a> {
-    weights: &'a AttentionWeights,
-    config: HybridMoeLayerConfig,
-    positions: &'a [i32],
-    causal: bool,
-    stream: &'a Stream,
+pub(super) struct AttentionRows<'a> {
+    pub(super) weights: &'a AttentionWeights,
+    pub(super) config: HybridMoeLayerConfig,
+    pub(super) positions: &'a [i32],
+    pub(super) causal: bool,
+    pub(super) stream: &'a Stream,
 }
 
 fn row_slice(

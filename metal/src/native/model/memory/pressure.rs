@@ -62,18 +62,24 @@ pub(super) fn prefix_reclamation_needed(memory: crate::engine::MemoryStats) -> b
             > usable.saturating_mul(PREFIX_RECLAIM_PRESSURE_PERCENT) / 100
 }
 
-/// Live allocations only: the allocator cache is reclaimable and must not
-/// suspend a batched history that fits.
+/// Live allocations only: the allocator cache is reclaimable. Paged arenas keep
+/// their high-water capacity, so a share of `active` says little; suspend only
+/// when the real headroom no longer covers the prefill reserve.
 pub(super) fn history_pressure(memory: crate::engine::MemoryStats) -> bool {
     let usable = usable_memory(memory);
-    usable > 0 && memory.active > usable.saturating_mul(PREFIX_RECLAIM_PRESSURE_PERCENT) / 100
+    usable > 0 && usable.saturating_sub(memory.active) < prefill_reserve(usable)
 }
 
-/// Batched history duplicates paged K/V, so it may use half of the headroom.
-pub(super) fn history_limit_bytes(memory: crate::engine::MemoryStats) -> usize {
+/// The whole headroom above the prefill reserve; the history already retained
+/// is part of `active` and counts as available to itself.
+pub(super) fn history_limit_bytes(memory: crate::engine::MemoryStats, retained: usize) -> usize {
     let usable = usable_memory(memory);
-    let reserve = (usable / PREFILL_MEMORY_RESERVE_DIVISOR).max(PREFILL_MINIMUM_RESERVE);
-    usable.saturating_sub(memory.active).saturating_sub(reserve) / 2
+    let live = memory.active.saturating_sub(retained);
+    usable.saturating_sub(live).saturating_sub(prefill_reserve(usable))
+}
+
+fn prefill_reserve(usable: usize) -> usize {
+    (usable / PREFILL_MEMORY_RESERVE_DIVISOR).max(PREFILL_MINIMUM_RESERVE)
 }
 
 fn prefill_token_budgets(
@@ -84,7 +90,7 @@ fn prefill_token_budgets(
     if usable == 0 {
         return (1, 1);
     }
-    let reserve = (usable / PREFILL_MEMORY_RESERVE_DIVISOR).max(PREFILL_MINIMUM_RESERVE);
+    let reserve = prefill_reserve(usable);
     let headroom = usable.saturating_sub(memory.active).saturating_sub(reserve);
     let kv_bytes = kv_bytes_per_token.max(1);
     let wave_bytes = kv_bytes.saturating_mul(PREFILL_WORKSPACE_KV_COPIES).max(1);

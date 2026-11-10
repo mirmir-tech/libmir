@@ -12,7 +12,10 @@ impl LoadedModel {
     // Keep optional duplicate histories suspended until a later prefill boundary
     // observes relief, rather than rebuilding them immediately under pressure.
     pub(in crate::native) fn apply_history_pressure(&mut self, memory: MemoryStats) -> Result<()> {
-        self.stream.history_budget().set_automatic_limit(history_limit_bytes(memory));
+        let retained = self.stream.history_budget().snapshot().retained_bytes;
+        self.stream
+            .history_budget()
+            .set_automatic_limit(history_limit_bytes(memory, retained));
         if !history_pressure(memory) {
             self.stream.history_budget().set_admission(Admission::Open);
             return Ok(());

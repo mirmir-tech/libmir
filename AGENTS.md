@@ -1302,8 +1302,14 @@ The target shape is:
   this removes the per-step page gather, lifting C1 at 8k from 0.77-0.85x to
   1.06-1.18x of MLX-LM. Its page writes are no longer ancestors of the logits, so
   every evaluation before `detach_paged_arena_graphs` must root the arenas.
-- Admission is decided before any cache mutation. The budget follows half of the
-  live memory headroom at each prefill boundary; an explicit `set_limit` pins it.
+- Admission is decided before any cache mutation. At each prefill boundary the
+  budget is the whole live headroom above the prefill reserve, counting history
+  already retained; an explicit `set_limit` pins it. Suspend only when headroom
+  falls below that reserve: paged arenas keep their high-water capacity, so a
+  share of `active` memory (the old 50% rule) suspended every long-context cohort.
+- Gemma-style packed decode (`hybrid_moe`) shares the same history for global
+  layers. Deep C5/C10 TG in llama-benchy also reflects staggered prefill: compare
+  TTFT spread and per-request TG before reading aggregate TG as decode speed.
 
 ## Prefill throughput
 
