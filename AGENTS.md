@@ -1319,6 +1319,12 @@ The target shape is:
   tok/s versus MLX-LM 220/172. The kernel takes host-resolved slots and never reads
   the page table, so a table changed while preparing rows is scheduled with
   `async_eval`; otherwise a flush detaches it unevaluated and native reads fail.
+- K/V sizing counts sliding windows once: on Metal every sliding layer keeps a
+  bounded ring outside the block pool (`bounded_sliding`), and the prefill wave
+  rate averages `estimated_prefix_bytes` over 16k tokens. Charging Gemma's 25
+  sliding layers per token (225 KB instead of 20 KB) sized the cache for 98k tokens
+  and prefilled five 32k prompts two at a time. Gemma 26B C5 at 32k now finishes
+  in 97 s versus MLX-LM 114 s with aligned TTFT; C10 runs aligned too.
 - Packed device sampling runs once for rows sharing parameters, with one draw per
   row. llama-benchy sends no sampling fields, so mirmir uses the checkpoint's
   generation defaults while MLX-LM's server samples greedily.

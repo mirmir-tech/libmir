@@ -94,7 +94,8 @@ fn kv_budget(
             matches!(layer, AttentionLayerType::Full | AttentionLayerType::Sliding)
         })
         .fold((0_u64, 0_u64), |(per_token, total), (index, layer)| {
-            let cache = if *layer == AttentionLayerType::Sliding && bounded_sliding(decoder) {
+            let cache = if *layer == AttentionLayerType::Sliding && bounded_sliding(decoder, target)
+            {
                 sliding_cache(decoder, config, target)
             } else {
                 config.kv_cache
@@ -107,11 +108,12 @@ fn kv_budget(
             .memory_budget();
             let data = u64::try_from(budget.data_bytes_per_token).unwrap_or(u64::MAX);
             let scales = u64::try_from(budget.scale_bytes_per_token).unwrap_or(u64::MAX);
-            let growing = if *layer != AttentionLayerType::Sliding || !bounded_sliding(decoder) {
-                data.saturating_add(scales)
-            } else {
-                0
-            };
+            let growing =
+                if *layer != AttentionLayerType::Sliding || !bounded_sliding(decoder, target) {
+                    data.saturating_add(scales)
+                } else {
+                    0
+                };
             (
                 per_token.saturating_add(growing),
                 total.saturating_add(u64::try_from(budget.total_bytes).unwrap_or(u64::MAX)),
@@ -141,8 +143,11 @@ fn sliding_cache(
     }
 }
 
-const fn bounded_sliding(decoder: &DecoderConfig) -> bool {
-    decoder.swiglu_limit.is_some() && decoder.num_experts.is_some()
+/// Metal keeps every sliding layer in a bounded ring outside the block pool;
+/// CUDA bounds only the clamped-routed sliding layers.
+fn bounded_sliding(decoder: &DecoderConfig, target: &BackendTarget) -> bool {
+    *target == BackendTarget::Metal
+        || (decoder.swiglu_limit.is_some() && decoder.num_experts.is_some())
 }
 
 const fn workspace(weights: u64) -> u64 {

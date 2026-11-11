@@ -2,6 +2,7 @@ use super::{LoadedModel, clear_memory_cache, memory_stats, usable_memory};
 use crate::native::error::Result;
 
 const PRESSURE_PREFILL_TOKENS: usize = 128;
+const KV_RATE_REFERENCE_TOKENS: usize = 16 * 1_024;
 const PREFILL_MEMORY_RESERVE_DIVISOR: usize = 8;
 const PREFILL_MINIMUM_RESERVE: usize = 2 * 1024 * 1024 * 1024;
 /// Share of the headroom a physical wave may hold as whole-prompt K/V; the
@@ -19,7 +20,12 @@ impl LoadedModel {
 
     pub(crate) fn prefill_memory_token_budgets(&self) -> Result<(usize, usize)> {
         let memory = memory_stats()?;
-        let kv_bytes_per_token = self.estimated_prefix_bytes(1)?.max(1);
+        // One token makes every sliding window look unbounded; a long-prompt
+        // average charges windows once (Gemma: 225 KB/token at 1, 33 KB at 16k).
+        let kv_bytes_per_token = self
+            .estimated_prefix_bytes(KV_RATE_REFERENCE_TOKENS)?
+            .div_ceil(KV_RATE_REFERENCE_TOKENS)
+            .max(1);
         let budgets = prefill_token_budgets(memory, kv_bytes_per_token);
         tracing::debug!(
             active_bytes = memory.active,
