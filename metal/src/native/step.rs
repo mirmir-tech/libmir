@@ -160,18 +160,46 @@ pub(super) fn supports_device_token(sampling: &SamplingLogits) -> bool {
     }
 }
 
+/// One sampler for every row when all rows share their parameters.
+pub(super) fn shared_device_sampling<'a>(
+    samplings: impl Iterator<Item = &'a SamplingLogits>,
+) -> Option<(DeviceSampling, Vec<f32>)> {
+    let mut shared: Option<DeviceSampling> = None;
+    let mut draws = Vec::new();
+    for sampling in samplings {
+        let parameters = device_parameters(sampling).ok()??;
+        let key =
+            |p: DeviceSampling| (p.vocab_size, p.top_k, p.top_p.to_bits(), p.temperature.to_bits());
+        if shared.is_some_and(|first| key(first) != key(parameters)) {
+            return None;
+        }
+        shared.get_or_insert(parameters);
+        draws.push(parameters.draw);
+    }
+    shared.map(|parameters| (parameters, draws))
+}
+
 pub(super) fn device_token(
     logits: &Array,
     sampling: &SamplingLogits,
     stream: &Stream,
 ) -> Result<Option<Array>> {
+    if *sampling == SamplingLogits::None {
+        return Ok(Some(logits.argmax(stream)?));
+    }
+    Ok(device_parameters(sampling)?
+        .map(|parameters| sample(logits, parameters, stream))
+        .transpose()?)
+}
+
+/// `None` for rows that need host logits; greedy rows are handled by callers.
+fn device_parameters(sampling: &SamplingLogits) -> Result<Option<DeviceSampling>> {
     let parameters = match *sampling {
         SamplingLogits::Masked { .. } => {
             return Err(Error::InvalidPrefillBatch(
                 "schema masking requires full device logits".into(),
             ));
         },
-        SamplingLogits::None => return Ok(Some(logits.argmax(stream)?)),
         SamplingLogits::SampleTopK { k, vocab_size, temperature, draw } => DeviceSampling {
             vocab_size,
             top_k: k,
@@ -192,8 +220,10 @@ pub(super) fn device_token(
             temperature,
             draw,
         },
-        SamplingLogits::Full | SamplingLogits::TopK { .. } => return Ok(None),
+        SamplingLogits::None | SamplingLogits::Full | SamplingLogits::TopK { .. } => {
+            return Ok(None);
+        },
     };
-    Ok(Some(sample(logits, parameters, stream)?))
+    Ok(Some(parameters))
 }
 use runtime::backend::SamplingLogits;

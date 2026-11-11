@@ -1,3 +1,5 @@
+use std::sync::Mutex;
+
 use super::Kernels;
 use crate::engine::{Error, Result};
 
@@ -90,5 +92,74 @@ impl Kernels {
         Ok(prepared
             .bind(&self.paged_kv, dtype, function, options)?
             .dispatch(stream, inputs)?)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PageRowsOptions {
+    pub(crate) rows: usize,
+    pub(crate) kv_heads: usize,
+    pub(crate) page_capacity: usize,
+    pub(crate) page_size: usize,
+    pub(crate) head_dim: usize,
+}
+
+/// Stream-owned plans for writing one token per session in one dispatch.
+#[derive(Debug, Default)]
+pub struct PageRowsWrite {
+    plans: Mutex<[Option<mirtal::PreparedAliasing<5, 2>>; 3]>,
+}
+
+impl Kernels {
+    pub(crate) fn page_rows_write(
+        &self,
+        stream: &mirtal::Stream,
+        inputs: [&mirtal::Array; 5],
+        options: PageRowsOptions,
+    ) -> Result<[mirtal::Array; 2]> {
+        let dtype = inputs[0].dtype()?;
+        let (index, function) = match dtype {
+            mirtal::DType::Float32 => (0, "mirmir_page_write_rows_f32"),
+            mirtal::DType::Float16 => (1, "mirmir_page_write_rows_f16"),
+            mirtal::DType::Bfloat16 => (2, "mirmir_page_write_rows_bf16"),
+            _ => return Err(Error::InvalidModel("paged K/V dtype is unsupported".into())),
+        };
+        let elements = options
+            .rows
+            .checked_mul(options.kv_heads)
+            .and_then(|value| value.checked_mul(options.head_dim))
+            .ok_or(Error::ShapeOverflow)?;
+        let constants = [
+            u32::try_from(options.rows)?,
+            u32::try_from(options.kv_heads)?,
+            u32::try_from(options.page_capacity)?,
+            u32::try_from(options.page_size)?,
+            u32::try_from(options.head_dim)?,
+        ];
+        let grid = [elements, 1, 1];
+        let group = [elements.min(256), 1, 1];
+        let mut plans =
+            self.page_rows.plans.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let plan = &mut plans[index];
+        if plan.is_none() {
+            let dispatch = mirtal::AliasingDispatch::new([2, 3])
+                .constants(constants)
+                .strides([
+                    mirtal::StrideBinding { input: 0, axis: 0 },
+                    mirtal::StrideBinding { input: 0, axis: 1 },
+                    mirtal::StrideBinding { input: 0, axis: 3 },
+                    mirtal::StrideBinding { input: 1, axis: 0 },
+                    mirtal::StrideBinding { input: 1, axis: 1 },
+                    mirtal::StrideBinding { input: 1, axis: 3 },
+                ])
+                .grid(grid)
+                .threadgroup(group);
+            *plan = Some(self.paged_kv.export(function)?.prepare_aliasing(dispatch)?);
+        }
+        let plan = plan.as_mut().ok_or(Error::NullHandle("page rows write plan"))?;
+        plan.rebind(&constants, grid, group)?;
+        let outputs = plan.dispatch(stream, inputs)?;
+        drop(plans);
+        Ok(outputs)
     }
 }

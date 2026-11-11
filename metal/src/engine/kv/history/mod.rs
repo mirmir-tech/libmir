@@ -119,6 +119,18 @@ pub fn execute(
         },
         Err(error) => return Err(error),
     };
+    attend_history(&history, caches, queries, scale, sinks, stream)
+}
+
+/// Attends over `history` and hands every row its share of it.
+fn attend_history(
+    history: &Arc<History>,
+    caches: &mut [&mut KvCache],
+    queries: &Array,
+    scale: f32,
+    sinks: Option<&Array>,
+    stream: &Stream,
+) -> Result<Array> {
     let [keys, values] = history.views(stream)?;
     let mask = history.padding_mask(queries, stream)?;
     let output = match (mask.as_ref(), sinks) {
@@ -135,7 +147,7 @@ pub fn execute(
         },
     };
     for (index, cache) in caches.iter_mut().enumerate() {
-        cache.history = Some(Row { index, history: Arc::clone(&history) });
+        cache.history = Some(Row { index, history: Arc::clone(history) });
     }
     Ok(output)
 }

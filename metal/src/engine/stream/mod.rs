@@ -236,6 +236,14 @@ impl Stream {
         self.kernels.page_write(&self.native, inputs, options, prepared)
     }
 
+    pub(super) fn page_rows_write(
+        &self,
+        inputs: [&mirtal::Array; 5],
+        options: super::kernels::PageRowsOptions,
+    ) -> Result<[mirtal::Array; 2]> {
+        self.kernels.page_rows_write(&self.native, inputs, options)
+    }
+
     pub(super) fn quantized_page_write(
         &self,
         inputs: [&mirtal::Array; 7],

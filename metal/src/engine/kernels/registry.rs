@@ -40,6 +40,7 @@ impl Kernels {
             paged_attention_partial: paged_attention_partial_library()?,
             paged_attention_reduce: paged_attention_reduce()?,
             paged_kv: paged_kv_library()?,
+            page_rows: super::page_write::PageRowsWrite::default(),
             mxfp4_gate_up: mxfp4_gate_up()?,
             mxfp4_embedding: mxfp4_embedding::MxFp4EmbeddingKernel::new()?,
             #[cfg(test)]

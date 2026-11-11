@@ -28,7 +28,7 @@ mod template;
 pub use direct_fp8::DirectFp8Spec;
 pub(super) use direct_fp8_embedding::DirectFp8EmbeddingSpec;
 pub(super) use mxfp4::MxFp4Shape;
-pub(super) use page_write::{PageWriteOptions, PreparedPageWrite};
+pub(super) use page_write::{PageRowsOptions, PageWriteOptions, PreparedPageWrite};
 pub(super) use quantized_kv::{PreparedQuantizedPageWrite, QuantizedPageWriteOptions};
 pub(super) use template::template;
 
@@ -223,6 +223,7 @@ pub(super) struct Kernels {
     paged_attention_partial: mirtal::MetalLibrary,
     paged_attention_reduce: mirtal::MetalKernel<3, 1>,
     paged_kv: mirtal::MetalLibrary,
+    page_rows: page_write::PageRowsWrite,
     mxfp4_gate_up: mirtal::MetalKernel<6, 1>,
     mxfp4_embedding: mxfp4_embedding::MxFp4EmbeddingKernel,
     #[cfg(test)]

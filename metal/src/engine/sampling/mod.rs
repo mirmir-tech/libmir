@@ -1,5 +1,7 @@
 mod graph;
 mod mask;
+#[cfg(test)]
+mod tests;
 
 pub use graph::TopK;
 pub use mask::{MaskedSampling, TokenAllowlist};
@@ -18,6 +20,30 @@ pub struct DeviceSampling {
 pub fn sample(logits: &Array, sampling: DeviceSampling, stream: &Stream) -> Result<Array> {
     sampling.validate()?;
     Array::from_native(graph::sample(stream.native().graph(), logits.native(), sampling)?)
+}
+
+/// Samples every row of `logits` (`[B, ...]`) with shared parameters and one
+/// draw per row.
+pub fn sample_rows(
+    logits: &Array,
+    sampling: DeviceSampling,
+    draws: &[f32],
+    stream: &Stream,
+) -> Result<Array> {
+    sampling.validate()?;
+    if draws.iter().any(|draw| !draw.is_finite() || *draw < 0.0 || *draw >= 1.0) {
+        return Err(super::Error::InvalidSampling("draw must be in [0, 1)".into()));
+    }
+    let rank = logits.native().shape()?.dimensions().len();
+    let mut shape = vec![1; rank];
+    shape[0] = draws.len();
+    let draws = mirtal::Array::from_shape(draws, &mirtal::Shape::new(shape)?)?;
+    Array::from_native(graph::sample_with_draw(
+        stream.native().graph(),
+        logits.native(),
+        sampling,
+        &draws,
+    )?)
 }
 
 pub fn sample_u32(logits: &Array, sampling: DeviceSampling, stream: &Stream) -> Result<u32> {

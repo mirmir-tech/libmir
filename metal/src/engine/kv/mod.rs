@@ -8,6 +8,7 @@ mod inspection;
 mod lifecycle;
 mod paged;
 mod policy;
+mod rows;
 mod sliding;
 mod validation;
 

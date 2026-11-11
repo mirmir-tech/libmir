@@ -53,15 +53,7 @@ impl History {
             previous.filter(|p| p.extends_to(contexts.len(), heads, &tokens, dim))
             && previous.buffers[0].native().dtype()? == dtype
         {
-            let buffers = stream.kernels().history_append.execute(previous, updates, stream)?;
-            #[cfg(test)]
-            stats::record(true);
-            return Ok(Self {
-                buffers,
-                shape: previous.shape,
-                tokens,
-                reservation: Arc::clone(&previous.reservation),
-            });
+            return Self::appended(previous, updates, stream);
         }
         let capacity = capacity_for(tokens.iter().copied().max().unwrap_or(0))?;
         let shape = [contexts.len(), heads, capacity, dim];
@@ -93,6 +85,26 @@ impl History {
         #[cfg(test)]
         stats::record(false);
         Ok(Self { buffers, shape, tokens, reservation })
+    }
+
+    /// Appends one token per row in place; the caller has checked `extends_to`.
+    pub(super) fn appended(previous: &Self, updates: [&Array; 2], stream: &Stream) -> Result<Self> {
+        if !stream.history_budget().allows_reuse() {
+            return Err(Error::HistoryBudgetUnavailable);
+        }
+        let buffers = stream.kernels().history_append.execute(previous, updates, stream)?;
+        #[cfg(test)]
+        stats::record(true);
+        Ok(Self {
+            buffers,
+            shape: previous.shape,
+            tokens: previous.tokens.iter().map(|tokens| tokens + 1).collect(),
+            reservation: Arc::clone(&previous.reservation),
+        })
+    }
+
+    pub(super) fn dtype_matches(&self, dtype: mirtal::DType) -> Result<bool> {
+        Ok(self.buffers[0].native().dtype()? == dtype)
     }
 
     /// Every row must have grown by exactly one token within the allocation.

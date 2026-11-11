@@ -1313,6 +1313,15 @@ The target shape is:
 
 ## Prefill throughput
 
+- A reused cohort history appends every row's token with one page write per
+  layer (`KvCache::write_rows`): per-row aliasing writes serialized 360 dispatches
+  a step at C10 and cost about 18%. Qwen3-4B C10 at 0/4k context peaks at 224.7/179
+  tok/s versus MLX-LM 220/172. The kernel takes host-resolved slots and never reads
+  the page table, so a table changed while preparing rows is scheduled with
+  `async_eval`; otherwise a flush detaches it unevaluated and native reads fail.
+- Packed device sampling runs once for rows sharing parameters, with one draw per
+  row. llama-benchy sends no sampling fields, so mirmir uses the checkpoint's
+  generation defaults while MLX-LM's server samples greedily.
 - Long-context prefill keeps 2048-token chunks: `MAX_PREFILL_TOKEN_PAIRS` bounds
   them only past 128k context (the old 8M bound gave 255 tokens at 32k), and
   packed steps may hold five 32k rows. Physical waves hold whole-prompt K/V in

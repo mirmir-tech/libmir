@@ -2,7 +2,9 @@
 //! Rows rotate together, append in place and share one SDPA call, so attention
 //! cost no longer grows with a dispatch per row.
 
-use super::{KvCache, admits, enabled, execute, row_attention, take};
+use std::sync::Arc;
+
+use super::{History, KvCache, admits, attend_history, enabled, execute, row_attention, take};
 use crate::engine::{Array, PagedContextMode, Result, Stream, paged_attention_min_context};
 
 pub struct Attend<'a> {
@@ -55,6 +57,17 @@ pub fn attend(
     }
     let queries = rotate(layer.queries)?;
     let keys = rotate(layer.keys)?;
+    // A reused history already holds every earlier token: one page write for
+    // all rows replaces a write and a gathered view per row.
+    if let Some(previous) = previous.as_deref()
+        && previous.extends_to(caches.len(), kv_heads, &tokens, head_dim)
+        && previous.dtype_matches(dtype)?
+        && KvCache::write_rows(caches, [&keys, layer.values], stream)?
+    {
+        let history = Arc::new(History::appended(previous, [&keys, layer.values], stream)?);
+        return attend_history(&history, caches, &queries, layer.scale, layer.sinks, stream)
+            .map(Some);
+    }
     let row = |array: &Array, index: usize| {
         array.slice(&[index, 0, 0, 0], &[index + 1, kv_heads, 1, head_dim], stream)
     };
