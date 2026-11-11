@@ -47,7 +47,8 @@ pub(in crate::engine::kv) fn write_rows(
     };
     let slots = mirtal::Array::from_slice(&slots, [slots.len()])?;
     let mut arena = lock(&arena)?;
-    let [page_keys, page_values] = stream.page_rows_write(
+    let [page_keys, page_values] = stream.kernels().page_rows_write(
+        stream.native(),
         [keys.native(), values.native(), arena.keys.native(), arena.values.native(), &slots],
         PageRowsOptions {
             rows: stores.len(),
