@@ -1313,6 +1313,13 @@ The target shape is:
 
 ## Prefill throughput
 
+- Long-context prefill keeps 2048-token chunks: `MAX_PREFILL_TOKEN_PAIRS` bounds
+  them only past 128k context (the old 8M bound gave 255 tokens at 32k), and
+  packed steps may hold five 32k rows. Physical waves hold whole-prompt K/V in
+  half the headroom; `packed_prefill_fits` still guards the chunk workspace.
+  Chunks shrink to 128 tokens only when headroom falls below the prefill reserve.
+  Qwen3.6 C5 at 32k: PP 916 to 1959 tok/s, batch done in 89 s versus MLX-LM 108 s;
+  Gemma 26B C2/C5 at 8k reach MLX-LM. Needle retrieval at ~30k passes C1/C3.
 - GPT-OSS sorted expert dispatch lifts prefill about 10x (0.08x to 0.83–0.94x of
   MLX-LM); unsorted `gather` was the cost. The 2048-token chunk cap lifts Qwen3.6
   C1 prefill from 0.81x to 1.13x. Scalar prefill pressure counts live allocations

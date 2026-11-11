@@ -2,7 +2,9 @@ use models::semantic::{FeedForwardSpec, MixerSpec, SemanticModelSpec};
 
 const DEFAULT_PREFILL_STEP: usize = 512;
 const LARGE_PREFILL_STEP: usize = 2_048;
-const MAX_PREFILL_TOKEN_PAIRS: usize = 8 * 1_024 * 1_024;
+// Keeps 2048-token chunks to 128k context; the earlier 8M bound shrank 32k
+// chunks to 255 tokens and cost about a quarter of long-context prefill.
+const MAX_PREFILL_TOKEN_PAIRS: usize = 256 * 1_024 * 1_024;
 const MAX_PREFILL_CHUNK_TOKENS: usize = 2_048;
 const NATIVE_PAGED_TAIL_CONTEXT: usize = 16 * 1_024;
 const NATIVE_PAGED_TAIL_TOKENS: usize = 16;
@@ -85,15 +87,18 @@ mod tests {
         assert_eq!(bounded_step_with_limit(2048, 0, 4096, 1024), 1024);
         assert_eq!(bounded_step_with_limit(2048, 0, 4096, 2048), 2048);
         assert_eq!(bounded_step_with_limit(512, 0, 4096, 2048), 512);
-        assert_eq!(bounded_step_with_limit(2048, 16384, 4096, 2048), 511);
+        assert_eq!(bounded_step_with_limit(2048, 16384, 4096, 2048), 2048);
+        assert_eq!(bounded_step_with_limit(2048, 262_143, 4096, 2048), 1024);
         assert_eq!(bounded_step_with_limit(2048, 32767, 16, 2048), 1);
     }
 
     #[test]
     fn bounds_long_context_chunks_by_attention_work() {
         assert_eq!(bounded_prefill_step(2_048, 0, 4_096), 2_048);
-        assert_eq!(bounded_prefill_step(2_048, 16_384, 4_096), 511);
-        assert_eq!(bounded_prefill_step(2_048, 32_768, 4_096), 255);
+        // MLX-LM keeps 2048-token steps; fused SDPA needs no score matrix.
+        assert_eq!(bounded_prefill_step(2_048, 32_768, 4_096), 2_048);
+        assert_eq!(bounded_prefill_step(2_048, 131_071, 4_096), 2_048);
+        assert_eq!(bounded_prefill_step(2_048, 524_287, 4_096), 512);
         assert_eq!(bounded_prefill_step(2_048, 32_767, 2), 1);
         assert_eq!(bounded_prefill_step(2_048, usize::MAX, 4_096), 1);
     }

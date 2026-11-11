@@ -1,11 +1,12 @@
 use super::{LoadedModel, clear_memory_cache, memory_stats, usable_memory};
 use crate::native::error::Result;
 
-const PRESSURE_DIVISOR: usize = 2;
 const PRESSURE_PREFILL_TOKENS: usize = 128;
 const PREFILL_MEMORY_RESERVE_DIVISOR: usize = 8;
 const PREFILL_MINIMUM_RESERVE: usize = 2 * 1024 * 1024 * 1024;
-const PREFILL_WORKSPACE_KV_COPIES: usize = 16;
+/// Share of the headroom a physical wave may hold as whole-prompt K/V; the
+/// packed workspace check still guards each chunk's activations.
+const PREFILL_WAVE_HEADROOM_DIVISOR: usize = 2;
 const PREFIX_RECLAIM_PRESSURE_PERCENT: usize = 50;
 
 impl LoadedModel {
@@ -93,11 +94,10 @@ fn prefill_token_budgets(
     let reserve = prefill_reserve(usable);
     let headroom = usable.saturating_sub(memory.active).saturating_sub(reserve);
     let kv_bytes = kv_bytes_per_token.max(1);
-    let wave_bytes = kv_bytes.saturating_mul(PREFILL_WORKSPACE_KV_COPIES).max(1);
-    let wave_tokens = headroom.checked_div(wave_bytes).unwrap_or(0).max(1);
-    // A cohort only stores K/V; the workspace multiple applies to one physical
-    // wave.
-    let cohort_tokens = headroom.checked_div(kv_bytes).unwrap_or(0).max(wave_tokens);
+    // Workspace scales with a chunk, not with the whole prompt: sizing waves by
+    // sixteen prompt-length copies admitted one 32k row at a time.
+    let cohort_tokens = headroom.checked_div(kv_bytes).unwrap_or(0).max(1);
+    let wave_tokens = (cohort_tokens / PREFILL_WAVE_HEADROOM_DIVISOR).max(1);
     (wave_tokens, cohort_tokens)
 }
 
@@ -107,9 +107,10 @@ fn pressure_bounded_budget(
     workspace_constrained: bool,
 ) -> usize {
     let usable = usable_memory(memory);
-    // The allocator cache is reclaimable, so only live allocations shrink a chunk.
+    // The allocator cache is reclaimable, and paged arenas keep their high-water
+    // capacity, so only headroom below the prefill reserve shrinks a chunk.
     let available = usable.saturating_sub(memory.active);
-    if workspace_constrained || usable > 0 && available < usable / PRESSURE_DIVISOR {
+    if workspace_constrained || usable > 0 && available < prefill_reserve(usable) {
         budget.min(PRESSURE_PREFILL_TOKENS)
     } else {
         budget
@@ -122,17 +123,18 @@ mod tests {
 
     #[test]
     fn shrinks_scalar_prefill_only_under_allocator_pressure() {
+        const GIB: usize = 1024 * 1024 * 1024;
         let memory = crate::engine::MemoryStats {
-            active: 40,
-            cached: 12,
+            active: 58 * GIB,
+            cached: 2 * GIB,
             peak: 0,
-            limit: 64,
-            recommended: Some(64),
+            limit: 64 * GIB,
+            recommended: Some(64 * GIB),
         };
         assert_eq!(pressure_bounded_budget(memory, 512, false), 128);
         assert_eq!(
             pressure_bounded_budget(
-                crate::engine::MemoryStats { active: 16, ..memory },
+                crate::engine::MemoryStats { active: 40 * GIB, ..memory },
                 512,
                 false,
             ),
@@ -160,7 +162,7 @@ mod tests {
         );
         assert!(roomy_budget.0 > pressured_budget.0);
         assert!(roomy_budget.1 > pressured_budget.1);
-        assert!(roomy_budget.1 >= roomy_budget.0 * PREFILL_WORKSPACE_KV_COPIES);
+        assert!(roomy_budget.1 >= roomy_budget.0 * PREFILL_WAVE_HEADROOM_DIVISOR);
         assert_eq!(cached_budget, roomy_budget);
     }
 
