@@ -18,14 +18,19 @@ impl LoadedModel {
         Ok(pressure_bounded_budget(memory_stats()?, budget, workspace_constrained))
     }
 
+    /// K/V bytes a long prompt adds per token, sliding windows charged once.
+    pub(crate) fn kv_rate_bytes_per_token(&self) -> Result<usize> {
+        Ok(self
+            .estimated_prefix_bytes(KV_RATE_REFERENCE_TOKENS)?
+            .div_ceil(KV_RATE_REFERENCE_TOKENS)
+            .max(1))
+    }
+
     pub(crate) fn prefill_memory_token_budgets(&self) -> Result<(usize, usize)> {
         let memory = memory_stats()?;
         // One token makes every sliding window look unbounded; a long-prompt
         // average charges windows once (Gemma: 225 KB/token at 1, 33 KB at 16k).
-        let kv_bytes_per_token = self
-            .estimated_prefix_bytes(KV_RATE_REFERENCE_TOKENS)?
-            .div_ceil(KV_RATE_REFERENCE_TOKENS)
-            .max(1);
+        let kv_bytes_per_token = self.kv_rate_bytes_per_token()?;
         let budgets = prefill_token_budgets(memory, kv_bytes_per_token);
         tracing::debug!(
             active_bytes = memory.active,
@@ -72,17 +77,25 @@ pub(super) fn prefix_reclamation_needed(memory: crate::engine::MemoryStats) -> b
 /// Live allocations only: the allocator cache is reclaimable. Paged arenas keep
 /// their high-water capacity, so a share of `active` says little; suspend only
 /// when the real headroom no longer covers the prefill reserve.
-pub(super) fn history_pressure(memory: crate::engine::MemoryStats) -> bool {
+pub(super) fn history_pressure(memory: crate::engine::MemoryStats, pending: usize) -> bool {
     let usable = usable_memory(memory);
-    usable > 0 && usable.saturating_sub(memory.active) < prefill_reserve(usable)
+    usable > 0
+        && usable.saturating_sub(memory.active) < prefill_reserve(usable).saturating_add(pending)
 }
 
 /// The whole headroom above the prefill reserve; the history already retained
 /// is part of `active` and counts as available to itself.
-pub(super) fn history_limit_bytes(memory: crate::engine::MemoryStats, retained: usize) -> usize {
+pub(super) fn history_limit_bytes(
+    memory: crate::engine::MemoryStats,
+    retained: usize,
+    pending: usize,
+) -> usize {
     let usable = usable_memory(memory);
     let live = memory.active.saturating_sub(retained);
-    usable.saturating_sub(live).saturating_sub(prefill_reserve(usable))
+    usable
+        .saturating_sub(live)
+        .saturating_sub(prefill_reserve(usable))
+        .saturating_sub(pending)
 }
 
 fn prefill_reserve(usable: usize) -> usize {
@@ -170,6 +183,25 @@ mod tests {
         assert!(roomy_budget.1 > pressured_budget.1);
         assert!(roomy_budget.1 >= roomy_budget.0 * PREFILL_WAVE_HEADROOM_DIVISOR);
         assert_eq!(cached_budget, roomy_budget);
+    }
+
+    #[test]
+    fn keeps_history_clear_of_the_prefill_still_to_come() {
+        const GIB: usize = 1024 * 1024 * 1024;
+        let memory = crate::engine::MemoryStats {
+            active: 36 * GIB,
+            cached: 0,
+            peak: 0,
+            limit: 64 * GIB,
+            recommended: Some(56 * GIB),
+        };
+        // 20 GiB free, 7 GiB reserve: 11 GiB of queued prompts leaves 2 GiB.
+        assert!(!history_pressure(memory, 0));
+        assert!(!history_pressure(memory, 11 * GIB));
+        assert!(history_pressure(memory, 14 * GIB));
+        assert_eq!(history_limit_bytes(memory, GIB, 0), 14 * GIB);
+        assert_eq!(history_limit_bytes(memory, GIB, 11 * GIB), 3 * GIB);
+        assert_eq!(history_limit_bytes(memory, GIB, 20 * GIB), 0);
     }
 
     #[test]

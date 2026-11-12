@@ -1339,3 +1339,21 @@ The target shape is:
   MLX-LM); unsorted `gather` was the cost. The 2048-token chunk cap lifts Qwen3.6
   C1 prefill from 0.81x to 1.13x. Scalar prefill pressure counts live allocations
   only: the reclaimable allocator cache halved Gemma 26B's C1 prefill.
+
+## Memory admission at deep concurrency
+
+- The unified 2/5 K/V limit covers the whole cache: bounded sliding rings are
+  subtracted before sizing the growing pool. Gemma 31B had planned 21 GB of
+  pages plus 13.6 GB of rings (55 GB residency of 55.6 GB usable).
+- History admission keeps room for the K/V the starting prefill still adds
+  (`apply_history_pressure(memory, prefill_tokens)`, prompt tokens times the
+  16k-averaged rate). Early rows had duplicated about 11 GB of history beside
+  rows still prefilling; Qwen3.8 C5 at 32k went from 35 OOMs to none, TG 11.6 to
+  33.5 tok/s with aligned TTFT.
+- `Session::drop` releases backend pages and logical blocks before telling the
+  scheduler: notifying first let a cohort start while a finished session still
+  held its pages, and the batch failed with "requires N free K/V pages".
+- Open: Gemma 31B C5/C10 at 4k+ context still hits Metal OOM on the first decode
+  after a large prefill. MLX-LM dies on the same cells, so mirmir only has to fail
+  those requests gracefully and keep serving; a memory-bounded admission is a
+  later fix. llama-benchy averages survivors, so count OOMs in server logs.

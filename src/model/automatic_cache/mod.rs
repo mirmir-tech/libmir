@@ -61,8 +61,10 @@ pub(super) fn resolve(
     // let an automatically sized cache consume the entire first snapshot: even
     // allocator bookkeeping between the two samples would otherwise reject it.
     kv_budget = kv_budget.saturating_sub(ADMISSION_SNAPSHOT_HEADROOM_BYTES);
+    // The unified limit covers the whole cache, bounded sliding rings included:
+    // only the growing part is sized here.
     if let Some(limit) = unified_limit(memory) {
-        kv_budget = kv_budget.min(limit);
+        kv_budget = kv_budget.min(limit.saturating_sub(fixed_kv));
     }
     let block_bytes = estimate
         .kv_bytes_per_token

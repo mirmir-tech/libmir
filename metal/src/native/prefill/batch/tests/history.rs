@@ -50,13 +50,16 @@ fn pressure_releases_optional_history_and_preserves_nonempty_prefix_cache() -> R
         assert!(retained > 0, "both families keep a batched K/V history");
         let groups = model.prefixes.group_count();
         assert!(groups > 0, "prefix preservation must not be vacuous");
-        model.apply_history_pressure(MemoryStats {
-            active: 60,
-            cached: 0,
-            peak: 0,
-            limit: 100,
-            recommended: Some(100),
-        })?;
+        model.apply_history_pressure(
+            MemoryStats {
+                active: 60,
+                cached: 0,
+                peak: 0,
+                limit: 100,
+                recommended: Some(100),
+            },
+            0,
+        )?;
         assert_eq!(model.stream.history_budget().snapshot().retained_bytes, 0);
         assert_eq!(model.stream.history_budget().snapshot().admission, Admission::Suspended);
         assert_eq!(model.prefixes.group_count(), groups);
