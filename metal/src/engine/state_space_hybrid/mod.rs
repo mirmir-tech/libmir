@@ -7,6 +7,7 @@ mod feed_forward;
 mod layer;
 mod mamba;
 mod model;
+mod multimodal;
 #[cfg(test)]
 mod tests;
 

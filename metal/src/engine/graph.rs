@@ -48,6 +48,14 @@ impl Array {
         Self::from_native(graph.astype(&output, self.native().dtype()?)?)
     }
 
+    /// `relu(x)²`, preserving the dtype.
+    pub(crate) fn relu_squared(&self, stream: &Stream) -> Result<Self> {
+        let graph = stream.native().graph();
+        let zero = graph.full(&mirtal::Shape::new([])?, 0.0, self.native().dtype()?)?;
+        let clamped = graph.maximum(self.native(), &zero)?;
+        Self::from_native(graph.multiply(&clamped, &clamped)?)
+    }
+
     pub fn tanh(&self, stream: &Stream) -> Result<Self> {
         Self::from_native(stream.native().graph().tanh(self.native())?)
     }

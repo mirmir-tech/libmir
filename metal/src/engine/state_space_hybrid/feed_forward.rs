@@ -3,7 +3,7 @@
 //! ungated `relu²` expert outputs. Experts may run in a projected latent
 //! space; an optional shared expert always runs at model width.
 
-use mirtal::{DType, Shape};
+use mirtal::DType;
 use models::{
     layout::LatentRoutedConfig,
     weights::{ExpertProjectionRole, LatentRoutedBindings, RoutedExpertBindings},
@@ -92,7 +92,7 @@ impl RoutedFeedForward {
         match &self.shared {
             Some((up, down)) => {
                 let shared =
-                    down.forward(&relu_squared(&up.forward(input, stream)?, stream)?, stream)?;
+                    down.forward(&up.forward(input, stream)?.relu_squared(stream)?, stream)?;
                 routed.add(&shared, stream)
             },
             None => Ok(routed),
@@ -146,7 +146,7 @@ impl RoutedFeedForward {
 
     fn mlp(&self, input: &Array, indices: &Array, sorted: bool, stream: &Stream) -> Result<Array> {
         let up = self.up.gather(input, indices, sorted, stream)?;
-        self.down.gather(&relu_squared(&up, stream)?, indices, sorted, stream)
+        self.down.gather(&up.relu_squared(stream)?, indices, sorted, stream)
     }
 }
 
@@ -176,12 +176,4 @@ fn load_experts(
             "routed experts require stacked or individual up/down tensors without gates".into(),
         )),
     }
-}
-
-/// `relu(x)²`, preserving the input dtype.
-fn relu_squared(input: &Array, stream: &Stream) -> Result<Array> {
-    let graph = stream.native().graph();
-    let zero = graph.full(&Shape::new([])?, 0.0, input.native().dtype()?)?;
-    let clamped = graph.maximum(input.native(), &zero)?;
-    Array::from_native(graph.multiply(&clamped, &clamped)?)
 }

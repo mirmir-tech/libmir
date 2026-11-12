@@ -16,8 +16,8 @@ use super::{
     session::SessionState,
 };
 use crate::engine::{
-    Array, DecoderModel, MemoryStats, PooledVisionTower, SequenceScoringModel,
-    SpatialMergeVisionTower, Stream, TextEmbeddingModel,
+    Array, DecoderModel, MemoryStats, PixelShuffleVisionTower, PooledVisionTower,
+    SequenceScoringModel, SpatialMergeVisionTower, Stream, TextEmbeddingModel,
 };
 
 mod batch;
@@ -87,8 +87,9 @@ impl LoadedExecution {
 
 #[derive(Debug)]
 pub(super) enum LoadedVisionModel {
-    PooledEncoder(PooledVisionTower),
-    SpatialMergeEncoder(SpatialMergeVisionTower),
+    Pooled(PooledVisionTower),
+    SpatialMerge(SpatialMergeVisionTower),
+    PixelShuffle(PixelShuffleVisionTower),
 }
 
 #[derive(Debug)]

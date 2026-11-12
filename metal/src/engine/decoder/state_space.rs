@@ -1,6 +1,6 @@
 use super::DecoderExecution;
 use crate::engine::{
-    Array, DecoderCache, Result, Stream, state_space_hybrid::StateSpaceHybridModel,
+    Array, DecoderCache, ImageTokenSpan, Result, Stream, state_space_hybrid::StateSpaceHybridModel,
 };
 
 impl DecoderExecution for StateSpaceHybridModel {
@@ -50,6 +50,17 @@ impl DecoderExecution for StateSpaceHybridModel {
         stream: &Stream,
     ) -> Result<Array> {
         self.forward_prefill(token_ids, cache, position, stream)
+    }
+
+    fn forward_embedded_multimodal(
+        &self,
+        token_ids: &Array,
+        image_embeddings: &Array,
+        image: ImageTokenSpan,
+        cache: &mut DecoderCache,
+        stream: &Stream,
+    ) -> Result<Array> {
+        self.forward_multimodal_prefill(token_ids, image_embeddings, image, cache, stream)
     }
 
     fn fusion_summary(&self) -> (usize, usize, usize, usize) {

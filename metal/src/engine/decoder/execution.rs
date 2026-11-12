@@ -104,6 +104,19 @@ pub trait DecoderExecution: Debug + Send {
         Err(unsupported("spatial multimodal prefill"))
     }
 
+    /// Causal prefill with image embeddings spliced over the image span and
+    /// plain positions; for decoders whose positions ignore the image layout.
+    fn forward_embedded_multimodal(
+        &self,
+        _token_ids: &Array,
+        _image_embeddings: &Array,
+        _image: ImageTokenSpan,
+        _cache: &mut DecoderCache,
+        _stream: &Stream,
+    ) -> Result<Array> {
+        Err(unsupported("embedded multimodal prefill"))
+    }
+
     fn fusion_summary(&self) -> (usize, usize, usize, usize);
     fn expert_fusion_summary(&self) -> String;
 }

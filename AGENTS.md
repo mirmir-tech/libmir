@@ -1366,3 +1366,18 @@ The target shape is:
   (`Array::grouped_decode_attention`; 5.4 versus 1.6 ms per layer at 32k, 0.68
   versus 0.16 ms at 4k). Gemma 31B C2 at 6k context decodes in 78 ms per step (was
   98, MLX-LM 84). Only float additive padding masks take the path.
+
+## Pixel-shuffle vision on Metal
+
+- Metal runs the pixel-shuffle (Nemotron Omni) vision contract:
+  `PixelShuffleVisionTower` embeds patches with the position table resized
+  bilinearly at half-pixel centres to the larger grid side, runs pre-norm blocks
+  with fused biased QKV and exact GELU, folds each 2×2 block of patches into
+  channels (block rows, then columns) and projects through RMS norm, `relu²` and
+  two linears. Nemotron-H prefills the soft tokens over the image span with plain
+  positions (`DecoderExecution::forward_embedded_multimodal`); its attention has
+  no positional encoding. Validation is synthetic only: a host f64 reference of
+  the CUDA kernels on a non-square grid, and spliced span embeddings reproducing
+  the plain prefill. `records_a_real_pixel_shuffle_tower_output` writes a real
+  checkpoint's soft tokens for comparison with the CUDA recorder once a checkpoint
+  that fits 64 GiB is available.

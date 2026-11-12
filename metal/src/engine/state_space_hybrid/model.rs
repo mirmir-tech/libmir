@@ -106,6 +106,17 @@ impl StateSpaceHybridModel {
         stream: &Stream,
     ) -> Result<Array> {
         let hidden = self.embedding.lookup(token_ids, stream)?;
+        self.forward_embedded(hidden, cache, position, causal, stream)
+    }
+
+    pub(super) fn forward_embedded(
+        &self,
+        hidden: Array,
+        cache: &mut DecoderCache,
+        position: i32,
+        causal: bool,
+        stream: &Stream,
+    ) -> Result<Array> {
         let sequence = usize::try_from(*hidden.shape()?.get(1).ok_or_else(|| {
             Error::InvalidModel("state-space hybrid hidden state has no sequence axis".into())
         })?)?;

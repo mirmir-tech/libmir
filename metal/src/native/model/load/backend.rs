@@ -6,8 +6,8 @@ use models::{
 use super::super::{KV_CACHE_STEP, LoadedVisionModel};
 use crate::{
     engine::{
-        DecoderModel, KvPageFormat, ModelTensors, PooledVisionTower, SpatialMergeVisionTower,
-        Stream,
+        DecoderModel, KvPageFormat, ModelTensors, PixelShuffleVisionTower, PooledVisionTower,
+        SpatialMergeVisionTower, Stream,
         clamped_routed::ClampedRoutedModel,
         dense::swiglu::DenseSwiGluModel,
         hybrid_linear_moe::HybridLinearMoeModel,
@@ -76,18 +76,21 @@ pub(super) fn load_vision_model(
                 .ok_or_else(|| {
                     Error::UnsupportedModel("pooled vision projection binding is missing".into())
                 })?;
-            Ok(Some(LoadedVisionModel::PooledEncoder(PooledVisionTower::load(
+            Ok(Some(LoadedVisionModel::Pooled(PooledVisionTower::load(
                 tensors, config, projection, stream,
             )?)))
         },
         Some(VisionConfig::SpatialMergeEncoder(config)) => {
-            Ok(Some(LoadedVisionModel::SpatialMergeEncoder(SpatialMergeVisionTower::load(
+            Ok(Some(LoadedVisionModel::SpatialMerge(SpatialMergeVisionTower::load(
                 tensors, config, stream,
             )?)))
         },
-        // No Metal tower runs this contract yet; the model loads text-only
-        // and its prefill reports the missing tower.
-        Some(VisionConfig::PixelShuffleEncoder(_)) | None => Ok(None),
+        Some(VisionConfig::PixelShuffleEncoder(config)) => {
+            Ok(Some(LoadedVisionModel::PixelShuffle(PixelShuffleVisionTower::load(
+                tensors, config, stream,
+            )?)))
+        },
+        None => Ok(None),
     }
 }
 

@@ -140,6 +140,18 @@ impl DecoderModel {
         )
     }
 
+    pub(crate) fn forward_embedded_multimodal(
+        &self,
+        token_ids: &Array,
+        image_embeddings: &Array,
+        image: ImageTokenSpan,
+        cache: &mut DecoderCache,
+        stream: &Stream,
+    ) -> Result<Array> {
+        self.execution
+            .forward_embedded_multimodal(token_ids, image_embeddings, image, cache, stream)
+    }
+
     pub(crate) fn fusion_summary(&self) -> (usize, usize, usize, usize) {
         self.execution.fusion_summary()
     }

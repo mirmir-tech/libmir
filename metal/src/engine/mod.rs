@@ -99,7 +99,10 @@ pub use shared_expert_moe::{SharedExpertMoe, SharedExpertMoeConfig};
 pub use stream::Stream;
 pub use tensors::TensorFile;
 pub use text_embedding::TextEmbeddingModel;
-pub use vision::{pooled::PooledVisionTower, spatial_merge::SpatialMergeVisionTower};
+pub use vision::{
+    pixel_shuffle::PixelShuffleVisionTower, pooled::PooledVisionTower,
+    spatial_merge::SpatialMergeVisionTower,
+};
 
 pub fn version() -> Result<String> {
     Ok(mirtal::version()?)

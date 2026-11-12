@@ -14,6 +14,7 @@ use super::StateSpaceHybridModel;
 use crate::engine::{Array, DecoderCache, ModelTensors, Result, Stream, lowering};
 
 mod fixture;
+mod multimodal;
 mod oracle;
 
 use fixture::{HIDDEN, write_checkpoint};

@@ -16,6 +16,8 @@ use crate::{
     },
 };
 
+mod pixel_shuffle;
+
 impl LoadedModel {
     pub(in crate::native) fn prefill_pooled_vision(
         &mut self,
@@ -47,7 +49,7 @@ impl LoadedModel {
             page_size,
         ))?;
         let model = self.execution.decoder()?;
-        let Some(LoadedVisionModel::PooledEncoder(tower)) = self.vision_model.as_ref() else {
+        let Some(LoadedVisionModel::Pooled(tower)) = self.vision_model.as_ref() else {
             return Err(Error::UnsupportedModel(
                 "pooled vision tower is not loaded or its tensors are incomplete".into(),
             ));
@@ -118,7 +120,7 @@ impl LoadedModel {
             page_size,
         ))?;
         let model = self.execution.decoder()?;
-        let Some(LoadedVisionModel::SpatialMergeEncoder(tower)) = self.vision_model.as_ref() else {
+        let Some(LoadedVisionModel::SpatialMerge(tower)) = self.vision_model.as_ref() else {
             return Err(Error::UnsupportedModel(
                 "spatial-merge vision tower is not loaded or its tensors are incomplete".into(),
             ));
