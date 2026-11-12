@@ -1,3 +1,6 @@
+mod pixel_shuffle;
+
+pub use self::pixel_shuffle::encoder_tensor as pixel_shuffle_encoder_tensor;
 use crate::{
     layout::{PooledVisionConfig, SpatialMergeVisionConfig, VisionConfig},
     weights::{
@@ -11,6 +14,9 @@ impl VisionTensorSchema {
         match config {
             VisionConfig::PooledEncoder(config) => pooled_encoder(config),
             VisionConfig::SpatialMergeEncoder(config) => spatial_merge_encoder(config),
+            VisionConfig::PixelShuffleEncoder(config) => {
+                pixel_shuffle::pixel_shuffle_encoder(config)
+            },
         }
     }
 
@@ -145,5 +151,4 @@ fn linear(label: &str, prefix: &str) -> TensorRequirement {
 }
 
 #[cfg(test)]
-#[path = "vision/tests.rs"]
 mod tests;

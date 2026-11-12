@@ -136,3 +136,19 @@ fn spatial_merge_config() -> SpatialMergeVisionConfig {
         mrope_sections: vec![1, 1, 2],
     }
 }
+
+/// Every tensor the pixel-shuffle schema names is in a real checkpoint of
+/// the contract (`MODEL` is its directory).
+#[test]
+#[ignore = "needs MODEL, a pixel-shuffle encoder checkpoint"]
+fn pixel_shuffle_schema_resolves_in_a_real_checkpoint() -> crate::error::Result<()> {
+    let root = PathBuf::from(std::env::var("MODEL").unwrap_or_default());
+    let layout = crate::layout::ModelLayout::inspect(&root)?;
+    let Some(config) = VisionConfig::from_layout(&layout)? else {
+        return Err(crate::error::ModelsError::InvalidConfig("no vision contract".into()));
+    };
+    let readiness =
+        VisionTensorSchema::discover(&config).readiness(&TensorCatalog::from_layout(&layout)?);
+    assert!(readiness.is_ready(), "missing: {:?}", readiness.missing);
+    Ok(())
+}

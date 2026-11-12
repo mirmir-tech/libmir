@@ -45,7 +45,7 @@ fn is_optional_vision_tensor(config: &VisionConfig, name: &str) -> bool {
             (name.starts_with("model.vision_tower.") || name.starts_with("model.embed_vision."))
                 && name.ends_with(".bias")
         },
-        VisionConfig::SpatialMergeEncoder(_) => false,
+        VisionConfig::SpatialMergeEncoder(_) | VisionConfig::PixelShuffleEncoder(_) => false,
     }
 }
 

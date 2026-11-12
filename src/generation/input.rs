@@ -164,6 +164,8 @@ impl Prepared {
             Self::Vision(PreparedVisionPrompt::Pooled { tokens, .. }) => &tokens.token_ids,
             #[cfg(any(feature = "cuda", feature = "metal"))]
             Self::Vision(PreparedVisionPrompt::SpatialMerge { tokens, .. }) => &tokens.token_ids,
+            #[cfg(any(feature = "cuda", feature = "metal"))]
+            Self::Vision(PreparedVisionPrompt::PixelShuffle { tokens, .. }) => &tokens.token_ids,
         }
     }
 
@@ -173,7 +175,8 @@ impl Prepared {
             #[cfg(any(feature = "cuda", feature = "metal"))]
             Self::Vision(
                 PreparedVisionPrompt::Pooled { prompt, .. }
-                | PreparedVisionPrompt::SpatialMerge { prompt, .. },
+                | PreparedVisionPrompt::SpatialMerge { prompt, .. }
+                | PreparedVisionPrompt::PixelShuffle { prompt, .. },
             ) => &prompt.text,
         }
     }

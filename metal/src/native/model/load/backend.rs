@@ -84,7 +84,9 @@ pub(super) fn load_vision_model(
                 tensors, config, stream,
             )?)))
         },
-        None => Ok(None),
+        // No Metal tower runs this contract yet; the model loads text-only
+        // and its prefill reports the missing tower.
+        Some(VisionConfig::PixelShuffleEncoder(_)) | None => Ok(None),
     }
 }
 

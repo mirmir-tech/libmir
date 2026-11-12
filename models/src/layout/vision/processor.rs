@@ -12,6 +12,7 @@ use crate::{
 pub enum ImageProcessorConfig {
     Pooled(PooledImageProcessorConfig),
     SpatialMerge(SpatialMergeImageProcessorConfig),
+    PixelShuffle(PixelShuffleImageProcessorConfig),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -40,6 +41,32 @@ pub struct SpatialMergeImageProcessorConfig {
     pub do_normalize: bool,
 }
 
+/// One tile at the image's own aspect ratio, sized to a patch budget.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PixelShuffleImageProcessorConfig {
+    pub patch_size: usize,
+    /// Patches folded into one token along each axis; each side of the
+    /// patch grid is a multiple of it.
+    pub shuffle_factor: usize,
+    pub min_patches: usize,
+    pub max_patches: usize,
+    /// Patches the model's context leaves for one image, when declared.
+    pub context_patches: Option<usize>,
+    pub rescale_factor: f64,
+    pub image_mean: [f64; 3],
+    pub image_std: [f64; 3],
+}
+
+impl PixelShuffleImageProcessorConfig {
+    /// The patch budget of one image: the context's share bounded by the
+    /// processor's minimum and maximum.
+    #[must_use]
+    pub fn patch_budget(&self) -> usize {
+        let budget = self.context_patches.unwrap_or(self.max_patches).max(self.min_patches);
+        budget.min(self.max_patches).max(self.min_patches)
+    }
+}
+
 impl ImageProcessorConfig {
     pub fn from_layout(layout: &ModelLayout, pipeline: VisionPipeline) -> Result<Option<Self>> {
         let Some(path) = layout
@@ -60,6 +87,9 @@ impl ImageProcessorConfig {
             VisionPipeline::PooledEncoder => parse_pooled(value).map(Self::Pooled),
             VisionPipeline::SpatialMergeEncoder => {
                 parse_spatial_merge(value).map(Self::SpatialMerge)
+            },
+            VisionPipeline::PixelShuffleEncoder => {
+                parse_pixel_shuffle(value).map(Self::PixelShuffle)
             },
         }
     }
@@ -94,6 +124,36 @@ fn parse_spatial_merge(value: &Value) -> Result<SpatialMergeImageProcessorConfig
         do_rescale: bool_field(value, "do_rescale", true)?,
         do_normalize: bool_field(value, "do_normalize", true)?,
     })
+}
+
+fn parse_pixel_shuffle(value: &Value) -> Result<PixelShuffleImageProcessorConfig> {
+    let ratio = value
+        .get("downsample_ratio")
+        .and_then(Value::as_f64)
+        .ok_or_else(|| invalid("missing image processor float downsample_ratio"))?;
+    let shuffle_factor = super::config::shuffle_factor(ratio)?;
+    // The processor reserves four tokens of the context for the prompt.
+    let context_patches = value
+        .get("max_model_len")
+        .and_then(Value::as_u64)
+        .map(|tokens| usize::try_from(tokens.saturating_sub(4)))
+        .transpose()?
+        .map(|tokens| tokens * shuffle_factor * shuffle_factor);
+    Ok(PixelShuffleImageProcessorConfig {
+        patch_size: usize_field(value, "patch_size")?,
+        shuffle_factor,
+        min_patches: usize_field(value, "min_num_patches")?,
+        max_patches: usize_field(value, "max_num_patches")?,
+        context_patches,
+        rescale_factor: float_field(value, "rescale_factor", 1.0 / 255.0)?,
+        image_mean: float_triplet_alias(value, &["norm_mean", "image_mean"])?,
+        image_std: float_triplet_alias(value, &["norm_std", "image_std"])?,
+    })
+}
+
+fn float_triplet_alias(value: &Value, fields: &[&str]) -> Result<[f64; 3]> {
+    let field = fields.iter().find(|field| value.get(**field).is_some()).unwrap_or(&fields[0]);
+    float_triplet(value, field)
 }
 
 fn usize_field(value: &Value, field: &str) -> Result<usize> {

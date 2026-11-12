@@ -133,7 +133,7 @@ pub use task::{
     CudaDecisionModel, CudaSequenceScoringModel, CudaTextEmbeddingModel, DecisionPrecision,
 };
 pub use tuning::{AttentionFamily, AttentionProfileRequest, CudaTuningConfig, CudaTuningMode};
-pub use vision::{CudaPooledVisionTower, CudaSpatialMergeVisionTower};
+pub use vision::{CudaPixelShuffleVisionTower, CudaPooledVisionTower, CudaSpatialMergeVisionTower};
 
 use crate::{Error, Result};
 
