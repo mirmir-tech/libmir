@@ -16,6 +16,7 @@ pub use files::{ModelLayout, WeightFile};
 pub use metadata::ModelMetadata;
 pub use modernbert::{ModernBertAttention, ModernBertConfig};
 pub use vision::{
-    ImageProcessorConfig, PooledImageProcessorConfig, PooledVisionConfig,
-    SpatialMergeImageProcessorConfig, SpatialMergeVisionConfig, VisionConfig, VisionPipeline,
+    ImageProcessorConfig, ImageTags, PixelShuffleImageProcessorConfig, PixelShuffleVisionConfig,
+    PooledImageProcessorConfig, PooledVisionConfig, SpatialMergeImageProcessorConfig,
+    SpatialMergeVisionConfig, VisionConfig, VisionPipeline,
 };

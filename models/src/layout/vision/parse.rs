@@ -2,18 +2,18 @@ use serde_json::Value;
 
 use crate::error::{ModelsError, Result};
 
-pub(super) fn has_fields(value: &Value, fields: &[&str]) -> bool {
+pub(in crate::layout::vision) fn has_fields(value: &Value, fields: &[&str]) -> bool {
     fields.iter().all(|field| value.get(*field).is_some())
 }
 
-pub(super) fn object<'a>(value: &'a Value, field: &str) -> Result<&'a Value> {
+pub(in crate::layout::vision) fn object<'a>(value: &'a Value, field: &str) -> Result<&'a Value> {
     value
         .get(field)
         .filter(|value| value.is_object())
         .ok_or_else(|| invalid(format!("missing vision object {field}")))
 }
 
-pub(super) fn usize_field(value: &Value, field: &str) -> Result<usize> {
+pub(in crate::layout::vision) fn usize_field(value: &Value, field: &str) -> Result<usize> {
     let raw = value
         .get(field)
         .and_then(Value::as_u64)
@@ -21,7 +21,10 @@ pub(super) fn usize_field(value: &Value, field: &str) -> Result<usize> {
     Ok(usize::try_from(raw)?)
 }
 
-pub(super) fn optional_usize_field(value: &Value, field: &str) -> Result<Option<usize>> {
+pub(in crate::layout::vision) fn optional_usize_field(
+    value: &Value,
+    field: &str,
+) -> Result<Option<usize>> {
     value.get(field).map_or(Ok(None), |value| {
         let raw = value
             .as_u64()
@@ -30,7 +33,7 @@ pub(super) fn optional_usize_field(value: &Value, field: &str) -> Result<Option<
     })
 }
 
-pub(super) fn scalar_usize_field(value: &Value, field: &str) -> Result<usize> {
+pub(in crate::layout::vision) fn scalar_usize_field(value: &Value, field: &str) -> Result<usize> {
     if let Some(raw) = value.get(field).and_then(Value::as_u64) {
         return Ok(usize::try_from(raw)?);
     }
@@ -42,7 +45,7 @@ pub(super) fn scalar_usize_field(value: &Value, field: &str) -> Result<usize> {
         .ok_or_else(|| invalid(format!("vision field {field} must have one uniform value")))
 }
 
-pub(super) fn u32_field(value: &Value, field: &str) -> Result<u32> {
+pub(in crate::layout::vision) fn u32_field(value: &Value, field: &str) -> Result<u32> {
     let raw = value
         .get(field)
         .and_then(Value::as_u64)
@@ -50,14 +53,14 @@ pub(super) fn u32_field(value: &Value, field: &str) -> Result<u32> {
     Ok(u32::try_from(raw)?)
 }
 
-pub(super) fn float_field(value: &Value, field: &str) -> Result<f64> {
+pub(in crate::layout::vision) fn float_field(value: &Value, field: &str) -> Result<f64> {
     value
         .get(field)
         .and_then(Value::as_f64)
         .ok_or_else(|| invalid(format!("missing vision float {field}")))
 }
 
-pub(super) fn string_field(value: &Value, field: &str) -> Result<String> {
+pub(in crate::layout::vision) fn string_field(value: &Value, field: &str) -> Result<String> {
     value
         .get(field)
         .and_then(Value::as_str)
@@ -65,7 +68,11 @@ pub(super) fn string_field(value: &Value, field: &str) -> Result<String> {
         .ok_or_else(|| invalid(format!("missing vision string {field}")))
 }
 
-pub(super) fn bool_field(value: &Value, field: &str, default: bool) -> Result<bool> {
+pub(in crate::layout::vision) fn bool_field(
+    value: &Value,
+    field: &str,
+    default: bool,
+) -> Result<bool> {
     value.get(field).map_or(Ok(default), |value| {
         value
             .as_bool()
@@ -73,7 +80,10 @@ pub(super) fn bool_field(value: &Value, field: &str, default: bool) -> Result<bo
     })
 }
 
-pub(super) fn usize_array_field(value: &Value, field: &str) -> Result<Vec<usize>> {
+pub(in crate::layout::vision) fn usize_array_field(
+    value: &Value,
+    field: &str,
+) -> Result<Vec<usize>> {
     value
         .get(field)
         .and_then(Value::as_array)
@@ -88,6 +98,6 @@ pub(super) fn usize_array_field(value: &Value, field: &str) -> Result<Vec<usize>
         .collect()
 }
 
-pub(super) fn invalid(message: impl Into<String>) -> ModelsError {
+pub(in crate::layout::vision) fn invalid(message: impl Into<String>) -> ModelsError {
     ModelsError::InvalidConfig(message.into())
 }

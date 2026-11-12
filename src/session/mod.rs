@@ -51,6 +51,7 @@ impl Session {
         let tokens = match prepared {
             PreparedVisionPrompt::Pooled { tokens, .. } => &tokens.token_ids,
             PreparedVisionPrompt::SpatialMerge { tokens, .. } => &tokens.token_ids,
+            PreparedVisionPrompt::PixelShuffle { tokens, .. } => &tokens.token_ids,
         };
         let request = self.model.clone().with_cache_wait(|cache| {
             Ok(self
@@ -71,6 +72,17 @@ impl Session {
             },
             PreparedVisionPrompt::SpatialMerge { tokens, image, .. } => {
                 Ok(self.model.engine().prefill_spatial_merge_vision_with_progress(
+                    self.model.handle(),
+                    request.session_id,
+                    tokens,
+                    image,
+                    self.state.table(),
+                    sampling,
+                    progress,
+                )?)
+            },
+            PreparedVisionPrompt::PixelShuffle { tokens, image, .. } => {
+                Ok(self.model.engine().prefill_pixel_shuffle_vision_with_progress(
                     self.model.handle(),
                     request.session_id,
                     tokens,

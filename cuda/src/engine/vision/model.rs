@@ -5,13 +5,14 @@ use models::{
 
 use crate::{
     CudaBackend, Result,
-    backend::{CudaPooledVisionTower, CudaSpatialMergeVisionTower},
+    backend::{CudaPixelShuffleVisionTower, CudaPooledVisionTower, CudaSpatialMergeVisionTower},
     checkpoint::load_vision_tensors,
 };
 
 pub(in crate::engine) enum LoadedVisionModel {
     Pooled(CudaPooledVisionTower),
     SpatialMerge(CudaSpatialMergeVisionTower),
+    PixelShuffle(CudaPixelShuffleVisionTower),
 }
 
 pub(in crate::engine) fn load_vision_model(
@@ -43,6 +44,18 @@ pub(in crate::engine) fn load_vision_model(
                 catalog,
             )?;
             Ok(Some(LoadedVisionModel::SpatialMerge(CudaSpatialMergeVisionTower::new(
+                backend,
+                config.clone(),
+                tensors,
+            )?)))
+        },
+        Some(VisionConfig::PixelShuffleEncoder(config)) => {
+            let tensors = load_vision_tensors(
+                backend,
+                &VisionConfig::PixelShuffleEncoder(config.clone()),
+                catalog,
+            )?;
+            Ok(Some(LoadedVisionModel::PixelShuffle(CudaPixelShuffleVisionTower::new(
                 backend,
                 config.clone(),
                 tensors,

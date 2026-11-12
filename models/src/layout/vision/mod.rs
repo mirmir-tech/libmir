@@ -2,9 +2,13 @@ mod config;
 mod parse;
 mod processor;
 
-pub use config::{PooledVisionConfig, SpatialMergeVisionConfig, VisionConfig, VisionPipeline};
+pub use config::{
+    ImageTags, PixelShuffleVisionConfig, PooledVisionConfig, SpatialMergeVisionConfig,
+    VisionConfig, VisionPipeline,
+};
 pub use processor::{
-    ImageProcessorConfig, PooledImageProcessorConfig, SpatialMergeImageProcessorConfig,
+    ImageProcessorConfig, PixelShuffleImageProcessorConfig, PooledImageProcessorConfig,
+    SpatialMergeImageProcessorConfig,
 };
 
 #[cfg(test)]

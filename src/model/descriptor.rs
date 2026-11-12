@@ -191,6 +191,16 @@ pub(super) fn validate_tokenizer(
         Some(VisionConfig::SpatialMergeEncoder(config)) => {
             vec![config.image_token_id, config.vision_start_token_id, config.vision_end_token_id]
         },
+        Some(VisionConfig::PixelShuffleEncoder(config)) => {
+            let tags = [config.image_tags.start(), config.image_tags.end()];
+            let mut ids = vec![config.image_token_id];
+            for tag in tags {
+                ids.push(tokenizer.token_id(tag).ok_or_else(|| {
+                    models::ModelsError::InvalidConfig(format!("image tag {tag} is not one token"))
+                })?);
+            }
+            ids
+        },
         None => Vec::new(),
     };
     Ok(tokenizer.validate_contract(vocabulary, &required)?)

@@ -3,12 +3,13 @@ use models::{
     generation::GenerationSettings,
     layout::{ImageProcessorConfig, VisionConfig},
     vision::{
-        PooledPreprocessedImage, PooledPromptTokens, SpatialMergePreprocessedImage,
-        SpatialMergePromptTokens,
+        PixelShufflePreprocessedImage, PixelShufflePromptTokens, PooledPreprocessedImage,
+        PooledPromptTokens, SpatialMergePreprocessedImage, SpatialMergePromptTokens,
     },
 };
 
 mod limits;
+mod pixel_shuffle;
 
 use self::limits::VisionLimits;
 use super::{Model, ModelDescriptor};
@@ -39,6 +40,15 @@ pub enum PreparedVisionPrompt {
         tokens: SpatialMergePromptTokens,
         /// Decoded, normalized, and temporal-spatial patch buffer.
         image: SpatialMergePreprocessedImage,
+    },
+    /// Prefix-token encoder followed by a pixel shuffle and projection.
+    PixelShuffle {
+        /// Rendered text prompt before image placeholder expansion.
+        prompt: models::chat::ChatPrompt,
+        /// Expanded token sequence with image tags and the soft-token span.
+        tokens: PixelShufflePromptTokens,
+        /// Decoded, resized, and patch-packed image.
+        image: PixelShufflePreprocessedImage,
     },
 }
 
@@ -141,6 +151,12 @@ impl ModelDescriptor {
                 )?;
                 Ok(PreparedVisionPrompt::SpatialMerge { prompt: prepared.prompt, tokens, image })
             },
+            (
+                Some(VisionConfig::PixelShuffleEncoder(vision)),
+                Some(ImageProcessorConfig::PixelShuffle(processor)),
+            ) => self.prepare_pixel_shuffle(
+                conversation, encoded_image, generation, limits, vision, processor,
+            ),
             _ => Err(models::ModelsError::InvalidConfig(
                 "loaded model has no complete supported image execution contract".into(),
             )

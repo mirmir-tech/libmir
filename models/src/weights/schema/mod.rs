@@ -7,6 +7,7 @@ mod vision;
 
 pub use text::TextTensorLayout;
 pub use types::{EncoderTensorSchema, TensorReadiness, TensorRequirement, VisionTensorSchema};
+pub use vision::pixel_shuffle_encoder_tensor;
 
 impl EncoderTensorSchema {
     #[must_use]

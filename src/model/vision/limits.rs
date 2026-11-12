@@ -1,4 +1,4 @@
-use models::layout::{PooledVisionConfig, SpatialMergeVisionConfig};
+use models::layout::{PixelShuffleVisionConfig, PooledVisionConfig, SpatialMergeVisionConfig};
 
 use super::super::Model;
 use crate::{Error, Result, VisionRuntimeConfig};
@@ -42,6 +42,15 @@ impl VisionLimits {
         let patch_area = vision.patch_size.saturating_mul(vision.patch_size);
         let attention_pixels = patches.saturating_mul(patch_area);
         self.max_pixels.map_or(attention_pixels, |pixels| pixels.min(attention_pixels))
+    }
+
+    /// Patches the attention budget leaves an image beside the encoder's
+    /// prefix tokens.
+    pub fn pixel_shuffle_patch_limit(self, vision: &PixelShuffleVisionConfig) -> usize {
+        let tokens = attention_patch_limit(self.attention_budget_bytes, vision.num_attention_heads);
+        let patches = tokens.saturating_sub(vision.prefix_tokens);
+        let patch_area = vision.patch_size.saturating_mul(vision.patch_size).max(1);
+        self.max_pixels.map_or(patches, |pixels| patches.min(pixels / patch_area))
     }
 
     pub fn validate(self, patch_tokens: usize, attention_heads: usize) -> Result<()> {

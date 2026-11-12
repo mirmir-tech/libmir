@@ -105,7 +105,7 @@ fn spatial_image(
 ) -> Result<&models::vision::SpatialMergePreprocessedImage> {
     match prepared {
         PreparedVisionPrompt::SpatialMerge { image, .. } => Ok(image),
-        PreparedVisionPrompt::Pooled { .. } => {
+        PreparedVisionPrompt::Pooled { .. } | PreparedVisionPrompt::PixelShuffle { .. } => {
             Err(backend_error("prepared prompt does not use spatial-merge vision").into())
         },
     }
