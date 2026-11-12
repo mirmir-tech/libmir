@@ -52,7 +52,8 @@ pub(super) fn discover_from_layout(
             Some(VisionConfig::PooledEncoder(config)) => {
                 Some([config.output_hidden_size, config.hidden_size])
             },
-            Some(VisionConfig::SpatialMergeEncoder(_)) | None => None,
+            Some(VisionConfig::SpatialMergeEncoder(_) | VisionConfig::PixelShuffleEncoder(_))
+            | None => None,
         },
     };
     discover_with_hints(spec, catalog, hints)

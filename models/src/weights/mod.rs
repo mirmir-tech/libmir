@@ -38,4 +38,5 @@ pub use encoder_binding::{
 pub use names::{alternate_model_tensor_name, model_tensor_aliases};
 pub use schema::{
     EncoderTensorSchema, TensorReadiness, TensorRequirement, TextTensorLayout, VisionTensorSchema,
+    pixel_shuffle_encoder_tensor,
 };

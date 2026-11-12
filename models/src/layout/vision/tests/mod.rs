@@ -204,3 +204,5 @@ fn temp_root(name: &str) -> std::path::PathBuf {
 fn missing(item: &str) -> ModelsError {
     ModelsError::InvalidConfig(format!("missing test {item}"))
 }
+
+mod pixel_shuffle;

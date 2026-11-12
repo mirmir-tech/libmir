@@ -1,4 +1,5 @@
 pub(super) mod model;
+mod pixel_shuffle;
 
 use models::{
     layout::VisionPipeline,

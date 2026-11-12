@@ -157,8 +157,8 @@ pub use text::{L2NormalizeBf16, TextAttention, TextAttentionSpec};
 pub(crate) use tuning::CacheEviction;
 pub(crate) use vision::VisionEmbeddingSplice;
 pub use vision::{
-    SpatialMergeKernels, VisionAttention, VisionAttentionSpec, VisionClip, VisionClipSpec,
-    VisionElementwise, VisionElementwiseSpec, VisionPatchLayout, VisionPool, VisionPoolSpec,
-    VisionSpatialRope,
+    PixelShuffleGeometry, PixelShuffleKernels, SpatialMergeKernels, VisionAttention,
+    VisionAttentionSpec, VisionClip, VisionClipSpec, VisionElementwise, VisionElementwiseSpec,
+    VisionPatchLayout, VisionPool, VisionPoolSpec, VisionSpatialRope,
 };
 pub(crate) use windowed_prefill::{WindowedPrefillStage, WindowedPrefillStageArgs};
