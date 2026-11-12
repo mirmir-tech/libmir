@@ -1,6 +1,8 @@
 use super::PagedAttentionScratch;
 use crate::engine::{Array, Result, Stream};
 
+mod grouped;
+
 #[derive(Debug, Clone, Copy)]
 pub struct PagedAttention<'a> {
     pub key_pages: &'a Array,
@@ -67,6 +69,11 @@ impl Array {
         mask: &Self,
         stream: &Stream,
     ) -> Result<Self> {
+        if let Some(output) =
+            self.grouped_decode_attention(keys, values, scale, Some(mask), stream)?
+        {
+            return Ok(output);
+        }
         Self::from_native(stream.native().graph().scaled_dot_product_attention(
             self.native(),
             keys.native(),
@@ -87,6 +94,12 @@ impl Array {
         causal: bool,
         stream: &Stream,
     ) -> Result<Self> {
+        if !causal
+            && let Some(output) =
+                self.grouped_decode_attention(keys, values, scale, None, stream)?
+        {
+            return Ok(output);
+        }
         let mask = if causal {
             mirtal::AttentionMask::Causal
         } else {
@@ -109,6 +122,11 @@ impl Array {
         mask: &Self,
         stream: &Stream,
     ) -> Result<Self> {
+        if let Some(output) =
+            self.grouped_decode_attention(keys, values, scale, Some(mask), stream)?
+        {
+            return Ok(output);
+        }
         Self::from_native(stream.native().graph().scaled_dot_product_attention(
             self.native(),
             keys.native(),

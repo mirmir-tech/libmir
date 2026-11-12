@@ -1357,3 +1357,12 @@ The target shape is:
   after a large prefill. MLX-LM dies on the same cells, so mirmir only has to fail
   those requests gracefully and keep serving; a memory-bounded admission is a
   later fix. llama-benchy averages survivors, so count OOMs in server logs.
+
+## Head-dim-512 decode attention
+
+- Gemma 4 global-layer decode bypasses MLX's fused SDPA: MLX 0.32.4 sends unmasked
+  single-token D512 queries to its generic vector kernel, about three times slower
+  than a GQA-grouped matmul, f32 softmax and matmul
+  (`Array::grouped_decode_attention`; 5.4 versus 1.6 ms per layer at 32k, 0.68
+  versus 0.16 ms at 4k). Gemma 31B C2 at 6k context decodes in 78 ms per step (was
+  98, MLX-LM 84). Only float additive padding masks take the path.
