@@ -17,6 +17,7 @@ impl LoadedModel {
         &mut self,
         inputs: &[DecodeInput],
     ) -> Result<Vec<(NativeOutput, DecodeExecution)>> {
+        self.release_settled_prefill_reserve()?;
         // Validate every row before advancing any cache, including scalar rows.
         self.validate_decode_inputs(inputs)?;
         self.validate_decode_capacity(inputs)?;

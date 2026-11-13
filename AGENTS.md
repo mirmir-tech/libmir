@@ -1350,6 +1350,12 @@ The target shape is:
   16k-averaged rate). Early rows had duplicated about 11 GB of history beside
   rows still prefilling; Qwen3.8 C5 at 32k went from 35 OOMs to none, TG 11.6 to
   33.5 tok/s with aligned TTFT.
+- The history room held for a starting prefill lasts only while a prefill batch is
+  in flight (`release_settled_prefill_reserve` before each decode step), and
+  counts only prompt tokens beyond pages the arenas already hold. Holding it
+  through the whole decode refused Qwen3-4B C10 at 8k its history (limit 13.4 GB,
+  need 15.1 GB): TG 88.8 fell to 66.3, peak 110 to 75. Now 81.6 with peak 110,
+  d16384 C5 56.6, while Qwen3.8 C5 at 32k keeps 0 OOMs (TG 32.2).
 - `Session::drop` releases backend pages and logical blocks before telling the
   scheduler: notifying first let a cohort start while a finished session still
   held its pages, and the batch failed with "requires N free K/V pages".

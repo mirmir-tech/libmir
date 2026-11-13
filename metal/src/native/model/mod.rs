@@ -65,6 +65,8 @@ pub(super) struct LoadedModel {
     pub(super) sessions: HashMap<Uuid, SessionState>,
     recovery: recovery::ExecutionRecovery,
     pub(super) prefill_reservations: super::prefill::Reservations,
+    /// Whether the history limit holds room for a prefill still in flight.
+    pub(super) history_prefill_reserved: bool,
 }
 
 #[derive(Debug)]
