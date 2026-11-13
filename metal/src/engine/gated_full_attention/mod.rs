@@ -8,7 +8,7 @@ use position::rope;
 
 use super::{
     Array, Error, KvCache, NormWeight, PagedContextMode, Result, Stream, binding::BoundLinear,
-    fused_gate_up::split_last, native_paged_attention_mode,
+    fused::gate_up::split_last, native_paged_attention_mode,
 };
 
 #[derive(Debug, Clone)]

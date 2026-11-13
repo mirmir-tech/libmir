@@ -20,7 +20,7 @@ fn abandoning_last_prefill_handle_releases_completed_and_partial_rows() -> Resul
 
 #[test]
 fn abandoning_hybrid_prefill_releases_completed_and_partial_rows() -> Result<()> {
-    use crate::engine::hybrid_linear_moe::tests::{write_config, write_weights};
+    use crate::engine::hybrid::linear_moe::tests::{write_config, write_weights};
     let root = std::env::temp_dir().join(format!("hybrid-prefill-abandonment-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&root)?;
     write_config(&root)?;
@@ -56,7 +56,7 @@ fn reports_scalar_packed_and_prefix_timings_for_clamped_moe() -> Result<()> {
 
 #[test]
 fn reports_scalar_packed_and_prefix_timings_for_hybrid_moe() -> Result<()> {
-    use crate::engine::hybrid_linear_moe::tests::{write_config, write_weights};
+    use crate::engine::hybrid::linear_moe::tests::{write_config, write_weights};
     let root = std::env::temp_dir().join(format!("hybrid-prefill-timing-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&root)?;
     write_config(&root)?;

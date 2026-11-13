@@ -6,8 +6,8 @@ impl BoundLinear {
         &self,
         input: &Array,
         rhs: &Array,
-        plan: &crate::engine::kernels::expert_group::tiles::TilePlan,
-        tiles: &crate::engine::kernels::expert_group::tiles::WorkTiles,
+        plan: &crate::engine::kernels::expert::group::tiles::TilePlan,
+        tiles: &crate::engine::kernels::expert::group::tiles::WorkTiles,
         stream: &Stream,
     ) -> Result<Array> {
         let Self::MxFp4(projection) = self else {
@@ -119,7 +119,7 @@ mod tests {
             let indices = Array::from_u32(&indices, &[4])?;
             let output = fused.gather(&input, &indices, sorted, &stream)?;
             let (actual_gate, actual_up) =
-                crate::engine::fused_gate_up::split_last(&output, width, &stream)?;
+                crate::engine::fused::gate_up::split_last(&output, width, &stream)?;
             let expected_gate = gate.gather(&input, &indices, sorted, &stream)?;
             let expected_up = up.gather(&input, &indices, sorted, &stream)?;
             assert_eq!(actual_gate.to_vec_f32(&stream)?, expected_gate.to_vec_f32(&stream)?);
@@ -132,7 +132,7 @@ mod tests {
     #[test]
     fn tile_projection_preserves_gathered_output_bias() -> Result<()> {
         let stream = Stream::new_gpu()?;
-        let plan = crate::engine::kernels::expert_group::tiles::TilePlan::new()?;
+        let plan = crate::engine::kernels::expert::group::tiles::TilePlan::new()?;
         let input =
             Array::from_f32(&vec![0.5; 33 * 32], &[33, 1, 32])?.astype(Dtype::Bfloat16, &stream)?;
         let ids = [vec![0; 17], vec![1; 16]].concat();

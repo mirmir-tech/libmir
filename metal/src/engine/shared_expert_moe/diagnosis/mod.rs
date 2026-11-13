@@ -9,7 +9,7 @@ mod rows;
 
 use super::{Array, Result, RoutedGateUp, SharedExpertMoe, Stream};
 use crate::engine::{
-    RouterOutput, SortedExpertInputs, kernels::expert_group::aligned::AlignedGroup,
+    RouterOutput, SortedExpertInputs, kernels::expert::group::aligned::AlignedGroup,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -19,7 +19,7 @@ enum Plan<'a> {
     SortedGraph,
     GroupedProjection(&'a RoutedGateUp),
     GroupedIndexed,
-    GroupedTiles(&'a crate::engine::kernels::expert_group::tiles::TilePlan),
+    GroupedTiles(&'a crate::engine::kernels::expert::group::tiles::TilePlan),
     GroupedAligned(&'a AlignedGroup),
 }
 
@@ -130,16 +130,18 @@ impl Plan<'_> {
             Self::GroupedProjection(_) => "grouped_projection",
             Self::GroupedIndexed => "grouped_indexed",
             Self::GroupedTiles(plan) => match plan.columns() {
-                crate::engine::kernels::expert_group::tiles::ColumnTile::Width32 => "grouped_tiles",
-                crate::engine::kernels::expert_group::tiles::ColumnTile::Width64 => {
+                crate::engine::kernels::expert::group::tiles::ColumnTile::Width32 => {
+                    "grouped_tiles"
+                },
+                crate::engine::kernels::expert::group::tiles::ColumnTile::Width64 => {
                     "grouped_tiles64"
                 },
             },
             Self::GroupedAligned(plan) => match plan.budget() {
-                crate::engine::kernels::expert_group::aligned::PaddingBudget::Four => {
+                crate::engine::kernels::expert::group::aligned::PaddingBudget::Four => {
                     "grouped_aligned4"
                 },
-                crate::engine::kernels::expert_group::aligned::PaddingBudget::Eight => {
+                crate::engine::kernels::expert::group::aligned::PaddingBudget::Eight => {
                     "grouped_aligned"
                 },
             },

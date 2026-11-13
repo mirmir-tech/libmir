@@ -65,9 +65,9 @@ fn split(
     stream: &Stream,
 ) -> Result<(Array, Array)> {
     if interleaved {
-        super::super::fused_gate_up::split_interleaved_last(output, intermediate, stream)
+        super::super::fused::gate_up::split_interleaved_last(output, intermediate, stream)
     } else {
-        super::super::fused_gate_up::split_last(output, intermediate, stream)
+        super::super::fused::gate_up::split_last(output, intermediate, stream)
     }
 }
 

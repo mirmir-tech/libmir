@@ -59,7 +59,7 @@ fn gathers_and_splits_interleaved_nvfp4_gate_up_bank() -> Result<()> {
     let indices = Array::from_u32(&[0, 1], &[2])?;
 
     let output = linear.gather(&input, &indices, false, &stream)?;
-    let (gate, up) = crate::engine::fused_gate_up::split_interleaved_last(&output, 2, &stream)?;
+    let (gate, up) = crate::engine::fused::gate_up::split_interleaved_last(&output, 2, &stream)?;
     assert_eq!(gate.to_vec_f32(&stream)?, [16.0, 48.0, 96.0, 192.0]);
     assert_eq!(up.to_vec_f32(&stream)?, [32.0, 64.0, 128.0, 16.0]);
     drop(tensors);

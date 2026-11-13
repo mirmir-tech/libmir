@@ -6,7 +6,7 @@ use runtime::kv::CacheConfig;
 use super::{Library, ModelLoadOptions};
 use crate::{
     Engine, Result, RuntimeConfig,
-    model::{ModelDescriptor, automatic_cache, kv_sizing::KvSizing, memory_policy},
+    model::{ModelDescriptor, automatic_cache, kv_sizing::KvSizing, memory::policy},
 };
 
 impl Library {
@@ -53,9 +53,9 @@ impl Library {
                 .saturating_mul(u64::try_from(config.kv_cache.block_size).unwrap_or(u64::MAX)),
             kv_bytes_per_token = estimate.kv_bytes_per_token,
             kv_cache_bytes = resolved_estimate.kv_cache_bytes,
-            platform_reserve_bytes = memory_policy::platform_reserve(config.memory, &memory),
-            transient_reserve_bytes = memory_policy::transient_reserve(resolved_estimate, &memory),
-            planned_residency_bytes = memory_policy::planned_residency(resolved_estimate, &memory),
+            platform_reserve_bytes = policy::platform_reserve(config.memory, &memory),
+            transient_reserve_bytes = policy::transient_reserve(resolved_estimate, &memory),
+            planned_residency_bytes = policy::planned_residency(resolved_estimate, &memory),
             memory_source = memory.source,
             "resolved model KV cache"
         );

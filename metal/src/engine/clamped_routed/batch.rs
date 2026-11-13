@@ -1,6 +1,6 @@
 use super::{ClampedRoutedModel, layer::ClampedRoutedLayer};
 use crate::engine::{
-    Array, DecoderCache, Error, Result, Stream, decode_graph,
+    Array, DecoderCache, Error, Result, Stream, decode,
     decoder::{
         LayerContext, LoweredLayer, LoweredPackedLayer, forward_packed_layers,
         packed_profile::{self, Component, PrefillProfile},
@@ -19,7 +19,7 @@ impl ClampedRoutedModel {
         let hidden = self.forward_packed_state(token_ids, caches, positions, false, stream)?;
         let hidden = self.final_norm.apply(&hidden, self.config.epsilon, stream)?;
         let logits = self.output.forward(&hidden, stream)?;
-        decode_graph::export_once(&logits, stream)?;
+        decode::graph::export_once(&logits, stream)?;
         Ok(logits)
     }
 

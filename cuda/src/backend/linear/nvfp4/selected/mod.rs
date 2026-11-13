@@ -15,7 +15,6 @@ mod hybrid_gate_moe;
 mod marlin;
 mod micro_moe;
 mod tensor_core;
-mod tensor_core_weight_only;
 #[cfg(test)]
 mod tests;
 mod tiled;
@@ -31,8 +30,10 @@ pub(in crate::backend) use marlin::{
     MarlinRouteBlock,
 };
 pub use micro_moe::DirectNvFp4MoeBf16;
-pub use tensor_core::{SelectedNvFp4LinearBf16, SelectedNvFp4TensorCoreMoeBf16};
-pub use tensor_core_weight_only::SelectedNvFp4WeightOnlyTensorCoreMoeBf16;
+pub use tensor_core::{
+    SelectedNvFp4LinearBf16, SelectedNvFp4TensorCoreMoeBf16,
+    weight_only::SelectedNvFp4WeightOnlyTensorCoreMoeBf16,
+};
 pub use tiled::TiledSelectedNvFp4MoeBf16;
 
 /// Two-launch selected-expert NVFP4 MLP with device-side routing inputs.

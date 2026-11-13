@@ -6,7 +6,7 @@ use super::{
     projection::{BoundEmbedding, BoundLinear},
 };
 use crate::engine::{
-    Array, DecoderCache, ModelTensors, NormWeight, Result, Stream, decode_graph,
+    Array, DecoderCache, ModelTensors, NormWeight, Result, Stream, decode,
     decoder::{LayerContext, LayerLoopOptions, forward_layers},
     lowering::{FeedForwardLowering, LayerLowering, MixerLowering},
 };
@@ -90,7 +90,7 @@ impl DenseSwiGluModel {
         stream: &Stream,
     ) -> Result<Array> {
         let logits = self.forward_hidden(token_ids, cache, position, false, stream)?;
-        decode_graph::export_once(&logits, stream)?;
+        decode::graph::export_once(&logits, stream)?;
         Ok(logits)
     }
 

@@ -1,7 +1,7 @@
 use std::cell::Cell;
 
 use super::BoundLinear;
-use crate::engine::{Array, Result, Stream, fused_gate_up::split_last};
+use crate::engine::{Array, Result, Stream, fused::gate_up::split_last};
 
 thread_local! {
     static JOINED_CALLS: Cell<usize> = const { Cell::new(0) };

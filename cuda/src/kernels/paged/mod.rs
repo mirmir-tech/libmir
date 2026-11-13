@@ -11,7 +11,6 @@ mod batch;
 mod gather;
 mod graph;
 mod prefill;
-mod prefill_batch;
 mod split;
 #[cfg(test)]
 mod tests;
@@ -20,8 +19,7 @@ pub use batch::{
     BatchedPagedAttention, BatchedSplitAttentionWorkspace, BatchedSplitPagedAttention,
 };
 pub use gather::{BatchedPagedKvGather, PagedKvGather};
-pub use prefill::PagedPrefillAttention;
-pub use prefill_batch::BatchedPagedPrefillAttention;
+pub use prefill::{PagedPrefillAttention, batch::BatchedPagedPrefillAttention};
 pub use split::{
     MergeAttentionArguments, SplitAttentionArguments, SplitAttentionConfigs, SplitAttentionKernels,
     SplitAttentionNodes, SplitAttentionWorkspace, SplitPagedAttention,

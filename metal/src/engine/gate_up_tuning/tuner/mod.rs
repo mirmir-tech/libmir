@@ -4,10 +4,12 @@ use runtime::tuning::{StartupBudget, TuningConfig, TuningMode};
 
 use super::{
     super::{
-        attention_batch_tuning::{BatchAttentionExecution, BatchAttentionKey},
-        attention_tuning::AttentionKey,
-        decode_plan_tuning::{DecodePlan, DecodePlanKey},
-        expert_tuning::{ExpertExecution, ExpertKey},
+        attention::tuning::{
+            AttentionKey,
+            batch::{BatchAttentionExecution, BatchAttentionKey},
+        },
+        decode::plan_tuning::{DecodePlan, DecodePlanKey},
+        expert::tuning::{ExpertExecution, ExpertKey},
         kernels::PagedExecution,
         route_tuning::{RoutingExecution, RoutingKey},
     },

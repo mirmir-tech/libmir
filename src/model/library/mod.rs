@@ -11,9 +11,11 @@ use runtime::kv::CacheConfig;
 
 use super::{
     Library, Model, ModelDescriptor, ModelInner,
-    cache_cohort::CacheCohort,
-    memory_admission::{AdmissionTerms, ModelMemoryManager},
-    memory_policy,
+    cache::cohort::CacheCohort,
+    memory::{
+        admission::{AdmissionTerms, ModelMemoryManager},
+        policy,
+    },
 };
 use crate::{Engine, ProgressEvent, Result, RuntimeConfig, scheduler::ModelCoordinator};
 
@@ -217,7 +219,7 @@ fn resolved_post_load_reserve(
         let bytes = estimate
             .kv_cache_bytes
             .saturating_add(estimate.workspace_bytes)
-            .saturating_add(memory_policy::platform_reserve(config.memory, memory));
+            .saturating_add(policy::platform_reserve(config.memory, memory));
         usize::try_from(bytes).unwrap_or(usize::MAX)
     })
 }

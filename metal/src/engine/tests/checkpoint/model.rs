@@ -1,7 +1,7 @@
 use models::layout::{DecoderConfig, ModelLayout};
 
 use super::*;
-use crate::engine::hybrid_moe::{HybridMoeLayer, HybridMoeLayerConfig, HybridMoeModel};
+use crate::engine::hybrid::moe::{HybridMoeLayer, HybridMoeLayerConfig, HybridMoeModel};
 
 #[test]
 #[ignore = "loads all model layers; set MIRMIR_BENCH_MODEL or MODEL"]

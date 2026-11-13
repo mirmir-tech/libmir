@@ -24,8 +24,7 @@ mod router;
 mod runtime;
 mod sampling;
 mod scratch_pool;
-mod shared_moe;
-mod shared_routed;
+mod shared;
 mod state_space_hybrid;
 mod task;
 mod tuning;
@@ -116,14 +115,16 @@ pub use planning::{
 pub use profile::{DeviceTimer, ProfilerCapture};
 pub use router::{AffineRouterBf16, RouterBf16, RouterSelection, RouterTensors};
 pub use sampling::{DeviceBatchSamplerBf16, DeviceSamplerBf16};
-pub use shared_moe::{
-    AffineSharedExpertMoeConfig, AffineSharedExpertMoeWeights, CudaAffineSharedExpertMoe,
-    CudaAffineSharedExpertMoeExecution,
-};
-pub use shared_routed::{
-    CudaSharedRoutedDecodeBatch, CudaSharedRoutedLayerState, CudaSharedRoutedModelSession,
-    CudaSharedRoutedModelTemplate, CudaSharedRoutedPrefillBatch, DraftRow, DraftingRow,
-    SharedRoutedCheckpoint, SpeculativeStep,
+pub use shared::{
+    moe::{
+        AffineSharedExpertMoeConfig, AffineSharedExpertMoeWeights, CudaAffineSharedExpertMoe,
+        CudaAffineSharedExpertMoeExecution,
+    },
+    routed::{
+        CudaSharedRoutedDecodeBatch, CudaSharedRoutedLayerState, CudaSharedRoutedModelSession,
+        CudaSharedRoutedModelTemplate, CudaSharedRoutedPrefillBatch, DraftRow, DraftingRow,
+        SharedRoutedCheckpoint, SpeculativeStep,
+    },
 };
 pub use state_space_hybrid::{
     CudaAttentionHybridExecution, CudaAttentionHybridLayer, CudaMamba2HybridExecution,
@@ -166,7 +167,7 @@ struct CudaRuntime {
         state_space_hybrid::MixerScratch,
     >,
     decode_workspaces: scratch_pool::ScratchPool<
-        shared_routed::DecodeWorkspaceKey,
+        shared::routed::DecodeWorkspaceKey,
         crate::kernels::BatchedSplitAttentionWorkspace,
     >,
     device: DeviceInfo,

@@ -8,10 +8,12 @@ use crate::{
     MetalConfig,
     engine::{
         Array, Dtype, Error, QuantizedArrays, QuantizedLinear, Result, Stream,
-        attention_batch_tuning::{BatchAttentionExecution, BatchAttentionKey},
-        attention_tuning::AttentionKey,
-        decode_plan_tuning::{DecodePlan, DecodePlanAction, DecodePlanKey},
-        expert_tuning::{ExpertExecution, ExpertKey},
+        attention::tuning::{
+            AttentionKey,
+            batch::{BatchAttentionExecution, BatchAttentionKey},
+        },
+        decode::plan_tuning::{DecodePlan, DecodePlanAction, DecodePlanKey},
+        expert::tuning::{ExpertExecution, ExpertKey},
         kernels::PagedExecution,
         route_tuning::{ExpertActivation, RoutingExecution, RoutingKey},
     },

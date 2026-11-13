@@ -14,9 +14,7 @@ mod bitsandbytes;
 mod float8;
 mod gptq;
 mod mxfp4;
-mod mxfp4_gathered;
 mod mxfp8;
-mod mxfp8_gathered;
 mod nvfp4;
 mod packed_integer;
 

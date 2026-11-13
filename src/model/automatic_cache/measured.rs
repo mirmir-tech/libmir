@@ -9,7 +9,7 @@
 
 use runtime::kv::PREFIX_CHECKPOINT_PAGE_DIVISOR;
 
-use super::{ADMISSION_SNAPSHOT_HEADROOM_BYTES, memory_policy, unified_limit, useful_blocks};
+use super::{ADMISSION_SNAPSHOT_HEADROOM_BYTES, policy, unified_limit, useful_blocks};
 use crate::{MemorySnapshot, ModelMemoryEstimate, RuntimeConfig};
 
 /// Tokens the warm-up workload holds at once: its two profile sessions and
@@ -80,7 +80,7 @@ const MEASURED_RESERVE_FLOOR_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 /// cover what it cannot see.
 fn measured_reserve(config: &RuntimeConfig, memory: &MemorySnapshot) -> u64 {
     if config.memory.reserve_percent.is_some() || config.memory.reserve_bytes.is_some() {
-        return memory_policy::platform_reserve(config.memory, memory);
+        return policy::platform_reserve(config.memory, memory);
     }
     memory
         .total_bytes

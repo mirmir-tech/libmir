@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use super::{
-    PagedArenaPool, Result, attention_tuning,
+    PagedArenaPool, Result, attention,
     compiled::CompiledGraphs,
     gate_up_tuning::MetalTuner,
     kernels::{
@@ -143,12 +143,12 @@ impl Stream {
     pub(super) fn paged_attention(
         &self,
         inputs: [&mirtal::Array; 5],
-        scratch: &super::attention::PagedAttentionScratch,
+        scratch: &attention::PagedAttentionScratch,
         page_size: usize,
         context_tokens: usize,
         scale: f32,
     ) -> Result<mirtal::Array> {
-        attention_tuning::forward(
+        attention::tuning::forward(
             &self.kernels, inputs, scratch, page_size, context_tokens, scale, self,
         )
     }

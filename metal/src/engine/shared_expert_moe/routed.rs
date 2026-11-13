@@ -2,8 +2,8 @@ use models::weights::RoutedExpertBindings;
 
 use super::{
     super::{
-        expert_tuning,
-        fused_gate_up::{split_interleaved_last, split_last},
+        expert,
+        fused::gate_up::{split_interleaved_last, split_last},
     },
     Array, BoundLinear, Error, FusedExpertGateUp, ModelTensors, Result, Stream,
 };
@@ -113,7 +113,7 @@ impl RoutedGateUp {
                         ))
                     },
                     |projection| {
-                        expert_tuning::forward(gate, up, projection, input, indices, stream)
+                        expert::tuning::forward(gate, up, projection, input, indices, stream)
                     },
                 )
             },

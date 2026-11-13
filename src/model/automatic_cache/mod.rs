@@ -1,4 +1,4 @@
-use super::memory_policy;
+use super::memory::policy;
 use crate::{MemorySnapshot, ModelMemoryEstimate, RuntimeConfig};
 
 mod measured;
@@ -41,7 +41,7 @@ pub(super) fn resolve(
     if let Some(total) = memory.total_bytes {
         available = available.min(total.saturating_sub(committed_bytes));
     }
-    let reserve = memory_policy::platform_reserve(config.memory, memory);
+    let reserve = policy::platform_reserve(config.memory, memory);
     let configured_tokens = u64::from(config.kv_cache.block_count)
         .saturating_mul(u64::try_from(config.kv_cache.block_size).unwrap_or(u64::MAX));
     let fixed_kv = estimate
@@ -53,7 +53,7 @@ pub(super) fn resolve(
         .saturating_add(fixed_kv);
     let remaining = available.saturating_sub(reserve).saturating_sub(fixed);
     let mut kv_budget = if memory.unified {
-        remaining.saturating_sub(memory_policy::transient_reserve(estimate, memory))
+        remaining.saturating_sub(policy::transient_reserve(estimate, memory))
     } else {
         remaining
     };

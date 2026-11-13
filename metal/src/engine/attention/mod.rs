@@ -4,6 +4,7 @@ mod prefix;
 mod request;
 mod rope;
 mod sdpa;
+pub(super) mod tuning;
 
 pub use mrope::apply_mrope;
 pub use paged::{PagedAttentionScratch, ScratchSpec};

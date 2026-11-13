@@ -3,7 +3,7 @@
 use std::{hint::black_box, time::Instant};
 
 use super::*;
-use crate::engine::hybrid_moe::{HybridMoeLayer, HybridMoeLayerConfig};
+use crate::engine::hybrid::moe::{HybridMoeLayer, HybridMoeLayerConfig};
 
 #[test]
 #[ignore = "loads a real model; set MIRMIR_BENCH_MODEL or MODEL"]

@@ -7,7 +7,7 @@ mod gather;
 #[cfg(test)]
 mod offsets;
 use crate::engine::{
-    Array, Error, KvCache, PagedContextMode, Result, Stream, fused_gate_up::split_last,
+    Array, Error, KvCache, PagedContextMode, Result, Stream, fused::gate_up::split_last,
     paged_attention_min_context,
 };
 

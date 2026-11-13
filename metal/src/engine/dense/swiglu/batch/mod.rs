@@ -6,7 +6,7 @@ use super::{
     model::{DenseSwiGluModel, OutputProjection},
 };
 use crate::engine::{
-    Array, DecoderCache, KvCache, Result, Stream, decode_graph, decoder::forward_packed_layers,
+    Array, DecoderCache, KvCache, Result, Stream, decode, decoder::forward_packed_layers,
 };
 
 impl DenseSwiGluModel {
@@ -24,7 +24,7 @@ impl DenseSwiGluModel {
             OutputProjection::TiedEmbedding => self.embedding.project(&hidden, stream)?,
             OutputProjection::Linear(output) => output.forward(&hidden, stream)?,
         };
-        decode_graph::export_once(&logits, stream)?;
+        decode::graph::export_once(&logits, stream)?;
         Ok(logits)
     }
 

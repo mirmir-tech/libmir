@@ -1,5 +1,5 @@
 use super::{Array, Error, Result, RoutedGateUp, SharedExpertMoe, Stream};
-use crate::engine::{SortedExpertInputs, kernels::expert_group::tiles::TilePlan};
+use crate::engine::{SortedExpertInputs, kernels::expert::group::tiles::TilePlan};
 
 impl SharedExpertMoe {
     // Shared by actual-layer replay and the test-only whole-model candidate.

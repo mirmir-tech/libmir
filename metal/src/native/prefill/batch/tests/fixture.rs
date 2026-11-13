@@ -34,7 +34,7 @@ pub(super) fn load_family_with_paging(
             write_weights(&directory.join("model.safetensors"), true)?;
         },
         Family::Hybrid => {
-            use crate::engine::hybrid_linear_moe::tests::{write_config, write_weights};
+            use crate::engine::hybrid::linear_moe::tests::{write_config, write_weights};
             write_config(&directory)?;
             write_weights(&directory.join("model.safetensors"))?;
         },

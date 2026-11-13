@@ -7,7 +7,7 @@ use crate::{
     MetalConfig,
     engine::{
         Array, Error, FusedExpertGateUp, QuantizedArrays, QuantizedLinear, Result, Stream,
-        binding::BoundLinear, expert_tuning,
+        binding::BoundLinear, expert,
     },
 };
 
@@ -179,7 +179,9 @@ fn unsorted(
 ) -> Result<Array> {
     let input = input.expand_dims(&[-2, -3], stream)?;
     let (gate, up) = if fused {
-        expert_tuning::forward(&weights.gate, &weights.up, &weights.fused, &input, indices, stream)?
+        expert::tuning::forward(
+            &weights.gate, &weights.up, &weights.fused, &input, indices, stream,
+        )?
     } else {
         (
             weights.gate.gather(&input, indices, false, stream)?,

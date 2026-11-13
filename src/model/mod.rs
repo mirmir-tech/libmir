@@ -1,7 +1,6 @@
 mod admission;
 mod automatic_cache;
 mod cache;
-mod cache_cohort;
 pub mod constraints;
 mod decode;
 mod descriptor;
@@ -10,8 +9,6 @@ mod kv_sizing;
 mod library;
 mod lifecycle;
 mod memory;
-mod memory_admission;
-mod memory_policy;
 mod prefill;
 mod prompt;
 mod remote;
@@ -47,7 +44,7 @@ pub use vision::{IMAGE_PLACEHOLDER, PreparedVisionPrompt};
 
 use self::helpers::{model_id, validate_context};
 pub use self::{
-    cache_cohort::FillClaim,
+    cache::cohort::FillClaim,
     descriptor::{PreparedPrompt, PromptPreparationTimings},
     library::ModelLoadOptions,
 };
@@ -77,7 +74,7 @@ pub struct ModelDescriptor {
 #[derive(Debug, Clone)]
 pub struct Library {
     state: Arc<Mutex<library::LibraryState>>,
-    memory: memory_admission::ModelMemoryManager,
+    memory: memory::admission::ModelMemoryManager,
     caches: cache::KvCachePools,
     registry: kv_sizing::ModelRegistry,
     config: RuntimeConfig,
@@ -95,11 +92,11 @@ struct ModelInner {
     handle: ModelHandle,
     config: RuntimeConfig,
     cache: Arc<cache::SharedKvCache>,
-    cache_cohort: cache_cohort::CacheCohort,
+    cache_cohort: cache::cohort::CacheCohort,
     coordinator: ModelCoordinator,
     kv_sizing: Mutex<kv_sizing::KvSizing>,
     registry: kv_sizing::ModelRegistry,
-    memory: memory_admission::ModelMemoryLease,
+    memory: memory::admission::ModelMemoryLease,
 }
 
 impl ModelDescriptor {

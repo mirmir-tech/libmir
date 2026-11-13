@@ -60,7 +60,7 @@ fn metal_geometry_fits_the_full_depth_four_c10_cohort() {
     assert!(
         cache_bytes(&resolved, estimate) + estimate.required_bytes
             <= memory.available_bytes.unwrap_or_default()
-                - memory_policy::platform_reserve(config.memory, &memory)
+                - policy::platform_reserve(config.memory, &memory)
     );
 }
 
@@ -78,8 +78,8 @@ fn repaired_gx10_geometry_keeps_dynamic_prefill_headroom() {
     assert!(
         cache_bytes(&resolved, estimate)
             + estimate.required_bytes
-            + memory_policy::transient_reserve(estimate, &memory)
-            <= available - memory_policy::platform_reserve(config.memory, &memory)
+            + policy::transient_reserve(estimate, &memory)
+            <= available - policy::platform_reserve(config.memory, &memory)
     );
 }
 

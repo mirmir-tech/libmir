@@ -11,8 +11,7 @@ mod mxfp4;
 mod mxfp8;
 mod nvfp4;
 mod pack;
-mod packed_int8;
-mod packed_integer;
+mod packed;
 mod pair;
 mod projection;
 mod qmm;
@@ -53,10 +52,13 @@ pub(in crate::backend) use nvfp4::{
     MarlinRouteBlock, SelectedNvFp4WeightOnlyTensorCoreMoeBf16, TiledSelectedNvFp4MoeBf16,
 };
 pub use pack::{Bf16LinearPack, Bf16LinearPackWeights};
-pub(in crate::backend) use packed_int8::CompressedInt8Embedding;
-pub use packed_int8::{CompressedInt8Bf16Linear, CompressedInt8Weight};
-pub(in crate::backend) use packed_integer::embedding as packed_integer_embedding;
-pub use packed_integer::{PackedIntegerBf16Linear, PackedIntegerWeight};
+pub(in crate::backend) use packed::{
+    int8::CompressedInt8Embedding, integer::embedding as packed_integer_embedding,
+};
+pub use packed::{
+    int8::{CompressedInt8Bf16Linear, CompressedInt8Weight},
+    integer::{PackedIntegerBf16Linear, PackedIntegerWeight},
+};
 pub use pair::{Bf16LinearPair, Bf16LinearPairWeights};
 pub use projection::Bf16Projection;
 pub use qmm::AffineQuantizedBf16Qmm;

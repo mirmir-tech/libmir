@@ -1,5 +1,5 @@
 use super::*;
-use crate::engine::kernels::expert_group::aligned::{AlignedGroup, PaddingBudget};
+use crate::engine::kernels::expert::group::aligned::{AlignedGroup, PaddingBudget};
 
 #[test]
 fn padded_affine_mlp_restores_only_real_routes_in_original_order() -> Result<()> {

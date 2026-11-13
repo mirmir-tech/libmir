@@ -1,23 +1,12 @@
 mod awq;
 mod bitsandbytes;
 mod direct_fp8;
-mod direct_fp8_embedding;
-pub(super) mod expert_group;
-mod expert_reduce;
+pub(super) mod expert;
 pub(super) mod gated_delta;
 mod gptq;
 mod mxfp4;
-mod mxfp4_embedding;
-#[cfg(test)]
-mod mxfp4_gathered_linear;
-#[cfg(test)]
-mod mxfp4_linear;
-mod nvfp4_convert;
-mod nvfp4_gathered_linear;
-mod page_copy;
-#[cfg(test)]
-pub mod page_gather;
-mod page_write;
+mod nvfp4;
+pub mod page;
 mod paged_attention;
 pub(super) use paged_attention::{PagedExecution, partial_blocks, two_pass_supported};
 mod quantized_kv;
@@ -25,9 +14,9 @@ mod registry;
 mod template;
 
 pub use direct_fp8::DirectFp8Spec;
-pub(super) use direct_fp8_embedding::DirectFp8EmbeddingSpec;
+pub(super) use direct_fp8::embedding::DirectFp8EmbeddingSpec;
 pub(super) use mxfp4::MxFp4Shape;
-pub(super) use page_write::{PageWriteOptions, PreparedPageWrite};
+pub(super) use page::write::{PageWriteOptions, PreparedPageWrite};
 pub(super) use quantized_kv::{PreparedQuantizedPageWrite, QuantizedPageWriteOptions};
 pub(super) use template::template;
 
@@ -198,20 +187,20 @@ pub(super) struct Kernels {
     #[cfg(test)]
     pub(crate) history_append: crate::engine::persistent_history::Append,
     #[cfg(test)]
-    pub(crate) page_gather: page_gather::Gather,
+    pub(crate) page_gather: page::gather::Gather,
     #[cfg(test)]
     pub(in crate::engine) gdn_experiment: gated_delta::experiment::Recurrence,
     awq_repack: awq::AwqRepackKernel,
     bitsandbytes_4bit: bitsandbytes::BitsAndBytes4BitKernel,
     direct_fp8: direct_fp8::DirectFp8Kernel,
-    direct_fp8_embedding: direct_fp8_embedding::DirectFp8EmbeddingKernel,
+    direct_fp8_embedding: direct_fp8::embedding::DirectFp8EmbeddingKernel,
     gated_delta_gates: mirtal::MetalKernel<4, 2>,
-    expert_group: expert_group::ExpertGroupKernel,
+    expert_group: expert::group::ExpertGroupKernel,
     #[cfg(test)]
-    expert_group_aligned: expert_group::aligned::AlignedGroup,
+    expert_group_aligned: expert::group::aligned::AlignedGroup,
     #[cfg(test)]
-    expert_tiles: expert_group::tiles::TilePlan,
-    expert_reduce: expert_reduce::ExpertReduceKernel,
+    expert_tiles: expert::group::tiles::TilePlan,
+    expert_reduce: expert::reduce::ExpertReduceKernel,
     gated_delta_recurrence: mirtal::MetalKernel<6, 2>,
     gated_delta_decode: mirtal::MetalKernel<8, 2>,
     gptq: gptq::GptqKernels,
@@ -223,15 +212,15 @@ pub(super) struct Kernels {
     paged_attention_reduce: mirtal::MetalKernel<3, 1>,
     paged_kv: mirtal::MetalLibrary,
     mxfp4_gate_up: mirtal::MetalKernel<6, 1>,
-    mxfp4_embedding: mxfp4_embedding::MxFp4EmbeddingKernel,
+    mxfp4_embedding: mxfp4::embedding::MxFp4EmbeddingKernel,
     #[cfg(test)]
-    mxfp4_gathered_linear: mxfp4_gathered_linear::MxFp4GatheredLinearKernel,
+    mxfp4_gathered_linear: mxfp4::gathered_linear::MxFp4GatheredLinearKernel,
     #[cfg(test)]
-    mxfp4_linear: mxfp4_linear::MxFp4LinearKernel,
+    mxfp4_linear: mxfp4::linear::MxFp4LinearKernel,
     mxfp4_down: mirtal::MetalKernel<6, 1>,
     mxfp4_split_gate_up: mirtal::MetalKernel<9, 1>,
     mxfp4_u32_down: mirtal::MetalKernel<6, 1>,
-    nvfp4_convert: nvfp4_convert::NvFp4ConvertKernel,
-    nvfp4_gathered_linear: nvfp4_gathered_linear::NvFp4GatheredLinearKernel,
+    nvfp4_convert: nvfp4::convert::NvFp4ConvertKernel,
+    nvfp4_gathered_linear: nvfp4::gathered_linear::NvFp4GatheredLinearKernel,
     quantized_kv: quantized_kv::QuantizedKvKernels,
 }

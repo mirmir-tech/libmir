@@ -1,33 +1,25 @@
 mod array;
 mod attention;
-mod attention_batch_tuning;
+mod decode;
+pub(crate) mod expert;
+mod fused;
+pub mod hybrid;
 #[cfg(test)]
-pub(crate) use attention_batch_tuning::BatchAttentionExecution;
-mod attention_tuning;
+pub(crate) use attention::tuning::batch::BatchAttentionExecution;
 mod binding;
 pub mod clamped_routed;
 mod compiled;
 mod decision;
-mod decode_graph;
-mod decode_plan_tuning;
 mod decoder;
 pub mod dense;
 pub(crate) mod diagnostics;
 mod embedding;
 mod error;
-pub(crate) mod expert_fusion;
-mod expert_tuning;
-mod fused_attention;
-mod fused_expert_gate_up;
-mod fused_gate_up;
-mod fused_key_value;
 mod fusion_planner;
 mod gate_up_tuning;
 mod gated_delta;
 mod gated_full_attention;
 mod graph;
-pub mod hybrid_linear_moe;
-pub mod hybrid_moe;
 mod kernels;
 mod kv;
 #[cfg(test)]
@@ -57,7 +49,7 @@ pub mod vision;
 pub use array::Array;
 pub use attention::{ImageTokenSpan, PagedAttention, RopeOptions, prefix_attention_mask};
 pub use decision::MetalDecisionModel;
-pub(crate) use decode_plan_tuning::{
+pub(crate) use decode::plan_tuning::{
     DecodePlan, DecodePlanAction, DecodePlanKey, context_bucket as decode_context_bucket,
 };
 pub use decoder::DecoderCache;
@@ -67,11 +59,11 @@ pub(crate) use decoder::{DecoderExecution, probe};
 pub use dense::{DenseEmbedding, DenseLinear};
 pub use embedding::QuantizedEmbedding;
 pub use error::{Error, Result};
-pub(crate) use expert_fusion::{ExpertFusion, ExpertFusionDecision, configure_expert_fusion};
-pub(crate) use fused_attention::FusedAttention;
-pub(crate) use fused_expert_gate_up::FusedExpertGateUp;
-pub(crate) use fused_gate_up::FusedGateUp;
-pub(crate) use fused_key_value::FusedKeyValue;
+pub(crate) use expert::fusion::{ExpertFusion, ExpertFusionDecision, configure_expert_fusion};
+pub(crate) use fused::{
+    attention::FusedAttention, expert_gate_up::FusedExpertGateUp, gate_up::FusedGateUp,
+    key_value::FusedKeyValue,
+};
 pub use gated_delta::{GatedDeltaInputs, GatedDeltaLayer, GatedDeltaLayerConfig, GatedDeltaState};
 pub use gated_full_attention::{GatedFullAttention, GatedFullAttentionConfig};
 pub(crate) use kv::{

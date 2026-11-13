@@ -1,11 +1,10 @@
+mod paged;
 use super::*;
 
 mod checkpoint;
 mod clamped_routed;
 mod gated_delta;
 mod page_write;
-mod paged_attention;
-mod paged_store;
 mod quantized_kv;
 mod rope;
 mod router;
