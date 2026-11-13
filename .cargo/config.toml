@@ -1,9 +1,9 @@
 [net]
 git-fetch-with-cli = true
 
-# CUDA 13 baseline; explicit environment values take precedence.
+# CUDA 13 baseline; explicit environment values take precedence. The CUDA
+# libraries resolve through the system loader, so no LD_LIBRARY_PATH is set.
 # The cudarc binding version is pinned by mircuda-sys (`cuda-13000`).
 [env]
 CUDA_HOME = { value = "/usr/local/cuda", force = false }
 NVCC = { value = "/usr/local/cuda/bin/nvcc", force = false }
-LD_LIBRARY_PATH = { value = "/usr/local/cuda/lib64", force = false }
