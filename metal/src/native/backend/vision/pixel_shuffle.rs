@@ -5,7 +5,7 @@
 
 use models::vision::{PixelShufflePreprocessedImage, PixelShufflePromptTokens};
 use runtime::{
-    Error as RuntimeError, Result as RuntimeResult,
+    Result as RuntimeResult, RuntimeError,
     backend::{ModelHandle, PrefillOutput, SamplingLogits},
     kv::BlockTable,
 };
