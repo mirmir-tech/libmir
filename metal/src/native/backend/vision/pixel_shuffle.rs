@@ -1,7 +1,7 @@
 //! Pixel-shuffle vision prefill on Metal: the contract is discovered and
 //! prepared backend-neutrally, but no Metal tower runs it yet. The tower
-//! (prefix tokens, resized position grid, ViT blocks, pixel shuffle and
-//! RMS-normalized ReLU² projector) and a decoder it feeds belong here.
+//! (prefix tokens, resized position grid, `ViT` blocks, pixel shuffle and
+//! RMS-normalized `ReLU²` projector) and a decoder it feeds belong here.
 
 use models::vision::{PixelShufflePreprocessedImage, PixelShufflePromptTokens};
 use runtime::{
