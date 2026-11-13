@@ -15,13 +15,9 @@ const TOKENS: usize = 2;
 const INPUT: usize = 8;
 const OUTPUT: usize = 2;
 
-#[path = "direct_fp8/checkpoint.rs"]
 mod checkpoint;
-#[path = "direct_fp8/embedding.rs"]
 mod embedding;
-#[path = "direct_fp8/padded_grid.rs"]
 mod padded_grid;
-#[path = "direct_fp8/static_scale.rs"]
 mod static_scale;
 
 #[test]

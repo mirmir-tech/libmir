@@ -3,7 +3,6 @@ use libmir::{
     SamplingLogits,
 };
 
-#[path = "checkpoint/prefill_batch.rs"]
 mod prefill_batch;
 
 #[test]

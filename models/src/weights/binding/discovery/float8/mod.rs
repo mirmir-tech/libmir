@@ -222,5 +222,4 @@ fn invalid(name: &str, reason: &str) -> ModelsError {
 }
 
 #[cfg(test)]
-#[path = "float8/tests.rs"]
 mod tests;

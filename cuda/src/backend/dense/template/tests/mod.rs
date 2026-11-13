@@ -20,11 +20,8 @@ use crate::{
     ProjectionFormat,
 };
 
-#[path = "tests/fp8_stages.rs"]
 mod fp8_stages;
-#[path = "tests/gemma.rs"]
 mod gemma;
-#[path = "tests/mxfp4.rs"]
 mod mxfp4;
 
 type TestResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
