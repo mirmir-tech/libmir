@@ -11,8 +11,6 @@ mod decision;
 mod decode_graph;
 mod decode_plan_tuning;
 mod decoder;
-#[cfg(test)]
-pub(crate) use decoder::probe;
 pub mod dense;
 pub(crate) mod diagnostics;
 mod embedding;
@@ -63,9 +61,9 @@ pub(crate) use decode_plan_tuning::{
     DecodePlan, DecodePlanAction, DecodePlanKey, context_bucket as decode_context_bucket,
 };
 pub use decoder::DecoderCache;
-#[cfg(test)]
-pub(crate) use decoder::DecoderExecution;
 pub(crate) use decoder::DecoderModel;
+#[cfg(test)]
+pub(crate) use decoder::{DecoderExecution, probe};
 pub use dense::{DenseEmbedding, DenseLinear};
 pub use embedding::QuantizedEmbedding;
 pub use error::{Error, Result};

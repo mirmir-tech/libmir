@@ -1,5 +1,4 @@
 mod composition;
-use crate::backend::feed_forward::{FeedForward, LayerNormConfig};
 mod execution;
 #[cfg(all(test, target_os = "linux"))]
 mod tests;
@@ -10,6 +9,7 @@ use crate::{
     AffineGatedDeltaLayerConfig, AffineSharedExpertMoeConfig, CudaAffineGatedDeltaLayer,
     CudaAffineSharedExpertMoe, CudaBackend, CudaGatedDeltaState, CudaTensor, CudaTensorDType,
     CudaTensorSet, Error, ExecutionPhase, Result,
+    backend::feed_forward::{FeedForward, LayerNormConfig},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]

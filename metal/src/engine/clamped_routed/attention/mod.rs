@@ -1,4 +1,3 @@
-use crate::engine::attention::{AttentionBias, AttentionRequest};
 mod batch;
 #[cfg(test)]
 mod offsets;
@@ -8,6 +7,7 @@ use models::weights::RoutedDecoderLayerBindings;
 use super::{config::ClampedRoutedConfig, projection::BoundLinear};
 use crate::engine::{
     Array, KvCache, ModelTensors, NormWeight, PagedContextMode, Result, Stream,
+    attention::{AttentionBias, AttentionRequest},
     paged_attention_min_context,
 };
 

@@ -1,9 +1,8 @@
 mod capacity;
 mod contiguous;
+mod format;
 #[cfg(test)]
 pub mod history;
-pub use paged::DecodeCapacity;
-mod format;
 #[cfg(test)]
 mod inspection;
 mod lifecycle;
@@ -15,7 +14,7 @@ mod validation;
 use std::sync::Arc;
 
 pub use format::KvPageFormat;
-pub use paged::PagedArenaPool;
+pub use paged::{DecodeCapacity, PagedArenaPool};
 pub use policy::{
     NATIVE_PAGED_ATTENTION_MIN_CONTEXT, native_paged_attention_mode, paged_attention_enabled,
     paged_attention_min_context,

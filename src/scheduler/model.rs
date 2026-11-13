@@ -9,11 +9,9 @@ use runtime::{
     scheduler::SchedulerConfig,
 };
 
-#[cfg(any(feature = "cuda", feature = "metal"))]
-use super::generation::GenerationCoordinator;
-#[cfg(any(feature = "cuda", feature = "metal"))]
-use super::response::DecodeResponse;
 use super::{DecodeCoordinator, GenerationStepState, PrefillCoordinator};
+#[cfg(any(feature = "cuda", feature = "metal"))]
+use super::{generation::GenerationCoordinator, response::DecodeResponse};
 use crate::{Engine, Result};
 
 pub struct ModelCoordinator {
