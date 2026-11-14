@@ -27,7 +27,7 @@ pub(super) fn patches(
     let scale = (real(budget)? / (closest_rows * closest_cols)).sqrt().min(1.0);
     let mut rows = whole((scale * closest_rows).floor().max(1.0))?;
     let mut cols = whole((scale * closest_cols).floor().max(1.0))?;
-    if budget > config.min_patches && rows * cols < config.min_patches {
+    if budget >= config.min_patches && rows * cols < config.min_patches {
         let up = (real(config.min_patches)? / real(rows * cols)?).sqrt();
         rows = whole((up * real(rows)?).ceil())?;
         cols = whole((up * real(cols)?).ceil())?;

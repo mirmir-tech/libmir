@@ -38,6 +38,15 @@ fn the_patch_grid_follows_the_processors_rule() -> crate::error::Result<()> {
     Ok(())
 }
 
+/// A budget equal to the minimum still upscales a small image to it.
+#[test]
+fn a_budget_at_the_minimum_upscales_to_it() -> crate::error::Result<()> {
+    let config = processor();
+    assert_eq!(target::patches(64, 64, &config, config.min_patches)?, (32, 32));
+    assert_eq!(target::patches(48, 48, &config, config.min_patches)?, (32, 32));
+    Ok(())
+}
+
 /// Sizes where the reference rule overshoots its budget: the minimum-size
 /// upscale (26×40 against 1030) and a thin image whose short side rounds up
 /// to the factor (2×1600 against 512). Both are fitted within the budget.

@@ -89,3 +89,22 @@ fn the_processor_budget_is_the_context_share_within_bounds() -> crate::error::Re
     assert_eq!((config.shuffle_factor, config.patch_budget()), (2, 13312));
     Ok(())
 }
+
+#[test]
+fn overflowing_counts_are_rejected() {
+    let mut prefix = config();
+    prefix["vision_config"]["num_cls_tokens"] = json!(u64::MAX);
+    assert!(VisionConfig::from_value(&prefix).is_err());
+    let processor = json!({
+        "downsample_ratio": 0.5,
+        "max_model_len": u64::MAX,
+        "max_num_patches": 13312,
+        "min_num_patches": 1024,
+        "norm_mean": [0.5, 0.5, 0.5],
+        "norm_std": [0.5, 0.5, 0.5],
+        "patch_size": 16
+    });
+    assert!(
+        ImageProcessorConfig::from_value(&processor, VisionPipeline::PixelShuffleEncoder).is_err()
+    );
+}
