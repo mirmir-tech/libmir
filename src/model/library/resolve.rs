@@ -5,7 +5,7 @@ use runtime::kv::CacheConfig;
 
 use super::{Library, ModelLoadOptions};
 use crate::{
-    Engine, Result, RuntimeConfig,
+    Engine, MemorySnapshot, Result, RuntimeConfig,
     model::{ModelDescriptor, automatic_cache, kv_sizing::KvSizing, memory::policy},
 };
 
@@ -25,19 +25,8 @@ impl Library {
         let estimate = descriptor.memory_estimate_for(&self.config, &target);
         let memory = probe.memory_snapshot()?;
         let committed = self.memory.committed_bytes()?;
-        // A per-model block count is final: no automatic sizing or resize.
-        let library = options.kv_blocks.map_or_else(
-            || self.config.clone(),
-            |blocks| {
-                let mut fixed = self.config.clone();
-                fixed.kv_cache.block_count = blocks.get();
-                fixed.automatic_kv_cache = false;
-                fixed
-            },
-        );
-        let mut config = automatic_cache::resolve(&library, estimate, &memory, committed);
-        let resizable = probe.kv_cache_resizable(&descriptor.manifest_for(target.clone())?)?;
-        let kv_sizing = KvSizing::for_load(&library, &mut config, estimate, &target, resizable);
+        let (config, kv_sizing) =
+            self.resolve_cache(descriptor, options, &probe, &memory, committed)?;
         let resolved_estimate = descriptor.memory_estimate_for(&config, &target);
         let engine = if engine_cache_compatible(&target, config.kv_cache, engine_config.kv_cache) {
             probe
@@ -63,6 +52,34 @@ impl Library {
         state.engine = Some(engine.clone());
         drop(state);
         Ok((engine, config, kv_sizing))
+    }
+
+    /// The K/V cache a load with `options` resolves to against `memory`, of
+    /// which `committed` bytes are reserved by other loads. Changes nothing.
+    pub(super) fn resolve_cache(
+        &self,
+        descriptor: &ModelDescriptor,
+        options: ModelLoadOptions,
+        probe: &Engine,
+        memory: &MemorySnapshot,
+        committed: u64,
+    ) -> Result<(RuntimeConfig, KvSizing)> {
+        let target = probe.target();
+        let estimate = descriptor.memory_estimate_for(&self.config, &target);
+        // A per-model block count is final: no automatic sizing or resize.
+        let library = options.kv_blocks.map_or_else(
+            || self.config.clone(),
+            |blocks| {
+                let mut fixed = self.config.clone();
+                fixed.kv_cache.block_count = blocks.get();
+                fixed.automatic_kv_cache = false;
+                fixed
+            },
+        );
+        let mut config = automatic_cache::resolve(&library, estimate, memory, committed);
+        let resizable = probe.kv_cache_resizable(&descriptor.manifest_for(target.clone())?)?;
+        let kv_sizing = KvSizing::for_load(&library, &mut config, estimate, &target, resizable);
+        Ok((config, kv_sizing))
     }
 }
 

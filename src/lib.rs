@@ -35,10 +35,10 @@ pub use memory::{MemorySnapshot, ModelMemoryEstimate};
 pub use metal::DecodeReservation as MetalDecodeReservation;
 pub use model::{
     AdmissionCheck, AdmissionCheckKind, AdmissionStatus, BackendAdmissionReport, CacheStatsReader,
-    CheckpointEncoding, IMAGE_PLACEHOLDER, Library, MODEL_FORMAT_REGISTRY_SCHEMA_VERSION, Model,
-    ModelDescriptor, ModelLoadOptions, PreparedPrompt, PreparedVisionPrompt,
-    PromptPreparationTimings, RemoteModelContract, RemoteTaskMetadata, RemoteVisionContract,
-    UnloadedTensors, WeightEncoding,
+    CheckpointEncoding, IMAGE_PLACEHOLDER, Library, LoadPreview,
+    MODEL_FORMAT_REGISTRY_SCHEMA_VERSION, Model, ModelDescriptor, ModelLoadOptions, PreparedPrompt,
+    PreparedVisionPrompt, PromptPreparationTimings, RemoteModelContract, RemoteTaskMetadata,
+    RemoteVisionContract, UnloadedTensors, WeightEncoding,
 };
 pub use models::{
     chat::{ReasoningEffort, ReasoningHistory, ReasoningMode, TemplateKind},

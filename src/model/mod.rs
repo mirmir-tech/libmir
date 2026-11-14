@@ -46,7 +46,7 @@ use self::helpers::{model_id, validate_context};
 pub use self::{
     cache::cohort::FillClaim,
     descriptor::{PreparedPrompt, PromptPreparationTimings},
-    library::ModelLoadOptions,
+    library::{LoadPreview, ModelLoadOptions},
 };
 use crate::{Engine, Error, Result, RuntimeConfig, Session, scheduler::ModelCoordinator};
 
