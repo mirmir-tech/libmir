@@ -107,6 +107,19 @@ fn vision_check(
                 vision.pipeline()
             ),
         ),
+        // The decoder still runs, so the model is partial, not unsupported.
+        Some(_)
+            if matches!(backend, BackendTarget::Metal)
+                && !architecture::metal::executes_vision(vision.pipeline()) =>
+        {
+            (
+                AdmissionStatus::Partial,
+                format!(
+                    "Metal has no {:?} vision tower; the decoder loads text-only",
+                    vision.pipeline()
+                ),
+            )
+        },
         Some(readiness) => (
             AdmissionStatus::Supported,
             format!(

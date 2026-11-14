@@ -1,6 +1,8 @@
 use models::{
     execution::{PoolingMode, TaskExecutionPlan},
-    layout::{EncoderConfig, EncoderPositionEmbedding, EncoderRopeScaling, NormKind},
+    layout::{
+        EncoderConfig, EncoderPositionEmbedding, EncoderRopeScaling, NormKind, VisionPipeline,
+    },
     semantic::SemanticModelSpec,
 };
 
@@ -44,6 +46,16 @@ pub enum MetalArchitecture {
     Generation(MetalDecoderRuntime),
     Embedding,
     SequenceScoring,
+}
+
+/// Whether Metal runs a vision tower for `pipeline`. A model with another
+/// pipeline loads text-only, and its image requests fail.
+#[must_use]
+pub const fn executes_vision(pipeline: VisionPipeline) -> bool {
+    match pipeline {
+        VisionPipeline::PooledEncoder | VisionPipeline::SpatialMergeEncoder => true,
+        VisionPipeline::PixelShuffleEncoder => false,
+    }
 }
 
 pub fn admit(

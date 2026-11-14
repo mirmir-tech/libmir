@@ -26,7 +26,8 @@ pub(super) fn validate_kv_storage(
     if !format.quantized() {
         return Ok(());
     }
-    if vision.is_some() {
+    // A pipeline without a Metal tower loads text-only, without prefix masks.
+    if vision.is_some_and(|vision| architecture::metal::executes_vision(vision.pipeline())) {
         return Err(Error::UnsupportedModel(
             "INT8 Metal K/V does not yet support multimodal prefix masks".into(),
         ));
