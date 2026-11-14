@@ -5,12 +5,13 @@
 //! gives a top-level auxiliary role. Multi-token prediction modules load only
 //! with speculative decoding. The runtime loads tensors only through the
 //! roles it executes, so a text-only load leaves both on disk, and a
-//! speculative load leaves the auxiliary components.
+//! speculative load leaves the auxiliary components. A vision load keeps the
+//! auxiliary components resident but still leaves the prediction modules
+//! unless it speculates.
 
 use models::{
-    execution::DecoderExecutionContract,
     layout::{ModelLayout, VisionConfig},
-    weights::{LogicalTensorRole, TensorCatalog},
+    weights::{LogicalTensorRole, TensorCatalog, WeightBindingPlan},
 };
 
 /// Checkpoint tensors a load leaves on disk.
@@ -25,25 +26,26 @@ pub struct UnloadedTensors {
 }
 
 /// Tensors outside the decoder in a text-only load, or `None` when every
-/// checkpoint byte must be counted: no decoder contract, or a vision contract
-/// whose tower loads by name alongside the decoder.
+/// checkpoint byte must be counted: no decoder contract. With a vision
+/// contract, whose tower loads by name alongside the decoder, the auxiliary
+/// components count as resident; the prediction modules still load only with
+/// speculative decoding.
 pub fn unloaded(
     catalog: &TensorCatalog,
-    execution: Option<&DecoderExecutionContract>,
+    bindings: Option<&WeightBindingPlan>,
     vision: Option<&VisionConfig>,
 ) -> Option<UnloadedTensors> {
-    if vision.is_some() {
-        return None;
-    }
-    execution?
-        .bindings
+    bindings?
         .tensors
         .iter()
-        .filter(|binding| {
-            matches!(
-                binding.role,
-                LogicalTensorRole::Auxiliary { .. } | LogicalTensorRole::Prediction { .. }
-            )
+        .filter(|binding| match binding.role {
+            LogicalTensorRole::Prediction { .. } => true,
+            LogicalTensorRole::Auxiliary { .. } => vision.is_none(),
+            LogicalTensorRole::Embedding
+            | LogicalTensorRole::FinalNorm
+            | LogicalTensorRole::Output
+            | LogicalTensorRole::VisionProjection
+            | LogicalTensorRole::Layer { .. } => false,
         })
         .flat_map(|binding| {
             let prediction = matches!(binding.role, LogicalTensorRole::Prediction { .. });

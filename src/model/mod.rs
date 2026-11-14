@@ -122,7 +122,11 @@ impl ModelDescriptor {
         let vision_readiness = vision
             .as_ref()
             .map(|config| VisionTensorSchema::discover(config).readiness(&catalog));
-        let unloaded = memory::unloaded(&catalog, execution.as_ref(), vision.as_ref());
+        let unloaded = memory::unloaded(
+            &catalog,
+            execution.as_ref().map(|execution| &execution.bindings),
+            vision.as_ref(),
+        );
         let image_processor = vision
             .as_ref()
             .map(|vision| ImageProcessorConfig::from_layout(&layout, vision.pipeline()))
