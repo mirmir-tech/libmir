@@ -45,19 +45,18 @@ struct CacheKey {
 }
 
 impl KvCachePools {
+    /// The cache a model loads with. On Metal, automatically sized models of
+    /// one K/V geometry share logical blocks. A model given its own context
+    /// (`fixed`) keeps exactly that capacity, so it never shares.
     pub(in crate::model) fn acquire(
         &self,
         target: &BackendTarget,
         config: CacheConfig,
         estimate: ModelMemoryEstimate,
+        fixed: bool,
     ) -> CacheAssignment {
-        if *target != BackendTarget::Metal || estimate.kv_bytes_per_token == 0 {
+        let Some(key) = shared_key(target, config, estimate, fixed) else {
             return independent(config);
-        }
-        let key = CacheKey {
-            block_size: config.block_size,
-            dtype: config.dtype,
-            bytes_per_token: estimate.kv_bytes_per_token,
         };
         let mut pools = self.pools.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         pools.retain(|_, cache| cache.strong_count() > 0);
@@ -84,6 +83,36 @@ impl KvCachePools {
             config,
         }
     }
+
+    /// The cache configuration `acquire` would give, without acquiring it.
+    pub(in crate::model) fn preview(
+        &self,
+        target: &BackendTarget,
+        config: CacheConfig,
+        estimate: ModelMemoryEstimate,
+        fixed: bool,
+    ) -> CacheConfig {
+        let Some(key) = shared_key(target, config, estimate, fixed) else {
+            return config;
+        };
+        let pools = self.pools.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        pools.get(&key).and_then(Weak::upgrade).map_or(config, |cache| cache.config)
+    }
+}
+
+fn shared_key(
+    target: &BackendTarget,
+    config: CacheConfig,
+    estimate: ModelMemoryEstimate,
+    fixed: bool,
+) -> Option<CacheKey> {
+    (*target == BackendTarget::Metal && estimate.kv_bytes_per_token > 0 && !fixed).then_some(
+        CacheKey {
+            block_size: config.block_size,
+            dtype: config.dtype,
+            bytes_per_token: estimate.kv_bytes_per_token,
+        },
+    )
 }
 
 fn independent(config: CacheConfig) -> CacheAssignment {
@@ -106,20 +135,47 @@ mod tests {
     #[test]
     fn compatible_metal_models_share_logical_blocks() {
         let pools = KvCachePools::default();
-        let first = pools.acquire(&BackendTarget::Metal, CacheConfig::new(10), estimate(1_024));
-        let second = pools.acquire(&BackendTarget::Metal, CacheConfig::new(5), estimate(1_024));
+        let first =
+            pools.acquire(&BackendTarget::Metal, CacheConfig::new(10), estimate(1_024), false);
+        let preview =
+            pools.preview(&BackendTarget::Metal, CacheConfig::new(5), estimate(1_024), false);
+        let second =
+            pools.acquire(&BackendTarget::Metal, CacheConfig::new(5), estimate(1_024), false);
 
         assert!(Arc::ptr_eq(&first.cache, &second.cache));
         assert_eq!(second.config.block_count, 10);
+        assert_eq!(preview.block_count, 10);
         assert_eq!(first.shared_memory, second.shared_memory);
+    }
+
+    #[test]
+    fn a_model_given_its_own_context_keeps_it() {
+        let pools = KvCachePools::default();
+        let first =
+            pools.acquire(&BackendTarget::Metal, CacheConfig::new(64), estimate(1_024), true);
+        let preview =
+            pools.preview(&BackendTarget::Metal, CacheConfig::new(128), estimate(1_024), true);
+        let second =
+            pools.acquire(&BackendTarget::Metal, CacheConfig::new(128), estimate(1_024), true);
+        let automatic =
+            pools.acquire(&BackendTarget::Metal, CacheConfig::new(32), estimate(1_024), false);
+
+        assert!(!Arc::ptr_eq(&first.cache, &second.cache));
+        assert_eq!((first.config.block_count, second.config.block_count), (64, 128));
+        assert_eq!(preview.block_count, 128);
+        assert!(second.shared_memory.is_none());
+        assert_eq!(automatic.config.block_count, 32);
     }
 
     #[test]
     fn incompatible_geometry_and_cuda_keep_separate_blocks() {
         let pools = KvCachePools::default();
-        let first = pools.acquire(&BackendTarget::Metal, CacheConfig::new(10), estimate(1_024));
-        let other = pools.acquire(&BackendTarget::Metal, CacheConfig::new(10), estimate(2_048));
-        let cuda = pools.acquire(&BackendTarget::Cuda, CacheConfig::new(10), estimate(1_024));
+        let first =
+            pools.acquire(&BackendTarget::Metal, CacheConfig::new(10), estimate(1_024), false);
+        let other =
+            pools.acquire(&BackendTarget::Metal, CacheConfig::new(10), estimate(2_048), false);
+        let cuda =
+            pools.acquire(&BackendTarget::Cuda, CacheConfig::new(10), estimate(1_024), false);
 
         assert!(!Arc::ptr_eq(&first.cache, &other.cache));
         assert!(!Arc::ptr_eq(&first.cache, &cuda.cache));

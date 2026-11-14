@@ -38,7 +38,16 @@ impl Model {
         if !matches!(self.descriptor().task(), ModelTask::Generation) {
             return Ok(());
         }
-        let Some(tokens) = profile_context(self.descriptor().metadata().context_len) else {
+        // A model given a small context must warm up within it: the
+        // sessions share its K/V blocks, and a prompt they cannot hold would
+        // wait for blocks that never free.
+        let cache = self.inner.config.kv_cache;
+        let context = warmup_context(
+            self.descriptor().metadata().context_len,
+            usize::try_from(cache.block_count).unwrap_or(usize::MAX),
+            cache.block_size,
+        );
+        let Some(tokens) = profile_context(context) else {
             return Ok(());
         };
         let seed = self
@@ -60,11 +69,7 @@ impl Model {
             .prefill_profile_shapes(self.handle(), self.inner.config.scheduler.max_batch_tokens)?
             .into_iter()
             .filter_map(|shape| {
-                profile_checkpoint(
-                    shape,
-                    self.inner.config.kv_cache.block_size,
-                    self.descriptor().metadata().context_len,
-                )
+                profile_checkpoint(shape, self.inner.config.kv_cache.block_size, context)
             })
             .collect::<Vec<_>>();
         let base_total = PROFILE_SESSIONS * (PROFILE_DECODE_STEPS + 1);
@@ -154,6 +159,13 @@ fn required_token(token: Option<u32>) -> Result<u32> {
     })
 }
 
+/// The longest warm-up prompt: the model's context, and no more than each
+/// warm-up session's share of the cache, less a block for its decode steps.
+fn warmup_context(model_context: usize, blocks: usize, block_tokens: usize) -> usize {
+    let share = blocks.saturating_mul(block_tokens) / PROFILE_SESSIONS;
+    model_context.min(share.saturating_sub(block_tokens))
+}
+
 fn profile_context(context: usize) -> Option<usize> {
     let available = context.checked_sub(PROFILE_DECODE_STEPS)?;
     (available > 0).then_some(available.min(PROFILE_CONTEXT_TOKENS))
@@ -162,6 +174,15 @@ fn profile_context(context: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn warm_up_fits_a_small_cache() {
+        // 128 blocks of 16 tokens: two sessions of at most 1008 tokens each.
+        assert_eq!(warmup_context(40_960, 128, 16), 1_008);
+        assert_eq!(profile_context(warmup_context(40_960, 128, 16)), Some(1_006));
+        assert_eq!(warmup_context(4_096, 100_000, 16), 4_096);
+        assert_eq!(profile_context(warmup_context(40_960, 1, 16)), None);
+    }
 
     #[test]
     fn bounds_interleaved_checkpoint_and_reserves_a_tail() {

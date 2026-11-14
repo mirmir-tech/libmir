@@ -76,7 +76,12 @@ impl Library {
         let manifest = descriptor.manifest_for(engine.target())?;
         let target = engine.target();
         let initial_estimate = descriptor.memory_estimate_for(&config, &target);
-        let cache = self.caches.acquire(&target, config.kv_cache, initial_estimate);
+        let cache = self.caches.acquire(
+            &target,
+            config.kv_cache,
+            initial_estimate,
+            options.kv_blocks.is_some(),
+        );
         config.kv_cache = cache.config;
         let estimate = descriptor.memory_estimate_for(&config, &target);
         let memory = engine.memory_snapshot()?;

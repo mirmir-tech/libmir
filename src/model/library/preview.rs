@@ -35,8 +35,15 @@ impl Library {
         memory.available_bytes =
             memory.available_bytes.map(|bytes| bytes.saturating_add(released_bytes));
         let committed = self.memory.committed_bytes()?.saturating_sub(released_bytes);
-        let (config, _) = self.resolve_cache(descriptor, options, &probe, &memory, committed)?;
-        let estimate = descriptor.memory_estimate_for(&config, &probe.target());
+        let target = probe.target();
+        let mut config = self.resolve_cache(descriptor, options, &probe, &memory, committed);
+        // The cache the load is given: an automatic one may join a pool that
+        // compatible models already share, and keeps that pool's size.
+        let initial = descriptor.memory_estimate_for(&config, &target);
+        config.kv_cache =
+            self.caches
+                .preview(&target, config.kv_cache, initial, options.kv_blocks.is_some());
+        let estimate = descriptor.memory_estimate_for(&config, &target);
         Ok(LoadPreview { config, estimate, released_bytes })
     }
 }
