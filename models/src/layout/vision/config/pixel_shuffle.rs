@@ -135,7 +135,8 @@ pub(super) fn parse_pixel_shuffle(
         num_channels: optional_usize_field(vision, "num_channels")?.unwrap_or(3),
         patch_size,
         prefix_tokens: usize_field(vision, "num_cls_tokens")?
-            + usize_field(vision, "num_registers")?,
+            .checked_add(usize_field(vision, "num_registers")?)
+            .ok_or_else(|| invalid("vision prefix token count overflows"))?,
         position_grid: max_img_size / patch_size,
         layer_norm_eps: float_field(vision, "layer_norm_eps")?,
         hidden_activation: string_field(vision, "hidden_act")?,

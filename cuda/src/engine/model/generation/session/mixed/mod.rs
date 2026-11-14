@@ -158,10 +158,10 @@ impl GenerationExecution for MixedMixerExecution {
         request: &runtime::backend::DecodeRequest,
         _use_device_token: bool,
     ) -> Result<Output> {
-        if request.speculation.is_some() && self.drafting.is_some() {
+        let session = required(&mut self.sessions, request.session_id)?;
+        if request.speculation.is_some() && self.drafting.is_some() && session.predicts() {
             return self.decode_speculative(request);
         }
-        let session = required(&mut self.sessions, request.session_id)?;
         session.decode(request.session_id, request.token_id, &request.block_table)?;
         generation_output(backend, session, request.sampling_logits.clone())
     }

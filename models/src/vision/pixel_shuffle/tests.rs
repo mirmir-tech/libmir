@@ -38,6 +38,50 @@ fn the_patch_grid_follows_the_processors_rule() -> crate::error::Result<()> {
     Ok(())
 }
 
+/// A budget equal to the minimum still upscales a small image to it.
+#[test]
+fn a_budget_at_the_minimum_upscales_to_it() -> crate::error::Result<()> {
+    let config = processor();
+    assert_eq!(target::patches(64, 64, &config, config.min_patches)?, (32, 32));
+    assert_eq!(target::patches(48, 48, &config, config.min_patches)?, (32, 32));
+    Ok(())
+}
+
+/// Sizes where the reference rule overshoots its budget: the minimum-size
+/// upscale (26×40 against 1030) and a thin image whose short side rounds up
+/// to the factor (2×1600 against 512). Both are fitted within the budget.
+const OVERSHOOTS: [(usize, usize, usize, (usize, usize)); 2] =
+    [(400, 640, 1030, (26, 38)), (16, 160_000, 512, (2, 256))];
+
+#[test]
+fn overshooting_grids_are_fitted_to_the_budget() -> crate::error::Result<()> {
+    let config = processor();
+    for (height, width, budget, expected) in OVERSHOOTS {
+        assert_eq!(target::patches(height, width, &config, budget)?, expected, "{height}x{width}");
+    }
+    Ok(())
+}
+
+#[test]
+fn every_grid_is_factor_aligned_and_within_its_budget() -> crate::error::Result<()> {
+    let config = processor();
+    let factor = config.shuffle_factor;
+    let sides = [1, 2, 15, 16, 17, 31, 100, 333, 400, 640, 1000, 1999, 4096, 20_000, 160_000];
+    let budgets = [4, 5, 7, 64, 100, 511, 512, 1000, 1023, 1024, 1025, 1030, 2048, 4099, 13_312];
+    for height in sides {
+        for width in sides {
+            for budget in budgets {
+                let (rows, cols) = target::patches(height, width, &config, budget)?;
+                let case = format!("{height}x{width} budget {budget}: {rows}x{cols}");
+                assert!(rows > 0 && cols > 0, "{case}");
+                assert!(rows.is_multiple_of(factor) && cols.is_multiple_of(factor), "{case}");
+                assert!(rows * cols <= budget, "{case}");
+            }
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn halves_round_to_the_even_neighbour() {
     assert!((target::round(25.5) - 26.0).abs() < f64::EPSILON);

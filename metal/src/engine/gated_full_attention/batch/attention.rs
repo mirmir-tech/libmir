@@ -48,7 +48,7 @@ pub(super) fn batch(
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let outputs = crate::engine::attention_batch_tuning::execute(
+            let outputs = crate::engine::attention::tuning::batch::execute(
                 execution,
                 &rows.iter().collect::<Vec<_>>(),
                 &contexts.iter().collect::<Vec<_>>(),

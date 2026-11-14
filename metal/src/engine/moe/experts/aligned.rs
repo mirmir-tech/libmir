@@ -1,5 +1,5 @@
 use super::{Array, DType, Error, Result, Shape, SortedExpertInputs, Stream, dimensions, elements};
-use crate::engine::kernels::expert_group::aligned::AlignedGroup;
+use crate::engine::kernels::expert::group::aligned::AlignedGroup;
 
 impl Array {
     pub(crate) fn align_expert_inputs(

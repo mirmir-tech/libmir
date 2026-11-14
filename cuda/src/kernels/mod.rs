@@ -2,6 +2,7 @@
 //!
 //! Mircuda supplies compilation and typed dispatch; this module owns model
 //! mathematics, quantization formats, launch geometry, and numerical policy.
+mod packed;
 
 mod attention_transform;
 pub(crate) use attention_transform::AttentionTransform;
@@ -31,8 +32,6 @@ mod mrope;
 mod mxfp4;
 mod nvfp4;
 mod output_fp8;
-mod packed_gated;
-mod packed_int8;
 mod paged;
 mod projection_pack;
 mod qkv;
@@ -116,8 +115,8 @@ pub use nvfp4::{
 pub use output_fp8::{
     Fp8OutputKernels, Fp8OutputSpec, Fp8RefinementKernels, Fp8ResidualWeightBuffers,
 };
-pub(crate) use packed_gated::PackedGatedBf16;
-pub use packed_int8::{
+pub(crate) use packed::gated::PackedGatedBf16;
+pub use packed::int8::{
     PackedInt8Embedding, PackedInt8EmbeddingLaunch, PackedInt8EmbeddingSpec, PackedInt8Launch,
     PackedInt8Linear, PackedInt8Spec,
 };

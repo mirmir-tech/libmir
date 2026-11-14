@@ -136,9 +136,13 @@ fn parse_pixel_shuffle(value: &Value) -> Result<PixelShuffleImageProcessorConfig
     let context_patches = value
         .get("max_model_len")
         .and_then(Value::as_u64)
-        .map(|tokens| usize::try_from(tokens.saturating_sub(4)))
-        .transpose()?
-        .map(|tokens| tokens * shuffle_factor * shuffle_factor);
+        .map(|tokens| {
+            usize::try_from(tokens.saturating_sub(4))?
+                .checked_mul(shuffle_factor)
+                .and_then(|patches| patches.checked_mul(shuffle_factor))
+                .ok_or_else(|| invalid("image processor max_model_len patch count overflows"))
+        })
+        .transpose()?;
     Ok(PixelShuffleImageProcessorConfig {
         patch_size: usize_field(value, "patch_size")?,
         shuffle_factor,

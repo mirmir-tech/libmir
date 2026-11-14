@@ -12,7 +12,7 @@ fn joined_matrices_preserve_unequal_widths_bias_and_bf16_arithmetic() -> Result<
             let values = (0..rows * 64).map(|i| f32::from(i % 13) / 8.0 - 0.75).collect::<Vec<_>>();
             let input = Array::from_f32(&values, &[i32::from(rows), 1, 64])?
                 .astype(Dtype::Bfloat16, &stream)?;
-            let (key, value) = crate::engine::fused_gate_up::split_last(
+            let (key, value) = crate::engine::fused::gate_up::split_last(
                 &joined.forward(&input, &stream)?,
                 17,
                 &stream,

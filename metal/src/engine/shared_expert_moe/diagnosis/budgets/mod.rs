@@ -4,7 +4,7 @@ mod profile;
 use std::io::Write;
 
 use super::{AlignedGroup, Array, Plan, Result, RouterOutput, SharedExpertMoe, Stream};
-use crate::engine::kernels::expert_group::aligned::PaddingBudget;
+use crate::engine::kernels::expert::group::aligned::PaddingBudget;
 
 #[derive(Clone, Copy, Debug, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -30,9 +30,9 @@ impl SharedExpertMoe {
         assert_eq!(input.shape()?, [5, 512, 2048]);
         let four = AlignedGroup::with_budget(PaddingBudget::Four)?;
         let eight = AlignedGroup::with_budget(PaddingBudget::Eight)?;
-        let tile_plan = crate::engine::kernels::expert_group::tiles::TilePlan::new()?;
-        let wide_plan = crate::engine::kernels::expert_group::tiles::TilePlan::with_columns(
-            crate::engine::kernels::expert_group::tiles::ColumnTile::Width64,
+        let tile_plan = crate::engine::kernels::expert::group::tiles::TilePlan::new()?;
+        let wide_plan = crate::engine::kernels::expert::group::tiles::TilePlan::with_columns(
+            crate::engine::kernels::expert::group::tiles::ColumnTile::Width64,
         )?;
         let plans = if stream.config().diagnostics.moe_prefill
             == crate::config::MoePrefill::CompareTileWidths

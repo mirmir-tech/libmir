@@ -1,6 +1,6 @@
 use super::super::DecoderExecution;
 use crate::engine::{
-    Array, DecoderCache, ImageTokenSpan, Result, Stream, hybrid_moe::HybridMoeModel,
+    Array, DecoderCache, ImageTokenSpan, Result, Stream, hybrid::moe::HybridMoeModel,
 };
 
 impl DecoderExecution for HybridMoeModel {

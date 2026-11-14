@@ -7,7 +7,7 @@ use super::{
     batch_attention_key, decode_plan_key, fixture_key,
 };
 use crate::engine::{
-    DecodePlan, DecodePlanAction, attention_batch_tuning::BatchAttentionExecution,
+    DecodePlan, DecodePlanAction, attention::tuning::batch::BatchAttentionExecution,
 };
 
 #[test]

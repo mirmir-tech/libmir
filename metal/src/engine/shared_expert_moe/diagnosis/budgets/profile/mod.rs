@@ -6,7 +6,7 @@ use super::{
 use crate::engine::{
     Error,
     binding::BoundLinear,
-    kernels::expert_group::tiles::{TilePlan, WorkTiles},
+    kernels::expert::group::tiles::{TilePlan, WorkTiles},
 };
 
 #[derive(Clone, Copy, serde::Serialize)]

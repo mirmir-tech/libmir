@@ -1,3 +1,4 @@
+mod dense;
 use std::{
     path::Path,
     time::{Duration, Instant},
@@ -22,8 +23,6 @@ use crate::{
     ProjectionFormat, Result,
 };
 
-mod dense_vectors;
-mod dense_weights;
 mod prompt;
 mod quality;
 mod topk;

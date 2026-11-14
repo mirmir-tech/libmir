@@ -1,6 +1,5 @@
-mod composition;
-use crate::backend::feed_forward::{FeedForward, LayerNormConfig};
 mod batch;
+mod composition;
 mod execution;
 
 pub use execution::CudaAffineGatedFullAttentionMoeExecution;
@@ -10,6 +9,7 @@ use crate::{
     AffineGatedFullAttentionConfig, AffineSharedExpertMoeConfig, CudaAffineGatedFullAttention,
     CudaAffineGatedFullAttentionState, CudaAffineSharedExpertMoe, CudaBackend, CudaTensor,
     CudaTensorDType, CudaTensorSet, Error, ExecutionPhase, Result,
+    backend::feed_forward::{FeedForward, LayerNormConfig},
     kernels::BatchedSplitAttentionWorkspace,
 };
 

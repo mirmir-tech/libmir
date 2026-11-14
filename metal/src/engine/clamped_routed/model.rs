@@ -6,7 +6,7 @@ use super::{
     projection::{BoundEmbedding, BoundLinear},
 };
 use crate::engine::{
-    Array, DecoderCache, KvPageFormat, ModelTensors, NormWeight, Result, Stream, decode_graph,
+    Array, DecoderCache, KvPageFormat, ModelTensors, NormWeight, Result, Stream, decode,
     decoder::{LayerContext, LayerLoopOptions, forward_layers},
     lowering::{FeedForwardLowering, LayerLowering, MixerLowering},
 };
@@ -100,7 +100,7 @@ impl ClampedRoutedModel {
         let hidden = self.final_norm.apply(&hidden, self.config.epsilon, stream)?;
         let logits = self.output.forward(&hidden, stream)?;
         if !causal {
-            decode_graph::export_once(&logits, stream)?;
+            decode::graph::export_once(&logits, stream)?;
         }
         Ok(logits)
     }

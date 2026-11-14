@@ -1,7 +1,7 @@
 use models::layout::{DecoderConfig, ModelLayout};
 
 use super::*;
-use crate::engine::hybrid_moe::{HybridMoeLayer, HybridMoeLayerConfig};
+use crate::engine::hybrid::moe::{HybridMoeLayer, HybridMoeLayerConfig};
 
 const PREFIX_TOKENS: usize = 2_047;
 const LAYER_ZERO_DECODE: [f32; 8] = [

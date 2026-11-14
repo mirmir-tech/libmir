@@ -2,6 +2,7 @@ mod moe;
 #[cfg(test)]
 mod tests;
 mod validation;
+pub(super) mod weight_only;
 
 use mircuda::{BlockScaledFp4Plan, BlockScaledFp4Spec, DeviceBuffer, Stream, bf16};
 pub use moe::SelectedNvFp4TensorCoreMoeBf16;

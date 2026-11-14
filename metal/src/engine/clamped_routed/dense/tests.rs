@@ -5,7 +5,7 @@ use crate::{
     config::MoePrefill,
     engine::{
         DenseLinear,
-        kernels::expert_group::aligned::{AlignedGroup, PaddingBudget},
+        kernels::expert::group::aligned::{AlignedGroup, PaddingBudget},
     },
 };
 

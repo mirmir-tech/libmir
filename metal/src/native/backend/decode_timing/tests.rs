@@ -126,7 +126,7 @@ fn exercise(path: String) -> Result<()> {
 
 #[test]
 fn separates_worker_wait_for_hybrid_scalar_and_mixed_decode() -> Result<()> {
-    use crate::engine::hybrid_linear_moe::tests::{write_config, write_weights};
+    use crate::engine::hybrid::linear_moe::tests::{write_config, write_weights};
     let root = std::env::temp_dir().join(format!("hybrid-decode-timing-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&root)?;
     write_config(&root)?;

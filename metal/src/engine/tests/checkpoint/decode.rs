@@ -1,7 +1,7 @@
 use models::layout::{DecoderConfig, ModelLayout};
 
 use super::*;
-use crate::engine::hybrid_moe::{HybridMoeLayer, HybridMoeLayerConfig};
+use crate::engine::hybrid::moe::{HybridMoeLayer, HybridMoeLayerConfig};
 
 const EXPECTED_LAYERS: [u64; 30] = [
     0x69be_169d_89e4_8a1f,

@@ -1,7 +1,7 @@
 use super::super::{attention, config::DenseSwiGluLayerConfig, weights::AttentionWeights};
 use crate::engine::{
-    Array, Error, FusedAttention, KvCache, PagedContextMode, Result, Stream,
-    attention_batch_tuning, native_paged_attention_mode, paged_attention_min_context,
+    Array, Error, FusedAttention, KvCache, PagedContextMode, Result, Stream, attention::tuning,
+    native_paged_attention_mode, paged_attention_min_context,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -174,16 +174,15 @@ fn grouped_attention(
 ) -> Result<Vec<Option<Array>>> {
     let queries = prepared.iter().map(|(query, _, _)| query).collect::<Vec<_>>();
     let contexts = prepared.iter().map(|(_, context, _)| context).collect::<Vec<_>>();
-    let groups = attention_batch_tuning::compatible_groups(&queries, &contexts, causal)?;
+    let groups = tuning::batch::compatible_groups(&queries, &contexts, causal)?;
     let mut outputs = std::iter::repeat_with(|| None)
         .take(prepared.len())
         .collect::<Vec<Option<Array>>>();
     for rows in groups.iter().filter(|rows| rows.len() > 1) {
         let group_queries = rows.iter().map(|&row| queries[row]).collect::<Vec<_>>();
         let group_contexts = rows.iter().map(|&row| contexts[row]).collect::<Vec<_>>();
-        let Some(group_outputs) = attention_batch_tuning::forward(
-            &group_queries, &group_contexts, scale, causal, stream,
-        )?
+        let Some(group_outputs) =
+            tuning::batch::forward(&group_queries, &group_contexts, scale, causal, stream)?
         else {
             continue;
         };

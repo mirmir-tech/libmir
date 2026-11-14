@@ -14,6 +14,7 @@ use super::{
 };
 
 mod formats;
+mod vision;
 
 #[test]
 fn checkpoint_encoding_is_derived_from_weight_bindings() {

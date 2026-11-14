@@ -1,3 +1,4 @@
+mod long;
 use std::path::Path;
 
 use models::{
@@ -19,8 +20,6 @@ use crate::{
 mod assertions;
 mod batch;
 mod gemma;
-mod long_prefill;
-mod long_profile;
 mod policy;
 mod profile;
 mod projection_gate;

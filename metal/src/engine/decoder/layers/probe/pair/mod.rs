@@ -85,7 +85,7 @@ impl ProjectionPair {
 
     fn forward(&self, plan: Plan, stream: &Stream) -> Result<(Array, Array)> {
         if plan == Plan::Joined {
-            crate::engine::fused_gate_up::split_last(
+            crate::engine::fused::gate_up::split_last(
                 &self.joined.forward(&self.input, stream)?,
                 self.split,
                 stream,

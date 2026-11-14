@@ -1,6 +1,6 @@
 use crate::engine::{
     Array, Error, KvCache, KvContext, PagedContextMode, Result, Stream,
-    kernels::page_gather::Source,
+    kernels::page::gather::Source,
 };
 
 pub(super) fn enabled(
