@@ -83,7 +83,27 @@ fn prediction_module_drafts_the_decoder_greedy_token()
         rate(agreed)
     );
     assert!(rate(accepted) >= 0.85, "draft acceptance {:.4} is below 0.85", rate(accepted));
+    vision_session_does_not_draft(&template, &caches)?;
     compare(&template, &caches, records)
+}
+
+/// A vision prompt leaves the prediction module's K/V unwritten, so its
+/// session decodes without drafting.
+fn vision_session_does_not_draft(
+    template: &CudaSharedRoutedModelTemplate,
+    caches: &[Option<PagedKvCache>],
+) -> Result<()> {
+    let mut session = template.instantiate_with_caches(caches)?;
+    assert!(session.predicts());
+    let mut table = BlockTable::with_block_size(BLOCK);
+    table.push(BlockId(0));
+    table.set_token_len(3);
+    let image = copy(&template.backend, &vec![bf16::ZERO; template.decoder.hidden_size])?;
+    let positions = [0_u32, 1, 2, 0, 1, 2, 0, 1, 2];
+    session.prefill_vision(Uuid::new_v4(), &[1, 2, 3], &positions, &table, (1, 2), &image, 0)?;
+    assert!(!session.predicts());
+    assert_eq!(session.pending_drafts(), 0);
+    Ok(())
 }
 
 /// Greedy speculative decoding against plain decoding of the same prompts.

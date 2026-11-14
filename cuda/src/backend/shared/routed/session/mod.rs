@@ -116,6 +116,12 @@ impl CudaSharedRoutedModelSession {
         image: &DeviceBuffer<bf16>,
         position_delta: i32,
     ) -> Result<&DeviceBuffer<bf16>> {
+        // The prediction module embeds token ids, not image features, so a
+        // vision prompt leaves its K/V unwritten over the prompt; drafting
+        // over it would read recycled pages. Vision sessions never draft.
+        self.prediction = None;
+        self.drafts = None;
+        self.drafted = 0;
         self.prefill_inner(Pass {
             image_span: Some(image_span),
             image: Some(image),
@@ -152,6 +158,13 @@ impl CudaSharedRoutedModelSession {
     #[must_use]
     pub const fn logits(&self) -> &DeviceBuffer<bf16> {
         &self.logits
+    }
+
+    /// Whether the session drafts with the prediction module: a model that
+    /// loaded one, outside vision sessions.
+    #[must_use]
+    pub const fn predicts(&self) -> bool {
+        self.prediction.is_some()
     }
 
     #[must_use]

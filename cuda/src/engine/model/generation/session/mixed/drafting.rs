@@ -127,7 +127,7 @@ fn verifies(row: &DecodeSequence, speculate: bool) -> bool {
         && !matches!(row.sampling_logits, runtime::backend::SamplingLogits::Masked { .. })
 }
 
-/// Rows the packed pass samples on the device, without vision offsets or a
+/// Rows the packed pass samples on the device, without vision sessions or a
 /// repeated session.
 fn supported(
     execution: &MixedMixerExecution,
@@ -152,6 +152,9 @@ fn supported(
                 && execution.sessions.contains_key(&row.session_id)
         })
         && ids.iter().all(|id| {
-            execution.sessions.get(id).is_none_or(|session| session.position_delta() == 0)
+            execution
+                .sessions
+                .get(id)
+                .is_none_or(|session| session.predicts() && session.position_delta() == 0)
         })
 }
