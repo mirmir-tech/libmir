@@ -100,8 +100,10 @@ pub struct LatentRoutedConfig {
     pub expert_count: usize,
     /// Experts selected per token.
     pub top_k: usize,
-    /// Width of the latent space routed experts operate in.
-    pub latent_size: usize,
+    /// Width of the latent space routed experts operate in, when the
+    /// checkpoint projects into one; routed experts otherwise work at the
+    /// model hidden width.
+    pub latent_size: Option<usize>,
     /// Intermediate width of one routed expert.
     pub expert_intermediate_size: usize,
     /// Intermediate width of the always-active shared expert, if present.

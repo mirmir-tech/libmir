@@ -18,7 +18,6 @@ const PACKED_PREFILL_RESERVE_DIVISOR: usize = 8;
 const PACKED_PREFILL_MINIMUM_RESERVE: usize = 2 * 1024 * 1024 * 1024;
 const PACKED_PREFILL_WORKSPACE_COPIES: usize = 8;
 
-#[cfg(test)]
 mod history;
 mod pages;
 mod prefix;
@@ -106,7 +105,8 @@ impl LoadedModel {
         for state in self.sessions.values() {
             state.cache.extend_graph_roots(&mut roots);
         }
-        self.stream.eval_many(&roots)?;
+        // Persistent history leaves K/V page writes outside the output graph.
+        self.stream.eval_many_with_paged_arenas(&roots)?;
         self.stream.synchronize()?;
         self.stream.detach_paged_arena_graphs()?;
         for state in self.sessions.values() {

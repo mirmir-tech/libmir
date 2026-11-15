@@ -1,5 +1,5 @@
 mod batch;
-#[cfg(test)]
+mod history;
 mod offsets;
 
 use models::weights::RoutedDecoderLayerBindings;
@@ -141,6 +141,16 @@ impl ClampedRoutedAttention {
             (crate::engine::probe::Stage::Value, &values),
         ] {
             crate::engine::probe::detail(stage, array)?;
+        }
+        if !causal
+            && let Some(output) = self.attend_persistent(
+                [&queries, &keys, &values],
+                &mut [&mut *cache],
+                &[position],
+                stream,
+            )?
+        {
+            return Ok(output);
         }
         let queries = self.rope(&queries, position, stream)?;
         let keys = self.rope(&keys, position, stream)?;

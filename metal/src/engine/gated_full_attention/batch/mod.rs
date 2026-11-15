@@ -1,5 +1,6 @@
 use super::{GatedFullAttention, rope};
 mod attention;
+mod history;
 mod rows;
 use rows::{dimension, head_row, sequence_row};
 #[cfg(test)]
@@ -85,6 +86,16 @@ impl GatedFullAttention {
                 mode,
                 stream,
             );
+        }
+        if !causal
+            && let Some(output) = self.forward_persistent(
+                [&queries, &gate, &keys, &values],
+                caches,
+                positions,
+                stream,
+            )?
+        {
+            return Ok(output);
         }
         if let Some(position) = common_position(positions) {
             return self.forward_batched_rows(
@@ -184,9 +195,10 @@ impl GatedFullAttention {
             })
             .collect::<Result<Vec<_>>>()?;
         #[cfg(test)]
-        let attended = if crate::engine::persistent_history::enabled(
-            caches, &contexts, causal, sequence, stream,
-        ) {
+        let attended = if stream.config().diagnostics.history_batching
+            == crate::config::HistoryBatching::Persistent
+            && crate::engine::persistent_history::enabled(caches, &contexts, causal, sequence)
+        {
             crate::engine::persistent_history::execute(
                 history.as_deref(),
                 caches,
@@ -194,6 +206,7 @@ impl GatedFullAttention {
                 [&keys, values],
                 &queries,
                 self.config.attention_scale,
+                None,
                 stream,
             )?
         } else if gather {

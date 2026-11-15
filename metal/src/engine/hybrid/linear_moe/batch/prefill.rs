@@ -46,7 +46,7 @@ impl HybridLinearMoeModel {
                 && positions.iter().all(|&position| position == 512)
             {
                 let input = layer.post_attention_norm.apply(&hidden, layer.rms_norm_eps, stream)?;
-                layer.moe.diagnose_prefill(&input, stream)?;
+                layer.moe.routed()?.diagnose_prefill(&input, stream)?;
             }
             #[cfg(test)]
             if matches!(
@@ -59,7 +59,7 @@ impl HybridLinearMoeModel {
                 && positions.iter().all(|&position| position == 512)
             {
                 let input = layer.post_attention_norm.apply(&hidden, layer.rms_norm_eps, stream)?;
-                layer.moe.compare_alignment_budgets(&input, index, stream)?;
+                layer.moe.routed()?.compare_alignment_budgets(&input, index, stream)?;
             }
             hidden = layer.feed_forward_packed_prefill(&hidden, stream)?;
             packed_profile::record(

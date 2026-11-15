@@ -6,7 +6,7 @@ use crate::engine::{Array, Error, Result, Stream};
 mod tests;
 
 #[derive(Debug)]
-pub(super) struct StateArray(Storage);
+pub(in crate::engine) struct StateArray(Storage);
 
 #[derive(Debug)]
 enum Storage {
@@ -44,14 +44,14 @@ impl Deref for StateArray {
 impl StateArray {
     // Keep the retained parent among explicit roots so each evaluated state
     // generation releases its producing graph.
-    pub(super) fn graph_root(&self) -> &Array {
+    pub(in crate::engine) fn graph_root(&self) -> &Array {
         match &self.0 {
             Storage::Owned(array) => array,
             Storage::Row { source, .. } => &source.array,
         }
     }
 
-    pub(super) fn try_clone(&self) -> Result<Self> {
+    pub(in crate::engine) fn try_clone(&self) -> Result<Self> {
         let array = Array::from_native(self.native().clone())?;
         Ok(match &self.0 {
             Storage::Owned(_) => array.into(),
@@ -63,7 +63,7 @@ impl StateArray {
         })
     }
 
-    pub(super) fn join(rows: &[&Self], stream: &Stream) -> Result<Array> {
+    pub(in crate::engine) fn join(rows: &[&Self], stream: &Stream) -> Result<Array> {
         if let Some(array) = Self::whole_batch(rows) {
             return Array::from_native(array.native().clone());
         }
@@ -85,7 +85,11 @@ impl StateArray {
         complete.then_some(&source.array)
     }
 
-    pub(super) fn split(array: Array, rows: usize, stream: &Stream) -> Result<Vec<Self>> {
+    pub(in crate::engine) fn split(
+        array: Array,
+        rows: usize,
+        stream: &Stream,
+    ) -> Result<Vec<Self>> {
         let shape = array
             .shape()?
             .into_iter()

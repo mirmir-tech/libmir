@@ -45,13 +45,16 @@ impl HybridLinearMoeModel {
         stream: &Stream,
     ) -> Result<Self> {
         let compatible = lowering.len() == decoder.num_hidden_layers
-            && lowering
-                .iter()
-                .all(|layer| layer.feed_forward == FeedForwardLowering::SharedRouted)
+            && lowering.iter().all(|layer| layer.feed_forward == lowering[0].feed_forward)
+            && matches!(
+                lowering.first().map(|layer| layer.feed_forward),
+                Some(FeedForwardLowering::SharedRouted | FeedForwardLowering::Dense)
+            )
             && lowering.iter().any(|layer| layer.mixer == MixerLowering::Linear);
         if !compatible || decoder.tie_word_embeddings {
             return Err(Error::InvalidModel(
-                "hybrid linear MoE requires untied shared-expert decoder weights".into(),
+                "hybrid linear runtime requires untied dense or shared-expert decoder weights"
+                    .into(),
             ));
         }
         let norm_shift = norm_shift(tensors, bindings, lowering)?;
@@ -61,7 +64,7 @@ impl HybridLinearMoeModel {
                 tensors,
                 decoder,
                 index,
-                bindings.hybrid_decoder_layer(index)?,
+                bindings.mixed_decoder_layer(index)?,
                 *lowered,
                 norm_shift,
                 stream,
@@ -71,7 +74,7 @@ impl HybridLinearMoeModel {
         let expert_fusion = configure_expert_fusion(
             &mut layers,
             stream,
-            FusionPlanner::new(stream).expert_mode(FeedForwardLowering::SharedRouted),
+            FusionPlanner::new(stream).expert_mode(lowering[0].feed_forward),
         )?;
         super::decode_plan::prepare(&mut layers, stream)?;
         Ok(Self {
@@ -192,7 +195,7 @@ fn norm_shift(
         .iter()
         .position(|layer| layer.mixer == MixerLowering::Linear)
         .ok_or_else(|| Error::InvalidModel("missing linear attention layer".into()))?;
-    let layer = bindings.hybrid_decoder_layer(index)?;
+    let layer = bindings.mixed_decoder_layer(index)?;
     let HybridMixerBindings::Linear(linear) = layer.mixer else {
         return Err(Error::InvalidModel("linear layer has no linear mixer binding".into()));
     };

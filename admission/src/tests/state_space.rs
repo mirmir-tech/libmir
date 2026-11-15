@@ -49,14 +49,50 @@ fn lowers_state_space_hybrid_layers_on_cuda() -> AnyResult<()> {
 }
 
 #[test]
-fn admits_state_space_hybrids_on_cuda_only() -> AnyResult<()> {
+fn admits_state_space_hybrids_on_cuda_and_metal() -> AnyResult<()> {
     let (task, semantic) = hybrid_contract()?;
 
     assert_eq!(
         cuda::admit(&task, Some(&semantic))?,
         cuda::CudaArchitecture::Generation(cuda::CudaDecoderRuntime::StateSpaceHybrid)
     );
-    let metal = metal::admit(&task, Some(&semantic)).err().map(|error| error.to_string());
-    assert!(metal.is_some_and(|error| error.contains("state-space mixer")));
+    assert_eq!(
+        metal::admit(&task, Some(&semantic))?,
+        metal::MetalArchitecture::Generation(metal::MetalDecoderRuntime::StateSpaceHybrid)
+    );
+    Ok(())
+}
+
+#[test]
+fn cuda_rejects_routed_experts_without_a_latent_space() -> AnyResult<()> {
+    let decoder = DecoderConfig::from_value(&json!({
+        "hidden_size": 32,
+        "intermediate_size": 32,
+        "num_attention_heads": 4,
+        "num_key_value_heads": 2,
+        "head_dim": 8,
+        "vocab_size": 64,
+        "layers_block_type": ["mamba", "moe", "mamba", "attention", "moe"],
+        "mamba_num_heads": 4,
+        "mamba_head_dim": 16,
+        "ssm_state_size": 4,
+        "n_groups": 2,
+        "conv_kernel": 4,
+        "chunk_size": 8,
+        "n_routed_experts": 4,
+        "num_experts_per_tok": 2,
+        "moe_latent_size": null,
+        "moe_intermediate_size": 32,
+        "norm_topk_prob": true,
+        "mlp_hidden_act": "relu2"
+    }))?;
+    let semantic = SemanticModelSpec::discover(&decoder, &TensorCatalog { tensors: Vec::new() })?;
+    let task = TaskExecutionPlan::Generation { decoder };
+    let error = cuda::admit(&task, Some(&semantic)).err().map(|error| error.to_string());
+    assert!(error.is_some_and(|error| error.contains("moe_latent_size")));
+    assert_eq!(
+        metal::admit(&task, Some(&semantic))?,
+        metal::MetalArchitecture::Generation(metal::MetalDecoderRuntime::StateSpaceHybrid)
+    );
     Ok(())
 }

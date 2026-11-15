@@ -18,7 +18,9 @@ pub(super) enum RemainderPolicy {
     Consume,
     PreserveCohort,
 }
-const MAX_PACKED_PREFILL_TOKEN_PAIRS: usize = 32 * 1_024 * 1_024;
+// Packs five 32k rows in 2048-token chunks; the memory check still guards the
+// workspace of each packed step.
+const MAX_PACKED_PREFILL_TOKEN_PAIRS: usize = 1_024 * 1_024 * 1_024;
 
 impl Batch {
     pub(super) fn execute_packed(
@@ -133,8 +135,8 @@ mod tests {
 
     #[test]
     fn bounds_packed_prefill_by_attention_work() {
-        assert!(packed_prefill_work_fits(10, 8_192, 204));
-        assert!(!packed_prefill_work_fits(10, 16_384, 204));
-        assert!(packed_prefill_work_fits(2, 16_384, 512));
+        assert!(packed_prefill_work_fits(5, 32_768, 2_048));
+        assert!(packed_prefill_work_fits(10, 49_152, 2_048));
+        assert!(!packed_prefill_work_fits(10, 65_536, 2_048));
     }
 }

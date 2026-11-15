@@ -93,17 +93,23 @@ pub(super) fn feed_forward(
         FeedForwardSpec::None => {
             !has(LayerTensorRole::PostAttentionNorm) && !has(LayerTensorRole::Router)
         },
-        FeedForwardSpec::LatentRouted { routed, shared, .. } => {
-            let experts = (0..routed.expert_count).all(|expert| {
-                [ExpertProjectionRole::Up, ExpertProjectionRole::Down].into_iter().all(
-                    |projection| {
-                        has(LayerTensorRole::ExpertProjection { expert: Some(expert), projection })
-                    },
-                ) && !has(LayerTensorRole::ExpertProjection {
-                    expert: Some(expert),
-                    projection: ExpertProjectionRole::Gate,
-                })
+        FeedForwardSpec::LatentRouted { latent_size, routed, shared, .. } => {
+            let projection =
+                |expert, projection| has(LayerTensorRole::ExpertProjection { expert, projection });
+            let individual = (0..routed.expert_count).all(|expert| {
+                projection(Some(expert), ExpertProjectionRole::Up)
+                    && projection(Some(expert), ExpertProjectionRole::Down)
+                    && !projection(Some(expert), ExpertProjectionRole::Gate)
             });
+            let stacked = projection(None, ExpertProjectionRole::Up)
+                && projection(None, ExpertProjectionRole::Down)
+                && !projection(None, ExpertProjectionRole::Gate);
+            let experts = individual || stacked;
+            let latent_projection =
+                |projection| has(LayerTensorRole::LatentProjection { projection });
+            let latent_complete = latent_projection(LatentProjectionRole::Input)
+                == latent_size.is_some()
+                && latent_projection(LatentProjectionRole::Output) == latent_size.is_some();
             let shared_projection =
                 |projection| has(LayerTensorRole::SharedExpertProjection { projection });
             let shared_complete = match shared {
@@ -115,16 +121,11 @@ pub(super) fn feed_forward(
                 None => !shared_projection(FeedForwardProjectionRole::Up),
             };
             experts
+                && latent_complete
                 && shared_complete
                 && has(LayerTensorRole::PostAttentionNorm)
                 && has(LayerTensorRole::Router)
                 && has(LayerTensorRole::RouterCorrectionBias)
-                && has(LayerTensorRole::LatentProjection {
-                    projection: LatentProjectionRole::Input,
-                })
-                && has(LayerTensorRole::LatentProjection {
-                    projection: LatentProjectionRole::Output,
-                })
         },
         FeedForwardSpec::Dense { .. }
         | FeedForwardSpec::Routed { .. }

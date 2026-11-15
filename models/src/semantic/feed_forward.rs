@@ -16,10 +16,11 @@ pub enum FeedForwardSpec {
         dense_activation: ActivationSpec,
         routed: RoutedExpertsSpec,
     },
-    /// Routed experts operating in a projected latent space, plus an optional
-    /// shared expert at full width.
+    /// Routed experts operating in a projected latent space when
+    /// `latent_size` is set, plus an optional shared expert at full width.
+    /// Without a latent size the experts work at the model hidden width.
     LatentRouted {
-        latent_size: usize,
+        latent_size: Option<usize>,
         routed: RoutedExpertsSpec,
         shared: Option<SharedExpertSpec>,
         routed_scale: f64,

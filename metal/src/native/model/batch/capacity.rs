@@ -12,6 +12,7 @@ impl LoadedModel {
         sampling: runtime::backend::SamplingLogits,
     ) -> Result<NativeOutput> {
         let inputs = [DecodeInput { session, token, sampling }];
+        self.release_settled_prefill_reserve()?;
         self.validate_decode_inputs(&inputs)?;
         self.validate_decode_capacity(&inputs)?;
         let result = self.decode_admitted(session, token, &inputs[0].sampling);

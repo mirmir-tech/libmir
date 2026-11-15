@@ -1,7 +1,9 @@
 use super::{Array, BoundLinear, MxFp4Shape, Result, RouterOutput, Stream, activate};
 
-/// Test-only sorted prefill, using the same route permutation and restoration
-/// as Qwen while retaining clamped activation, gathered biases and graph sum.
+/// Sorted multi-token expert dispatch, using the same route permutation and
+/// restoration as Qwen while retaining clamped activation, gathered biases and
+/// graph sum. MLX-LM sorts here too; unsorted prefill gathers are about 10x
+/// slower.
 pub(super) fn forward(
     input: &Array,
     routing: &RouterOutput,

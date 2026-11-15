@@ -11,12 +11,13 @@ mod paged_attention;
 pub(super) use paged_attention::{PagedExecution, partial_blocks, two_pass_supported};
 mod quantized_kv;
 mod registry;
+mod state_space;
 mod template;
 
 pub use direct_fp8::DirectFp8Spec;
 pub(super) use direct_fp8::embedding::DirectFp8EmbeddingSpec;
 pub(super) use mxfp4::MxFp4Shape;
-pub(super) use page::write::{PageWriteOptions, PreparedPageWrite};
+pub(super) use page::write::{PageRowsOptions, PageWriteOptions, PreparedPageWrite};
 pub(super) use quantized_kv::{PreparedQuantizedPageWrite, QuantizedPageWriteOptions};
 pub(super) use template::template;
 
@@ -184,7 +185,6 @@ mirtal::metal_kernel! {
 
 #[derive(Debug)]
 pub(super) struct Kernels {
-    #[cfg(test)]
     pub(crate) history_append: crate::engine::persistent_history::Append,
     #[cfg(test)]
     pub(crate) page_gather: page::gather::Gather,
@@ -203,6 +203,7 @@ pub(super) struct Kernels {
     expert_reduce: expert::reduce::ExpertReduceKernel,
     gated_delta_recurrence: mirtal::MetalKernel<6, 2>,
     gated_delta_decode: mirtal::MetalKernel<8, 2>,
+    state_space_decode: mirtal::MetalKernel<7, 2>,
     gptq: gptq::GptqKernels,
     paged_attention: mirtal::MetalKernel<6, 1>,
     paged_attention_batched: mirtal::MetalKernel<29, 1>,
@@ -211,6 +212,7 @@ pub(super) struct Kernels {
     paged_attention_partial: mirtal::MetalLibrary,
     paged_attention_reduce: mirtal::MetalKernel<3, 1>,
     paged_kv: mirtal::MetalLibrary,
+    page_rows: page::write::PageRowsWrite,
     mxfp4_gate_up: mirtal::MetalKernel<6, 1>,
     mxfp4_embedding: mxfp4::embedding::MxFp4EmbeddingKernel,
     #[cfg(test)]

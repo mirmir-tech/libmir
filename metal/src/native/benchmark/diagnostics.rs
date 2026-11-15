@@ -14,6 +14,9 @@ pub(super) fn isolated_config() -> Arc<MetalConfig> {
         config.diagnostics.prefill_materialization =
             crate::config::PrefillMaterialization::StateOnly;
     }
+    if enabled("MIRMIR_BENCH_DENSE_HISTORY_ROWS") {
+        config.batch.dense_history = crate::config::DenseHistoryMode::PerRow;
+    }
     if !enabled("MIRMIR_BENCH_PREFIX_CACHE") {
         config.cache.prefix_cache_entries = 0;
     }

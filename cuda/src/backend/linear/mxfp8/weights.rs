@@ -71,7 +71,8 @@ impl MxFp8ExpertWeights {
                 },
                 down,
             ),
-            RoutedExpertBindings::Individual { .. } => {
+            RoutedExpertBindings::UngatedStacked { .. }
+            | RoutedExpertBindings::Individual { .. } => {
                 return Err(Error::UnsupportedDecoderLayer(
                     "MXFP8 CUDA experts require stacked checkpoint bindings".into(),
                 ));

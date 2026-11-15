@@ -62,8 +62,9 @@ pub use roles::{
 };
 pub use slot::LayerSlot;
 pub use state_space::{
-    AttentionProjectionBindings, LatentRoutedBindings, StateSpaceHybridLayerBindings,
-    StateSpaceHybridMixerBindings, StateSpaceMixerBindings, UngatedExpertBindings,
+    AttentionProjectionBindings, LatentProjectionBindings, LatentRoutedBindings,
+    StateSpaceHybridLayerBindings, StateSpaceHybridMixerBindings, StateSpaceMixerBindings,
+    UngatedExpertBindings,
 };
 pub use types::{
     BindingTransform, ExpertProjectionLayout, TensorBinding, TensorPacking, TensorStorage,

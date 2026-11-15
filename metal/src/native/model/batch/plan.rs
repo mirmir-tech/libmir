@@ -17,6 +17,7 @@ impl LoadedModel {
         &mut self,
         inputs: &[DecodeInput],
     ) -> Result<Vec<(NativeOutput, DecodeExecution)>> {
+        self.release_settled_prefill_reserve()?;
         // Validate every row before advancing any cache, including scalar rows.
         self.validate_decode_inputs(inputs)?;
         self.validate_decode_capacity(inputs)?;
@@ -41,6 +42,7 @@ impl LoadedModel {
                     outputs.push((row, (output, DecodeExecution::Scalar)));
                 },
                 Group::Packed(rows) => {
+                    let rows = self.stable_packed_order(inputs, rows)?;
                     let selected = rows.iter().map(|row| inputs[*row].clone()).collect::<Vec<_>>();
                     let execution = DecodeExecution::Packed { rows: rows.len() };
                     for (row, output) in rows.into_iter().zip(self.decode_batch_admitted(
@@ -55,6 +57,19 @@ impl LoadedModel {
         }
         outputs.sort_unstable_by_key(|(row, _)| *row);
         Ok(outputs.into_iter().map(|(_, output)| output).collect())
+    }
+
+    /// Persistent batch history reuses its buffers only for a stable row order,
+    /// while ready rows arrive in request-completion order.
+    fn stable_packed_order(
+        &self,
+        inputs: &[DecodeInput],
+        mut rows: Vec<usize>,
+    ) -> Result<Vec<usize>> {
+        if self.execution.decoder()?.keeps_persistent_row_order(&self.stream) {
+            rows.sort_unstable_by_key(|row| inputs[*row].session);
+        }
+        Ok(rows)
     }
 }
 

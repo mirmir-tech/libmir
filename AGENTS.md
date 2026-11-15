@@ -121,7 +121,7 @@ The target shape is:
   Qwen and synthetic clamped tests. Do not enable it by default from the first
   favorable pair; see Workmir's `2026-09-06-prefill-cohort-budget` report.
   Any candidate must retain scalar progress when the whole budget is tiny.
-- Use the latest stable MLX as the tuning baseline (currently 0.32.3, pinned
+- Use the latest stable MLX as the tuning baseline (currently 0.32.4, pinned
   by Workmir). Cross-version greedy differences alone do not establish a quality
   regression or justify reverting the baseline. Validate semantic correctness
   on the new version and compare tuning candidates within that same version.
@@ -383,8 +383,8 @@ The target shape is:
   SortedGraph changes reduction arithmetic. Test-only MXFP4 bank gate/up
   fusion matches output bitwise but gives only 1.010x local 512 speedup and
   noisy 128 results. Do not enable it or repeat full-model series from that.
-  Clamped sorted prefill also remains test-only; retain gathered biases,
-  clamped activation, interleaving and graph reduction. See Workmir's
+  Clamped sorted prefill is now the production multi-token path; retain gathered
+  biases, clamped activation, interleaving and graph reduction. See Workmir's
   `2026-09-07-moe-prefill` report. The missing native LHS gather index contract
   is a separate hypothesis, not an established optimization.
 - Mirtal now exposes optional LHS/RHS gather indices for affine and MXFP4.
@@ -1223,7 +1223,7 @@ The target shape is:
   assertion. See Workmir's `2026-10-08-state-only-release` report.
 - DeferredToken preserves384 IDs but slightly worsens total time; do not promote.
   A separate1024-token chunk trial changes generated token3;2048 was not run.
-  Keep production512 cap. Actual C1 HTTP trace did not trigger the128-token
+  The prefill chunk cap is now 2048, matching MLX-LM's step; 1024 changed a greedy token, so judge answers rather than exact IDs. Actual C1 HTTP trace did not trigger the128-token
   pressure cap, so do not attribute current short-prefill cost to that policy.
 - Native activity assertions and canonical HTTP refresh do not establish stable
   conditions. The latter stops during startup on44 global Swapins, no measured
@@ -1282,3 +1282,108 @@ The target shape is:
   Global layers use fused padded attention; local layers multiply
   64-query blocks against their band only, so batches longer than one window
   are padded to whole blocks.
+
+
+## Dense persistent decode history
+
+- `MetalBatchConfig::dense_history` defaults to `Persistent`. Dense packed decode
+  then rotates common-position rows together, appends one `[B, H, T, D]` tensor
+  per layer and runs one SDPA call, the shape MLX-LM's batched K/V cache uses.
+  Workmir's Qwen3-4B native ABBA measures 1.35–1.71x on B=2/5/10 with 0–5% spread.
+- The path needs one shared position and a stable row order. Ready rows arrive in
+  request-completion order, so `stable_packed_order` sorts them by session only
+  when positions match. Do not split rows into per-position cohorts: staggered
+  prefill waves and prompts differing by one token fragment the batch, regressed
+  long-context C5/C10 and produced an HTTP 500.
+- Rows may also be ragged: history pads shorter rows and masks the tail. Dense,
+  shared-routed and clamped runtimes share `persistent_history::attend`; sinks are
+  passed through, sliding layers keep their ring and per-row attention.
+- A lone paged session uses the same history (`[1, H, T, D]`, as MLX-LM's K/V cache):
+  this removes the per-step page gather, lifting C1 at 8k from 0.77-0.85x to
+  1.06-1.18x of MLX-LM. Its page writes are no longer ancestors of the logits, so
+  every evaluation before `detach_paged_arena_graphs` must root the arenas.
+- Admission is decided before any cache mutation. At each prefill boundary the
+  budget is the whole live headroom above the prefill reserve, counting history
+  already retained; an explicit `set_limit` pins it. Suspend only when headroom
+  falls below that reserve: paged arenas keep their high-water capacity, so a
+  share of `active` memory (the old 50% rule) suspended every long-context cohort.
+- Gemma-style packed decode (`hybrid_moe`) shares the same history for global
+  layers. Deep C5/C10 TG in llama-benchy also reflects staggered prefill: compare
+  TTFT spread and per-request TG before reading aggregate TG as decode speed.
+
+## Prefill throughput
+
+- A reused cohort history appends every row's token with one page write per
+  layer (`KvCache::write_rows`): per-row aliasing writes serialized 360 dispatches
+  a step at C10 and cost about 18%. Qwen3-4B C10 at 0/4k context peaks at 224.7/179
+  tok/s versus MLX-LM 220/172. The kernel takes host-resolved slots and never reads
+  the page table, so a table changed while preparing rows is scheduled with
+  `async_eval`; otherwise a flush detaches it unevaluated and native reads fail.
+- K/V sizing counts sliding windows once: on Metal every sliding layer keeps a
+  bounded ring outside the block pool (`bounded_sliding`), and the prefill wave
+  rate averages `estimated_prefix_bytes` over 16k tokens. Charging Gemma's 25
+  sliding layers per token (225 KB instead of 20 KB) sized the cache for 98k tokens
+  and prefilled five 32k prompts two at a time. Gemma 26B C5 at 32k now finishes
+  in 97 s versus MLX-LM 114 s with aligned TTFT; C10 runs aligned too.
+- Packed device sampling runs once for rows sharing parameters, with one draw per
+  row. llama-benchy sends no sampling fields, so mirmir uses the checkpoint's
+  generation defaults while MLX-LM's server samples greedily.
+- Long-context prefill keeps 2048-token chunks: `MAX_PREFILL_TOKEN_PAIRS` bounds
+  them only past 128k context (the old 8M bound gave 255 tokens at 32k), and
+  packed steps may hold five 32k rows. Physical waves hold whole-prompt K/V in
+  half the headroom; `packed_prefill_fits` still guards the chunk workspace.
+  Chunks shrink to 128 tokens only when headroom falls below the prefill reserve.
+  Qwen3.6 C5 at 32k: PP 916 to 1959 tok/s, batch done in 89 s versus MLX-LM 108 s;
+  Gemma 26B C2/C5 at 8k reach MLX-LM. Needle retrieval at ~30k passes C1/C3.
+- GPT-OSS sorted expert dispatch lifts prefill about 10x (0.08x to 0.83–0.94x of
+  MLX-LM); unsorted `gather` was the cost. The 2048-token chunk cap lifts Qwen3.6
+  C1 prefill from 0.81x to 1.13x. Scalar prefill pressure counts live allocations
+  only: the reclaimable allocator cache halved Gemma 26B's C1 prefill.
+
+## Memory admission at deep concurrency
+
+- The unified 2/5 K/V limit covers the whole cache: bounded sliding rings are
+  subtracted before sizing the growing pool. Gemma 31B had planned 21 GB of
+  pages plus 13.6 GB of rings (55 GB residency of 55.6 GB usable).
+- History admission keeps room for the K/V the starting prefill still adds
+  (`apply_history_pressure(memory, prefill_tokens)`, prompt tokens times the
+  16k-averaged rate). Early rows had duplicated about 11 GB of history beside
+  rows still prefilling; Qwen3.8 C5 at 32k went from 35 OOMs to none, TG 11.6 to
+  33.5 tok/s with aligned TTFT.
+- The history room held for a starting prefill lasts only while a prefill batch is
+  in flight (`release_settled_prefill_reserve` before each decode step), and
+  counts only prompt tokens beyond pages the arenas already hold. Holding it
+  through the whole decode refused Qwen3-4B C10 at 8k its history (limit 13.4 GB,
+  need 15.1 GB): TG 88.8 fell to 66.3, peak 110 to 75. Now 81.6 with peak 110,
+  d16384 C5 56.6, while Qwen3.8 C5 at 32k keeps 0 OOMs (TG 32.2).
+- `Session::drop` releases backend pages and logical blocks before telling the
+  scheduler: notifying first let a cohort start while a finished session still
+  held its pages, and the batch failed with "requires N free K/V pages".
+- Open: Gemma 31B C5/C10 at 4k+ context still hits Metal OOM on the first decode
+  after a large prefill. MLX-LM dies on the same cells, so mirmir only has to fail
+  those requests gracefully and keep serving; a memory-bounded admission is a
+  later fix. llama-benchy averages survivors, so count OOMs in server logs.
+
+## Head-dim-512 decode attention
+
+- Gemma 4 global-layer decode bypasses MLX's fused SDPA: MLX 0.32.4 sends unmasked
+  single-token D512 queries to its generic vector kernel, about three times slower
+  than a GQA-grouped matmul, f32 softmax and matmul
+  (`Array::grouped_decode_attention`; 5.4 versus 1.6 ms per layer at 32k, 0.68
+  versus 0.16 ms at 4k). Gemma 31B C2 at 6k context decodes in 78 ms per step (was
+  98, MLX-LM 84). Only float additive padding masks take the path.
+
+## Pixel-shuffle vision on Metal
+
+- Metal runs the pixel-shuffle (Nemotron Omni) vision contract:
+  `PixelShuffleVisionTower` embeds patches with the position table resized
+  bilinearly at half-pixel centres to the larger grid side, runs pre-norm blocks
+  with fused biased QKV and exact GELU, folds each 2×2 block of patches into
+  channels (block rows, then columns) and projects through RMS norm, `relu²` and
+  two linears. Nemotron-H prefills the soft tokens over the image span with plain
+  positions (`DecoderExecution::forward_embedded_multimodal`); its attention has
+  no positional encoding. Validation is synthetic only: a host f64 reference of
+  the CUDA kernels on a non-square grid, and spliced span embeddings reproducing
+  the plain prefill. `records_a_real_pixel_shuffle_tower_output` writes a real
+  checkpoint's soft tokens for comparison with the CUDA recorder once a checkpoint
+  that fits 64 GiB is available.

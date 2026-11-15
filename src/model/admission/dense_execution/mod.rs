@@ -209,7 +209,9 @@ fn dense_routed(bindings: RoutedExpertBindings<'_>) -> bool {
         RoutedExpertBindings::SeparateGateUp { gate, up, down } => [gate, up, down]
             .iter()
             .all(|binding| matches!(binding.storage, TensorStorage::Dense { .. })),
-        RoutedExpertBindings::Individual { .. } => false,
+        RoutedExpertBindings::UngatedStacked { .. } | RoutedExpertBindings::Individual { .. } => {
+            false
+        },
     }
 }
 

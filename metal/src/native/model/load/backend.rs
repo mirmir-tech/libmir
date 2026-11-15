@@ -6,12 +6,13 @@ use models::{
 use super::super::{KV_CACHE_STEP, LoadedVisionModel};
 use crate::{
     engine::{
-        DecoderModel, KvPageFormat, ModelTensors, PooledVisionTower, SpatialMergeVisionTower,
-        Stream,
+        DecoderModel, KvPageFormat, ModelTensors, PixelShuffleVisionTower, PooledVisionTower,
+        SpatialMergeVisionTower, Stream,
         clamped_routed::ClampedRoutedModel,
         dense::swiglu::DenseSwiGluModel,
         hybrid::{linear_moe::HybridLinearMoeModel, moe::HybridMoeModel},
         lowering::{DecoderLowering, DecoderRuntime, MixerLowering},
+        state_space_hybrid::StateSpaceHybridModel,
     },
     native::error::{Error, Result},
 };
@@ -75,18 +76,21 @@ pub(super) fn load_vision_model(
                 .ok_or_else(|| {
                     Error::UnsupportedModel("pooled vision projection binding is missing".into())
                 })?;
-            Ok(Some(LoadedVisionModel::PooledEncoder(PooledVisionTower::load(
+            Ok(Some(LoadedVisionModel::Pooled(PooledVisionTower::load(
                 tensors, config, projection, stream,
             )?)))
         },
         Some(VisionConfig::SpatialMergeEncoder(config)) => {
-            Ok(Some(LoadedVisionModel::SpatialMergeEncoder(SpatialMergeVisionTower::load(
+            Ok(Some(LoadedVisionModel::SpatialMerge(SpatialMergeVisionTower::load(
                 tensors, config, stream,
             )?)))
         },
-        // No Metal tower runs this contract yet; the model loads text-only
-        // and its prefill reports the missing tower.
-        Some(VisionConfig::PixelShuffleEncoder(_)) | None => Ok(None),
+        Some(VisionConfig::PixelShuffleEncoder(config)) => {
+            Ok(Some(LoadedVisionModel::PixelShuffle(PixelShuffleVisionTower::load(
+                tensors, config, stream,
+            )?)))
+        },
+        None => Ok(None),
     }
 }
 
@@ -113,11 +117,11 @@ pub(super) fn load_decoder_model(
             KV_CACHE_STEP,
             stream,
         )?)),
-        DecoderRuntime::DenseAndRouted => {
+        DecoderRuntime::DenseAndRouted | DecoderRuntime::DenseGelu => {
             load_dense_routed(lowering, tensors, decoder, bindings, stream)
         },
         DecoderRuntime::Dense => load_dense(lowering, tensors, decoder, bindings, stream),
-        DecoderRuntime::SharedRouted => Ok(DecoderModel::new(HybridLinearMoeModel::load(
+        DecoderRuntime::StateSpaceHybrid => Ok(DecoderModel::new(StateSpaceHybridModel::load(
             tensors,
             decoder,
             bindings,
@@ -125,6 +129,16 @@ pub(super) fn load_decoder_model(
             KV_CACHE_STEP,
             stream,
         )?)),
+        DecoderRuntime::SharedRouted | DecoderRuntime::DenseMixed => {
+            Ok(DecoderModel::new(HybridLinearMoeModel::load(
+                tensors,
+                decoder,
+                bindings,
+                lowering.layers(),
+                KV_CACHE_STEP,
+                stream,
+            )?))
+        },
     }
 }
 

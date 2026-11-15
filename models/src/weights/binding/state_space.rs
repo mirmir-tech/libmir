@@ -1,8 +1,8 @@
 //! Typed binding view of state-space hybrid decoder layers.
 
 use super::{
-    AttentionProjectionRole, FeedForwardProjectionRole, LatentProjectionRole, LayerTensorRole,
-    StateSpaceTensorRole, TensorBinding, WeightBindingPlan,
+    AttentionProjectionRole, ExpertProjectionRole, FeedForwardProjectionRole, LatentProjectionRole,
+    LayerTensorRole, StateSpaceTensorRole, TensorBinding, WeightBindingPlan,
     slot::LayerSlot,
     view::{RoutedExpertBindings, sources},
 };
@@ -49,11 +49,18 @@ pub struct LatentRoutedBindings<'a> {
     pub norm: &'a TensorBinding,
     pub router: &'a TensorBinding,
     pub correction_bias: &'a TensorBinding,
-    pub latent_input: &'a TensorBinding,
-    pub latent_output: &'a TensorBinding,
-    /// Per-expert up/down projections at latent width.
+    /// Projections into and out of the latent space; absent when routed
+    /// experts operate at the model hidden width.
+    pub latent: Option<LatentProjectionBindings<'a>>,
+    /// Up/down projections, per expert or stacked, at the expert width.
     pub routed: RoutedExpertBindings<'a>,
     pub shared: Option<UngatedExpertBindings<'a>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LatentProjectionBindings<'a> {
+    pub input: &'a TensorBinding,
+    pub output: &'a TensorBinding,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -131,13 +138,10 @@ impl<'a> StateSpaceHybridLayerBindings<'a> {
             },
         }
         if let Some(feed_forward) = self.feed_forward {
-            bindings.extend([
-                feed_forward.norm,
-                feed_forward.router,
-                feed_forward.correction_bias,
-                feed_forward.latent_input,
-                feed_forward.latent_output,
-            ]);
+            bindings.extend([feed_forward.norm, feed_forward.router, feed_forward.correction_bias]);
+            if let Some(latent) = feed_forward.latent {
+                bindings.extend([latent.input, latent.output]);
+            }
             bindings.extend(feed_forward.routed.bindings());
             if let Some(shared) = feed_forward.shared {
                 bindings.extend([shared.up, shared.down]);
@@ -153,7 +157,24 @@ fn latent_routed<'a>(
     router: &'a TensorBinding,
 ) -> Result<LatentRoutedBindings<'a>> {
     let get = |tensor| required(plan, slot, tensor);
-    let latent = |projection| get(LayerTensorRole::LatentProjection { projection });
+    let projection =
+        |projection| optional(plan, slot, LayerTensorRole::LatentProjection { projection });
+    let latent = match (
+        projection(LatentProjectionRole::Input),
+        projection(LatentProjectionRole::Output),
+    ) {
+        (Some(input), Some(output)) => Some(LatentProjectionBindings { input, output }),
+        (None, None) => None,
+        _ => return Err(invalid(slot, "latent space has only one projection")),
+    };
+    let stacked = |projection| {
+        optional(plan, slot, LayerTensorRole::ExpertProjection { expert: None, projection })
+    };
+    let experts = match (stacked(ExpertProjectionRole::Up), stacked(ExpertProjectionRole::Down)) {
+        (Some(up), Some(down)) => RoutedExpertBindings::UngatedStacked { up, down },
+        (None, None) => RoutedExpertBindings::Individual { tensors: &plan.tensors, layer: slot },
+        _ => return Err(invalid(slot, "stacked experts have only one projection")),
+    };
     let shared =
         |projection| optional(plan, slot, LayerTensorRole::SharedExpertProjection { projection });
     let shared =
@@ -166,9 +187,8 @@ fn latent_routed<'a>(
         norm: get(LayerTensorRole::PostAttentionNorm)?,
         router,
         correction_bias: get(LayerTensorRole::RouterCorrectionBias)?,
-        latent_input: latent(LatentProjectionRole::Input)?,
-        latent_output: latent(LatentProjectionRole::Output)?,
-        routed: RoutedExpertBindings::Individual { tensors: &plan.tensors, layer: slot },
+        latent,
+        routed: experts,
         shared,
     })
 }

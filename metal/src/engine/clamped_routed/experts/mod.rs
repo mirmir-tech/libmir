@@ -98,9 +98,10 @@ impl ClampedRoutedExperts {
                     mlx_layout(tensors, gate, up, down)?
                 }
             },
-            RoutedExpertBindings::Individual { .. } => {
+            RoutedExpertBindings::UngatedStacked { .. }
+            | RoutedExpertBindings::Individual { .. } => {
                 return Err(crate::engine::Error::InvalidModel(
-                    "clamped routed Metal execution requires stacked expert tensors".into(),
+                    "clamped routed Metal execution requires gated stacked expert tensors".into(),
                 ));
             },
         };

@@ -55,7 +55,7 @@ fn rejects_an_unavailable_normalization_independently() -> Result<()> {
 }
 
 #[test]
-fn does_not_admit_linear_attention_through_the_dense_runtime() -> Result<()> {
+fn admits_linear_attention_through_the_dense_mixed_runtime() -> Result<()> {
     let mut spec = dense_spec()?;
     spec.decoder.layers[0].mixer = MixerSpec::LinearAttention(LinearAttentionSpec {
         convolution_kernel_size: 4,
@@ -67,7 +67,7 @@ fn does_not_admit_linear_attention_through_the_dense_runtime() -> Result<()> {
     });
 
     assert_eq!(lower_layer(&spec.decoder.layers[0])?.mixer, MixerLowering::Linear);
-    assert!(plan(&spec).is_err());
+    assert_eq!(plan(&spec)?.runtime(), DecoderRuntime::DenseMixed);
     Ok(())
 }
 
@@ -94,12 +94,12 @@ fn preserves_windows_and_rejects_them_from_the_dense_runtime() -> Result<()> {
 fn rejects_an_activation_the_dense_operator_does_not_implement() -> Result<()> {
     let mut spec = dense_spec()?;
     if let FeedForwardSpec::Dense { activation, .. } = &mut spec.decoder.layers[0].feed_forward {
-        *activation = ActivationSpec::GeluTanh;
+        *activation = ActivationSpec::ReluSquared;
     }
 
     let error = lower_layer(&spec.decoder.layers[0])
         .err()
-        .ok_or_else(|| Error::InvalidModel("dense GELU was admitted".into()))?;
+        .ok_or_else(|| Error::InvalidModel("dense relu-squared was admitted".into()))?;
 
     assert!(error.to_string().contains("feed-forward activation composition"));
     Ok(())

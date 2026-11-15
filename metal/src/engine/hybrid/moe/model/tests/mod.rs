@@ -8,6 +8,8 @@ use models::{
 use serde_json::{Map, Value, json};
 
 use super::HybridMoeModel;
+
+mod history;
 use crate::engine::{Array, ModelTensors, Result, Stream, lowering};
 
 #[test]
@@ -51,7 +53,7 @@ fn execute_model(fused_experts: bool) -> Result<()> {
     Ok(())
 }
 
-fn write_config(root: &Path) -> Result<()> {
+pub(super) fn write_config(root: &Path) -> Result<()> {
     let config = json!({
         "architectures": ["HybridForCausalLM"],
         "hidden_size": 4,
@@ -77,7 +79,7 @@ fn write_config(root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn write_weights(path: &Path, fused_experts: bool) -> Result<()> {
+pub(super) fn write_weights(path: &Path, fused_experts: bool) -> Result<()> {
     let layer = "language_model.model.layers.0";
     let mut specs = vec![
         ("language_model.model.embed_tokens.weight".into(), vec![8, 4]),

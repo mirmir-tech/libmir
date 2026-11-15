@@ -41,22 +41,29 @@ impl HybridMoeModel {
     ) -> Result<Self> {
         let compatible = lowering.len() == decoder.num_hidden_layers
             && lowering.iter().all(|layer| {
-                layer.feed_forward == FeedForwardLowering::DenseAndRouted
-                    && matches!(layer.mixer, MixerLowering::Softmax { .. })
+                matches!(
+                    layer.feed_forward,
+                    FeedForwardLowering::DenseAndRouted | FeedForwardLowering::DenseGelu
+                ) && matches!(layer.mixer, MixerLowering::Softmax { .. })
             });
         if !compatible {
             return Err(crate::engine::Error::InvalidModel(
-                "hybrid MoE loader requires dense-and-routed softmax layers".into(),
+                "hybrid MoE loader requires dense GELU or dense-and-routed softmax layers".into(),
             ));
         }
         let mut layers = Vec::with_capacity(decoder.num_hidden_layers);
         let mut cache_windows = Vec::with_capacity(decoder.num_hidden_layers);
         for (index, lowered) in lowering.iter().enumerate() {
             let config = HybridMoeLayerConfig::from_decoder(index, decoder, 1)?;
-            let layer_bindings = bindings.hybrid_moe_layer(index)?;
-            layers.push(HybridMoeLayer::load_bindings(
-                tensors, &layer_bindings, *lowered, config, stream,
-            )?);
+            layers.push(if lowered.feed_forward == FeedForwardLowering::DenseGelu {
+                let layer_bindings = bindings.dense_decoder_layer(index)?;
+                HybridMoeLayer::load_dense_bindings(
+                    tensors, &layer_bindings, *lowered, config, stream,
+                )?
+            } else {
+                let layer_bindings = bindings.hybrid_moe_layer(index)?;
+                HybridMoeLayer::load_bindings(tensors, &layer_bindings, *lowered, config, stream)?
+            });
             let MixerLowering::Softmax { window, .. } = lowered.mixer else {
                 unreachable!("validated hybrid MoE mixer");
             };

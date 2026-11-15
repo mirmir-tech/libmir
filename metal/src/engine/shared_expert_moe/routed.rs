@@ -55,8 +55,9 @@ impl RoutedGateUp {
                     BoundLinear::load(tensors, down, stream)?,
                 ))
             },
-            RoutedExpertBindings::Individual { .. } => Err(Error::InvalidModel(
-                "shared routed Metal execution requires stacked expert tensors".into(),
+            RoutedExpertBindings::UngatedStacked { .. }
+            | RoutedExpertBindings::Individual { .. } => Err(Error::InvalidModel(
+                "shared routed Metal execution requires gated stacked expert tensors".into(),
             )),
         }
     }

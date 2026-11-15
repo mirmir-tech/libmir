@@ -6,7 +6,9 @@ use crate::semantic::{FeedForwardSpec, MixerSpec, PositionEncodingSpec};
 mod fixture;
 mod prediction;
 
-use fixture::{EXPERTS, HIDDEN, block, catalog, config, dense, sorted};
+use fixture::{
+    EXPERTS, HIDDEN, block, catalog, config, dense, sorted, stacked_catalog, stacked_config,
+};
 
 fn plan(catalog: &TensorCatalog) -> Result<(SemanticModelSpec, WeightBindingPlan)> {
     let decoder = DecoderConfig::from_value(&config())?;
@@ -71,6 +73,22 @@ fn binds_every_hybrid_layer_through_its_typed_view() -> Result<()> {
     let last = plan.state_space_hybrid_layer(2)?;
     assert!(matches!(last.mixer, StateSpaceHybridMixerBindings::Attention(_)));
     assert_eq!(last.input_norm.source, format!("{}.norm.weight", block(3)));
+    Ok(())
+}
+
+#[test]
+fn binds_stacked_experts_without_latent_space_or_prediction_modules() -> Result<()> {
+    let decoder = DecoderConfig::from_value(&stacked_config())?;
+    let catalog = stacked_catalog();
+    let spec = SemanticModelSpec::discover(&decoder, &catalog)?;
+    let plan = WeightBindingPlan::discover(&spec, &catalog)?;
+
+    assert!(spec.decoder.prediction_layers.is_empty());
+    let layer = plan.state_space_hybrid_layer(0)?;
+    let routed = layer.feed_forward.ok_or_else(|| invalid("layer 0 has a routed block"))?;
+    assert!(routed.latent.is_none());
+    assert!(matches!(routed.routed, RoutedExpertBindings::UngatedStacked { .. }));
+    assert!(plan.state_space_hybrid_layer(1)?.feed_forward.is_none());
     Ok(())
 }
 

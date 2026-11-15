@@ -104,9 +104,10 @@ pub(super) fn layer(suffix: &str) -> LayerTensorRole {
         "mlp.experts.gate_proj.weight" | "mlp.switch_mlp.gate_proj.weight" => {
             expert(None, ExpertProjectionRole::Gate)
         },
-        "mlp.experts.up_proj.weight" | "mlp.switch_mlp.up_proj.weight" => {
-            expert(None, ExpertProjectionRole::Up)
-        },
+        "mlp.experts.up_proj.weight"
+        | "mlp.switch_mlp.up_proj.weight"
+        | "experts.switch_glu.up_proj.weight"
+        | "mixer.switch_mlp.fc1.weight" => expert(None, ExpertProjectionRole::Up),
         "mlp.experts.gate_up_proj.weight"
         | "mlp.experts.gate_up_proj"
         | "mlp.switch_mlp.gate_up_proj.weight"
@@ -115,9 +116,9 @@ pub(super) fn layer(suffix: &str) -> LayerTensorRole {
         | "mlp.experts.down_proj"
         | "mlp.switch_mlp.down_proj.weight"
         | "experts.down_proj"
-        | "experts.switch_glu.down_proj.weight" => expert(None, ExpertProjectionRole::Down),
+        | "experts.switch_glu.down_proj.weight"
+        | "mixer.switch_mlp.fc2.weight" => expert(None, ExpertProjectionRole::Down),
         "experts.switch_glu.gate_proj.weight" => expert(None, ExpertProjectionRole::Gate),
-        "experts.switch_glu.up_proj.weight" => expert(None, ExpertProjectionRole::Up),
         "mlp.shared_expert.gate_proj.weight" => shared(FeedForwardProjectionRole::Gate),
         "mlp.shared_expert.up_proj.weight" | "mixer.shared_experts.up_proj.weight" => {
             shared(FeedForwardProjectionRole::Up)

@@ -58,6 +58,48 @@ PAGE_WRITE_KERNEL(mirmir_page_write_f32, float)
 PAGE_WRITE_KERNEL(mirmir_page_write_f16, half)
 PAGE_WRITE_KERNEL(mirmir_page_write_bf16, bfloat)
 
+// One decode token for each of several sessions sharing an arena: the host
+// resolves every row's physical slot, so one dispatch replaces one per row.
+struct PageRowsParameters {
+  uint rows;
+  uint kv_heads;
+  uint page_capacity;
+  uint page_size;
+  uint head_dim;
+  uint key_row_stride;
+  uint key_head_stride;
+  uint key_dimension_stride;
+  uint value_row_stride;
+  uint value_head_stride;
+  uint value_dimension_stride;
+};
+
+#define PAGE_ROWS_KERNEL(NAME, TYPE) \
+kernel void NAME( \
+    const device TYPE* keys [[buffer(0)]], \
+    const device TYPE* values [[buffer(1)]], \
+    device TYPE* page_keys [[buffer(2)]], \
+    device TYPE* page_values [[buffer(3)]], \
+    const device uint* slots [[buffer(4)]], \
+    constant PageRowsParameters& p [[buffer(5)]], \
+    uint index [[thread_position_in_grid]]) { \
+  uint dimension = index % p.head_dim; \
+  uint row_head = index / p.head_dim; \
+  uint head = row_head % p.kv_heads; \
+  uint row = row_head / p.kv_heads; \
+  uint slot = slots[row]; \
+  uint target = ((head * p.page_capacity + slot / p.page_size) * p.page_size + \
+      slot % p.page_size) * p.head_dim + dimension; \
+  page_keys[target] = keys[row * p.key_row_stride + head * p.key_head_stride + \
+      dimension * p.key_dimension_stride]; \
+  page_values[target] = values[row * p.value_row_stride + head * p.value_head_stride + \
+      dimension * p.value_dimension_stride]; \
+}
+
+PAGE_ROWS_KERNEL(mirmir_page_write_rows_f32, float)
+PAGE_ROWS_KERNEL(mirmir_page_write_rows_f16, half)
+PAGE_ROWS_KERNEL(mirmir_page_write_rows_bf16, bfloat)
+
 struct PageCopyParameters {
   uint source;
   uint target;

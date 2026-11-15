@@ -105,7 +105,8 @@ impl DenseExpertWeights {
                 },
                 projection(backend, &canonicalizer, tensors, down, experts, intermediate, hidden)?,
             ),
-            RoutedExpertBindings::Individual { .. } => {
+            RoutedExpertBindings::UngatedStacked { .. }
+            | RoutedExpertBindings::Individual { .. } => {
                 return Err(Error::UnsupportedDecoderLayer(
                     "dense CUDA experts require stacked checkpoint bindings".into(),
                 ));
