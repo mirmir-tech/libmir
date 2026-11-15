@@ -1,5 +1,7 @@
 //! What a load would resolve, without changing the library.
 
+use std::sync::Arc;
+
 use super::{Library, ModelLoadOptions};
 use crate::{Model, ModelDescriptor, ModelMemoryEstimate, Result, RuntimeConfig};
 
@@ -13,6 +15,10 @@ pub struct LoadPreview {
     pub estimate: ModelMemoryEstimate,
     /// Bytes the resident copy of the model holds and a reload frees.
     pub released_bytes: u64,
+    /// Bytes the other resident models' measured K/V caches would give
+    /// back to the load, above the minimum share each keeps. The resident
+    /// copy is left out: `released_bytes` already frees all of it.
+    pub reclaimable_bytes: u64,
 }
 
 impl Library {
@@ -44,6 +50,23 @@ impl Library {
             self.caches
                 .preview(&target, config.kv_cache, initial, options.kv_blocks.is_some());
         let estimate = descriptor.memory_estimate_for(&config, &target);
-        Ok(LoadPreview { config, estimate, released_bytes })
+        let reclaimable_bytes = self.reclaimable_kv_bytes_besides(resident)?;
+        Ok(LoadPreview {
+            config,
+            estimate,
+            released_bytes,
+            reclaimable_bytes,
+        })
+    }
+
+    fn reclaimable_kv_bytes_besides(&self, resident: Option<&Model>) -> Result<u64> {
+        let mut bytes = 0_u64;
+        for model in self.registry.all()? {
+            if resident.is_some_and(|resident| Arc::ptr_eq(&resident.inner, &model.inner)) {
+                continue;
+            }
+            bytes = bytes.saturating_add(model.reclaimable_kv_bytes()?);
+        }
+        Ok(bytes)
     }
 }
