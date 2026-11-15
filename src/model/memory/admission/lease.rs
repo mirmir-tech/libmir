@@ -58,6 +58,25 @@ impl ModelMemoryLease {
     }
 }
 
+impl ModelMemoryLease {
+    /// Bytes this model holds that its unload would give back: its own
+    /// reservation, and a shared K/V reservation no other model uses.
+    pub(in crate::model) fn released_bytes(&self) -> Result<u64> {
+        let Ok(ledger) = self.ledger.lock() else {
+            return Err(poisoned("model memory ledger"));
+        };
+        let Some(reservation) = ledger.entries.get(&self.id) else {
+            return Ok(0);
+        };
+        let shared = reservation
+            .shared_memory
+            .and_then(|id| ledger.shared.get(&id))
+            .filter(|shared| shared.references == 1)
+            .map_or(0, |shared| shared.bytes);
+        Ok(reservation.bytes.saturating_add(shared))
+    }
+}
+
 impl Drop for ModelMemoryLease {
     fn drop(&mut self) {
         let Ok(mut ledger) = self.ledger.lock() else {

@@ -19,6 +19,7 @@ fn observer_never_waits_for_cache_or_keeps_it_alive() {
             model_context_tokens: 0,
             session_state_bytes: 0,
         },
+        false,
     );
     let reader = CacheStatsReader(Arc::downgrade(&assignment.cache));
     assert!(reader.snapshot().is_some());

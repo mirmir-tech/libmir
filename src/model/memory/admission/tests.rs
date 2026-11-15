@@ -170,7 +170,11 @@ fn charges_shared_metal_cache_once_until_the_last_model_unloads() -> Result<()> 
     )?;
 
     assert_eq!(manager.committed_bytes()?, 8 * GIB);
+    // While both use the shared cache, unloading one gives back only its
+    // own bytes; the last one also gives back the shared cache.
+    assert_eq!(first.released_bytes()?, 2 * GIB);
     drop(first);
+    assert_eq!(second.released_bytes()?, 6 * GIB);
     assert_eq!(manager.committed_bytes()?, 6 * GIB);
     drop(second);
     assert_eq!(manager.committed_bytes()?, 0);

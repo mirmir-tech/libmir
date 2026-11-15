@@ -1,3 +1,5 @@
+mod preview;
+pub use preview::LoadPreview;
 mod resolve;
 
 use std::{
@@ -74,7 +76,12 @@ impl Library {
         let manifest = descriptor.manifest_for(engine.target())?;
         let target = engine.target();
         let initial_estimate = descriptor.memory_estimate_for(&config, &target);
-        let cache = self.caches.acquire(&target, config.kv_cache, initial_estimate);
+        let cache = self.caches.acquire(
+            &target,
+            config.kv_cache,
+            initial_estimate,
+            options.kv_blocks.is_some(),
+        );
         config.kv_cache = cache.config;
         let estimate = descriptor.memory_estimate_for(&config, &target);
         let memory = engine.memory_snapshot()?;
@@ -155,13 +162,14 @@ impl Library {
         self.model_config_with_options(descriptor, ModelLoadOptions::default())
     }
 
-    /// Resolves the runtime configuration a load with `options` would use.
+    /// Resolves the runtime configuration a load with `options` would use,
+    /// without changing the library.
     pub fn model_config_with_options(
         &self,
         descriptor: &ModelDescriptor,
         options: ModelLoadOptions,
     ) -> Result<RuntimeConfig> {
-        self.model_runtime(descriptor, options).map(|(_, config, _)| config)
+        self.preview_load(descriptor, options, None).map(|preview| preview.config)
     }
 
     /// Resizes idle models with measured K/V caches to the memory other

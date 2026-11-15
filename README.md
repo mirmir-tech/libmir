@@ -29,14 +29,14 @@ For Apple Metal:
 
 ```toml
 [dependencies]
-libmir = { version = "0.6.0", features = ["metal"] }
+libmir = { version = "0.6.1", features = ["metal"] }
 ```
 
 For NVIDIA CUDA:
 
 ```toml
 [dependencies]
-libmir = { version = "0.6.0", default-features = false, features = ["cuda"] }
+libmir = { version = "0.6.1", default-features = false, features = ["cuda"] }
 ```
 
 ## Generate from a local checkpoint
@@ -147,7 +147,7 @@ neutral repetition/EOS/minimum-token defaults and rejects explicit incompatible
 values. Token masks and completed-output schema validation remain active.
 
 For Rust source changes from 0.5.5 (new enum variants and request/backend
-fields), see the [migration guide](https://docs.mirmir.tech/getting-started/upgrade-0.6.0.html);
+fields), see the [migration guide](https://docs.mirmir.tech/getting-started/upgrade-0.6.1.html);
 from 0.5.2 or earlier, apply the
 [0.5.5 guide](https://docs.mirmir.tech/getting-started/upgrade-0.5.5.html) first.
 Sampled MTP verification currently copies target logits to the host; greedy
