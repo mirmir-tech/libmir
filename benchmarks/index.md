@@ -41,17 +41,25 @@ matrix coverage, and per-depth results.
 
 ## Metal
 
-| Model | Device | PP tok/s ↑<br>mirmir / MLX-LM | TG tok/s ↑<br>mirmir / MLX-LM | TTFT ms ↓<br>mirmir / MLX-LM |
-|:---|:---|---:|---:|---:|
-| [Qwen3-4B BF16](qwen3-4b.md) | Apple M3 Max<br>40-core GPU · 64 GiB | 545.0 / 593.4<br>91.8% · 5/26 wins | 22.10 / 27.34<br>80.8% · 6/26 wins | 19,149 / 17,405<br>1.100× · 5/26 wins |
+mirmir 0.6.2 and MLX-LM 0.32.2, both on MLX 0.32.4. MLX-LM runs out of GPU
+memory (`Insufficient Memory`, confirmed by a second run) in the deepest
+high-concurrency cells, which mirmir completes on the same machine; those
+cells are counted in the last column and left out of the ratios.
 
-## Single-request Metal diagnostics
+| Model | Device | PP tok/s ↑<br>mirmir / MLX-LM | TG tok/s ↑<br>mirmir / MLX-LM | TTFT ms ↓<br>mirmir / MLX-LM | MLX-LM out of memory |
+|:---|:---|---:|---:|---:|---:|
+| [Qwen3.6-35B-A3B 4-bit](qwen3.6-35b-a3b-4bit.md) | Apple M5 Pro<br>64 GiB | 2,164.3 / 1,617.8<br>133.8% · 25/34 wins | 144.26 / 105.44<br>136.8% · 33/34 wins | 5,810 / 7,526<br>0.772× · 22/34 wins | 2 of 36 |
+| [Gemma 4 26B-A4B IT 4-bit](gemma4-26b-a4b-it-4bit.md) | Apple M5 Pro<br>64 GiB | 1,972.6 / 1,595.4<br>123.6% · 23/32 wins | 105.27 / 87.63<br>120.1% · 32/32 wins | 5,880 / 7,040<br>0.835× · 22/32 wins | 4 of 36 |
+| [Qwen3.8-27B 4-bit](qwen3.8-27b-4bit.md) | Apple M5 Pro<br>64 GiB | 383.1 / 351.7<br>108.9% · 3/26 wins | 27.50 / 26.66<br>103.2% · 20/26 wins | 22,907 / 24,902<br>0.920× · 5/26 wins | 8 of 34 |
+| [Qwen3-4B BF16](qwen3-4b.md) | Apple M5 Pro<br>64 GiB | 1,662.2 / 1,738.0<br>95.6% · 13/28 wins | 53.44 / 54.67<br>97.7% · 10/28 wins | 6,164 / 5,846<br>1.054× · 14/28 wins | 8 of 36 |
+
+## Single-request Metal diagnostics (M3 Max, earlier releases)
 
 | Model | Device | PP tok/s ↑<br>mirmir / MLX-LM | TG tok/s ↑<br>mirmir / MLX-LM |
 |:---|:---|---:|---:|
 | [Qwen3.6-35B-A3B MXFP4](qwen3.6-35b-a3b-nvfp4.md) | Apple M3 Max<br>40-core GPU · 64 GiB | 1,085.09 / 1,069.22<br>101.5% · 2/4 wins | 109.19 / 100.21<br>109.0% · 4/4 wins |
 
-## Partial Metal reference diagnostics
+## Partial Metal reference diagnostics (M3 Max, earlier releases)
 
 These rows are excluded from the canonical table because the reference process
 did not finish. They retain only common positive cells and document the exact
