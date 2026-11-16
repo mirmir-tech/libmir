@@ -28,9 +28,20 @@ pub(super) fn sample(
     input: &NativeArray,
     sampling: DeviceSampling,
 ) -> mirtal::Result<NativeArray> {
+    sample_with_draw(graph, input, sampling, &scalar(graph, sampling.draw, DType::Float32)?)
+}
+
+/// `draw` broadcasts against one value per row, so rows sharing parameters
+/// sample in one graph with their own draws.
+pub(super) fn sample_with_draw(
+    graph: Graph<'_>,
+    input: &NativeArray,
+    sampling: DeviceSampling,
+    draw: &NativeArray,
+) -> mirtal::Result<NativeArray> {
     let logits = vocab_logits(graph, input, sampling.vocab_size)?;
     if sampling.top_k == 0 {
-        return full_sample(graph, &logits, sampling);
+        return full_sample(graph, &logits, sampling, draw);
     }
     let [mut indices, mut scores] = top_candidates(graph, &logits, sampling.top_k)?;
     let order = graph.argsort(&graph.negative(&scores)?, -1)?;
@@ -48,7 +59,7 @@ pub(super) fn sample(
     let weights = graph.multiply(&weights, &keep)?;
     let cumulative = graph.cumulative_sum(&weights, -1, false, true)?;
     let total = graph.reduce_sum(&weights, -1, true)?;
-    let threshold = graph.multiply(&total, &scalar(graph, sampling.draw, scores.dtype()?)?)?;
+    let threshold = graph.multiply(&total, &graph.astype(draw, scores.dtype()?)?)?;
     let position = graph.argmax_axis(&graph.greater_equal(&cumulative, &threshold)?, -1, false)?;
     let position = graph.expand_dims(&position, &[-1])?;
     let token = graph.take_along_axis(&indices, &position, -1)?;
@@ -118,6 +129,7 @@ fn full_sample(
     graph: Graph<'_>,
     logits: &NativeArray,
     sampling: DeviceSampling,
+    draw: &NativeArray,
 ) -> mirtal::Result<NativeArray> {
     let logits = graph.astype(logits, DType::Float32)?;
     let maximum = graph.reduce_max(&logits, -1, true)?;
@@ -130,8 +142,7 @@ fn full_sample(
     let last = start.len() - 1;
     start[last] = sampling.vocab_size - 1;
     let total = graph.slice(&cumulative, &start, shape.dimensions())?;
-    let draw = scalar(graph, sampling.draw, DType::Float32)?;
     let cumulative = graph.divide(&cumulative, &total)?;
     // A strict comparison excludes zero-mass tokens even when draw is zero.
-    graph.argmax_axis(&graph.less(&draw, &cumulative)?, -1, false)
+    graph.argmax_axis(&graph.less(draw, &cumulative)?, -1, false)
 }

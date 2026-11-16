@@ -68,22 +68,41 @@ impl LoadedModel {
     }
 
     pub(in crate::native) fn prefill_page_headroom(&self) -> Result<usize> {
+        let maximum = DecoderCache::physical_page_capacity(&self.stream, self.info.cache_step);
+        self.min_full_layer_pages(|layer, kv_heads, head_dim, format| {
+            self.stream
+                .paged_arenas()
+                .available_pages(maximum, layer, kv_heads, head_dim, format)
+        })
+    }
+
+    /// Free pages every full-attention layer already holds memory for.
+    pub(in crate::native) fn allocated_page_headroom(&self) -> Result<usize> {
+        self.min_full_layer_pages(|layer, kv_heads, head_dim, format| {
+            self.stream
+                .paged_arenas()
+                .allocated_free_pages(layer, kv_heads, head_dim, format)
+        })
+    }
+
+    fn min_full_layer_pages(
+        &self,
+        pages: impl Fn(usize, usize, usize, KvPageFormat) -> crate::engine::Result<usize>,
+    ) -> Result<usize> {
         let Some(decoder) = self.info.decoder.as_ref() else {
             return Ok(usize::MAX);
         };
-        let maximum = DecoderCache::physical_page_capacity(&self.stream, self.info.cache_step);
         let format = KvPageFormat::resolve(self.stream.config().kv_cache.dtype)?;
         (0..decoder.num_hidden_layers)
             .filter(|layer| decoder.layer_type(*layer) == AttentionLayerType::Full)
             .try_fold(usize::MAX, |available, layer| {
-                let pages = self.stream.paged_arenas().available_pages(
-                    maximum,
+                let free = pages(
                     layer,
                     decoder.layer_key_value_heads(layer),
                     decoder.layer_head_dim(layer),
                     format,
                 )?;
-                Ok(available.min(pages))
+                Ok(available.min(free))
             })
     }
 }

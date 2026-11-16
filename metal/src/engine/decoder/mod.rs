@@ -8,6 +8,7 @@ mod layers;
 #[cfg(test)]
 mod prefill;
 mod shared_routed;
+mod state_space;
 
 pub use cache::DecoderCache;
 pub use execution::DecoderExecution;
@@ -31,6 +32,10 @@ impl DecoderModel {
 
     pub(crate) fn prefers_packed_decode(&self, stream: &Stream) -> bool {
         self.execution.prefers_packed_decode(stream)
+    }
+
+    pub(crate) fn keeps_persistent_row_order(&self, stream: &Stream) -> bool {
+        self.execution.keeps_persistent_row_order(stream)
     }
 
     pub(crate) fn has_decode_plan_candidates(&self) -> bool {
@@ -133,6 +138,18 @@ impl DecoderModel {
         self.execution.forward_spatial_multimodal(
             token_ids, image_embeddings, image, position_ids, cache, stream,
         )
+    }
+
+    pub(crate) fn forward_embedded_multimodal(
+        &self,
+        token_ids: &Array,
+        image_embeddings: &Array,
+        image: ImageTokenSpan,
+        cache: &mut DecoderCache,
+        stream: &Stream,
+    ) -> Result<Array> {
+        self.execution
+            .forward_embedded_multimodal(token_ids, image_embeddings, image, cache, stream)
     }
 
     pub(crate) fn fusion_summary(&self) -> (usize, usize, usize, usize) {

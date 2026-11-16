@@ -154,3 +154,42 @@ fn nvfp4(tensors: &mut Vec<TensorInfo>, prefix: &str, output: usize, input: usiz
     tensors.push(tensor(&format!("{prefix}.weight_scale_2"), "F32", Vec::new()));
     tensors.push(tensor(&format!("{prefix}.input_scale"), "F32", Vec::new()));
 }
+
+/// [`config`] without a latent expert space, as sanitized conversions declare
+/// it.
+pub(super) fn stacked_config() -> Value {
+    let mut config = prediction_config();
+    config["llm_config"]["moe_latent_size"] = Value::Null;
+    config
+}
+
+/// [`catalog`] rewritten to the MLX layout: stacked `switch_mlp` experts at
+/// hidden width, no latent projections, and no prediction-module tensors
+/// even though the configuration declares them.
+pub(super) fn stacked_catalog() -> TensorCatalog {
+    let mut tensors = catalog().tensors;
+    tensors.retain(|tensor| {
+        !tensor.name.contains(".experts.")
+            && !tensor.name.contains("_latent_proj")
+            && !tensor.name.contains("mtp.")
+    });
+    for tensor in &mut tensors {
+        if tensor.name.ends_with("conv1d.weight") {
+            tensor.shape = vec![CONVOLUTION, 4, 1];
+        }
+    }
+    for block_index in [1, 4] {
+        let root = format!("{}.mixer", block(block_index));
+        dense(
+            &mut tensors,
+            &format!("{root}.switch_mlp.fc1.weight"),
+            &[EXPERTS, EXPERT_WIDTH, HIDDEN],
+        );
+        dense(
+            &mut tensors,
+            &format!("{root}.switch_mlp.fc2.weight"),
+            &[EXPERTS, HIDDEN, EXPERT_WIDTH],
+        );
+    }
+    sorted(tensors)
+}

@@ -1,5 +1,4 @@
-//! Vision checks: a pipeline without a tower on the backend leaves the
-//! decoder admitted text-only.
+//! Vision checks: every discovered pipeline has a tower on Metal and CUDA.
 
 use foundation::model::BackendTarget;
 use models::{
@@ -11,7 +10,7 @@ use serde_json::json;
 use super::super::{AdmissionCheck, AdmissionCheckKind, AdmissionStatus, aggregate, vision_check};
 
 #[test]
-fn metal_admits_a_pixel_shuffle_checkpoint_text_only() -> models::Result<()> {
+fn metal_runs_a_pixel_shuffle_tower() -> models::Result<()> {
     let vision = VisionConfig::from_value(&json!({
         "downsample_ratio": 0.5,
         "ps_version": "v2",
@@ -55,7 +54,7 @@ fn metal_admits_a_pixel_shuffle_checkpoint_text_only() -> models::Result<()> {
     let metal = check(BackendTarget::Metal);
     assert_eq!(
         (metal.kind, metal.status),
-        (AdmissionCheckKind::Vision, AdmissionStatus::Partial)
+        (AdmissionCheckKind::Vision, AdmissionStatus::Supported)
     );
     assert_eq!(check(BackendTarget::Cuda).status, AdmissionStatus::Supported);
     let decoder = AdmissionCheck {
@@ -63,6 +62,6 @@ fn metal_admits_a_pixel_shuffle_checkpoint_text_only() -> models::Result<()> {
         status: AdmissionStatus::Supported,
         detail: String::new(),
     };
-    assert_eq!(aggregate(&[decoder, metal]), AdmissionStatus::Partial);
+    assert_eq!(aggregate(&[decoder, metal]), AdmissionStatus::Supported);
     Ok(())
 }

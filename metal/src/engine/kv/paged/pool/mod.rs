@@ -5,6 +5,7 @@ use std::{
 
 use crate::engine::{Array, Error, KvPageFormat, Result, Stream};
 
+mod capacity;
 #[cfg(test)]
 mod inspection;
 mod key;
@@ -65,40 +66,6 @@ pub struct PagedArenaPool {
 }
 
 impl PagedArenaPool {
-    pub(crate) fn available_pages(
-        &self,
-        maximum: usize,
-        layer: usize,
-        kv_heads: usize,
-        head_dim: usize,
-        format: KvPageFormat,
-    ) -> Result<usize> {
-        let arena = {
-            let arenas = self
-                .arenas
-                .lock()
-                .map_err(|_| Error::InvalidModel("paged arena pool lock was poisoned".into()))?;
-            arenas.iter().find_map(|(key, arena)| {
-                (key.layer == layer
-                    && key.kv_heads == kv_heads
-                    && key.head_dim == head_dim
-                    && key.format == format)
-                    .then(|| arena.upgrade())
-                    .flatten()
-            })
-        };
-        let Some(arena) = arena else {
-            return Ok(maximum);
-        };
-        let used = {
-            let arena = arena
-                .lock()
-                .map_err(|_| Error::InvalidModel("paged arena lock was poisoned".into()))?;
-            arena.references.iter().filter(|count| **count > 0).count()
-        };
-        Ok(maximum.saturating_sub(used))
-    }
-
     pub(super) fn find(&self, key: &ArenaKey) -> Result<Option<Arc<Mutex<Arena>>>> {
         let arenas = self
             .arenas

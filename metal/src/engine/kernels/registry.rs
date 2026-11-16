@@ -2,13 +2,12 @@ use super::{
     Kernels, Result, awq, bitsandbytes, direct_fp8, expert, gated_delta, gated_delta_decode,
     gated_delta_recurrence, gptq, mxfp4, mxfp4_down, mxfp4_gate_up, mxfp4_split_gate_up,
     mxfp4_u32_down, nvfp4, paged_attention, paged_attention_partial_library,
-    paged_attention_reduce, paged_kv_library, quantized_kv,
+    paged_attention_reduce, paged_kv_library, quantized_kv, state_space,
 };
 
 impl Kernels {
     pub(crate) fn new() -> Result<Self> {
         Ok(Self {
-            #[cfg(test)]
             history_append: crate::engine::persistent_history::Append::new()?,
             #[cfg(test)]
             page_gather: super::page::gather::Gather::new()?,
@@ -29,6 +28,7 @@ impl Kernels {
             expert_reduce: expert::reduce::ExpertReduceKernel::new()?,
             gated_delta_recurrence: gated_delta_recurrence()?,
             gated_delta_decode: gated_delta_decode()?,
+            state_space_decode: state_space::new_state_space_decode_kernel()?,
             gptq: gptq::GptqKernels::new()?,
             paged_attention: paged_attention()?,
             paged_attention_batched: paged_attention::batched::new()?,
@@ -37,6 +37,7 @@ impl Kernels {
             paged_attention_partial: paged_attention_partial_library()?,
             paged_attention_reduce: paged_attention_reduce()?,
             paged_kv: paged_kv_library()?,
+            page_rows: super::page::write::PageRowsWrite::default(),
             mxfp4_gate_up: mxfp4_gate_up()?,
             mxfp4_embedding: mxfp4::embedding::MxFp4EmbeddingKernel::new()?,
             #[cfg(test)]

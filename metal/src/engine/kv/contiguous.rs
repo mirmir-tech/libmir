@@ -11,10 +11,7 @@ impl KvCache {
         mode: PagedContextMode,
     ) -> Result<KvContext> {
         let token_count = self.validate_update(keys, values)?;
-        #[cfg(test)]
-        {
-            self.history = None;
-        }
+        self.history = None;
         let needed = self.offset.checked_add(token_count).ok_or(Error::ShapeOverflow)?;
         if self.max_context.is_some_and(|limit| needed > limit) {
             return self.update_sliding(keys, values, stream, token_count, needed);

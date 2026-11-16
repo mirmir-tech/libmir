@@ -49,6 +49,15 @@ pub(super) fn packed_attention(
     let values = values
         .reshape(&[batch, sequence, config.kv_heads, config.head_dim], stream)?
         .transpose(&[0, 2, 1, 3], stream)?;
+    if let Some(output) = super::history::persistent_attention(
+        &queries, &keys, &values, caches, weights, config, positions, causal, stream,
+    )? {
+        let output = output.transpose(&[0, 2, 1, 3], stream)?;
+        let width = config.heads * config.head_dim;
+        return weights
+            .output
+            .forward(&output.reshape(&[batch, sequence, width], stream)?, stream);
+    }
     let rows = packed_attention_rows(
         &queries,
         &keys,
@@ -202,7 +211,7 @@ struct AttentionRows<'a> {
     stream: &'a Stream,
 }
 
-fn row_slice(
+pub(super) fn row_slice(
     input: &Array,
     row: usize,
     heads: i32,

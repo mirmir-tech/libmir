@@ -12,12 +12,14 @@ use crate::{
         PositionEncodingSpec, QkNormalization, RoutedExpertsSpec, RouterNormalization,
         SemanticModelSpec, SharedExpertSpec, StateSpaceSpec, StateSpaceStateDTypeSpec,
     },
+    weights::TensorCatalog,
 };
 
 pub(super) fn compile(
     decoder: &DecoderConfig,
     hybrid: &StateSpaceHybridConfig,
     norm: NormalizationSpec,
+    tensors: &TensorCatalog,
 ) -> Result<SemanticModelSpec> {
     let layers = hybrid
         .blocks
@@ -37,7 +39,7 @@ pub(super) fn compile(
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    let prediction_layers = match hybrid.prediction {
+    let prediction_layers = match hybrid.prediction.filter(|_| has_prediction_tensors(tensors)) {
         Some(prediction) => (0..prediction.depth.get())
             .map(|index| {
                 Ok(DecoderLayerSpec {
@@ -72,6 +74,12 @@ pub(super) fn compile(
             prediction_layers,
         },
     })
+}
+
+/// Sanitized conversions drop the `mtp.` modules their configuration still
+/// declares; such checkpoints have no prediction modules to execute.
+fn has_prediction_tensors(tensors: &TensorCatalog) -> bool {
+    tensors.tensors.iter().any(|tensor| tensor.name.contains("mtp.layers."))
 }
 
 fn mixer(

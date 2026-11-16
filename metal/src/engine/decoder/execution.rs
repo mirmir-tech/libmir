@@ -12,6 +12,10 @@ pub trait DecoderExecution: Debug + Send {
         true
     }
 
+    fn keeps_persistent_row_order(&self, _stream: &Stream) -> bool {
+        false
+    }
+
     fn has_decode_plan_candidates(&self) -> bool {
         false
     }
@@ -98,6 +102,19 @@ pub trait DecoderExecution: Debug + Send {
         _stream: &Stream,
     ) -> Result<Array> {
         Err(unsupported("spatial multimodal prefill"))
+    }
+
+    /// Causal prefill with image embeddings spliced over the image span and
+    /// plain positions; for decoders whose positions ignore the image layout.
+    fn forward_embedded_multimodal(
+        &self,
+        _token_ids: &Array,
+        _image_embeddings: &Array,
+        _image: ImageTokenSpan,
+        _cache: &mut DecoderCache,
+        _stream: &Stream,
+    ) -> Result<Array> {
+        Err(unsupported("embedded multimodal prefill"))
     }
 
     fn fusion_summary(&self) -> (usize, usize, usize, usize);

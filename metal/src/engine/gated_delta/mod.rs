@@ -5,7 +5,7 @@ mod state;
 mod update;
 
 pub use layer::{GatedDeltaLayer, GatedDeltaLayerConfig};
-use state::StateArray;
+pub(super) use state::StateArray;
 
 use super::{Array, Error, Result, Stream};
 

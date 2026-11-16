@@ -8,6 +8,10 @@ impl DecoderExecution for DenseSwiGluModel {
         stream.config().batch.dense_decode.packed()
     }
 
+    fn keeps_persistent_row_order(&self, stream: &Stream) -> bool {
+        stream.config().batch.dense_history.persistent()
+    }
+
     fn new_cache(&self, stream: &Stream) -> Result<DecoderCache> {
         self.new_cache(stream)
     }

@@ -176,6 +176,17 @@ impl GatedFullAttention {
             .transpose(&[0, 2, 1, 3], stream)?;
         #[cfg(test)]
         projection::capture_inputs(&queries, &keys, &values, &gate)?;
+        if !causal
+            && positions.is_none()
+            && let Some(output) = self.forward_scalar_persistent(
+                [&queries, &gate, &keys, &values],
+                cache,
+                position,
+                stream,
+            )?
+        {
+            return Ok(output);
+        }
         let queries = rope(&queries, &self.config, position, positions, stream)?;
         let keys = rope(&keys, &self.config, position, positions, stream)?;
         #[cfg(test)]

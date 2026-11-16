@@ -2,13 +2,14 @@ use std::sync::Arc;
 
 use crate::engine::{
     Error, GatedDeltaState, KvCache, KvPageFormat, PagedArenaPool, Result, Stream,
-    lowering::MixerLowering,
+    lowering::MixerLowering, state_space_hybrid::StateSpaceState,
 };
 
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)] // Session-local K/V stays inline; boxing adds per-layer allocation.
 pub(super) enum HybridLinearLayerCache {
     Linear(GatedDeltaState),
+    StateSpace(StateSpaceState),
     Full(KvCache),
 }
 
@@ -25,6 +26,9 @@ pub(super) fn new(
         .enumerate()
         .map(|(layer, mixer)| match mixer {
             MixerLowering::Linear => GatedDeltaState::new().map(HybridLinearLayerCache::Linear),
+            MixerLowering::StateSpace => {
+                Ok(HybridLinearLayerCache::StateSpace(StateSpaceState::new()))
+            },
             MixerLowering::Softmax { window: None, .. } => KvCache::new_paged_with_pool_capacity(
                 step,
                 page_size,
@@ -45,6 +49,7 @@ pub(super) fn reset(layers: &mut [HybridLinearLayerCache]) -> Result<()> {
     for layer in layers {
         match layer {
             HybridLinearLayerCache::Linear(state) => state.reset()?,
+            HybridLinearLayerCache::StateSpace(state) => state.reset(),
             HybridLinearLayerCache::Full(cache) => cache.reset()?,
         }
     }
@@ -75,6 +80,7 @@ pub(super) fn detach_evaluated_graphs(
     for layer in layers {
         match layer {
             HybridLinearLayerCache::Linear(state) => state.detach_evaluated_graphs(stream)?,
+            HybridLinearLayerCache::StateSpace(state) => state.detach_evaluated_graphs(stream)?,
             HybridLinearLayerCache::Full(cache) => cache.detach_evaluated_graphs(stream)?,
         }
     }
@@ -84,11 +90,13 @@ pub(super) fn detach_evaluated_graphs(
 pub(super) fn graph_roots(layers: &[HybridLinearLayerCache]) -> Vec<&crate::engine::Array> {
     layers
         .iter()
-        .filter_map(|layer| match layer {
-            HybridLinearLayerCache::Linear(state) => Some(state),
-            HybridLinearLayerCache::Full(_) => None,
+        .flat_map(|layer| -> Vec<&crate::engine::Array> {
+            match layer {
+                HybridLinearLayerCache::Linear(state) => state.graph_roots().collect(),
+                HybridLinearLayerCache::StateSpace(state) => state.graph_roots().collect(),
+                HybridLinearLayerCache::Full(_) => Vec::new(),
+            }
         })
-        .flat_map(GatedDeltaState::graph_roots)
         .collect()
 }
 
@@ -98,8 +106,8 @@ pub(super) fn gated_delta_state(
 ) -> Result<&mut GatedDeltaState> {
     match layers.get_mut(index) {
         Some(HybridLinearLayerCache::Linear(state)) => Ok(state),
-        Some(HybridLinearLayerCache::Full(_)) => {
-            Err(Error::InvalidModel(format!("layer {index} requires a full attention cache")))
+        Some(HybridLinearLayerCache::Full(_) | HybridLinearLayerCache::StateSpace(_)) => {
+            Err(Error::InvalidModel(format!("layer {index} requires a linear attention state")))
         },
         None => Err(Error::InvalidModel(format!("missing hybrid cache layer {index}"))),
     }
@@ -111,9 +119,20 @@ pub(super) fn full_attention_cache(
 ) -> Result<&mut KvCache> {
     match layers.get_mut(index) {
         Some(HybridLinearLayerCache::Full(cache)) => Ok(cache),
-        Some(HybridLinearLayerCache::Linear(_)) => {
-            Err(Error::InvalidModel(format!("layer {index} requires a linear attention state")))
+        Some(HybridLinearLayerCache::Linear(_) | HybridLinearLayerCache::StateSpace(_)) => {
+            Err(Error::InvalidModel(format!("layer {index} requires a recurrent state")))
         },
+        None => Err(Error::InvalidModel(format!("missing hybrid cache layer {index}"))),
+    }
+}
+
+pub(super) fn state_space_state(
+    layers: &mut [HybridLinearLayerCache],
+    index: usize,
+) -> Result<&mut StateSpaceState> {
+    match layers.get_mut(index) {
+        Some(HybridLinearLayerCache::StateSpace(state)) => Ok(state),
+        Some(_) => Err(Error::InvalidModel(format!("layer {index} is not a state-space layer"))),
         None => Err(Error::InvalidModel(format!("missing hybrid cache layer {index}"))),
     }
 }
@@ -146,6 +165,7 @@ pub(super) fn snapshot_at(
 fn layer_offset(layer: &HybridLinearLayerCache) -> Result<usize> {
     match layer {
         HybridLinearLayerCache::Linear(state) => state.offset(),
+        HybridLinearLayerCache::StateSpace(state) => Ok(state.offset()),
         HybridLinearLayerCache::Full(cache) => cache.offset(),
     }
 }
@@ -154,6 +174,9 @@ fn snapshot(layer: &HybridLinearLayerCache) -> Result<HybridLinearLayerCache> {
     match layer {
         HybridLinearLayerCache::Linear(state) => {
             state.snapshot().map(HybridLinearLayerCache::Linear)
+        },
+        HybridLinearLayerCache::StateSpace(state) => {
+            state.snapshot().map(HybridLinearLayerCache::StateSpace)
         },
         HybridLinearLayerCache::Full(cache) => {
             cache.snapshot_at(cache.offset()?).map(HybridLinearLayerCache::Full)

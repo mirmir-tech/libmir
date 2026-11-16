@@ -72,7 +72,7 @@ fn compares_router_precision_across_layers() -> std::result::Result<(), Box<dyn 
                 {
                     let input =
                         layer.post_attention_norm.apply(&hidden, layer.rms_norm_eps, &stream)?;
-                    layer.moe.probe_router_precision(
+                    layer.moe.routed()?.probe_router_precision(
                         &input,
                         &format!("layer={index},chunk={chunk},offset={position}"),
                         &stream,

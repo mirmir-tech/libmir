@@ -28,6 +28,9 @@ pub(super) fn forward(
     if profile {
         emit_profile(&dense, stream, config.layer_index, "dense", started)?;
     }
+    if weights.routed.is_none() {
+        return Ok(dense);
+    }
     let started = Instant::now();
     let experts = experts(input, weights, config, fused_expert_gate_up, stream)?;
     if profile {
@@ -49,7 +52,10 @@ pub(super) fn dense(
         gate_up_tuning::forward(&weights.dense.gate, &weights.dense.up, fused, &hidden, stream)?;
     let activated = gate.gelu_approx_mul(&up, stream)?;
     let output = weights.dense.down.forward(&activated, stream)?;
-    weights.post_dense_norm.apply(&output, config.rms_norm_eps, stream)
+    match &weights.routed {
+        Some(routed) => routed.post_dense_norm.apply(&output, config.rms_norm_eps, stream),
+        None => Ok(output),
+    }
 }
 
 pub(super) fn routing(
@@ -59,18 +65,19 @@ pub(super) fn routing(
     stream: &Stream,
 ) -> Result<crate::engine::RouterOutput> {
     if FusionPlanner::new(stream).native_router(FeedForwardLowering::DenseAndRouted) {
-        return weights.router.projection.route(
+        return weights.routed()?.router.projection.route(
             input,
-            &weights.router.norm_scale,
-            &weights.router.expert_scale,
+            &weights.routed()?.router.norm_scale,
+            &weights.routed()?.router.expert_scale,
             config.rms_norm_eps,
             config.top_k,
             stream,
         );
     }
-    let normalized = input.rms_norm(&weights.router.norm_scale, config.rms_norm_eps, stream)?;
-    let scores = weights.router.projection.forward(&normalized, stream)?;
-    scores.router_top_k(&weights.router.expert_scale, config.top_k, stream)
+    let normalized =
+        input.rms_norm(&weights.routed()?.router.norm_scale, config.rms_norm_eps, stream)?;
+    let scores = weights.routed()?.router.projection.forward(&normalized, stream)?;
+    scores.router_top_k(&weights.routed()?.router.expert_scale, config.top_k, stream)
 }
 
 #[cfg(test)]
@@ -96,7 +103,7 @@ mod tests {
         let config = HybridMoeLayerConfig::from_decoder(index, &decoder, 64)?;
         let weights = LayerWeights::load(&tensors, config, &stream)?;
         let input = Array::from_f32(&vec![0.25; decoder.hidden_size], &[1, 1, config.hidden_size])?
-            .astype_like(&weights.router.expert_scale, &stream)?;
+            .astype_like(&weights.routed()?.router.expert_scale, &stream)?;
         let iters = env_usize("MIRMIR_BENCH_ITERS", 12)?;
         let warmup = env_usize("MIRMIR_BENCH_WARMUP", 3)?;
         let router_ms =
@@ -108,16 +115,27 @@ mod tests {
         route.indices.async_eval(&stream)?;
         route.weights.async_eval(&stream)?;
         stream.synchronize()?;
-        let normalized = weights.pre_expert_norm.apply(&input, config.rms_norm_eps, &stream)?;
+        let normalized =
+            weights.routed()?.pre_expert_norm.apply(&input, config.rms_norm_eps, &stream)?;
         let expanded = normalized.expand_dims(&[-2, -3], &stream)?;
         let gate_up_ms = measure(iters, warmup, &stream, || {
-            Ok(weights.experts.gather_gate_up(&expanded, &route.indices, false, &stream)?.0)
+            Ok(weights
+                .routed()?
+                .experts
+                .gather_gate_up(&expanded, &route.indices, false, &stream)?
+                .0)
         })?;
-        let (gate, up) =
-            weights.experts.gather_gate_up(&expanded, &route.indices, false, &stream)?;
+        let (gate, up) = weights
+            .routed()?
+            .experts
+            .gather_gate_up(&expanded, &route.indices, false, &stream)?;
         let activated = gate.gelu_approx_mul(&up, &stream)?;
         let down_ms = measure(iters, warmup, &stream, || {
-            weights.experts.down.gather(&activated, &route.indices, false, &stream)
+            weights
+                .routed()?
+                .experts
+                .down
+                .gather(&activated, &route.indices, false, &stream)
         })?;
         let dense_ms =
             measure(iters, warmup, &stream, || dense(&input, &weights, config, None, &stream))?;
@@ -138,8 +156,9 @@ mod tests {
         config: HybridMoeLayerConfig,
         stream: &Stream,
     ) -> Result<Array> {
-        let input = input.rms_norm(&weights.router.norm_scale, config.rms_norm_eps, stream)?;
-        weights.router.projection.forward(&input, stream)
+        let input =
+            input.rms_norm(&weights.routed()?.router.norm_scale, config.rms_norm_eps, stream)?;
+        weights.routed()?.router.projection.forward(&input, stream)
     }
 
     fn routing(
@@ -149,7 +168,7 @@ mod tests {
         stream: &Stream,
     ) -> Result<crate::engine::RouterOutput> {
         router_logits(input, weights, config, stream)?.router_top_k(
-            &weights.router.expert_scale,
+            &weights.routed()?.router.expert_scale,
             config.top_k,
             stream,
         )

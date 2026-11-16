@@ -101,6 +101,23 @@ fn windowed_gx10_geometry_spends_only_full_layer_bytes_per_token() {
     assert_eq!(cache_tokens(&resolved), 1_778_480);
 }
 
+#[test]
+fn unified_limit_covers_bounded_sliding_rings() {
+    let config = RuntimeConfig::default();
+    let growing_bytes_per_token = 163_840;
+    let ring_bytes = 13_600_000_000;
+    let configured_tokens = 4_096 * 16;
+    let mut estimate = estimate(8 * GIB, GIB, growing_bytes_per_token, 262_144);
+    estimate.kv_cache_bytes = growing_bytes_per_token * configured_tokens + ring_bytes;
+    estimate.cache_capacity_tokens = configured_tokens;
+    let memory = memory(64 * GIB, 63 * GIB, 0, true);
+
+    let resolved = resolve(&config, estimate, &memory, 0);
+
+    assert!(cache_bytes(&resolved, estimate) > 10 * GIB);
+    assert!(cache_bytes(&resolved, estimate) + ring_bytes <= 64 * GIB / 5 * 2);
+}
+
 pub(super) const fn estimate(
     weight_bytes: u64,
     workspace_bytes: u64,

@@ -218,3 +218,11 @@ fn reads_hybrid_linear_moe_features() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn rejects_shared_key_value_layers_with_a_clear_error() {
+    let error = DecoderConfig::from_value(&json!({ "num_kv_shared_layers": 18 }))
+        .err()
+        .map(|error| error.to_string());
+    assert!(error.is_some_and(|error| error.contains("shared K/V layers")));
+}

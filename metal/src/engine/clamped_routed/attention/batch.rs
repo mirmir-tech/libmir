@@ -29,6 +29,17 @@ impl ClampedRoutedAttention {
         ] {
             crate::engine::probe::detail(stage, array)?;
         }
+        if !causal
+            && let Some(output) = self.forward_persistent(
+                [&queries, &keys, &values],
+                caches,
+                positions,
+                layer,
+                stream,
+            )?
+        {
+            return Ok(output);
+        }
         let sequence_usize = usize::try_from(sequence)?;
         let width = usize::try_from(self.config.head_dim)?;
         let row = |array: &Array, index, heads| {
@@ -99,7 +110,18 @@ impl ClampedRoutedAttention {
             );
         }
         let rows = attended.iter().collect::<Vec<_>>();
-        let output = Array::concatenate(&rows, 0, stream)?
+        self.project_attended(&Array::concatenate(&rows, 0, stream)?, batch, sequence, stream)
+    }
+
+    /// Projects `[B, H, S, D]` attention output back to the residual width.
+    pub(super) fn project_attended(
+        &self,
+        attended: &Array,
+        batch: i32,
+        sequence: i32,
+        stream: &Stream,
+    ) -> Result<Array> {
+        let output = attended
             .transpose(&[0, 2, 1, 3], stream)?
             .reshape(&[batch, sequence, self.config.heads * self.config.head_dim], stream)?;
         #[cfg(test)]

@@ -123,9 +123,17 @@ fn derives_mamba_and_latent_routed_geometry() -> Result<()> {
     assert_eq!(hybrid.mamba.state_dtype, StateSpaceStateDType::Float32);
     assert!(hybrid.mamba.time_step_limit.minimum.abs() < f64::EPSILON);
     assert_eq!(hybrid.mamba.time_step_limit.maximum, TimeStepBound::Unbounded);
-    assert_eq!(hybrid.routed.latent_size, 1024);
+    assert_eq!(hybrid.routed.latent_size, Some(1024));
     assert_eq!(hybrid.routed.shared_intermediate_size, Some(5376));
     assert!((hybrid.routed.routed_scale - 5.0).abs() < f64::EPSILON);
+    Ok(())
+}
+
+#[test]
+fn treats_a_null_latent_size_as_hidden_width_experts() -> Result<()> {
+    let decoder = DecoderConfig::from_value(&with(config("ME"), "moe_latent_size", Value::Null))?;
+    let hybrid = decoder.state_space.ok_or_else(|| missing("hybrid configuration"))?;
+    assert_eq!(hybrid.routed.latent_size, None);
     Ok(())
 }
 
@@ -158,7 +166,6 @@ fn rejects_malformed_block_patterns() -> Result<()> {
 #[test]
 fn rejects_inconsistent_mamba_geometry() -> Result<()> {
     rejects(&with(config("ME"), "n_groups", json!(3)), "divisible by n_groups")?;
-    rejects(&with(config("ME"), "expand", json!(4)), "expand * hidden_size")?;
     rejects(&with(config("ME"), "mamba_head_dim", json!(0)), "greater than zero")?;
     rejects(&with(config("ME"), "mamba_hidden_act", json!("gelu")), "silu")?;
     rejects(

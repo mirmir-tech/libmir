@@ -55,13 +55,15 @@ impl<'a> FusionPlanner<'a> {
                 self.config.dense_gate_up.enabled(),
                 false,
             ),
-            FeedForwardLowering::DenseAndRouted => (
+            FeedForwardLowering::DenseAndRouted | FeedForwardLowering::DenseGelu => (
                 self.config.hybrid_attention.enabled(),
                 self.config.hybrid_dense_gate_up.enabled(),
                 true,
             ),
             FeedForwardLowering::SharedRouted => (false, true, false),
-            FeedForwardLowering::ClampedRouted => (false, false, false),
+            FeedForwardLowering::ClampedRouted
+            | FeedForwardLowering::LatentRouted
+            | FeedForwardLowering::None => (false, false, false),
         };
         ProjectionFusion {
             attention: attention && !biases.attention,
@@ -74,7 +76,11 @@ impl<'a> FusionPlanner<'a> {
         match feed_forward {
             FeedForwardLowering::DenseAndRouted => self.config.routed_expert_gate_up,
             FeedForwardLowering::SharedRouted => self.config.shared_expert_gate_up,
-            FeedForwardLowering::Dense | FeedForwardLowering::ClampedRouted => FusionMode::Disabled,
+            FeedForwardLowering::Dense
+            | FeedForwardLowering::DenseGelu
+            | FeedForwardLowering::ClampedRouted
+            | FeedForwardLowering::LatentRouted
+            | FeedForwardLowering::None => FusionMode::Disabled,
         }
     }
 

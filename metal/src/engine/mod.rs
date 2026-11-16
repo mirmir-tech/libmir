@@ -22,8 +22,6 @@ mod gated_full_attention;
 mod graph;
 mod kernels;
 mod kv;
-#[cfg(test)]
-pub(crate) use kv::history as persistent_history;
 mod layer_norm;
 mod linear;
 pub mod lowering;
@@ -39,6 +37,7 @@ mod scalar;
 mod sequence_scoring;
 mod shared_expert_moe;
 mod snapshot;
+pub mod state_space_hybrid;
 mod stream;
 mod tensors;
 #[cfg(test)]
@@ -68,8 +67,8 @@ pub use gated_delta::{GatedDeltaInputs, GatedDeltaLayer, GatedDeltaLayerConfig, 
 pub use gated_full_attention::{GatedFullAttention, GatedFullAttentionConfig};
 pub(crate) use kv::{
     DecodeCapacity, KvPageFormat, NATIVE_PAGED_ATTENTION_MIN_CONTEXT, PagedArenaPool,
-    PagedContextMode, native_paged_attention_mode, paged_attention_enabled,
-    paged_attention_min_context,
+    PagedContextMode, history as persistent_history, native_paged_attention_mode,
+    paged_attention_enabled, paged_attention_min_context,
 };
 pub use kv::{KvCache, KvContext, PagedKvContext};
 pub use layer_norm::LayerNorm;
@@ -81,13 +80,18 @@ pub use moe::{RouterOutput, SortedExpertInputs};
 pub(crate) use norm::NormWeight;
 pub use quantized::QuantizedArrays;
 pub use sampling::TopK;
-pub(crate) use sampling::{DeviceSampling, MaskedSampling, TokenAllowlist, sample, sample_u32};
+pub(crate) use sampling::{
+    DeviceSampling, MaskedSampling, TokenAllowlist, sample, sample_rows, sample_u32,
+};
 pub use sequence_scoring::SequenceScoringModel;
 pub use shared_expert_moe::{SharedExpertMoe, SharedExpertMoeConfig};
 pub use stream::Stream;
 pub use tensors::TensorFile;
 pub use text_embedding::TextEmbeddingModel;
-pub use vision::{pooled::PooledVisionTower, spatial_merge::SpatialMergeVisionTower};
+pub use vision::{
+    pixel_shuffle::PixelShuffleVisionTower, pooled::PooledVisionTower,
+    spatial_merge::SpatialMergeVisionTower,
+};
 
 pub fn version() -> Result<String> {
     Ok(mirtal::version()?)

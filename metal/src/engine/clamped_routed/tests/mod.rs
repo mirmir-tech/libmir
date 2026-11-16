@@ -8,6 +8,7 @@ use models::{
 use serde_json::{Value, json};
 
 pub mod fixture;
+mod history;
 use fixture::{write_config, write_weights};
 
 use super::ClampedRoutedModel;

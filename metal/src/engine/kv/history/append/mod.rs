@@ -17,7 +17,9 @@ mirtal::metal_library! {
 #[derive(Debug)]
 pub struct Append {
     library: mirtal::MetalLibrary,
-    plans: Mutex<[Option<mirtal::PreparedAliasing<4, 2>>; 3]>,
+    plans: Mutex<[Option<mirtal::PreparedAliasing<5, 2>>; 3]>,
+    /// Every layer of a decode step needs the same mask, so one is enough.
+    padding_mask: Mutex<Option<(Vec<usize>, Array)>>,
 }
 
 impl Append {
@@ -25,6 +27,7 @@ impl Append {
         Ok(Self {
             library: append_library()?,
             plans: Mutex::new([None, None, None]),
+            padding_mask: Mutex::new(None),
         })
     }
 
@@ -34,7 +37,13 @@ impl Append {
         updates: [&Array; 2],
         stream: &Stream,
     ) -> Result<[Array; 2]> {
-        let geometry = Geometry::new(history.shape, history.tokens)?;
+        let geometry = Geometry::new(history.shape, &history.tokens)?;
+        let offsets = history
+            .tokens
+            .iter()
+            .map(|tokens| Ok(u32::try_from(*tokens)?))
+            .collect::<Result<Vec<_>>>()?;
+        let offsets = mirtal::Array::from_slice(&offsets, [offsets.len()])?;
         let dtype = history.buffers[0].native().dtype()?;
         let index = match dtype {
             mirtal::DType::Float32 => 0,
@@ -61,9 +70,41 @@ impl Append {
                 history.buffers[1].native(),
                 updates[0].native(),
                 updates[1].native(),
+                &offsets,
             ],
         )?;
         drop(plans);
         Ok([Array::from_native(keys)?, Array::from_native(values)?])
+    }
+
+    /// Returns an additive `[B, 1, 1, T]` mask with `-inf` over padded slots.
+    pub(super) fn padding_mask(&self, tokens: &[usize]) -> Result<Array> {
+        let cached = self
+            .padding_mask
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .filter(|(cached, _)| cached == tokens)
+            .map(|(_, mask)| mask.native().clone());
+        if let Some(mask) = cached {
+            return Array::from_native(mask);
+        }
+        let longest = tokens.iter().copied().max().unwrap_or(0);
+        let mut values = Vec::with_capacity(tokens.len() * longest);
+        for row in tokens {
+            values.extend((0..longest).map(|slot| {
+                if slot < *row {
+                    0.0
+                } else {
+                    f32::NEG_INFINITY
+                }
+            }));
+        }
+        let shape = [i32::try_from(tokens.len())?, 1, 1, i32::try_from(longest)?];
+        let mask = Array::from_f32(&values, &shape)?;
+        let retained = Array::from_native(mask.native().clone())?;
+        *self.padding_mask.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some((tokens.to_vec(), retained));
+        Ok(mask)
     }
 }

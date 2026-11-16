@@ -151,13 +151,16 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        self.model.release_decode_session(self.state.session_id());
+        // Free backend pages and logical blocks before the scheduler counts the
+        // session's blocks as free: otherwise a cohort admitted in between finds
+        // the physical pages still held and fails.
         let _backend_release = self
             .model
             .engine()
             .release_session(self.model.handle(), self.state.session_id());
         let _cache_release =
             self.model.clone().with_cache(|cache| Ok(self.state.release(cache)?));
+        self.model.release_decode_session(self.state.session_id());
         self.model.notify_cache_waiters();
     }
 }

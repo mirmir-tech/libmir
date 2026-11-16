@@ -129,8 +129,7 @@ impl LoadedModel {
     }
 
     fn prepare_prefill_state(&mut self, tokens: &[u32]) -> Result<super::prefix::RestoredPrefix> {
-        #[cfg(test)]
-        self.apply_history_pressure(crate::engine::memory_stats()?)?;
+        self.apply_history_pressure(crate::engine::memory_stats()?, tokens.len())?;
         let restored = self
             .prefixes
             .lease_longest(&self.info.manifest.id, tokens)?

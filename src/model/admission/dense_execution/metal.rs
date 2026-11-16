@@ -17,7 +17,9 @@ pub(super) fn metal_generation_supported(contract: &DecoderExecutionContract) ->
         FeedForwardSpec::Routed { shared: None, .. } => {
             contract.bindings.routed_decoder_layer(layer.index).is_ok()
         },
-        FeedForwardSpec::LatentRouted { .. } | FeedForwardSpec::None => false,
+        FeedForwardSpec::LatentRouted { .. } | FeedForwardSpec::None => {
+            contract.bindings.state_space_hybrid_layer(layer.index).is_ok()
+        },
     })
 }
 

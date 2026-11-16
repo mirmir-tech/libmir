@@ -31,12 +31,12 @@ pub(super) fn latent(
     hidden: usize,
     projection: LatentProjectionRole,
 ) -> Option<Vec<usize>> {
-    let FeedForwardSpec::LatentRouted { latent_size, .. } = feed_forward else {
+    let FeedForwardSpec::LatentRouted { latent_size: Some(latent), .. } = feed_forward else {
         return None;
     };
     Some(match projection {
-        LatentProjectionRole::Input => vec![*latent_size, hidden],
-        LatentProjectionRole::Output => vec![hidden, *latent_size],
+        LatentProjectionRole::Input => vec![*latent, hidden],
+        LatentProjectionRole::Output => vec![hidden, *latent],
     })
 }
 

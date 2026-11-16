@@ -1,17 +1,21 @@
 use models::weights::{
-    HybridMoeAttentionBindings, HybridMoeDenseBindings, HybridMoeExpertBindings,
-    HybridMoeLayerBindings, HybridMoeRouterBindings, TensorBinding,
+    DenseDecoderLayerBindings, HybridMoeAttentionBindings, HybridMoeDenseBindings,
+    HybridMoeExpertBindings, HybridMoeLayerBindings, HybridMoeRouterBindings, TensorBinding,
 };
 
-use super::{
-    AttentionWeights, DenseWeights, ExpertGateUpWeights, ExpertWeights, LayerWeights, RouterWeights,
-};
 #[cfg(test)]
-use crate::engine::QuantizedLinear;
+use self::legacy::{legacy_attention, legacy_dense, legacy_norm, legacy_router};
+use super::{
+    AttentionWeights, DenseWeights, ExpertGateUpWeights, ExpertWeights, LayerWeights,
+    RoutedWeights, RouterWeights,
+};
 use crate::engine::{
     Array, Error, ModelTensors, NormWeight, Result, Stream, binding::BoundLinear,
     hybrid::moe::HybridMoeLayerConfig,
 };
+
+#[cfg(test)]
+mod legacy;
 
 impl LayerWeights {
     pub(in crate::engine::hybrid::moe) fn load_bindings(
@@ -24,15 +28,65 @@ impl LayerWeights {
             input_norm: norm(tensors, bindings.input_norm)?,
             post_attention_norm: norm(tensors, bindings.post_attention_norm)?,
             pre_dense_norm: norm(tensors, bindings.pre_dense_norm)?,
-            post_dense_norm: norm(tensors, bindings.post_dense_norm)?,
-            pre_expert_norm: norm(tensors, bindings.pre_expert_norm)?,
-            post_expert_norm: norm(tensors, bindings.post_expert_norm)?,
             post_feed_forward_norm: norm(tensors, bindings.post_feed_forward_norm)?,
             layer_scalar: tensors.get(&bindings.layer_scale.source)?,
             attention: attention(tensors, bindings.attention, config, stream)?,
             dense: dense(tensors, bindings.dense, stream)?,
-            router: router(tensors, bindings.router, config, stream)?,
-            experts: experts(tensors, &bindings.experts, stream)?,
+            routed: Some(RoutedWeights {
+                post_dense_norm: norm(tensors, bindings.post_dense_norm)?,
+                pre_expert_norm: norm(tensors, bindings.pre_expert_norm)?,
+                post_expert_norm: norm(tensors, bindings.post_expert_norm)?,
+                router: router(tensors, bindings.router, config, stream)?,
+                experts: experts(tensors, &bindings.experts, stream)?,
+            }),
+        })
+    }
+
+    pub(in crate::engine::hybrid::moe) fn load_dense_bindings(
+        tensors: &ModelTensors,
+        bindings: &DenseDecoderLayerBindings<'_>,
+        config: HybridMoeLayerConfig,
+        stream: &Stream,
+    ) -> Result<Self> {
+        let sandwich = bindings.sandwich.ok_or_else(|| {
+            Error::InvalidModel("dense GELU layer needs output norms and a layer scale".into())
+        })?;
+        let attention_norm = |binding: Option<&TensorBinding>| {
+            binding.cloned().ok_or_else(|| {
+                Error::InvalidModel("dense GELU attention needs query and key norms".into())
+            })
+        };
+        let query_norm = attention_norm(bindings.attention.query_norm)?;
+        let key_norm = attention_norm(bindings.attention.key_norm)?;
+        Ok(Self {
+            input_norm: norm(tensors, bindings.input_norm)?,
+            post_attention_norm: norm(tensors, sandwich.attention_output_norm)?,
+            pre_dense_norm: norm(tensors, bindings.post_attention_norm)?,
+            post_feed_forward_norm: norm(tensors, sandwich.feed_forward_output_norm)?,
+            layer_scalar: tensors.get(&sandwich.layer_scale.source)?,
+            attention: attention(
+                tensors,
+                HybridMoeAttentionBindings {
+                    query: bindings.attention.query,
+                    key: bindings.attention.key,
+                    value: Some(bindings.attention.value),
+                    output: bindings.attention.output,
+                    query_norm: &query_norm,
+                    key_norm: &key_norm,
+                },
+                config,
+                stream,
+            )?,
+            dense: dense(
+                tensors,
+                HybridMoeDenseBindings {
+                    gate: bindings.gate,
+                    up: bindings.up,
+                    down: bindings.down,
+                },
+                stream,
+            )?,
+            routed: None,
         })
     }
 
@@ -47,20 +101,22 @@ impl LayerWeights {
             input_norm: legacy_norm(tensors, &layer, "input_layernorm")?,
             post_attention_norm: legacy_norm(tensors, &layer, "post_attention_layernorm")?,
             pre_dense_norm: legacy_norm(tensors, &layer, "pre_feedforward_layernorm")?,
-            post_dense_norm: legacy_norm(tensors, &layer, "post_feedforward_layernorm_1")?,
-            pre_expert_norm: legacy_norm(tensors, &layer, "pre_feedforward_layernorm_2")?,
-            post_expert_norm: legacy_norm(tensors, &layer, "post_feedforward_layernorm_2")?,
             post_feed_forward_norm: legacy_norm(tensors, &layer, "post_feedforward_layernorm")?,
             layer_scalar: tensors.get(&format!("{layer}.layer_scalar"))?,
             attention: legacy_attention(tensors, &format!("{layer}.self_attn"), config, stream)?,
             dense: legacy_dense(tensors, &format!("{layer}.mlp"), config.group_size)?,
-            router: legacy_router(tensors, &format!("{layer}.router"), config, stream)?,
-            experts: legacy_dense(
-                tensors,
-                &format!("{layer}.experts.switch_glu"),
-                config.group_size,
-            )?
-            .into(),
+            routed: Some(RoutedWeights {
+                post_dense_norm: legacy_norm(tensors, &layer, "post_feedforward_layernorm_1")?,
+                pre_expert_norm: legacy_norm(tensors, &layer, "pre_feedforward_layernorm_2")?,
+                post_expert_norm: legacy_norm(tensors, &layer, "post_feedforward_layernorm_2")?,
+                router: legacy_router(tensors, &format!("{layer}.router"), config, stream)?,
+                experts: legacy_dense(
+                    tensors,
+                    &format!("{layer}.experts.switch_glu"),
+                    config.group_size,
+                )?
+                .into(),
+            }),
         })
     }
 }
@@ -160,7 +216,7 @@ fn norm(tensors: &ModelTensors, binding: &TensorBinding) -> Result<NormWeight> {
     NormWeight::load_name(tensors, &binding.source)
 }
 
-fn rope_frequencies(config: HybridMoeLayerConfig, stream: &Stream) -> Result<Array> {
+pub(super) fn rope_frequencies(config: HybridMoeLayerConfig, stream: &Stream) -> Result<Array> {
     Array::proportional_rope_frequencies(
         config.head_dim,
         config.rope_dimensions,
@@ -176,67 +232,4 @@ impl From<DenseWeights> for ExpertWeights {
             down: weights.down,
         }
     }
-}
-
-#[cfg(test)]
-fn legacy_norm(tensors: &ModelTensors, prefix: &str, name: &str) -> Result<NormWeight> {
-    NormWeight::load(tensors, &format!("{prefix}.{name}"))
-}
-
-#[cfg(test)]
-fn legacy_attention(
-    tensors: &ModelTensors,
-    prefix: &str,
-    config: HybridMoeLayerConfig,
-    stream: &Stream,
-) -> Result<AttentionWeights> {
-    Ok(AttentionWeights {
-        query: legacy_linear(tensors, prefix, "q_proj", config.group_size)?,
-        key: legacy_linear(tensors, prefix, "k_proj", config.group_size)?,
-        value: (!config.use_k_eq_v)
-            .then(|| legacy_linear(tensors, prefix, "v_proj", config.group_size))
-            .transpose()?,
-        output: legacy_linear(tensors, prefix, "o_proj", config.group_size)?,
-        query_norm: legacy_norm(tensors, prefix, "q_norm")?,
-        key_norm: legacy_norm(tensors, prefix, "k_norm")?,
-        rope_frequencies: config
-            .proportional_rope
-            .then(|| rope_frequencies(config, stream))
-            .transpose()?,
-    })
-}
-
-#[cfg(test)]
-fn legacy_dense(tensors: &ModelTensors, prefix: &str, group: i32) -> Result<DenseWeights> {
-    Ok(DenseWeights {
-        gate: legacy_linear(tensors, prefix, "gate_proj", group)?,
-        up: legacy_linear(tensors, prefix, "up_proj", group)?,
-        down: legacy_linear(tensors, prefix, "down_proj", group)?,
-    })
-}
-
-#[cfg(test)]
-fn legacy_router(
-    tensors: &ModelTensors,
-    prefix: &str,
-    config: HybridMoeLayerConfig,
-    stream: &Stream,
-) -> Result<RouterWeights> {
-    Ok(RouterWeights {
-        projection: legacy_linear(tensors, prefix, "proj", config.group_size)?,
-        norm_scale: tensors
-            .get(&format!("{prefix}.scale"))?
-            .multiply_scalar(config.router_norm_scale, stream)?,
-        expert_scale: tensors.get(&format!("{prefix}.per_expert_scale"))?,
-    })
-}
-
-#[cfg(test)]
-fn legacy_linear(
-    tensors: &ModelTensors,
-    prefix: &str,
-    name: &str,
-    group: i32,
-) -> Result<BoundLinear> {
-    QuantizedLinear::load(tensors, &format!("{prefix}.{name}"), group).map(BoundLinear::Affine)
 }

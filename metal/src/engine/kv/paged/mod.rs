@@ -6,6 +6,7 @@ mod planning;
 mod pool;
 pub use planning::DecodeCapacity;
 mod reservation;
+mod rows;
 mod validation;
 mod write;
 
@@ -13,6 +14,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use pool::Arena;
 pub use pool::PagedArenaPool;
+pub(super) use rows::write_rows;
 
 use crate::engine::{
     Array, Error, KvPageFormat, Result, Stream,

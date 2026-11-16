@@ -17,7 +17,7 @@ fn fixture(
                 Array::from_native(graph.full(&full, 0.0, dtype)?)?,
             ],
             shape,
-            tokens,
+            tokens: vec![tokens; shape[0]],
             reservation: stream
                 .history_budget()
                 .reserve(crate::engine::persistent_history::budget::storage_bytes(shape, dtype)?)
@@ -84,7 +84,7 @@ fn rejects_invalid_geometry_and_address_overflow() {
         ([3, 2, usize::MAX, 64], 1),
         ([3, 2, 1 << 24, 64], 1),
     ] {
-        assert!(Geometry::new(shape, offset).is_err());
+        assert!(Geometry::new(shape, &[offset; 3]).is_err());
     }
-    assert!(Geometry::new([3, 2, 2304, 256], 2241).is_ok());
+    assert!(Geometry::new([3, 2, 2304, 256], &[2241; 3]).is_ok());
 }
