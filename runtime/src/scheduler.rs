@@ -162,7 +162,12 @@ impl Default for SchedulerConfig {
             max_batch_requests: 16,
             max_batch_tokens: 8192,
             prefill_batch_wait_us: 200,
-            decode_batch_wait_us: 200,
+            // A decode step waits this long for active requests that are
+            // still publishing their previous token. 200 us split batches on
+            // the HTTP path (Qwen3-8B, llama-benchy c=5: 125 tok/s with
+            // 111-144 spread; 1 ms: 159 tok/s, steady). The wait applies only
+            // while an active request is missing, so c=1 never pays it.
+            decode_batch_wait_us: 1_000,
             decode_priority_burst: 8,
             cached_prefill_policy: CachedPrefillPolicy::default(),
             prefill_decode_policy: PrefillDecodePolicy::default(),
