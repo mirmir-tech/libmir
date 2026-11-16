@@ -29,14 +29,14 @@ For Apple Metal:
 
 ```toml
 [dependencies]
-libmir = { version = "0.6.1", features = ["metal"] }
+libmir = { version = "0.6.2", features = ["metal"] }
 ```
 
 For NVIDIA CUDA:
 
 ```toml
 [dependencies]
-libmir = { version = "0.6.1", default-features = false, features = ["cuda"] }
+libmir = { version = "0.6.2", default-features = false, features = ["cuda"] }
 ```
 
 ## Generate from a local checkpoint
