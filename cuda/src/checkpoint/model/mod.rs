@@ -152,7 +152,8 @@ fn runtime_raw_sources(binding: &TensorBinding) -> Vec<&str> {
     match &binding.storage {
         TensorStorage::AffineQuantized { .. }
         | TensorStorage::BlockQuantized { .. }
-        | TensorStorage::Float8 { .. } => binding.physical_sources(),
+        | TensorStorage::Float8 { .. }
+        | TensorStorage::Ggml { .. } => binding.physical_sources(),
         TensorStorage::PackedInt8 { scales, .. } | TensorStorage::PackedInt4 { scales, .. } => {
             vec![binding.source.as_str(), scales.as_str()]
         },

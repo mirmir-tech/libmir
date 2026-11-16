@@ -1,9 +1,12 @@
 use crate::{
     AffineQuantizedWeight, Bf16LinearPairWeights, BlockFp8LinearWeight, CudaTensor,
-    DenseDownWeight, DenseGateUpWeights, DenseSwiGluWeights, DirectFp8CheckpointWeight,
-    Fp8ResidualLinearWeight, MxFp4CheckpointWeight, MxFp8CheckpointWeight, NvFp4LinearWeight,
-    PackedIntegerWeight, Result,
-    backend::{attention::graph::CapturedAttentionWeights, dense::sandwich::DenseSandwichOwned},
+    DenseDownWeight, DenseFeedForwardWeights, DenseGateUpWeights, DenseSwiGluWeights,
+    DirectFp8CheckpointWeight, Fp8ResidualLinearWeight, GgmlCheckpointWeight,
+    MxFp4CheckpointWeight, MxFp8CheckpointWeight, NvFp4LinearWeight, PackedIntegerWeight, Result,
+    backend::{
+        attention::graph::CapturedAttentionWeights,
+        dense::{RoutedExpertWeights, sandwich::DenseSandwichOwned},
+    },
 };
 
 #[derive(Clone)]
@@ -11,8 +14,20 @@ pub(super) struct CapturedDenseWeights {
     attention: CapturedAttentionWeights,
     post_attention_norm: CudaTensor,
     sandwich: Option<DenseSandwichOwned>,
-    gate_up: CapturedGateUp,
-    down: CapturedDown,
+    feed_forward: CapturedFeedForward,
+}
+
+#[expect(
+    clippy::large_enum_variant,
+    reason = "one per layer executor or template; the gated MLP is the common variant"
+)]
+#[derive(Clone)]
+enum CapturedFeedForward {
+    Gated {
+        gate_up: CapturedGateUp,
+        down: CapturedDown,
+    },
+    Routed(Box<RoutedExpertWeights>),
 }
 
 #[derive(Clone)]
@@ -29,6 +44,10 @@ enum CapturedGateUp {
     MxFp4 {
         gate: MxFp4CheckpointWeight,
         up: MxFp4CheckpointWeight,
+    },
+    Ggml {
+        gate: GgmlCheckpointWeight,
+        up: GgmlCheckpointWeight,
     },
     MxFp8 {
         gate: MxFp8CheckpointWeight,
@@ -58,6 +77,7 @@ enum CapturedDown {
     Bf16(CudaTensor),
     DirectFp8(DirectFp8CheckpointWeight),
     MxFp4(MxFp4CheckpointWeight),
+    Ggml(GgmlCheckpointWeight),
     MxFp8(MxFp8CheckpointWeight),
     PackedInteger(PackedIntegerWeight),
     NvFp4(NvFp4LinearWeight),
@@ -77,8 +97,13 @@ impl CapturedDenseWeights {
             attention: self.attention.borrow(),
             post_attention_norm: &self.post_attention_norm,
             sandwich: self.sandwich.as_ref().map(DenseSandwichOwned::borrow),
-            gate_up: self.gate_up.borrow(),
-            down: self.down.borrow(),
+            feed_forward: match &self.feed_forward {
+                CapturedFeedForward::Gated { gate_up, down } => DenseFeedForwardWeights::Gated {
+                    gate_up: gate_up.borrow(),
+                    down: down.borrow(),
+                },
+                CapturedFeedForward::Routed(weights) => DenseFeedForwardWeights::Routed(weights),
+            },
         }
     }
 }
@@ -91,8 +116,15 @@ impl TryFrom<DenseSwiGluWeights<'_>> for CapturedDenseWeights {
             attention: weights.attention.into(),
             post_attention_norm: weights.post_attention_norm.clone(),
             sandwich: weights.sandwich.map(DenseSandwichOwned::new).transpose()?,
-            gate_up: weights.gate_up.into(),
-            down: weights.down.into(),
+            feed_forward: match weights.feed_forward {
+                DenseFeedForwardWeights::Gated { gate_up, down } => CapturedFeedForward::Gated {
+                    gate_up: gate_up.into(),
+                    down: down.into(),
+                },
+                DenseFeedForwardWeights::Routed(weights) => {
+                    CapturedFeedForward::Routed(Box::new(weights.clone()))
+                },
+            },
         })
     }
 }
@@ -109,6 +141,9 @@ impl From<DenseGateUpWeights<'_>> for CapturedGateUp {
             },
             DenseGateUpWeights::MxFp4 { gate, up } => {
                 Self::MxFp4 { gate: gate.clone(), up: up.clone() }
+            },
+            DenseGateUpWeights::Ggml { gate, up } => {
+                Self::Ggml { gate: gate.clone(), up: up.clone() }
             },
             DenseGateUpWeights::MxFp8 { gate, up } => {
                 Self::MxFp8 { gate: gate.clone(), up: up.clone() }
@@ -138,6 +173,7 @@ impl CapturedGateUp {
             Self::Bf16(weights) => DenseGateUpWeights::Bf16(weights),
             Self::DirectFp8 { gate, up } => DenseGateUpWeights::DirectFp8 { gate, up },
             Self::MxFp4 { gate, up } => DenseGateUpWeights::MxFp4 { gate, up },
+            Self::Ggml { gate, up } => DenseGateUpWeights::Ggml { gate, up },
             Self::MxFp8 { gate, up } => DenseGateUpWeights::MxFp8 { gate, up },
             Self::PackedInteger { gate, up } => DenseGateUpWeights::PackedInteger { gate, up },
             Self::NvFp4 { gate, up } => DenseGateUpWeights::NvFp4 { gate, up },
@@ -156,6 +192,7 @@ impl From<DenseDownWeight<'_>> for CapturedDown {
             DenseDownWeight::Bf16(weight) => Self::Bf16(weight.clone()),
             DenseDownWeight::DirectFp8(weight) => Self::DirectFp8(weight.clone()),
             DenseDownWeight::MxFp4(weight) => Self::MxFp4(weight.clone()),
+            DenseDownWeight::Ggml(weight) => Self::Ggml(weight.clone()),
             DenseDownWeight::MxFp8(weight) => Self::MxFp8(weight.clone()),
             DenseDownWeight::PackedInteger(weight) => Self::PackedInteger(weight.clone()),
             DenseDownWeight::NvFp4(weight) => Self::NvFp4(weight.clone()),
@@ -178,6 +215,7 @@ impl CapturedDown {
             Self::Bf16(weight) => DenseDownWeight::Bf16(weight),
             Self::DirectFp8(weight) => DenseDownWeight::DirectFp8(weight),
             Self::MxFp4(weight) => DenseDownWeight::MxFp4(weight),
+            Self::Ggml(weight) => DenseDownWeight::Ggml(weight),
             Self::MxFp8(weight) => DenseDownWeight::MxFp8(weight),
             Self::PackedInteger(weight) => DenseDownWeight::PackedInteger(weight),
             Self::NvFp4(weight) => DenseDownWeight::NvFp4(weight),

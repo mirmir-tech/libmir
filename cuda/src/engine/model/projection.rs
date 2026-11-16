@@ -5,6 +5,8 @@ use crate::ProjectionFormat;
 pub(super) fn format(bindings: &WeightBindingPlan) -> ProjectionFormat {
     if bindings.affine_group_size().is_some() {
         ProjectionFormat::Affine
+    } else if bindings.uses_ggml() {
+        ProjectionFormat::Ggml
     } else if bindings.uses_float8() {
         ProjectionFormat::DirectFp8
     } else if bindings.uses_block_format(BlockFormat::MxFp4) {

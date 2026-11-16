@@ -67,6 +67,9 @@ impl SharedRoutedEmbedding {
             CheckpointProjectionWeight::MxFp8(_) => {
                 Err(Error::InvalidExecutionPlan("shared routed embedding does not support MXFP8"))
             },
+            CheckpointProjectionWeight::Ggml(_) => {
+                Err(Error::InvalidExecutionPlan("shared routed embedding does not support GGML"))
+            },
             CheckpointProjectionWeight::NvFp4(_)
             | CheckpointProjectionWeight::NvFp4WeightOnly(_) => {
                 Err(Error::InvalidExecutionPlan("shared routed embedding does not support NVFP4"))

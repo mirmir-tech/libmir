@@ -3,6 +3,9 @@ use models::weights::{
 };
 
 use super::canonical::canonicalize;
+
+mod banks;
+mod individual;
 use crate::{
     CudaBackend, CudaTensor, CudaTensorDType, CudaTensorSet, Error, Result,
     kernels::{
@@ -106,9 +109,7 @@ impl DenseExpertWeights {
                 projection(backend, &canonicalizer, tensors, down, experts, intermediate, hidden)?,
             ),
             RoutedExpertBindings::Individual { .. } => {
-                return Err(Error::UnsupportedDecoderLayer(
-                    "dense CUDA experts require stacked checkpoint bindings".into(),
-                ));
+                individual::stack(backend, tensors, bindings, experts, hidden, intermediate)?
             },
         };
         Ok(Self {

@@ -19,6 +19,7 @@ use crate::{
 };
 
 mod dense;
+mod ggml;
 pub(super) mod marlin;
 mod mlx;
 mod native;
@@ -91,6 +92,14 @@ pub(super) fn boundary(
                 )?)),
             ))
         },
+        ClampedRoutedLayout::Ggml => {
+            let weight = |binding| crate::GgmlCheckpointWeight::load_binding(tensors, binding);
+            Ok((
+                ClampedRoutedBoundaryProjection::Ggml(weight(bindings.embedding)?),
+                norm,
+                ClampedRoutedOutputProjection::Ggml(Box::new(weight(bindings.output)?)),
+            ))
+        },
         ClampedRoutedLayout::Mlx => {
             let embedding = affine(tensors, bindings.embedding)?;
             let output = affine(tensors, bindings.output)?;
@@ -132,6 +141,7 @@ pub(super) fn layer(
         ClampedRoutedLayout::Native => native::load(backend, config, tensors, bindings)?,
         ClampedRoutedLayout::Mlx => mlx::load(config, tensors, bindings)?,
         ClampedRoutedLayout::Dense => dense::load(backend, config, tensors, bindings)?,
+        ClampedRoutedLayout::Ggml => ggml::load(backend, config, tensors, bindings)?,
     };
     Ok(ClampedRoutedLayerWeights {
         input_norm,
@@ -149,11 +159,12 @@ pub(super) fn layer(
     })
 }
 
-fn binding_bias(tensors: &CudaTensorSet, binding: &TensorBinding) -> Result<CudaTensor> {
+pub(super) fn binding_bias(tensors: &CudaTensorSet, binding: &TensorBinding) -> Result<CudaTensor> {
     let name = match &binding.storage {
         TensorStorage::Dense { bias, .. }
         | TensorStorage::Float8 { bias, .. }
-        | TensorStorage::BlockQuantized { bias, .. } => bias.as_deref(),
+        | TensorStorage::BlockQuantized { bias, .. }
+        | TensorStorage::Ggml { bias, .. } => bias.as_deref(),
         TensorStorage::AffineQuantized { output_bias, .. } => output_bias.as_deref(),
         TensorStorage::PackedInt8 { .. }
         | TensorStorage::PackedInt4 { .. }

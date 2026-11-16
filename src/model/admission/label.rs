@@ -47,6 +47,7 @@ impl WeightEncoding {
             Self::MxFp4 { format } => format!("MXFP4 B{}", format.block_size),
             Self::MxFp8 { format } => format!("MXFP8 B{}", format.block_size),
             Self::NvFp4 { format } => format!("NVFP4 B{}", format.block_size),
+            Self::Ggml { format } => format!("GGML {}", format.ggml_type),
         }
     }
 }

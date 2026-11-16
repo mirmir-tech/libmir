@@ -5,8 +5,8 @@ use super::{
     NvFp4LinearWeight, ProjectionFormat, bf16,
 };
 use crate::{
-    AffineQuantizedWeight, DirectFp8CheckpointWeight, Error, MxFp4CheckpointWeight,
-    MxFp8CheckpointWeight, PackedIntegerWeight, Result,
+    AffineQuantizedWeight, DirectFp8CheckpointWeight, Error, GgmlCheckpointWeight,
+    MxFp4CheckpointWeight, MxFp8CheckpointWeight, PackedIntegerWeight, Result,
 };
 
 /// Config-derived geometry for one fixed-shape decode attention layer.
@@ -43,6 +43,7 @@ pub enum DecodeQkvWeights<'a> {
     Bf16(&'a Bf16LinearPackWeights<3>),
     DirectFp8([&'a DirectFp8CheckpointWeight; 3]),
     MxFp4([&'a MxFp4CheckpointWeight; 3]),
+    Ggml([&'a GgmlCheckpointWeight; 3]),
     MxFp8([&'a MxFp8CheckpointWeight; 3]),
     PackedInteger([&'a PackedIntegerWeight; 3]),
     NvFp4([&'a NvFp4LinearWeight; 3]),
@@ -55,6 +56,7 @@ impl<'a> DecodeQkvWeights<'a> {
             Self::Affine(_)
             | Self::DirectFp8(_)
             | Self::MxFp4(_)
+            | Self::Ggml(_)
             | Self::MxFp8(_)
             | Self::PackedInteger(_)
             | Self::NvFp4(_) => {

@@ -4,8 +4,9 @@ use super::{
     Bf16LinearPack, CudaBackend, DecodeAttentionConfig, DecodeQkvWeights, ProjectionFormat,
 };
 use crate::{
-    CudaTensor, DirectFp8Bf16Linear, Error, ExecutionPhase, MxFp4Bf16Linear, MxFp8Bf16Linear,
-    NvFp4Bf16Pack, PackedIntegerBf16Linear, Result, RmsNormBf16, backend::linear::AffineProjection,
+    CudaTensor, DirectFp8Bf16Linear, Error, ExecutionPhase, GgmlBf16Linear, MxFp4Bf16Linear,
+    MxFp8Bf16Linear, NvFp4Bf16Pack, PackedIntegerBf16Linear, Result, RmsNormBf16,
+    backend::linear::AffineProjection,
 };
 
 #[derive(Debug)]
@@ -14,6 +15,7 @@ pub(super) enum AttentionQkvProjection {
     Bf16(Bf16LinearPack<3>),
     DirectFp8(Box<[DirectFp8Bf16Linear; 3]>),
     MxFp4(Box<[MxFp4Bf16Linear; 3]>),
+    Ggml(Box<[GgmlBf16Linear; 3]>),
     MxFp8(Box<[MxFp8Bf16Linear; 3]>),
     PackedInteger(Box<[PackedIntegerBf16Linear; 3]>),
     NvFp4(Box<NvFp4Bf16Pack<3>>),
@@ -83,6 +85,9 @@ impl AttentionQkvProjection {
             },
             ProjectionFormat::MxFp4 => {
                 Ok(Self::MxFp4(super::mxfp4::prepare_qkv(backend, tokens, weights)?))
+            },
+            ProjectionFormat::Ggml => {
+                Ok(Self::Ggml(super::ggml::prepare_qkv(backend, tokens, weights)?))
             },
             ProjectionFormat::PackedInteger => {
                 let DecodeQkvWeights::PackedInteger(weights) =
@@ -192,20 +197,12 @@ impl AttentionQkvProjection {
                 }
                 Ok(true)
             },
-            Self::MxFp4(operations) => {
-                let DecodeQkvWeights::MxFp4(weights) = weights else {
-                    return Err(Error::InvalidExecutionPlan(
-                        "MXFP4 QKV operation received other weights",
-                    ));
-                };
-                input_norm.execute(input, norm_weight, buffers.normalized)?;
-                for ((operation, weight), output) in
-                    operations.iter().zip(weights).zip(buffers.separate.iter_mut())
-                {
-                    operation.execute(buffers.normalized, weight, output)?;
-                }
-                Ok(true)
-            },
+            Self::MxFp4(operations) => super::mxfp4::execute_qkv(
+                operations, input, input_norm, norm_weight, weights, buffers,
+            ),
+            Self::Ggml(operations) => super::ggml::execute_qkv(
+                operations, input, input_norm, norm_weight, weights, buffers,
+            ),
             Self::PackedInteger(operations) => {
                 let DecodeQkvWeights::PackedInteger(weights) = weights else {
                     return Err(Error::InvalidExecutionPlan(

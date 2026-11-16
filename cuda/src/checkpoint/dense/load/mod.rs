@@ -1,21 +1,25 @@
 use models::{
     layout::DecoderConfig,
     semantic::SemanticModelSpec,
-    weights::{DenseDecoderLayerBindings, TensorBinding, TensorCatalog},
+    weights::{
+        DenseDecoderLayerBindings, DenseLayerFeedForwardBindings, TensorBinding, TensorCatalog,
+    },
 };
 
 use super::source::DenseLayerSource;
 use crate::{
-    CudaBackend, CudaTensor, CudaTensorSet, DenseDownSource, DenseGateUpSource, DenseOutputSource,
-    DenseQkvSource, DenseSandwichWeights, DenseSwiGluLayerLoadConfig, DenseSwiGluLayerTemplate,
-    DenseWeightSource, Error, PackedIntegerWeight, ProjectionFormat, Result,
-    checkpoint::model::payload_bytes,
+    CudaBackend, CudaTensor, CudaTensorSet, DenseDownSource, DenseFeedForwardSource,
+    DenseGateUpSource, DenseOutputSource, DenseQkvSource, DenseSandwichWeights,
+    DenseSwiGluLayerLoadConfig, DenseSwiGluLayerTemplate, DenseWeightSource, Error,
+    PackedIntegerWeight, ProjectionFormat, Result, checkpoint::model::payload_bytes,
 };
 
 mod direct_fp8;
+mod ggml;
 mod mxfp4;
 mod mxfp8;
 mod nvfp4;
+mod routed;
 
 impl CudaBackend {
     pub(crate) fn load_dense_swiglu_layer_tracked(
@@ -30,25 +34,40 @@ impl CudaBackend {
         let block = load.block(decoder, semantic, layer)?;
         let source = DenseLayerSource::discover(catalog, bindings)?;
         let tensors = source.upload(self, bindings, load.projection_format)?;
-        let template = match load.projection_format {
-            ProjectionFormat::Affine => load_affine(self, block, &tensors, bindings)?,
-            ProjectionFormat::Bf16 => load_bf16(self, block, &tensors, bindings)?,
-            ProjectionFormat::DirectFp8 => direct_fp8::load(self, block, &tensors, bindings)?,
-            ProjectionFormat::MxFp4 => mxfp4::load(self, block, &tensors, bindings)?,
-            ProjectionFormat::MxFp8 => mxfp8::load(self, block, &tensors, bindings)?,
-            ProjectionFormat::PackedInteger => {
-                load_packed_integer(self, block, &tensors, bindings)?
-            },
-            ProjectionFormat::NvFp4 => nvfp4::load(self, block, &tensors, bindings)?,
+        let template = if let DenseLayerFeedForwardBindings::Routed(routed) = bindings.feed_forward
+        {
+            routed::load(self, block, &tensors, bindings, routed)?
+        } else {
+            self.load_gated(block, &tensors, bindings, load.projection_format)?
         };
         tracing::debug!(
             backend = "cuda",
             layer,
             tensors = source.tensors.len(),
             format = ?load.projection_format,
+            routed = block.experts.is_some(),
             "loaded dense SwiGLU layer template"
         );
         Ok((template, payload_bytes(source.tensors)?))
+    }
+
+    fn load_gated(
+        &self,
+        block: crate::DenseSwiGluConfig,
+        tensors: &CudaTensorSet,
+        bindings: DenseDecoderLayerBindings<'_>,
+        format: ProjectionFormat,
+    ) -> Result<DenseSwiGluLayerTemplate> {
+        Ok(match format {
+            ProjectionFormat::Affine => load_affine(self, block, tensors, bindings)?,
+            ProjectionFormat::Bf16 => load_bf16(self, block, tensors, bindings)?,
+            ProjectionFormat::DirectFp8 => direct_fp8::load(self, block, tensors, bindings)?,
+            ProjectionFormat::Ggml => ggml::load(self, block, tensors, bindings)?,
+            ProjectionFormat::MxFp4 => mxfp4::load(self, block, tensors, bindings)?,
+            ProjectionFormat::MxFp8 => mxfp8::load(self, block, tensors, bindings)?,
+            ProjectionFormat::PackedInteger => load_packed_integer(self, block, tensors, bindings)?,
+            ProjectionFormat::NvFp4 => nvfp4::load(self, block, tensors, bindings)?,
+        })
     }
 }
 
@@ -58,14 +77,15 @@ fn load_affine(
     tensors: &CudaTensorSet,
     bindings: DenseDecoderLayerBindings<'_>,
 ) -> Result<DenseSwiGluLayerTemplate> {
+    let feed_forward = bindings.feed_forward.gated()?;
     let affine = |binding| crate::AffineQuantizedWeight::load_binding(tensors, binding);
     let q = affine(bindings.attention.query)?;
     let k = affine(bindings.attention.key)?;
     let v = affine(bindings.attention.value)?;
     let output = affine(bindings.attention.output)?;
-    let gate = affine(bindings.gate)?;
-    let up = affine(bindings.up)?;
-    let down = affine(bindings.down)?;
+    let gate = affine(feed_forward.gate)?;
+    let up = affine(feed_forward.up)?;
+    let down = affine(feed_forward.down)?;
     backend.prepare_dense_swiglu_layer_template(
         block,
         common_source(
@@ -73,8 +93,10 @@ fn load_affine(
             bindings,
             DenseQkvSource::Affine([&q, &k, &v]),
             DenseOutputSource::Affine(&output),
-            DenseGateUpSource::Affine { gate: &gate, up: &up },
-            DenseDownSource::Affine(&down),
+            DenseFeedForwardSource::Gated {
+                gate_up: DenseGateUpSource::Affine { gate: &gate, up: &up },
+                down: DenseDownSource::Affine(&down),
+            },
         )?,
     )
 }
@@ -85,6 +107,7 @@ fn load_packed_integer(
     tensors: &CudaTensorSet,
     bindings: DenseDecoderLayerBindings<'_>,
 ) -> Result<DenseSwiGluLayerTemplate> {
+    let feed_forward = bindings.feed_forward.gated()?;
     let hidden = block.attention.hidden_size;
     let head = block.attention.cache.key_head_dim;
     let query = block.attention.query_heads * head;
@@ -94,9 +117,9 @@ fn load_packed_integer(
     let k = packed_integer(tensors, bindings.attention.key, hidden, key_value)?;
     let v = packed_integer(tensors, bindings.attention.value, hidden, key_value)?;
     let output = packed_integer(tensors, bindings.attention.output, query, hidden)?;
-    let gate = packed_integer(tensors, bindings.gate, hidden, intermediate)?;
-    let up = packed_integer(tensors, bindings.up, hidden, intermediate)?;
-    let down = packed_integer(tensors, bindings.down, intermediate, hidden)?;
+    let gate = packed_integer(tensors, feed_forward.gate, hidden, intermediate)?;
+    let up = packed_integer(tensors, feed_forward.up, hidden, intermediate)?;
+    let down = packed_integer(tensors, feed_forward.down, intermediate, hidden)?;
     backend.prepare_dense_swiglu_layer_template(
         block,
         common_source(
@@ -104,8 +127,10 @@ fn load_packed_integer(
             bindings,
             DenseQkvSource::PackedInteger([&q, &k, &v]),
             DenseOutputSource::PackedInteger(&output),
-            DenseGateUpSource::PackedInteger { gate: &gate, up: &up },
-            DenseDownSource::PackedInteger(&down),
+            DenseFeedForwardSource::Gated {
+                gate_up: DenseGateUpSource::PackedInteger { gate: &gate, up: &up },
+                down: DenseDownSource::PackedInteger(&down),
+            },
         )?,
     )
 }
@@ -125,14 +150,15 @@ fn load_bf16(
     tensors: &CudaTensorSet,
     bindings: DenseDecoderLayerBindings<'_>,
 ) -> Result<DenseSwiGluLayerTemplate> {
+    let feed_forward = bindings.feed_forward.gated()?;
     let qkv = backend.pack_bf16_linears([
         tensor(tensors, &bindings.attention.query.source)?,
         tensor(tensors, &bindings.attention.key.source)?,
         tensor(tensors, &bindings.attention.value.source)?,
     ])?;
     let gate_up = backend.pack_bf16_linear_pair(
-        tensor(tensors, &bindings.gate.source)?,
-        tensor(tensors, &bindings.up.source)?,
+        tensor(tensors, &feed_forward.gate.source)?,
+        tensor(tensors, &feed_forward.up.source)?,
     )?;
     backend.prepare_dense_swiglu_layer_template(
         block,
@@ -141,8 +167,10 @@ fn load_bf16(
             bindings,
             DenseQkvSource::Bf16(&qkv),
             DenseOutputSource::Bf16(tensor(tensors, &bindings.attention.output.source)?),
-            DenseGateUpSource::Bf16(&gate_up),
-            DenseDownSource::Bf16(tensor(tensors, &bindings.down.source)?),
+            DenseFeedForwardSource::Gated {
+                gate_up: DenseGateUpSource::Bf16(&gate_up),
+                down: DenseDownSource::Bf16(tensor(tensors, &feed_forward.down.source)?),
+            },
         )?,
     )
 }
@@ -152,8 +180,7 @@ pub(super) fn common_source<'a>(
     bindings: DenseDecoderLayerBindings<'_>,
     qkv: DenseQkvSource<'a>,
     output: DenseOutputSource<'a>,
-    gate_up: DenseGateUpSource<'a>,
-    down: DenseDownSource<'a>,
+    feed_forward: DenseFeedForwardSource<'a>,
 ) -> Result<DenseWeightSource<'a>> {
     Ok(DenseWeightSource {
         input_norm: tensor(tensors, &bindings.input_norm.source)?,
@@ -175,8 +202,7 @@ pub(super) fn common_source<'a>(
                 })
             })
             .transpose()?,
-        gate_up,
-        down,
+        feed_forward,
     })
 }
 

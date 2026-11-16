@@ -56,6 +56,10 @@ impl DenseSwiGluWeights {
                 .map(|binding| NormWeight::load_name(tensors, &binding.source))
                 .transpose()
         };
+        let feed_forward = bindings
+            .feed_forward
+            .gated()
+            .map_err(|error| crate::engine::Error::InvalidModel(error.to_string()))?;
         Ok(Self {
             input_norm: NormWeight::load_name(tensors, &bindings.input_norm.source)?,
             post_attention_norm: NormWeight::load_name(
@@ -72,9 +76,9 @@ impl DenseSwiGluWeights {
                 rope_frequencies: rope_frequencies(config, stream)?,
             },
             mlp: MlpWeights {
-                gate: BoundLinear::load(tensors, bindings.gate, stream)?,
-                up: BoundLinear::load(tensors, bindings.up, stream)?,
-                down: BoundLinear::load(tensors, bindings.down, stream)?,
+                gate: BoundLinear::load(tensors, feed_forward.gate, stream)?,
+                up: BoundLinear::load(tensors, feed_forward.up, stream)?,
+                down: BoundLinear::load(tensors, feed_forward.down, stream)?,
             },
         })
     }

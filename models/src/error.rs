@@ -9,6 +9,10 @@ pub type Result<T> = std::result::Result<T, ModelsError>;
 pub enum ModelsError {
     #[error("this model does not declare a supported reasoning template control")]
     UnsupportedReasoningControl,
+    #[error("invalid GGUF: {0}")]
+    InvalidGguf(String),
+    #[error("GGML tensor type {0} is not supported")]
+    UnsupportedGgmlType(u32),
     #[error("model file is missing: {0}")]
     MissingFile(PathBuf),
     #[error("invalid model config: {0}")]

@@ -104,8 +104,10 @@ fn checkpoint_layer_zero_matches_the_fp8_oracle() -> Result<()> {
         "post-attention norm",
         &stream,
     )?;
-    let gate = BoundLinear::load(&tensors, layer.gate, &stream)?.forward(&normalized, &stream)?;
-    let up = BoundLinear::load(&tensors, layer.up, &stream)?.forward(&normalized, &stream)?;
+    let gate = BoundLinear::load(&tensors, layer.feed_forward.gated()?.gate, &stream)?
+        .forward(&normalized, &stream)?;
+    let up = BoundLinear::load(&tensors, layer.feed_forward.gated()?.up, &stream)?
+        .forward(&normalized, &stream)?;
     assert_values(
         &gate,
         &[-0.304_687_5, -1.234_375, 0.341_796_88, -0.060_058_594],
@@ -119,7 +121,8 @@ fn checkpoint_layer_zero_matches_the_fp8_oracle() -> Result<()> {
         "SwiGLU activation",
         &stream,
     )?;
-    let down = BoundLinear::load(&tensors, layer.down, &stream)?.forward(&activated, &stream)?;
+    let down = BoundLinear::load(&tensors, layer.feed_forward.gated()?.down, &stream)?
+        .forward(&activated, &stream)?;
     assert_values(
         &down,
         &[-0.279_296_88, -0.190_429_69, -0.089_355_47, -0.171_875],

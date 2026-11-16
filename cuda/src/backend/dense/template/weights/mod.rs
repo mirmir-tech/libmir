@@ -1,12 +1,13 @@
 use mircuda::{DeviceBuffer, bf16};
 
 use super::super::{
-    DenseSandwichWeights, DenseSwiGluConfig, DenseSwiGluWeights, sandwich::DenseSandwichOwned,
+    DenseFeedForwardWeights, DenseSandwichWeights, DenseSwiGluConfig, DenseSwiGluWeights,
+    RoutedExpertWeights, sandwich::DenseSandwichOwned,
 };
 use crate::{
     AffineQuantizedWeight, Bf16LinearPackWeights, Bf16LinearPairWeights, CudaBackend, CudaTensor,
-    DecodeAttentionWeights, DecodeQkvWeights, DirectFp8CheckpointWeight, MxFp4CheckpointWeight,
-    MxFp8CheckpointWeight, NvFp4LinearWeight, PackedIntegerWeight, Result,
+    DecodeAttentionWeights, DecodeQkvWeights, DirectFp8CheckpointWeight, GgmlCheckpointWeight,
+    MxFp4CheckpointWeight, MxFp8CheckpointWeight, NvFp4LinearWeight, PackedIntegerWeight, Result,
 };
 
 mod down;
@@ -25,6 +26,7 @@ pub enum DenseQkvSource<'a> {
     Bf16(&'a Bf16LinearPackWeights<3>),
     DirectFp8([&'a DirectFp8CheckpointWeight; 3]),
     MxFp4([&'a MxFp4CheckpointWeight; 3]),
+    Ggml([&'a GgmlCheckpointWeight; 3]),
     MxFp8([&'a MxFp8CheckpointWeight; 3]),
     PackedInteger([&'a PackedIntegerWeight; 3]),
     NvFp4([&'a NvFp4LinearWeight; 3]),
@@ -36,6 +38,7 @@ pub enum DenseOutputSource<'a> {
     Bf16(&'a CudaTensor),
     DirectFp8(&'a DirectFp8CheckpointWeight),
     MxFp4(&'a MxFp4CheckpointWeight),
+    Ggml(&'a GgmlCheckpointWeight),
     MxFp8(&'a MxFp8CheckpointWeight),
     PackedInteger(&'a PackedIntegerWeight),
     NvFp4(&'a NvFp4LinearWeight),
@@ -55,6 +58,10 @@ pub enum DenseGateUpSource<'a> {
     MxFp4 {
         gate: &'a MxFp4CheckpointWeight,
         up: &'a MxFp4CheckpointWeight,
+    },
+    Ggml {
+        gate: &'a GgmlCheckpointWeight,
+        up: &'a GgmlCheckpointWeight,
     },
     MxFp8 {
         gate: &'a MxFp8CheckpointWeight,
@@ -76,6 +83,7 @@ pub enum DenseDownSource<'a> {
     Bf16(&'a CudaTensor),
     DirectFp8(&'a DirectFp8CheckpointWeight),
     MxFp4(&'a MxFp4CheckpointWeight),
+    Ggml(&'a GgmlCheckpointWeight),
     MxFp8(&'a MxFp8CheckpointWeight),
     PackedInteger(&'a PackedIntegerWeight),
     NvFp4(&'a NvFp4LinearWeight),
@@ -90,8 +98,16 @@ pub struct DenseWeightSource<'a> {
     pub output: DenseOutputSource<'a>,
     pub post_attention_norm: &'a CudaTensor,
     pub sandwich: Option<DenseSandwichWeights<'a>>,
-    pub gate_up: DenseGateUpSource<'a>,
-    pub down: DenseDownSource<'a>,
+    pub feed_forward: DenseFeedForwardSource<'a>,
+}
+
+#[derive(Clone, Copy)]
+pub enum DenseFeedForwardSource<'a> {
+    Gated {
+        gate_up: DenseGateUpSource<'a>,
+        down: DenseDownSource<'a>,
+    },
+    Routed(&'a RoutedExpertWeights),
 }
 
 #[derive(Clone)]
@@ -103,8 +119,20 @@ pub(super) struct DenseWeights {
     output: DenseOutputOwned,
     post_attention_norm: CudaTensor,
     sandwich: Option<DenseSandwichOwned>,
-    gate_up: DenseGateUpOwned,
-    down: DenseDownOwned,
+    feed_forward: FeedForwardOwned,
+}
+
+#[expect(
+    clippy::large_enum_variant,
+    reason = "one per layer executor or template; the gated MLP is the common variant"
+)]
+#[derive(Clone)]
+enum FeedForwardOwned {
+    Gated {
+        gate_up: DenseGateUpOwned,
+        down: DenseDownOwned,
+    },
+    Routed(Box<RoutedExpertWeights>),
 }
 
 #[derive(Clone)]
@@ -113,6 +141,7 @@ enum DenseQkvOwned {
     Bf16(Bf16LinearPackWeights<3>),
     DirectFp8(Box<[DirectFp8CheckpointWeight; 3]>),
     MxFp4(Box<[MxFp4CheckpointWeight; 3]>),
+    Ggml(Box<[GgmlCheckpointWeight; 3]>),
     MxFp8(Box<[MxFp8CheckpointWeight; 3]>),
     PackedInteger(Box<[PackedIntegerWeight; 3]>),
     NvFp4([NvFp4LinearWeight; 3]),
@@ -143,8 +172,15 @@ impl DenseWeights {
             output: DenseOutputOwned::new(backend, source.output)?,
             post_attention_norm: source.post_attention_norm.clone(),
             sandwich: source.sandwich.map(DenseSandwichOwned::new).transpose()?,
-            gate_up: DenseGateUpOwned::new(backend, source.gate_up)?,
-            down: DenseDownOwned::new(backend, source.down)?,
+            feed_forward: match source.feed_forward {
+                DenseFeedForwardSource::Gated { gate_up, down } => FeedForwardOwned::Gated {
+                    gate_up: DenseGateUpOwned::new(backend, gate_up)?,
+                    down: DenseDownOwned::new(backend, down)?,
+                },
+                DenseFeedForwardSource::Routed(weights) => {
+                    FeedForwardOwned::Routed(Box::new(weights.clone()))
+                },
+            },
         })
     }
 
@@ -159,8 +195,13 @@ impl DenseWeights {
             },
             post_attention_norm: &self.post_attention_norm,
             sandwich: self.sandwich.as_ref().map(DenseSandwichOwned::borrow),
-            gate_up: self.gate_up.borrow(),
-            down: self.down.borrow(),
+            feed_forward: match &self.feed_forward {
+                FeedForwardOwned::Gated { gate_up, down } => DenseFeedForwardWeights::Gated {
+                    gate_up: gate_up.borrow(),
+                    down: down.borrow(),
+                },
+                FeedForwardOwned::Routed(weights) => DenseFeedForwardWeights::Routed(weights),
+            },
         }
     }
 }
@@ -178,6 +219,7 @@ impl DenseQkvOwned {
             Self::MxFp4(weights) => {
                 DecodeQkvWeights::MxFp4([&weights[0], &weights[1], &weights[2]])
             },
+            Self::Ggml(weights) => DecodeQkvWeights::Ggml([&weights[0], &weights[1], &weights[2]]),
             Self::MxFp8(weights) => {
                 DecodeQkvWeights::MxFp8([&weights[0], &weights[1], &weights[2]])
             },
@@ -200,6 +242,7 @@ impl From<DenseQkvSource<'_>> for DenseQkvOwned {
                 Self::DirectFp8(Box::new(weights.map(Clone::clone)))
             },
             DenseQkvSource::MxFp4(weights) => Self::MxFp4(Box::new(weights.map(Clone::clone))),
+            DenseQkvSource::Ggml(weights) => Self::Ggml(Box::new(weights.map(Clone::clone))),
             DenseQkvSource::MxFp8(weights) => Self::MxFp8(Box::new(weights.map(Clone::clone))),
             DenseQkvSource::PackedInteger(weights) => {
                 Self::PackedInteger(Box::new(weights.map(Clone::clone)))

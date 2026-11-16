@@ -82,6 +82,9 @@ pub(super) fn validate(plan: &WeightBindingPlan, catalog: &TensorCatalog) -> Res
                 bias.as_deref(),
                 catalog,
             )?,
+            TensorStorage::Ggml { format, .. } => {
+                super::ggml::validate(binding, logical, *format, catalog)?;
+            },
             TensorStorage::Auxiliary { .. } => shape(&binding.source, &binding.shape, logical)?,
         }
     }

@@ -9,6 +9,7 @@ use super::{AdmissionCheck, AdmissionCheckKind, AdmissionStatus, WeightEncoding}
 
 mod bitsandbytes;
 mod float8;
+mod ggml;
 mod kind;
 
 use bitsandbytes::assess as bitsandbytes;
@@ -28,6 +29,7 @@ pub(super) fn assess(backend: &BackendTarget, encoding: &WeightEncoding) -> Admi
         (BackendTarget::Cuda, WeightEncoding::Dense { dtype }) => {
             dense(dtype, "CUDA execution depends on the admitted architecture")
         },
+        (_, WeightEncoding::Ggml { format }) => ggml::assess(backend, *format),
         (BackendTarget::Metal, WeightEncoding::Affine { format }) => affine_metal(*format),
         (BackendTarget::Cuda, WeightEncoding::Affine { format }) => affine_cuda(*format),
         (BackendTarget::Metal, WeightEncoding::PackedInt8 { format }) => {

@@ -27,6 +27,10 @@ impl DenseSwiGluLayerLoadConfig {
         layer: usize,
     ) -> Result<DenseSwiGluConfig> {
         validate_common(decoder, layer, self.max_sequence_blocks)?;
+        let routed = matches!(
+            semantic.decoder.layers.get(layer).map(|layer| &layer.feed_forward),
+            Some(models::semantic::FeedForwardSpec::Routed { .. })
+        );
         Ok(DenseSwiGluConfig {
             attention: attention_config(
                 decoder,
@@ -36,9 +40,27 @@ impl DenseSwiGluLayerLoadConfig {
                 self.max_sequence_blocks,
                 self.projection_format,
             )?,
-            intermediate_size: decoder.intermediate_size,
+            intermediate_size: if routed {
+                decoder
+                    .moe_intermediate_size
+                    .ok_or_else(|| unsupported("missing moe_intermediate_size"))?
+            } else {
+                decoder.intermediate_size
+            },
             activation: GatedActivation::try_from(decoder)?,
             feed_forward_format: self.projection_format,
+            experts: routed
+                .then(|| {
+                    Ok::<_, Error>(crate::RoutedExpertsConfig {
+                        count: decoder
+                            .num_experts
+                            .ok_or_else(|| unsupported("missing num_experts"))?,
+                        top_k: decoder
+                            .top_k_experts
+                            .ok_or_else(|| unsupported("missing top_k_experts"))?,
+                    })
+                })
+                .transpose()?,
         })
     }
 }

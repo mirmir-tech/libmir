@@ -3,15 +3,19 @@ use libmir::{
     BackendAdmissionReport, CheckpointEncoding, MODEL_FORMAT_REGISTRY_SCHEMA_VERSION,
     WeightEncoding,
 };
-use models::weights::{
-    AffineBits, AffineGroupAxis, AffinePacking, AffineParameterDType, AffineSignedness,
-    AffineStorageDType, AffineZeroPointMode, AwqBits, AwqPacking, AwqQuantization, AwqScaleDType,
-    AwqStorageDType, BlockQuantization, CompressedIntegerActivationOrder, CompressedIntegerBits,
-    CompressedIntegerPacking, CompressedIntegerQuantization, CompressedIntegerScaleDType,
-    CompressedIntegerScaleStrategy, CompressedIntegerSignedness, CompressedIntegerStorageDType,
-    CompressedIntegerZeroPointMode, Float8ActivationScale, Float8Format, Float8ParameterDType,
-    Float8Quantization, Float8ScaleGranularity, Float8ScaleMode, GptqBits, GptqCheckpointFormat,
-    GptqPacking, GptqQuantization, GptqScaleDType, GptqStorageDType, GroupedAffineQuantization,
+use models::{
+    gguf::GgmlType,
+    weights::{
+        AffineBits, AffineGroupAxis, AffinePacking, AffineParameterDType, AffineSignedness,
+        AffineStorageDType, AffineZeroPointMode, AwqBits, AwqPacking, AwqQuantization,
+        AwqScaleDType, AwqStorageDType, BlockQuantization, CompressedIntegerActivationOrder,
+        CompressedIntegerBits, CompressedIntegerPacking, CompressedIntegerQuantization,
+        CompressedIntegerScaleDType, CompressedIntegerScaleStrategy, CompressedIntegerSignedness,
+        CompressedIntegerStorageDType, CompressedIntegerZeroPointMode, Float8ActivationScale,
+        Float8Format, Float8ParameterDType, Float8Quantization, Float8ScaleGranularity,
+        Float8ScaleMode, GgmlBlockQuantization, GptqBits, GptqCheckpointFormat, GptqPacking,
+        GptqQuantization, GptqScaleDType, GptqStorageDType, GroupedAffineQuantization,
+    },
 };
 use serde::Deserialize;
 
@@ -89,6 +93,26 @@ fn gptq_activation_order_is_admitted_on_both_accelerators() {
 fn encoding(id: &str) -> Option<WeightEncoding> {
     Some(match id {
         "dense_bf16" => WeightEncoding::Dense { dtype: "BF16".into() },
+        "ggml_q8_0" => ggml(GgmlType::Q8_0),
+        "ggml_q4_k" => ggml(GgmlType::Q4_K),
+        "ggml_q6_k" => ggml(GgmlType::Q6_K),
+        "ggml_q4_0" => ggml(GgmlType::Q4_0),
+        "ggml_q4_1" => ggml(GgmlType::Q4_1),
+        "ggml_q5_0" => ggml(GgmlType::Q5_0),
+        "ggml_q5_1" => ggml(GgmlType::Q5_1),
+        "ggml_q5_k" => ggml(GgmlType::Q5_K),
+        "ggml_q3_k" => ggml(GgmlType::Q3_K),
+        "ggml_q2_k" => ggml(GgmlType::Q2_K),
+        "ggml_iq4_nl" => ggml(GgmlType::IQ4_NL),
+        "ggml_iq4_xs" => ggml(GgmlType::IQ4_XS),
+        "ggml_iq2_xxs" => ggml(GgmlType::IQ2_XXS),
+        "ggml_iq2_xs" => ggml(GgmlType::IQ2_XS),
+        "ggml_iq2_s" => ggml(GgmlType::IQ2_S),
+        "ggml_iq3_xxs" => ggml(GgmlType::IQ3_XXS),
+        "ggml_iq3_s" => ggml(GgmlType::IQ3_S),
+        "ggml_iq1_s" => ggml(GgmlType::IQ1_S),
+        "ggml_iq1_m" => ggml(GgmlType::IQ1_M),
+        "ggml_mxfp4" => ggml(GgmlType::MXFP4),
         "dense_f16" => WeightEncoding::Dense { dtype: "F16".into() },
         "dense_f32" => WeightEncoding::Dense { dtype: "F32".into() },
         "packed_int8" => WeightEncoding::PackedInt8 { format: packed_int8() },
@@ -188,4 +212,10 @@ fn affine(bits: u8) -> Option<GroupedAffineQuantization> {
         scale_dtype: AffineParameterDType::BF16,
         bias_dtype: Some(AffineParameterDType::BF16),
     })
+}
+
+const fn ggml(ggml_type: GgmlType) -> WeightEncoding {
+    WeightEncoding::Ggml {
+        format: GgmlBlockQuantization { ggml_type },
+    }
 }

@@ -3,8 +3,9 @@ use models::{
     execution::ArchitectureRequirements,
     weights::{
         AwqQuantization, BitsAndBytes4BitQuantization, BlockFormat, BlockQuantization,
-        CompressedIntegerQuantization, EncoderBindingPlan, Float8Quantization, GptqQuantization,
-        GroupedAffineQuantization, TensorStorage, WeightBindingPlan,
+        CompressedIntegerQuantization, EncoderBindingPlan, Float8Quantization,
+        GgmlBlockQuantization, GptqQuantization, GroupedAffineQuantization, TensorStorage,
+        WeightBindingPlan,
     },
 };
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -57,6 +58,8 @@ pub enum AdmissionCheckKind {
     MxFp8,
     /// NVIDIA NVFP4 block weights.
     NvFp4,
+    /// GGML block weights from GGUF files.
+    Ggml,
     /// Semantic model composition and backend lowering.
     Architecture,
     /// Vision tensors and image preprocessing contract.
@@ -132,6 +135,11 @@ pub enum WeightEncoding {
         /// Complete block and scale hierarchy.
         format: BlockQuantization,
     },
+    /// GGML blocks read in place from GGUF files.
+    Ggml {
+        /// The GGML type, which fixes block layout and scales.
+        format: GgmlBlockQuantization,
+    },
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -191,6 +199,9 @@ impl CheckpointEncoding {
                     BlockFormat::MxFp8 => WeightEncoding::MxFp8 { format: *format },
                     BlockFormat::NvFp4 => WeightEncoding::NvFp4 { format: *format },
                 }),
+                TensorStorage::Ggml { format, .. } => {
+                    Some(WeightEncoding::Ggml { format: *format })
+                },
                 TensorStorage::Auxiliary { .. } => None,
             })
             .collect::<Vec<_>>();

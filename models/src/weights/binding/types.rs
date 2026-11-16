@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     AwqQuantization, BitsAndBytes4BitQuantization, BlockQuantization,
-    CompressedIntegerQuantization, Float8Quantization, GptqQuantization, GroupedAffineQuantization,
-    LogicalTensorRole,
+    CompressedIntegerQuantization, Float8Quantization, GgmlBlockQuantization, GptqQuantization,
+    GroupedAffineQuantization, LogicalTensorRole,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,6 +93,12 @@ pub enum TensorStorage {
         bias: Option<String>,
         packing: TensorPacking,
     },
+    /// GGML blocks from a GGUF file; scales live inside the blocks.
+    Ggml {
+        format: GgmlBlockQuantization,
+        /// A dense output bias beside the blocks (gpt-oss).
+        bias: Option<String>,
+    },
     Auxiliary {
         dtype: String,
     },
@@ -116,7 +122,9 @@ impl TensorBinding {
     pub fn physical_sources(&self) -> Vec<&str> {
         let mut sources = vec![self.source.as_str()];
         match &self.storage {
-            TensorStorage::Dense { bias, .. } => sources.extend(bias.as_deref()),
+            TensorStorage::Dense { bias, .. } | TensorStorage::Ggml { bias, .. } => {
+                sources.extend(bias.as_deref());
+            },
             TensorStorage::AffineQuantized { scales, biases, output_bias, .. } => {
                 sources.push(scales);
                 sources.extend(biases.as_deref());

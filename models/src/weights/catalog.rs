@@ -115,6 +115,10 @@ impl TensorCatalog {
 }
 
 fn read_weight_header(weight: &WeightFile) -> Result<Vec<TensorInfo>> {
+    if crate::gguf::is_gguf(&weight.path) {
+        let header = crate::gguf::GgufHeader::read(&weight.path)?;
+        return Ok(header.mapped_catalog(&weight.path)?.tensors);
+    }
     let mut file = File::open(&weight.path)?;
     let header_len = read_header_len(&mut file)?;
     let mut header = vec![0; usize::try_from(header_len)?];

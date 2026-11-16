@@ -63,7 +63,7 @@ fn generation(semantic: Option<&SemanticModelSpec>) -> Result<CudaArchitecture> 
         CudaDecoderRuntime::ClampedRouted
     } else if plan.all_dense_and_routed() {
         CudaDecoderRuntime::DenseAndRouted
-    } else if plan.all_dense() {
+    } else if plan.all_dense_or_routed() {
         let _normalization = graph_normalization(&plan)?;
         CudaDecoderRuntime::Dense
     } else {

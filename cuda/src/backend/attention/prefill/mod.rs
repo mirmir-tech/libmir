@@ -83,6 +83,7 @@ impl PrefillAttentionBf16 {
         let output_projection = match config.projection_format {
             ProjectionFormat::Affine
             | ProjectionFormat::DirectFp8
+            | ProjectionFormat::Ggml
             | ProjectionFormat::MxFp4
             | ProjectionFormat::MxFp8 => AttentionOutputProjection::new(
                 backend,

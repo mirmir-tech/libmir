@@ -2,6 +2,7 @@ use models::semantic::{KeyValueRelation, MixerSpec, QkNormalization};
 
 use super::fixtures::{
     AnyResult, clamped_routed, dense_and_routed, dense_contract, mixed_unsupported, shared_routed,
+    unshared_routed,
 };
 use crate::{cuda, metal};
 
@@ -56,6 +57,23 @@ fn preserves_backend_specific_window_admission() -> AnyResult<()> {
         cuda::admit(&task, Some(&semantic))?,
         cuda::CudaArchitecture::Generation(cuda::CudaDecoderRuntime::Dense)
     );
+    Ok(())
+}
+
+#[test]
+fn admits_unshared_routed_experts_to_the_cuda_dense_runtime() -> AnyResult<()> {
+    let (task, dense) = dense_contract()?;
+    let semantic = unshared_routed(dense);
+    assert_eq!(
+        cuda::admit(&task, Some(&semantic))?,
+        cuda::CudaArchitecture::Generation(cuda::CudaDecoderRuntime::Dense)
+    );
+    // Sinks still need the clamped-routed runtime's attention.
+    let mut sinks = semantic;
+    if let MixerSpec::SoftmaxAttention(attention) = &mut sinks.decoder.layers[0].mixer {
+        attention.sinks = true;
+    }
+    assert!(cuda::admit(&task, Some(&sinks)).is_err());
     Ok(())
 }
 

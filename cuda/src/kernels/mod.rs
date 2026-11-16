@@ -23,6 +23,7 @@ mod fingerprint;
 mod gated_attention;
 mod gated_delta;
 mod geometry;
+mod ggml;
 mod gptq;
 mod latent_moe;
 mod linear_fp8;
@@ -90,6 +91,11 @@ pub use gated_delta::{
     GatedDeltaInputs as GatedDeltaKernelInputs, GatedDeltaLaunch, GatedDeltaRecurrence,
     GatedDeltaRecurrenceMode, GatedDeltaSpec, GatedDeltaTransformSpec, GatedDeltaTransforms,
 };
+pub use ggml::{
+    GGML_GEMV_MAX_TOKENS, GgmlActivations, GgmlDequantize, GgmlEmbedding, GgmlEmbeddingOperands,
+    GgmlExpertSpec, GgmlGatheredLinear, GgmlKernelType, GgmlLinear, GgmlMxFp4Repack,
+    GgmlRowPlacement, GgmlSelections, GgmlSpec,
+};
 pub use gptq::{GptqLaunch, GptqLinear, GptqSpec};
 pub use latent_moe::{ReluSquaredBf16, SigmoidRouter, SigmoidRouterOutputs, SigmoidRouterSpec};
 pub use linear_fp8::{BlockFp8LinearKernels, BlockFp8LinearSpec};
@@ -142,14 +148,14 @@ pub use router::{RouterSpec, RouterTopK, RouterUnitSpec, RouterUnitTopK};
 pub use row::{CopyRowsBf16, GatherRowsBf16, SelectRowBf16};
 pub use sampling::{MAX_TOP_K, Sampling, SamplingSpec, SamplingWorkspace};
 pub use selected::{
-    DenseExpertCanonicalizer, DenseGateUpLayout, DenseGatedActivation, GatedActivation,
-    NvFp4BankView, SelectedAffineGated, SelectedAffineGatedLaunch, SelectedAffineGatedSpec,
-    SelectedAffinePair, SelectedAffinePairLaunch, SelectedAffinePairSpec, SelectedAffineReduce,
-    SelectedAffineReduceLaunch, SelectedAffineReduceSpec, SelectedDenseDispatch,
-    SelectedDenseGateLaunch, SelectedDenseMoe, SelectedDenseMoeSpec, SelectedDenseReduceLaunch,
-    SelectedNvFp4Gated, SelectedNvFp4Reduce, SelectedNvFp4Spec, SelectedNvFp4TensorCoreGated,
-    SelectedNvFp4TensorCoreLinear, SelectedNvFp4TiledGated, SelectedNvFp4TiledReduce,
-    SelectedNvFp4TiledRows,
+    DenseExpertCanonicalizer, DenseExpertInterleave, DenseGateUpLayout, DenseGatedActivation,
+    GatedActivation, NvFp4BankView, SelectedAffineGated, SelectedAffineGatedLaunch,
+    SelectedAffineGatedSpec, SelectedAffinePair, SelectedAffinePairLaunch, SelectedAffinePairSpec,
+    SelectedAffineReduce, SelectedAffineReduceLaunch, SelectedAffineReduceSpec,
+    SelectedDenseDispatch, SelectedDenseGateLaunch, SelectedDenseMoe, SelectedDenseMoeSpec,
+    SelectedDenseReduceLaunch, SelectedNvFp4Gated, SelectedNvFp4Reduce, SelectedNvFp4Spec,
+    SelectedNvFp4TensorCoreGated, SelectedNvFp4TensorCoreLinear, SelectedNvFp4TiledGated,
+    SelectedNvFp4TiledReduce, SelectedNvFp4TiledRows,
 };
 pub use sigmoid::{SigmoidElementwiseBf16, SigmoidMultiplyBf16};
 pub use text::{L2NormalizeBf16, TextAttention, TextAttentionSpec};

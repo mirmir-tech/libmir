@@ -143,7 +143,7 @@ impl<'a> RoutedDecoderLayerBindings<'a> {
     }
 }
 
-fn experts(plan: &WeightBindingPlan, index: usize) -> Result<RoutedExpertBindings<'_>> {
+pub(super) fn experts(plan: &WeightBindingPlan, index: usize) -> Result<RoutedExpertBindings<'_>> {
     if let Some(down) = optional_expert(plan, index, ExpertProjectionRole::Down) {
         if let Some(gate_up) = optional_expert(plan, index, ExpertProjectionRole::GateUp) {
             return Ok(RoutedExpertBindings::InterleavedGateUp { gate_up, down });

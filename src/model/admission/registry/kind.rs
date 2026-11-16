@@ -13,5 +13,6 @@ pub(super) const fn kind(encoding: &WeightEncoding) -> AdmissionCheckKind {
         WeightEncoding::MxFp4 { .. } => AdmissionCheckKind::MxFp4,
         WeightEncoding::MxFp8 { .. } => AdmissionCheckKind::MxFp8,
         WeightEncoding::NvFp4 { .. } => AdmissionCheckKind::NvFp4,
+        WeightEncoding::Ggml { .. } => AdmissionCheckKind::Ggml,
     }
 }

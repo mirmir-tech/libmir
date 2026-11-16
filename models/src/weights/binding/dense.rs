@@ -1,6 +1,6 @@
 use super::{
-    AttentionProjectionRole, FeedForwardProjectionRole, LayerTensorRole, LogicalTensorRole,
-    TensorBinding, WeightBindingPlan,
+    AttentionProjectionRole, DenseFeedForwardBindings, FeedForwardProjectionRole, LayerTensorRole,
+    LogicalTensorRole, RoutedExpertBindings, TensorBinding, WeightBindingPlan,
 };
 use crate::error::{ModelsError, Result};
 
@@ -11,9 +11,44 @@ pub struct DenseDecoderLayerBindings<'a> {
     /// Normalizes the residual stream before the feed-forward projections.
     pub post_attention_norm: &'a TensorBinding,
     pub sandwich: Option<DenseSandwichBindings<'a>>,
-    pub gate: &'a TensorBinding,
-    pub up: &'a TensorBinding,
-    pub down: &'a TensorBinding,
+    pub feed_forward: DenseLayerFeedForwardBindings<'a>,
+}
+
+/// The feed-forward of a softmax-attention decoder layer: one gated MLP, or
+/// experts chosen per token by a router and no shared expert.
+#[derive(Debug, Clone, Copy)]
+pub enum DenseLayerFeedForwardBindings<'a> {
+    Gated(DenseFeedForwardBindings<'a>),
+    Routed(RoutedFeedForwardBindings<'a>),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RoutedFeedForwardBindings<'a> {
+    pub router: &'a TensorBinding,
+    pub experts: RoutedExpertBindings<'a>,
+}
+
+impl<'a> DenseLayerFeedForwardBindings<'a> {
+    /// The gated MLP, for loaders without routed experts.
+    pub fn gated(self) -> Result<DenseFeedForwardBindings<'a>> {
+        match self {
+            Self::Gated(bindings) => Ok(bindings),
+            Self::Routed(_) => Err(ModelsError::InvalidConfig(
+                "dense decoder layer has routed experts instead of a gated MLP".into(),
+            )),
+        }
+    }
+
+    fn bindings(self) -> Vec<&'a TensorBinding> {
+        match self {
+            Self::Gated(value) => vec![value.gate, value.up, value.down],
+            Self::Routed(value) => {
+                let mut bindings = vec![value.router];
+                bindings.extend(value.experts.bindings());
+                bindings
+            },
+        }
+    }
 }
 
 /// Gemma-style norms on each sub-block's output before its residual add, and
@@ -77,9 +112,18 @@ impl WeightBindingPlan {
             },
             post_attention_norm,
             sandwich,
-            gate: feed_forward(FeedForwardProjectionRole::Gate)?,
-            up: feed_forward(FeedForwardProjectionRole::Up)?,
-            down: feed_forward(FeedForwardProjectionRole::Down)?,
+            feed_forward: if let Some(router) = optional(self, index, LayerTensorRole::Router) {
+                DenseLayerFeedForwardBindings::Routed(RoutedFeedForwardBindings {
+                    router,
+                    experts: super::view::experts(self, index)?,
+                })
+            } else {
+                DenseLayerFeedForwardBindings::Gated(DenseFeedForwardBindings {
+                    gate: feed_forward(FeedForwardProjectionRole::Gate)?,
+                    up: feed_forward(FeedForwardProjectionRole::Up)?,
+                    down: feed_forward(FeedForwardProjectionRole::Down)?,
+                })
+            },
         })
     }
 }
@@ -94,10 +138,8 @@ impl<'a> DenseDecoderLayerBindings<'a> {
             self.attention.value,
             self.attention.output,
             self.post_attention_norm,
-            self.gate,
-            self.up,
-            self.down,
         ];
+        bindings.extend(self.feed_forward.bindings());
         bindings.extend(self.sandwich.into_iter().flat_map(|sandwich| {
             [
                 sandwich.attention_output_norm,

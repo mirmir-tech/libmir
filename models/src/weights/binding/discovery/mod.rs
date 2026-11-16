@@ -159,6 +159,9 @@ fn projection_storage(
     consumed: &mut BTreeSet<String>,
     hints: DiscoveryHints,
 ) -> Result<TensorStorage> {
+    if let Some(storage) = super::ggml::storage(tensor, catalog, consumed) {
+        return Ok(storage);
+    }
     if let Some(storage) = bitsandbytes::storage(tensor, catalog, consumed, hints.bitsandbytes)? {
         return Ok(storage);
     }

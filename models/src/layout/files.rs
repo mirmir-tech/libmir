@@ -138,6 +138,14 @@ fn read_safetensor_names(root: &Path) -> Result<BTreeSet<String>> {
             let _inserted = names.insert(name.to_owned());
         }
     }
+    if names.is_empty() {
+        // A GGUF import directory links its shards instead.
+        for path in crate::gguf::files_in(root)? {
+            if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+                let _inserted = names.insert(name.to_owned());
+            }
+        }
+    }
     Ok(names)
 }
 

@@ -1,8 +1,11 @@
-use super::{Bf16LinearPairWeights, CudaTensor, DecodeAttentionConfig, DecodeAttentionWeights};
+use super::{
+    Bf16LinearPairWeights, CudaTensor, DecodeAttentionConfig, DecodeAttentionWeights,
+    routed::RoutedExpertWeights,
+};
 use crate::{
     AffineQuantizedWeight, BlockFp8LinearWeight, DirectFp8CheckpointWeight, Error,
-    Fp8ResidualLinearWeight, MxFp4CheckpointWeight, MxFp8CheckpointWeight, NvFp4LinearWeight,
-    PackedIntegerWeight, Result,
+    Fp8ResidualLinearWeight, GgmlCheckpointWeight, MxFp4CheckpointWeight, MxFp8CheckpointWeight,
+    NvFp4LinearWeight, PackedIntegerWeight, Result,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -13,6 +16,15 @@ pub struct DenseSwiGluConfig {
     /// Storage of the gate, up and down projections; attention projections
     /// follow `attention.projection_format`.
     pub feed_forward_format: crate::ProjectionFormat,
+    /// Routed experts in place of the gated MLP; `intermediate_size` is then
+    /// the width of one expert.
+    pub experts: Option<RoutedExpertsConfig>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RoutedExpertsConfig {
+    pub count: usize,
+    pub top_k: usize,
 }
 
 impl DenseSwiGluConfig {
@@ -31,8 +43,16 @@ pub struct DenseSwiGluWeights<'a> {
     /// Normalizes the residual stream before the feed-forward projections.
     pub post_attention_norm: &'a CudaTensor,
     pub sandwich: Option<DenseSandwichWeights<'a>>,
-    pub gate_up: DenseGateUpWeights<'a>,
-    pub down: DenseDownWeight<'a>,
+    pub feed_forward: DenseFeedForwardWeights<'a>,
+}
+
+#[derive(Clone, Copy)]
+pub enum DenseFeedForwardWeights<'a> {
+    Gated {
+        gate_up: DenseGateUpWeights<'a>,
+        down: DenseDownWeight<'a>,
+    },
+    Routed(&'a RoutedExpertWeights),
 }
 
 /// Gemma-style norms on each sub-block's output before its residual add, and
@@ -54,6 +74,10 @@ pub enum DenseGateUpWeights<'a> {
     DirectFp8 {
         gate: &'a DirectFp8CheckpointWeight,
         up: &'a DirectFp8CheckpointWeight,
+    },
+    Ggml {
+        gate: &'a GgmlCheckpointWeight,
+        up: &'a GgmlCheckpointWeight,
     },
     MxFp4 {
         gate: &'a MxFp4CheckpointWeight,
@@ -89,6 +113,7 @@ impl<'a> DenseGateUpWeights<'a> {
             | Self::Fp8Int4 { exact: weights, .. } => Ok(weights),
             Self::Affine { .. }
             | Self::DirectFp8 { .. }
+            | Self::Ggml { .. }
             | Self::MxFp4 { .. }
             | Self::MxFp8 { .. }
             | Self::PackedInteger { .. }
@@ -104,6 +129,7 @@ pub enum DenseDownWeight<'a> {
     Affine(&'a AffineQuantizedWeight),
     Bf16(&'a CudaTensor),
     DirectFp8(&'a DirectFp8CheckpointWeight),
+    Ggml(&'a GgmlCheckpointWeight),
     MxFp4(&'a MxFp4CheckpointWeight),
     MxFp8(&'a MxFp8CheckpointWeight),
     PackedInteger(&'a PackedIntegerWeight),
@@ -126,6 +152,7 @@ impl<'a> DenseDownWeight<'a> {
             | Self::Fp8Int4 { exact: weight, .. } => Ok(weight),
             Self::Affine(_)
             | Self::DirectFp8(_)
+            | Self::Ggml(_)
             | Self::MxFp4(_)
             | Self::MxFp8(_)
             | Self::PackedInteger(_)

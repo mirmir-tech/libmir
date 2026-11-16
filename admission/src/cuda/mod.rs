@@ -63,6 +63,22 @@ impl CudaDecoderPlan {
         self.all_feed_forward(CudaFeedForwardLowering::Dense)
     }
 
+    /// Softmax attention in every layer with a gated MLP or, without sinks,
+    /// routed experts that have no shared expert and no clamp: the two
+    /// feed-forwards of the dense runtime.
+    #[must_use]
+    pub fn all_dense_or_routed(&self) -> bool {
+        !self.layers.is_empty()
+            && self.layers.iter().all(|layer| match (layer.mixer, layer.feed_forward) {
+                (CudaMixerLowering::Softmax { .. }, CudaFeedForwardLowering::Dense) => true,
+                (
+                    CudaMixerLowering::Softmax { sinks, .. },
+                    CudaFeedForwardLowering::Routed { shared: false, clamped: false },
+                ) => !sinks,
+                _ => false,
+            })
+    }
+
     #[must_use]
     pub fn all_dense_and_routed(&self) -> bool {
         self.all_feed_forward(CudaFeedForwardLowering::DenseAndRouted)

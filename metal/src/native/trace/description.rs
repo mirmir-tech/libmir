@@ -140,6 +140,7 @@ fn has_bias(binding: &models::weights::TensorBinding) -> bool {
         | TensorStorage::Awq { .. }
         | TensorStorage::Gptq { .. }
         | TensorStorage::BitsAndBytes4Bit { .. }
+        | TensorStorage::Ggml { .. }
         | TensorStorage::Auxiliary { .. } => false,
     }
 }

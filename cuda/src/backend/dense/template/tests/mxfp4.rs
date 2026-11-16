@@ -8,9 +8,9 @@ use runtime::kv::{BlockId, BlockTable, CacheConfig, KvCacheDType, KvStorageSpec}
 
 use super::{copy, read};
 use crate::{
-    CudaBackend, CudaConfig, DenseDownSource, DenseGateUpSource, DenseOutputSource, DenseQkvSource,
-    DenseSwiGluConfig, DenseWeightSource, GatedActivation, MxFp4CheckpointWeight, ProjectionFormat,
-    Result, kernels::QkvNormalization,
+    CudaBackend, CudaConfig, DenseDownSource, DenseFeedForwardSource, DenseGateUpSource,
+    DenseOutputSource, DenseQkvSource, DenseSwiGluConfig, DenseWeightSource, GatedActivation,
+    MxFp4CheckpointWeight, ProjectionFormat, Result, kernels::QkvNormalization,
 };
 
 #[test]
@@ -36,8 +36,10 @@ fn executes_complete_dense_layer_from_mxfp4_checkpoint_blocks() -> Result<()> {
             output: DenseOutputSource::MxFp4(&weight),
             post_attention_norm: norm,
             sandwich: None,
-            gate_up: DenseGateUpSource::MxFp4 { gate: &weight, up: &weight },
-            down: DenseDownSource::MxFp4(&weight),
+            feed_forward: DenseFeedForwardSource::Gated {
+                gate_up: DenseGateUpSource::MxFp4 { gate: &weight, up: &weight },
+                down: DenseDownSource::MxFp4(&weight),
+            },
         },
     )?;
     let input = copy(&backend, &[bf16::ONE; 32])?;
@@ -88,6 +90,7 @@ fn config() -> DenseSwiGluConfig {
         intermediate_size: 32,
         activation: GatedActivation::Silu,
         feed_forward_format: ProjectionFormat::MxFp4,
+        experts: None,
     }
 }
 

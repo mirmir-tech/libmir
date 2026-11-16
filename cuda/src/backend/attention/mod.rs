@@ -12,6 +12,7 @@ use crate::{
 
 mod batch;
 mod config;
+mod ggml;
 pub(in crate::backend) mod graph;
 mod mxfp4;
 mod mxfp8;

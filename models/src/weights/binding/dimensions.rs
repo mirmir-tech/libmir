@@ -46,6 +46,7 @@ pub(super) fn uniform_affine_group_size(bindings: &[TensorBinding]) -> Option<us
         | super::TensorStorage::Float8 { .. }
         | super::TensorStorage::Dense { .. }
         | super::TensorStorage::BlockQuantized { .. }
+        | super::TensorStorage::Ggml { .. }
         | super::TensorStorage::Auxiliary { .. } => None,
     });
     let first = sizes.next()?;

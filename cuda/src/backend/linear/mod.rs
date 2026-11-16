@@ -5,6 +5,7 @@ mod bitsandbytes;
 mod block_fp8;
 mod checkpoint_projection;
 mod direct_fp8;
+mod ggml;
 mod gptq;
 mod mixed;
 mod mxfp4;
@@ -29,6 +30,7 @@ pub use block_fp8::{BlockFp8LinearWeight, Fp8ResidualLinearWeight};
 pub(in crate::backend) use checkpoint_projection::CheckpointProjection;
 pub use checkpoint_projection::CheckpointProjectionWeight;
 pub use direct_fp8::{DirectFp8Bf16Linear, DirectFp8CheckpointWeight, DirectFp8EmbeddingLookup};
+pub use ggml::{GgmlBf16Linear, GgmlCheckpointWeight, GgmlEmbeddingLookup};
 use mircuda::{DenseMatmulPlan, DenseMatmulSpec, DeviceBuffer, Stream, bf16};
 pub use mixed::Bf16Fp32Linear;
 pub use mxfp4::{
@@ -81,6 +83,7 @@ pub enum ProjectionFormat {
     Affine,
     Bf16,
     DirectFp8,
+    Ggml,
     MxFp4,
     MxFp8,
     PackedInteger,

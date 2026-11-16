@@ -6,6 +6,7 @@ mod dense;
 mod dimensions;
 mod discovery;
 mod float8;
+mod ggml;
 mod gptq;
 mod grammar;
 mod hybrid;
@@ -32,11 +33,15 @@ pub use block::{
     BlockActivationMode, BlockFormat, BlockInputPadding, BlockProjectionLayout, BlockQuantization,
     BlockScale, BlockScaleEncoding, BlockStorageDType,
 };
-pub use dense::{DenseDecoderLayerBindings, DenseSandwichBindings, DenseSoftmaxBindings};
+pub use dense::{
+    DenseDecoderLayerBindings, DenseLayerFeedForwardBindings, DenseSandwichBindings,
+    DenseSoftmaxBindings, RoutedFeedForwardBindings,
+};
 pub use float8::{
     Float8ActivationScale, Float8Format, Float8ParameterDType, Float8Quantization,
     Float8ScaleGranularity, Float8ScaleMode,
 };
+pub use ggml::GgmlBlockQuantization;
 pub use gptq::{
     GptqBits, GptqCheckpointFormat, GptqPacking, GptqQuantization, GptqScaleDType, GptqStorageDType,
 };
@@ -156,6 +161,13 @@ impl WeightBindingPlan {
         self.tensors
             .iter()
             .any(|binding| matches!(binding.storage, TensorStorage::BitsAndBytes4Bit { .. }))
+    }
+
+    #[must_use]
+    pub fn uses_ggml(&self) -> bool {
+        self.tensors
+            .iter()
+            .any(|binding| matches!(binding.storage, TensorStorage::Ggml { .. }))
     }
 
     #[must_use]
