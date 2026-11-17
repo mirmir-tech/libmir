@@ -4,6 +4,11 @@ namespace {
 
 constexpr unsigned int kTileRows = 64u;
 constexpr unsigned int kTileColumns = 64u;
+// Sub-blocks of 32 input columns staged at a time, as int8 words; four
+// words of padding keep fragment loads free of bank conflicts.
+constexpr unsigned int kStageSubs = 4u;
+constexpr unsigned int kStageWords = kStageSubs * 8u;
+constexpr unsigned int kRowWords = kStageWords + 4u;
 
 // The expert and first row of each 64-row tile, from the expert offsets.
 __device__ void ggml_mmq_tiles(

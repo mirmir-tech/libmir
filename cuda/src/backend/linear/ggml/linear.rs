@@ -7,7 +7,8 @@ use crate::{
     Bf16Projection, CudaBackend, CudaTensor, DensePlanRequest, DenseRole, Error, ExecutionPhase,
     Result,
     kernels::{
-        GGML_GEMV_MAX_TOKENS, GgmlActivations, GgmlDequantize, GgmlKernelType, GgmlLinear, GgmlSpec,
+        GGML_GEMV_MAX_TOKENS, GgmlActivations, GgmlDequantize, GgmlGroupedMmq, GgmlKernelType,
+        GgmlLinear, GgmlMmqGroups, GgmlMmqInput, GgmlMmqPlacement, GgmlSpec,
     },
 };
 
@@ -31,11 +32,26 @@ pub struct GgmlBf16Linear {
     stream: Stream,
 }
 
+/// Prefill chunks up to this many tokens take the int8 grouped GEMM over
+/// the GGML blocks: dequantizing every weight to BF16 costs a chunk about
+/// as much as 300 tokens of the grouped GEMM (Mistral-7B `Q4_K_M` on GB10:
+/// 256 tokens 137 vs 162 ms, 512 tokens 254 vs 194 ms), so a prompt's short
+/// last chunk no longer pays a full dequantization.
+const MMQ_MAX_TOKENS: usize = 256;
+
 #[derive(Debug)]
 enum Path {
     Vector {
         operations: Vec<GgmlLinear>,
         activations: Arc<Mutex<GgmlActivations>>,
+    },
+    Grouped {
+        operation: Mutex<GgmlGroupedMmq>,
+        activations: Arc<Mutex<GgmlActivations>>,
+        /// One group of every row: offset 0, count `tokens`.
+        offsets: DeviceBuffer<u32>,
+        counts: DeviceBuffer<u32>,
+        tokens: usize,
     },
     Dense {
         dequantize: Vec<GgmlDequantize>,
@@ -68,13 +84,30 @@ impl GgmlBf16Linear {
                 operations: operations.collect::<Result<_>>()?,
                 activations: backend.ggml_activations(tokens, input_features)?,
             }
+        } else if tokens <= MMQ_MAX_TOKENS {
+            let kinds = specs.iter().map(|spec| spec.kind).collect::<Vec<_>>();
+            let (pool, stream) = (&backend.inner.pool, &backend.inner.stream);
+            let operation = GgmlGroupedMmq::compile(
+                compiler, pool, stream, &kinds, 1, output_features, input_features, tokens,
+            )?;
+            let offsets = pool.allocate_zeroed::<u32>(stream, 1)?;
+            let mut counts = pool.allocate::<u32>(stream, 1)?;
+            let mut host = backend.inner.context.allocate_pinned::<u32>(1)?;
+            host.copy_from_slice(&[u32::try_from(tokens)?])?;
+            stream.copy_to_device(&mut host, &mut counts)?;
+            // The pinned source must outlive the transfer.
+            stream.synchronize()?;
+            Path::Grouped {
+                operation: Mutex::new(operation),
+                activations: backend.ggml_activations(tokens, input_features)?,
+                offsets,
+                counts,
+                tokens,
+            }
         } else {
-            let dequantize = specs
-                .into_iter()
-                .map(|spec| {
-                    GgmlDequantize::compile(compiler, spec.kind, output_features, input_features)
-                })
-                .collect::<Result<Vec<_>>>()?;
+            let kinds = specs.iter().map(|spec| spec.kind).collect::<Vec<_>>();
+            let dequantize =
+                GgmlDequantize::compile_kinds(compiler, &kinds, output_features, input_features)?;
             let projection = backend.prepare_bf16_projection(DensePlanRequest {
                 phase: ExecutionPhase::Prefill,
                 role,
@@ -140,6 +173,36 @@ impl GgmlBf16Linear {
                     operation.quantize(&self.stream, input, &mut activations)?;
                 }
                 operation.multiply(&self.stream, &activations, &weight.blocks, output)
+            },
+            Path::Grouped {
+                operation,
+                activations,
+                offsets,
+                counts,
+                tokens,
+            } => {
+                let poisoned = || Error::InvalidExecutionPlan("GGML grouped plan lock is poisoned");
+                let mut operation = operation.lock().map_err(|_| poisoned())?;
+                let mut activations = activations.lock().map_err(|_| poisoned())?;
+                let groups = GgmlMmqGroups { offsets, counts };
+                // Each plan lays out its own tiles, so it quantizes the input
+                // again even when an earlier projection of it did.
+                operation.prepare(
+                    &self.stream,
+                    GgmlMmqInput::Rows(input),
+                    *tokens,
+                    groups,
+                    &mut activations,
+                )?;
+                let placement = GgmlMmqPlacement {
+                    ld: self.output_features,
+                    stride: 1,
+                    offset: 0,
+                };
+                operation.multiply(
+                    &self.stream, &activations, groups, weight.kind, &weight.blocks, output,
+                    placement,
+                )
             },
             Path::Dense { dequantize, projection, scratch } => {
                 let dequantize = dequantize

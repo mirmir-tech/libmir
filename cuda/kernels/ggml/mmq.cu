@@ -1,20 +1,13 @@
-// Grouped GGML GEMM for routed prefill, composed after the block decoders
-// and `ggml/mma.cuh`. Rows of the input are grouped by expert
-// (`offsets[e]..offsets[e] + counts[e]`) and quantized like decode activations
-// (`libmir_cuda_ggml_quantize_q8`: int8 per 32 values, a scale and the sums
-// of both halves). Each block computes a 64 x 64 output tile of one expert:
-// it stages 128 input columns of 64 activation rows and decodes the same
-// columns of 64 weight rows to int8 with their per-16 scales and minima,
-// then takes `mma.sync` int8 products of each 32-value sub-block (16 values
-// for types with per-16 scales) and folds each into float accumulators:
-// d_x * scale_w * dot - minimum_w * sum_x.
-// llama.cpp's MMQ (v1.0.0 `mmq.cuh`) takes the same int8 route.
+// Grouped GGML GEMM for routed prefill and short dense prefill chunks,
+// composed after the block decoders and `ggml/mma.cuh`. Input rows are
+// grouped by expert (`offsets[e]..offsets[e] + counts[e]`) and quantized like
+// decode activations (int8 per 32 values, a scale and both halves' sums).
+// A block computes a 64 x 64 output tile of one expert: it stages 128 input
+// columns of 64 activation rows, decodes those columns of 64 weight rows to
+// int8 with their scales and minima, takes `mma.sync` int8 products of each
+// 32-value sub-block (16 for per-16 scales) and folds each into float sums:
+// d_x * scale_w * dot - minimum_w * sum_x. llama.cpp's MMQ takes this route.
 namespace {
-
-constexpr unsigned int kStageSubs = 4u;
-constexpr unsigned int kStageWords = kStageSubs * 8u;
-// Four words of padding keep fragment loads free of bank conflicts.
-constexpr unsigned int kRowWords = kStageWords + 4u;
 
 // output[row * ld + column * stride + offset] for each expert row and
 // weight row of the tile.
@@ -29,6 +22,11 @@ __device__ void ggml_mmq(
   __shared__ float4 a_scales[kTileRows][kStageSubs];
   __shared__ unsigned int b_words[kTileColumns][kRowWords];
   __shared__ float4 b_scales[kTileColumns][kStageSubs];
+  // Whole-scale types fold each sub-block with one pair per row:
+  // (scale, sum of the 32 values) and (scale, minimum).
+  __shared__ float2 a_pairs[kTileRows][kStageSubs];
+  __shared__ float2 b_pairs[kTileColumns][kStageSubs];
+  constexpr bool kWhole = WholeScales<Block>::value;
   const unsigned int tile = blockIdx.y;
   if (tile >= *tile_count) return;
   const unsigned int expert = tile_experts[tile];
@@ -69,7 +67,11 @@ __device__ void ggml_mmq(
       unsigned int* words = &a_words[r][s * 8u];
       words[0] = low.x; words[1] = low.y; words[2] = low.z; words[3] = low.w;
       words[4] = high.x; words[5] = high.y; words[6] = high.z; words[7] = high.w;
-      a_scales[r][s] = scale;
+      if constexpr (kWhole) {
+        a_pairs[r][s] = make_float2(scale.x, scale.y + scale.z);
+      } else {
+        a_scales[r][s] = scale;
+      }
     }
     for (unsigned int item = threadIdx.x; item < kTileColumns * kStageSubs; item += blockDim.x) {
       const unsigned int n = item / kStageSubs;
@@ -89,7 +91,11 @@ __device__ void ggml_mmq(
       unsigned int* words = &b_words[n][s * 8u];
 #pragma unroll
       for (unsigned int i = 0; i < 8u; ++i) words[i] = sub.q[i];
-      b_scales[n][s] = make_float4(sub.scale[0], sub.scale[1], sub.minimum[0], sub.minimum[1]);
+      if constexpr (kWhole) {
+        b_pairs[n][s] = make_float2(sub.scale[0], sub.minimum[0]);
+      } else {
+        b_scales[n][s] = make_float4(sub.scale[0], sub.scale[1], sub.minimum[0], sub.minimum[1]);
+      }
     }
     __syncthreads();
     if constexpr (WholeScales<Block>::value) {
@@ -116,17 +122,17 @@ __device__ void ggml_mmq(
         for (unsigned int n = 0u; n < 4u; ++n) {
 #pragma unroll
           for (unsigned int c = 0u; c < 2u; ++c) {
-            const float4 w = b_scales[wn + n * 8u + quad * 2u + c][s];
+            const float2 w = b_pairs[wn + n * 8u + quad * 2u + c][s];
             w_scale[n][c] = w.x;
-            w_minimum[n][c] = w.z;
+            w_minimum[n][c] = w.y;
           }
         }
 #pragma unroll
         for (unsigned int m = 0u; m < 2u; ++m) {
 #pragma unroll
           for (unsigned int half = 0u; half < 2u; ++half) {
-            const float4 x = a_scales[wm + m * 16u + group + half * 8u][s];
-            const float sum = x.y + x.z;
+            const float2 x = a_pairs[wm + m * 16u + group + half * 8u][s];
+            const float sum = x.y;
 #pragma unroll
             for (unsigned int n = 0u; n < 4u; ++n) {
 #pragma unroll

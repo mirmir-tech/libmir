@@ -1,6 +1,6 @@
 use mircuda::{
-    CompileOptions, Compiler, DeviceBuffer, LaunchConfig, Stream, TypedKernel, bf16, cuda_export,
-    cuda_kernel_files,
+    CompileOptions, Compiler, DeviceBuffer, LaunchConfig, Module, Stream, TypedKernel, bf16,
+    cuda_export, cuda_kernel_files,
 };
 
 use super::{
@@ -82,8 +82,21 @@ impl GgmlDequantize {
         rows: usize,
         columns: usize,
     ) -> Result<Self> {
-        let block = usize::try_from(kind.ggml_type().block_elements())?;
-        if rows == 0 || columns == 0 || !columns.is_multiple_of(block) {
+        Self::compile_kinds(compiler, &[kind], rows, columns)?
+            .pop()
+            .ok_or(Error::InvalidDecoderKernel("invalid GGML dequantization geometry"))
+    }
+
+    /// One dequantization per kind from a single module lookup: the cache
+    /// key hashes every composed source, which costs more than the kernel
+    /// lookups when a prefill plan prepares all twenty types.
+    pub fn compile_kinds(
+        compiler: &Compiler,
+        kinds: &[GgmlKernelType],
+        rows: usize,
+        columns: usize,
+    ) -> Result<Vec<Self>> {
+        if rows == 0 || columns == 0 {
             return Err(Error::InvalidDecoderKernel("invalid GGML dequantization geometry"));
         }
         let module = compiler.compile(
@@ -100,29 +113,23 @@ impl GgmlDequantize {
             ),
             &CompileOptions::default(),
         )?;
-        let kernel = match kind {
-            GgmlKernelType::Q4_0 => Kernel::Q4_0(module.kernel()?),
-            GgmlKernelType::Q4_1 => Kernel::Q4_1(module.kernel()?),
-            GgmlKernelType::Q5_0 => Kernel::Q5_0(module.kernel()?),
-            GgmlKernelType::Q5_1 => Kernel::Q5_1(module.kernel()?),
-            GgmlKernelType::Q8_0 => Kernel::Q8_0(module.kernel()?),
-            GgmlKernelType::Q3K => Kernel::Q3K(module.kernel()?),
-            GgmlKernelType::Q2K => Kernel::Q2K(module.kernel()?),
-            GgmlKernelType::Q4K => Kernel::Q4K(module.kernel()?),
-            GgmlKernelType::Q5K => Kernel::Q5K(module.kernel()?),
-            GgmlKernelType::Q6K => Kernel::Q6K(module.kernel()?),
-            GgmlKernelType::IQ4NL => Kernel::IQ4NL(module.kernel()?),
-            GgmlKernelType::IQ4XS => Kernel::IQ4XS(module.kernel()?),
-            GgmlKernelType::IQ2XXS => Kernel::IQ2XXS(module.kernel()?),
-            GgmlKernelType::IQ2XS => Kernel::IQ2XS(module.kernel()?),
-            GgmlKernelType::IQ2S => Kernel::IQ2S(module.kernel()?),
-            GgmlKernelType::IQ3XXS => Kernel::IQ3XXS(module.kernel()?),
-            GgmlKernelType::IQ3S => Kernel::IQ3S(module.kernel()?),
-            GgmlKernelType::IQ1S => Kernel::IQ1S(module.kernel()?),
-            GgmlKernelType::IQ1M => Kernel::IQ1M(module.kernel()?),
-            GgmlKernelType::MXFP4 => Kernel::MXFP4(module.kernel()?),
-        };
-        Ok(Self { kernel, kind, rows, columns })
+        kinds
+            .iter()
+            .map(|&kind| {
+                let block = usize::try_from(kind.ggml_type().block_elements())?;
+                if !columns.is_multiple_of(block) {
+                    return Err(Error::InvalidDecoderKernel(
+                        "invalid GGML dequantization geometry",
+                    ));
+                }
+                Ok(Self {
+                    kernel: kernel(&module, kind)?,
+                    kind,
+                    rows,
+                    columns,
+                })
+            })
+            .collect()
     }
 
     #[must_use]
@@ -196,4 +203,29 @@ impl GgmlDequantize {
         }
         Ok(())
     }
+}
+
+fn kernel(module: &Module, kind: GgmlKernelType) -> Result<Kernel> {
+    Ok(match kind {
+        GgmlKernelType::Q4_0 => Kernel::Q4_0(module.kernel()?),
+        GgmlKernelType::Q4_1 => Kernel::Q4_1(module.kernel()?),
+        GgmlKernelType::Q5_0 => Kernel::Q5_0(module.kernel()?),
+        GgmlKernelType::Q5_1 => Kernel::Q5_1(module.kernel()?),
+        GgmlKernelType::Q8_0 => Kernel::Q8_0(module.kernel()?),
+        GgmlKernelType::Q3K => Kernel::Q3K(module.kernel()?),
+        GgmlKernelType::Q2K => Kernel::Q2K(module.kernel()?),
+        GgmlKernelType::Q4K => Kernel::Q4K(module.kernel()?),
+        GgmlKernelType::Q5K => Kernel::Q5K(module.kernel()?),
+        GgmlKernelType::Q6K => Kernel::Q6K(module.kernel()?),
+        GgmlKernelType::IQ4NL => Kernel::IQ4NL(module.kernel()?),
+        GgmlKernelType::IQ4XS => Kernel::IQ4XS(module.kernel()?),
+        GgmlKernelType::IQ2XXS => Kernel::IQ2XXS(module.kernel()?),
+        GgmlKernelType::IQ2XS => Kernel::IQ2XS(module.kernel()?),
+        GgmlKernelType::IQ2S => Kernel::IQ2S(module.kernel()?),
+        GgmlKernelType::IQ3XXS => Kernel::IQ3XXS(module.kernel()?),
+        GgmlKernelType::IQ3S => Kernel::IQ3S(module.kernel()?),
+        GgmlKernelType::IQ1S => Kernel::IQ1S(module.kernel()?),
+        GgmlKernelType::IQ1M => Kernel::IQ1M(module.kernel()?),
+        GgmlKernelType::MXFP4 => Kernel::MXFP4(module.kernel()?),
+    })
 }
