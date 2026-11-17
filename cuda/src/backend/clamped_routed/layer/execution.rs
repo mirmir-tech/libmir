@@ -81,6 +81,9 @@ impl ClampedRoutedLayerExecution {
         if !cache.is_windowed() {
             cache.store_prefill_batch(batch, &scratch.key, &scratch.value)?;
         }
+        if self.decode_fmha(weights, cache, batch, scratch, batch_split_decode)? {
+            return self.execute_tail(input, weights, scratch, dense_experts, output);
+        }
         let windowed_fmha = if cache.is_windowed()
             && batch.max_query_tokens() >= super::super::WINDOWED_FMHA_MIN_QUERY_TOKENS
         {
@@ -234,7 +237,7 @@ impl ClampedRoutedLayerExecution {
     }
 }
 
-fn bf16s(tensor: &CudaTensor) -> Result<&DeviceBuffer<bf16>> {
+pub(super) fn bf16s(tensor: &CudaTensor) -> Result<&DeviceBuffer<bf16>> {
     tensor.as_bf16().ok_or_else(|| Error::DTypeMismatch {
         name: tensor.name().into(),
         expected: "BF16",

@@ -9,7 +9,7 @@ impl BatchedPagedAttentionBf16 {
         batch: &PagedDecodeBatch,
         window: Option<usize>,
     ) -> usize {
-        if window.is_none() && self.fmha.is_some() {
+        if self.fmha.is_some() {
             return PagedFmhaDecode::capture_key(batch);
         }
         let tokens = batch.maximum_tokens();

@@ -6,6 +6,7 @@ mod embedding;
 mod gathered;
 mod gemv;
 mod linear;
+mod mmq;
 mod repack;
 #[cfg(test)]
 mod tests;
@@ -14,6 +15,7 @@ pub use dequantize::GgmlDequantize;
 pub use embedding::{GgmlEmbedding, GgmlEmbeddingOperands};
 pub use gathered::{GgmlExpertSpec, GgmlGatheredLinear, GgmlSelections};
 pub use linear::{GgmlActivations, GgmlLinear};
+pub use mmq::{GgmlGroupedMmq, GgmlMmqGroups, GgmlMmqInput, GgmlMmqPlacement, GgmlRouteCombine};
 use models::gguf::GgmlType;
 pub use repack::{GgmlMxFp4Repack, GgmlRowPlacement};
 

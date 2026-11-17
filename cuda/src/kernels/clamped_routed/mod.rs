@@ -3,7 +3,8 @@ mod marlin;
 mod math;
 
 pub use attention::{
-    ClampedRoutedAttention, ClampedRoutedBatchSplitDecode, ClampedRoutedSplitDecode,
+    ClampedRoutedAttention, ClampedRoutedBatchSplitDecode, ClampedRoutedFmhaWorkspace,
+    ClampedRoutedSplitDecode,
 };
 pub use marlin::{ClampedRoutedMarlinEpilogue, ClampedRoutedMarlinGeometry};
 pub use math::{ClampedRoutedKernels, ClampedRoutedSpec};

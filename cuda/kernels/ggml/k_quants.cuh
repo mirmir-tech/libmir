@@ -5,7 +5,8 @@ struct Q4_K {
   static constexpr unsigned int elements = 256u;
   static constexpr unsigned int bytes = 144u;
   // Two units in flight per lane: measured faster for Q4_K only.
-  static constexpr bool staged = false;
+  static constexpr unsigned int staged_tokens = 1u;
+  static constexpr bool whole_scales = true;
   static constexpr unsigned int unroll = 2u;
   static constexpr unsigned int units = 4u;
   static constexpr unsigned int width = 2u;
@@ -58,7 +59,8 @@ struct Q4_K {
 struct Q5_K {
   static constexpr unsigned int elements = 256u;
   static constexpr unsigned int bytes = 176u;
-  static constexpr bool staged = false;
+  static constexpr unsigned int staged_tokens = 16u;
+  static constexpr bool whole_scales = true;
   static constexpr unsigned int unroll = 2u;
   static constexpr unsigned int units = 4u;
   static constexpr unsigned int width = 2u;
@@ -96,11 +98,24 @@ struct Q5_K {
       }
     }
   }
+  // From bytes at any alignment, for the staged GEMV.
   __device__ static void decode(const unsigned char* block, unsigned int s, IntSub& sub) {
-    IntSub pair[2];
-    unsigned int index[2];
-    decode_unit(block, s >> 1u, pair, index);
-    sub = pair[s & 1u];
+    unsigned int words[4];
+    load16(block, words);
+    const unsigned int scales[3] = {words[1], words[2], words[3]};
+    unsigned int scale;
+    unsigned int minimum;
+    scale_min_k4(scales, s, scale, minimum);
+    sub.scale[0] = sub.scale[1] = ggml_half(block) * static_cast<float>(scale);
+    sub.minimum[0] = sub.minimum[1] = ggml_half(block + 2u) * static_cast<float>(minimum);
+    unsigned int qh[8];
+    load32(block + 16u, qh);
+    load32(block + 48u + (s >> 1u) * 32u, sub.q);
+    const unsigned int shift = (s & 1u) * 4u;
+#pragma unroll
+    for (unsigned int i = 0; i < 8u; ++i) {
+      sub.q[i] = ((sub.q[i] >> shift) & 0x0F0F0F0Fu) | (((qh[i] >> s) & 0x01010101u) << 4u);
+    }
   }
 };
 
@@ -109,7 +124,7 @@ struct Q6_K {
   static constexpr unsigned int bytes = 210u;
   // One sub-block per unit: pairing quarters that share ql bytes measured
   // slower (more registers, two misaligned loads per lane).
-  static constexpr bool staged = true;
+  static constexpr unsigned int staged_tokens = 16u;
   static constexpr unsigned int unroll = 1u;
   static constexpr unsigned int units = 8u;
   static constexpr unsigned int width = 1u;
@@ -144,10 +159,10 @@ struct Q6_K {
 
 // Shared traits of the K-quants read one sub-block per unit from shared
 // memory (`staged`): their blocks are not 16-byte aligned.
-#define LIBMIR_GGML_STAGED_K(BYTES)                                                     \
+#define LIBMIR_GGML_STAGED_K(BYTES, STAGED)                                             \
   static constexpr unsigned int elements = 256u;                                       \
   static constexpr unsigned int bytes = BYTES;                                         \
-  static constexpr bool staged = true;                                                 \
+  static constexpr unsigned int staged_tokens = STAGED;                                \
   static constexpr unsigned int unroll = 1u;                                           \
   static constexpr unsigned int units = 8u;                                            \
   static constexpr unsigned int width = 1u;                                            \
@@ -161,7 +176,7 @@ struct Q6_K {
 // half d. Sub-block s is shift 2 * (s % 4) of qs[32 * (s / 4) ..][0..32]
 // with bit s of hmask[l] clear meaning minus 4; value = d * (sc - 32) * q.
 struct Q3_K {
-  LIBMIR_GGML_STAGED_K(110u)
+  LIBMIR_GGML_STAGED_K(110u, 16u)
   __device__ static void decode(const unsigned char* block, unsigned int s, IntSub& sub) {
     const unsigned int part = s >> 2u;
     const unsigned int shift = 2u * (s & 3u);
@@ -197,7 +212,7 @@ struct Q3_K {
 // Sub-block s is shift 2 * (s % 4) of qs[32 * (s / 4) ..][0..32]; each 16
 // values have their own scale and minimum: value = d * sc * q - dmin * m.
 struct Q2_K {
-  LIBMIR_GGML_STAGED_K(84u)
+  LIBMIR_GGML_STAGED_K(84u, 4u)
   __device__ static void decode(const unsigned char* block, unsigned int s, IntSub& sub) {
     const unsigned int part = s >> 2u;
     const unsigned int shift = 2u * (s & 3u);

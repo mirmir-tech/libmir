@@ -28,7 +28,7 @@ impl CudaBackend {
 
     /// Quantized decode activations shared by every GEMV plan of the same
     /// batch and input width, so projections of one input quantize it once.
-    pub(super) fn ggml_activations(
+    pub(in crate::backend) fn ggml_activations(
         &self,
         tokens: usize,
         columns: usize,

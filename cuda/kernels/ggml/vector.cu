@@ -7,16 +7,11 @@
 namespace {
 
 
-// One thread per token and sub-block: 32 BF16 values to int8 words, with the
-// scale and the exact float sums of both halves beside them.
-__device__ void ggml_quantize(
-    const __nv_bfloat16* input, unsigned int* quantized, float4* scales, unsigned int tokens,
-    unsigned int columns) {
-  const unsigned int subs = columns / kSub;
-  const unsigned long long index =
-      static_cast<unsigned long long>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (index >= static_cast<unsigned long long>(tokens) * subs) return;
-  const uint4* vectors = reinterpret_cast<const uint4*>(input + index * kSub);
+// 32 BF16 values to int8 words, with the scale and the exact float sums of
+// both halves beside them.
+__device__ __forceinline__ void ggml_quantize_sub(
+    const __nv_bfloat16* source, unsigned int* quantized, float4* scale) {
+  const uint4* vectors = reinterpret_cast<const uint4*>(source);
   float x[kSub];
 #pragma unroll
   for (unsigned int v = 0; v < 4u; ++v) {
@@ -36,7 +31,6 @@ __device__ void ggml_quantize(
     maximum = fmaxf(maximum, fabsf(x[i]));
     sums[i >> 4u] += x[i];
   }
-  const float scale = maximum / 127.0f;
   const float inverse = maximum > 0.0f ? 127.0f / maximum : 0.0f;
   unsigned int words[8];
 #pragma unroll
@@ -49,10 +43,21 @@ __device__ void ggml_quantize(
     }
     words[w] = word;
   }
-  uint4* output = reinterpret_cast<uint4*>(quantized + index * 8u);
+  uint4* output = reinterpret_cast<uint4*>(quantized);
   output[0] = make_uint4(words[0], words[1], words[2], words[3]);
   output[1] = make_uint4(words[4], words[5], words[6], words[7]);
-  scales[index] = make_float4(scale, sums[0], sums[1], 0.0f);
+  *scale = make_float4(maximum / 127.0f, sums[0], sums[1], 0.0f);
+}
+
+// One thread per token and sub-block.
+__device__ void ggml_quantize(
+    const __nv_bfloat16* input, unsigned int* quantized, float4* scales, unsigned int tokens,
+    unsigned int columns) {
+  const unsigned int subs = columns / kSub;
+  const unsigned long long index =
+      static_cast<unsigned long long>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (index >= static_cast<unsigned long long>(tokens) * subs) return;
+  ggml_quantize_sub(input + index * kSub, quantized + index * 8u, scales + index);
 }
 
 // Warps own `rows_per_warp` output rows; pass `pass` of `passes` takes every
@@ -64,12 +69,10 @@ __device__ void ggml_gemv(
     const unsigned int* quantized, const float4* scales, const unsigned char* weight,
     __nv_bfloat16* output, unsigned int tokens, unsigned int rows, unsigned int columns,
     unsigned int pass, unsigned int passes) {
-  if constexpr (Block::staged) {
-    if (stageable<Block>(columns)) {
-      ggml_gemv_staged<Block, kTokens>(
-          quantized, scales, weight, output, tokens, rows, columns, pass, passes);
-      return;
-    }
+  if constexpr (kTokens <= Block::staged_tokens) {
+    ggml_gemv_staged<Block, kTokens>(
+        quantized, scales, weight, output, tokens, rows, columns, pass, passes);
+    return;
   }
   constexpr unsigned int kRows = rows_per_warp<kTokens>();
   const unsigned int lane = threadIdx.x & 31u;

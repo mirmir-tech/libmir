@@ -4,7 +4,6 @@ use models::weights::{
 
 use super::canonical::canonicalize;
 
-mod banks;
 mod individual;
 use crate::{
     CudaBackend, CudaTensor, CudaTensorDType, CudaTensorSet, Error, Result,

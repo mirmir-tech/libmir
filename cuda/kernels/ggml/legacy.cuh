@@ -25,11 +25,12 @@ __device__ __forceinline__ unsigned int load_u32(const unsigned char* bytes) {
          (static_cast<unsigned int>(bytes[2]) << 16u) | (static_cast<unsigned int>(bytes[3]) << 24u);
 }
 
-template <unsigned int kBytes>
+template <unsigned int kBytes, unsigned int kStaged>
 struct LegacyTraits {
   static constexpr unsigned int elements = 32u;
   static constexpr unsigned int bytes = kBytes;
-  static constexpr bool staged = true;
+  static constexpr unsigned int staged_tokens = kStaged;
+  static constexpr bool whole_scales = true;
   static constexpr unsigned int unroll = 1u;
   static constexpr unsigned int units = 1u;
   static constexpr unsigned int width = 1u;
@@ -43,7 +44,7 @@ struct LegacyTraits {
   }
 
 // Q4_0: half d, qs[16]; value = d * (q - 8).
-struct Q4_0 : LegacyTraits<18u> {
+struct Q4_0 : LegacyTraits<18u, 1u> {
   __device__ static void decode(const unsigned char* block, unsigned int, IntSub& sub) {
     legacy_nibbles<false>(block + 2u, 0u, sub.q);
 #pragma unroll
@@ -55,7 +56,7 @@ struct Q4_0 : LegacyTraits<18u> {
 };
 
 // Q4_1: half d, half m, qs[16]; value = d * q + m.
-struct Q4_1 : LegacyTraits<20u> {
+struct Q4_1 : LegacyTraits<20u, 1u> {
   __device__ static void decode(const unsigned char* block, unsigned int, IntSub& sub) {
     legacy_nibbles<false>(block + 4u, 0u, sub.q);
     sub.scale[0] = sub.scale[1] = ggml_half(block);
@@ -65,7 +66,7 @@ struct Q4_1 : LegacyTraits<20u> {
 };
 
 // Q5_0: half d, qh[4], qs[16]; value = d * (q - 16).
-struct Q5_0 : LegacyTraits<22u> {
+struct Q5_0 : LegacyTraits<22u, 1u> {
   __device__ static void decode(const unsigned char* block, unsigned int, IntSub& sub) {
     legacy_nibbles<true>(block + 6u, load_u32(block + 2u), sub.q);
 #pragma unroll
@@ -77,7 +78,7 @@ struct Q5_0 : LegacyTraits<22u> {
 };
 
 // Q5_1: half d, half m, qh[4], qs[16]; value = d * q + m.
-struct Q5_1 : LegacyTraits<24u> {
+struct Q5_1 : LegacyTraits<24u, 4u> {
   __device__ static void decode(const unsigned char* block, unsigned int, IntSub& sub) {
     legacy_nibbles<true>(block + 8u, load_u32(block + 4u), sub.q);
     sub.scale[0] = sub.scale[1] = ggml_half(block);
@@ -87,7 +88,8 @@ struct Q5_1 : LegacyTraits<24u> {
 };
 
 struct Q8_0 {
-  static constexpr bool staged = true;
+  static constexpr unsigned int staged_tokens = 8u;
+  static constexpr bool whole_scales = true;
   static constexpr unsigned int unroll = 1u;
   static constexpr unsigned int units = 1u;
   static constexpr unsigned int width = 1u;

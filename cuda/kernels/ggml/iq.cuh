@@ -36,10 +36,10 @@ __device__ __forceinline__ float iq2_scale(float d, unsigned int scale) {
   return d * (0.5f + static_cast<float>(scale)) * 0.25f;
 }
 
-#define LIBMIR_GGML_IQ(BYTES)                                                           \
+#define LIBMIR_GGML_IQ(BYTES, STAGED)                                                   \
   static constexpr unsigned int elements = 256u;                                       \
   static constexpr unsigned int bytes = BYTES;                                         \
-  static constexpr bool staged = true;                                                 \
+  static constexpr unsigned int staged_tokens = STAGED;                                \
   static constexpr unsigned int unroll = 1u;                                           \
   static constexpr unsigned int units = 8u;                                            \
   static constexpr unsigned int width = 1u;                                            \
@@ -52,7 +52,7 @@ __device__ __forceinline__ float iq2_scale(float d, unsigned int scale) {
 // IQ2_XXS: half d, qs u16[32]; sub-block s is 8 bytes: four grid indices,
 // then 4 x 7 sign bits and a 4-bit scale in the top bits.
 struct IQ2_XXS {
-  LIBMIR_GGML_IQ(66u)
+  LIBMIR_GGML_IQ(66u, 2u)
   __device__ static void decode(const unsigned char* block, unsigned int s, IntSub& sub) {
     const unsigned int indices = byte_u32(block + 2u + 8u * s);
     const unsigned int aux = byte_u32(block + 6u + 8u * s);
@@ -69,7 +69,7 @@ struct IQ2_XXS {
 // IQ2_XS: half d, qs u16[32] (9-bit index, 7 sign bits), scales[8] (4 bits
 // per 16 values).
 struct IQ2_XS {
-  LIBMIR_GGML_IQ(74u)
+  LIBMIR_GGML_IQ(74u, 2u)
   __device__ static void decode(const unsigned char* block, unsigned int s, IntSub& sub) {
 #pragma unroll
     for (unsigned int l = 0; l < 4u; ++l) {
@@ -86,7 +86,7 @@ struct IQ2_XS {
 // IQ2_S: half d, qs[64] (32 low index bytes, then 32 sign bytes), qh[8]
 // (two high index bits per group), scales[8].
 struct IQ2_S {
-  LIBMIR_GGML_IQ(82u)
+  LIBMIR_GGML_IQ(82u, 16u)
   __device__ static void decode(const unsigned char* block, unsigned int s, IntSub& sub) {
     const unsigned int high = block[66u + s];
 #pragma unroll
@@ -104,7 +104,7 @@ struct IQ2_S {
 // IQ3_XXS: half d, qs[64] (two 4-value grid indices per group), then u32[8]
 // of 4 x 7 sign bits and a 4-bit scale; value = d * (0.5 + s) / 2 * grid.
 struct IQ3_XXS {
-  LIBMIR_GGML_IQ(98u)
+  LIBMIR_GGML_IQ(98u, 8u)
   __device__ static void decode(const unsigned char* block, unsigned int s, IntSub& sub) {
     const unsigned int aux = byte_u32(block + 66u + 4u * s);
 #pragma unroll
@@ -122,7 +122,7 @@ struct IQ3_XXS {
 // IQ3_S: half d, qs[64], qh[8] (ninth index bit), signs[32], scales[4] (4 bits
 // per sub-block); value = d * (1 + 2 * s) * grid.
 struct IQ3_S {
-  LIBMIR_GGML_IQ(110u)
+  LIBMIR_GGML_IQ(110u, 16u)
   __device__ static void decode(const unsigned char* block, unsigned int s, IntSub& sub) {
     const unsigned int high = block[66u + s];
 #pragma unroll
@@ -152,7 +152,7 @@ __device__ __forceinline__ void iq1_values(
 // IQ1_S: half d, qs[32] (low index bytes), qh u16[8] (3 high index bits per
 // group, a 3-bit scale, the shift's sign); value = d * (2 * s + 1) * (g +- 1/8).
 struct IQ1_S {
-  LIBMIR_GGML_IQ(50u)
+  LIBMIR_GGML_IQ(50u, 2u)
   __device__ static void decode(const unsigned char* block, unsigned int s, IntSub& sub) {
     const unsigned int high = byte_u16(block + 34u + 2u * s);
 #pragma unroll
@@ -169,7 +169,7 @@ struct IQ1_S {
 // IQ1_M: qs[32], qh[16] (3 high index bits and the shift's sign per group),
 // scales u16[4] (3-bit scales per 16 values; their top nibbles hold d).
 struct IQ1_M {
-  LIBMIR_GGML_IQ(56u)
+  LIBMIR_GGML_IQ(56u, 16u)
   __device__ static void decode(const unsigned char* block, unsigned int s, IntSub& sub) {
     unsigned int scales[4];
 #pragma unroll

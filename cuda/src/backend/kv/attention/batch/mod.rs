@@ -139,10 +139,8 @@ impl BatchedPagedAttentionBf16 {
         {
             return Err(Error::InvalidPagedKv("batched attention metadata geometry differs"));
         }
-        if window.is_none()
-            && let Some(fmha) = &mut self.fmha
-        {
-            return fmha.execute(query, cache, batch, output, scale);
+        if let Some(fmha) = &mut self.fmha {
+            return fmha.execute(query, cache, batch, output, window, scale);
         }
         self.ensure_tuned(query, cache, batch, output, window, scale);
         self.operation.execute(

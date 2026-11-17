@@ -12,6 +12,7 @@ use crate::Result;
 
 mod bandwidth;
 mod gathered;
+mod mmq;
 mod reference;
 
 use reference::{Blocks, dequantize};
@@ -23,14 +24,17 @@ const KINDS: [GgmlKernelType; 20] = GgmlKernelType::ALL;
 #[test]
 fn linear_kernels_match_the_reference_dequantization() -> Result<()> {
     let fixture = Fixture::new()?;
-    // 2048 columns hold whole 64-sub-block chunks, so the staged types take
-    // the shared-memory kernel; 512 takes the direct one.
-    for (kind, columns) in KINDS.into_iter().flat_map(|kind| [(kind, COLUMNS), (kind, 2048)]) {
+    // Passes up to a type's `staged_tokens` take the shared-memory kernel:
+    // 2048 columns hold whole 64-sub-block chunks, 512 and 3840 end in a
+    // partial one, and their rows of odd block counts start misaligned.
+    let shapes = |kind| [(kind, COLUMNS), (kind, 2048), (kind, 3840)];
+    for (kind, columns) in KINDS.into_iter().flat_map(shapes) {
         let blocks = Blocks::random(kind, ROWS, columns, 0x9e37_79b9)?;
         let weight = dequantize(kind, &blocks.bytes, ROWS, columns);
         let device_weight = fixture.copy(&blocks.bytes)?;
-        // 37 tokens take three 16-token passes with a ragged last one.
-        for tokens in [1, 3, 37] {
+        // Passes of 1, 2, 8 and 16 tokens; 37 take three 16-token passes
+        // with a ragged last one.
+        for tokens in [1, 2, 5, 37] {
             let input = reference::input(tokens * columns, 0x85eb_ca6b);
             let device_input = fixture.copy(&input)?;
             let mut output =

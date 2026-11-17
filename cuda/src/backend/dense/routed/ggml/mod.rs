@@ -1,5 +1,5 @@
-mod dequantized;
 mod gathered;
+mod grouped;
 
 use mircuda::{DeviceBuffer, Stream, bf16};
 
@@ -10,10 +10,10 @@ use crate::{
 };
 
 /// GGML expert banks for a fixed number of rows. Decode batches take one
-/// int8 GEMV per (token, expert) selection; prefill chunks dequantize the
-/// layer's banks into BF16 scratch shared by every layer and run the dense
-/// grouped expert GEMM. As with dense projections, the bank's type picks the
-/// kernel, since a `Q4_K_M` checkpoint mixes types across layers.
+/// int8 GEMV per (token, expert) selection; prefill chunks sort selections
+/// by expert and run grouped int8 GEMMs over the banks. As with dense
+/// projections, the bank's type picks the kernel, since a `Q4_K_M`
+/// checkpoint mixes types across layers.
 pub(super) struct GgmlRoutedExperts {
     path: Path,
     stream: Stream,
@@ -22,7 +22,7 @@ pub(super) struct GgmlRoutedExperts {
 
 enum Path {
     Gathered(Box<gathered::Gathered>),
-    Dequantized(Box<dequantized::Dequantized>),
+    Grouped(Box<grouped::Grouped>),
 }
 
 /// The selections of one routed feed-forward call.
@@ -44,9 +44,7 @@ impl GgmlRoutedExperts {
         let path = if rows <= GGML_GEMV_MAX_TOKENS {
             Path::Gathered(Box::new(gathered::Gathered::new(backend, config, experts, rows)?))
         } else {
-            Path::Dequantized(Box::new(dequantized::Dequantized::new(
-                backend, config, experts, rows,
-            )?))
+            Path::Grouped(Box::new(grouped::Grouped::new(backend, config, experts, rows)?))
         };
         Ok(Self {
             path,
@@ -70,7 +68,7 @@ impl GgmlRoutedExperts {
         };
         match &mut self.path {
             Path::Gathered(path) => path.execute(&self.stream, input, &routing, weights, output),
-            Path::Dequantized(path) => path.execute(&self.stream, input, &routing, weights, output),
+            Path::Grouped(path) => path.execute(&self.stream, input, &routing, weights, output),
         }
     }
 }

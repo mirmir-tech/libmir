@@ -57,9 +57,9 @@ pub use affine::{
 pub use awq::{AwqLaunch, AwqLinear, AwqSpec};
 pub use bitsandbytes::{BitsAndBytes4BitLaunch, BitsAndBytes4BitLinear, BitsAndBytes4BitSpec};
 pub(crate) use clamped_routed::{
-    ClampedRoutedAttention, ClampedRoutedBatchSplitDecode, ClampedRoutedKernels,
-    ClampedRoutedMarlinEpilogue, ClampedRoutedMarlinGeometry, ClampedRoutedSpec,
-    ClampedRoutedSplitDecode,
+    ClampedRoutedAttention, ClampedRoutedBatchSplitDecode, ClampedRoutedFmhaWorkspace,
+    ClampedRoutedKernels, ClampedRoutedMarlinEpilogue, ClampedRoutedMarlinGeometry,
+    ClampedRoutedSpec, ClampedRoutedSplitDecode,
 };
 pub use concat::ConcatColumnsBf16;
 pub use decision::{
@@ -94,8 +94,9 @@ pub use gated_delta::{
 };
 pub use ggml::{
     GGML_GEMV_MAX_TOKENS, GgmlActivations, GgmlDequantize, GgmlEmbedding, GgmlEmbeddingOperands,
-    GgmlExpertSpec, GgmlGatheredLinear, GgmlKernelType, GgmlLinear, GgmlMxFp4Repack,
-    GgmlRowPlacement, GgmlSelections, GgmlSpec,
+    GgmlExpertSpec, GgmlGatheredLinear, GgmlGroupedMmq, GgmlKernelType, GgmlLinear, GgmlMmqGroups,
+    GgmlMmqInput, GgmlMmqPlacement, GgmlMxFp4Repack, GgmlRouteCombine, GgmlRowPlacement,
+    GgmlSelections, GgmlSpec,
 };
 pub use gptq::{GptqLaunch, GptqLinear, GptqSpec};
 pub use latent_moe::{ReluSquaredBf16, SigmoidRouter, SigmoidRouterOutputs, SigmoidRouterSpec};

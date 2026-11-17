@@ -45,7 +45,8 @@ __device__ __forceinline__ void iq4_values(
 struct IQ4_NL {
   static constexpr unsigned int elements = 32u;
   static constexpr unsigned int bytes = 18u;
-  static constexpr bool staged = true;
+  static constexpr unsigned int staged_tokens = 1u;
+  static constexpr bool whole_scales = true;
   static constexpr unsigned int unroll = 1u;
   static constexpr unsigned int units = 1u;
   static constexpr unsigned int width = 1u;
@@ -67,7 +68,8 @@ struct IQ4_NL {
 struct IQ4_XS {
   static constexpr unsigned int elements = 256u;
   static constexpr unsigned int bytes = 136u;
-  static constexpr bool staged = true;
+  static constexpr unsigned int staged_tokens = 1u;
+  static constexpr bool whole_scales = true;
   static constexpr unsigned int unroll = 1u;
   static constexpr unsigned int units = 8u;
   static constexpr unsigned int width = 1u;
@@ -92,7 +94,8 @@ struct IQ4_XS {
 struct MXFP4 {
   static constexpr unsigned int elements = 32u;
   static constexpr unsigned int bytes = 17u;
-  static constexpr bool staged = true;
+  static constexpr unsigned int staged_tokens = 1u;
+  static constexpr bool whole_scales = true;
   static constexpr unsigned int unroll = 1u;
   static constexpr unsigned int units = 1u;
   static constexpr unsigned int width = 1u;
