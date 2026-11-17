@@ -123,6 +123,7 @@ pub(super) fn config() -> DecodeAttentionConfig {
             dimensions: 256,
             pairing: 256,
             theta: 10_000.0,
+            scaling: crate::kernels::RotaryScaling::NONE,
         }),
         rms_norm_epsilon: 1.0e-6,
         attention_scale: 0.0625,

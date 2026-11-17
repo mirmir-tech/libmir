@@ -19,6 +19,7 @@ mod ggml;
 mod mxfp4;
 mod mxfp8;
 mod nvfp4;
+mod rope_rows;
 mod routed;
 
 impl CudaBackend {
@@ -33,7 +34,26 @@ impl CudaBackend {
     ) -> Result<(DenseSwiGluLayerTemplate, u64)> {
         let block = load.block(decoder, semantic, layer)?;
         let source = DenseLayerSource::discover(catalog, bindings)?;
-        let tensors = source.upload(self, bindings, load.projection_format)?;
+        let mut tensors = source.upload(self, bindings, load.projection_format)?;
+        if decoder.query_key_rows_interleaved {
+            rope_rows::restore(self, &mut tensors, bindings, block.attention.cache.key_head_dim)?;
+        }
+        let offset = semantic
+            .decoder
+            .layers
+            .get(layer)
+            .map_or(0.0, |spec| spec.input_norm.weight_offset);
+        if offset != 0.0 {
+            let attention = bindings.attention;
+            let mut norms = vec![bindings.input_norm, bindings.post_attention_norm];
+            norms.extend(attention.query_norm.into_iter().chain(attention.key_norm));
+            if let Some(sandwich) = bindings.sandwich {
+                norms.extend([sandwich.attention_output_norm, sandwich.feed_forward_output_norm]);
+            }
+            for norm in norms {
+                tensors.add_bf16(&norm.source, offset)?;
+            }
+        }
         let template = if let DenseLayerFeedForwardBindings::Routed(routed) = bindings.feed_forward
         {
             routed::load(self, block, &tensors, bindings, routed)?
@@ -198,7 +218,10 @@ pub(super) fn common_source<'a>(
                         tensors,
                         &sandwich.feed_forward_output_norm.source,
                     )?,
-                    layer_scalar: tensor(tensors, &sandwich.layer_scale.source)?,
+                    layer_scalar: sandwich
+                        .layer_scale
+                        .map(|binding| tensor(tensors, &binding.source))
+                        .transpose()?,
                 })
             })
             .transpose()?,

@@ -1,6 +1,7 @@
 mod controls;
 mod reasoning;
 mod rerank;
+mod system;
 
 use foundation::conversation::Message;
 

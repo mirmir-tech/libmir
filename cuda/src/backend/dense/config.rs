@@ -56,12 +56,12 @@ pub enum DenseFeedForwardWeights<'a> {
 }
 
 /// Gemma-style norms on each sub-block's output before its residual add, and
-/// a learned BF16 scalar on the layer output.
+/// a learned BF16 scalar on the layer output when the checkpoint has one.
 #[derive(Clone, Copy)]
 pub struct DenseSandwichWeights<'a> {
     pub attention_output_norm: &'a CudaTensor,
     pub feed_forward_output_norm: &'a CudaTensor,
-    pub layer_scalar: &'a CudaTensor,
+    pub layer_scalar: Option<&'a CudaTensor>,
 }
 
 #[derive(Clone, Copy)]

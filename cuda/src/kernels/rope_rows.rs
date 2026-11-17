@@ -1,0 +1,55 @@
+use mircuda::{
+    CompileOptions, Compiler, DeviceBuffer, LaunchConfig, Stream, TypedKernel, cuda_export,
+    cuda_kernel_file,
+};
+
+use super::geometry::{narrow, product, require};
+use crate::{Error, Result};
+
+cuda_export!(RopeRowsKernel = "libmir_cuda_rope_rows_u8"(
+    source: &DeviceBuffer<u8>, output: &mut DeviceBuffer<u8>, rows: u32, row_bytes: u32,
+    head_dim: u32,
+));
+
+/// Query and key rows from llama.cpp's pairwise-interleaved order back to
+/// Hugging Face's `rotate_half` halves, per head of `head_dim` rows.
+#[derive(Clone, Debug)]
+pub struct RopeRows {
+    kernel: TypedKernel<RopeRowsKernel>,
+}
+
+impl RopeRows {
+    pub fn compile(compiler: &Compiler) -> Result<Self> {
+        let module = compiler.compile(
+            cuda_kernel_file!("../../kernels/rope_rows_u8.cu"),
+            &CompileOptions::default(),
+        )?;
+        Ok(Self { kernel: module.kernel()? })
+    }
+
+    pub fn execute(
+        &self,
+        stream: &Stream,
+        source: &DeviceBuffer<u8>,
+        output: &mut DeviceBuffer<u8>,
+        rows: usize,
+        head_dim: usize,
+    ) -> Result<()> {
+        if head_dim == 0 || !head_dim.is_multiple_of(2) || !rows.is_multiple_of(head_dim) {
+            return Err(Error::InvalidDecoderKernel("rotary rows need whole even heads"));
+        }
+        let row_bytes = source.len() / rows;
+        require("rotary rows", product(rows, row_bytes)?, source.len())?;
+        require("restored rotary rows", source.len(), output.len())?;
+        self.kernel.launch(
+            stream,
+            LaunchConfig {
+                grid: (narrow(source.len().div_ceil(256))?, 1, 1),
+                block: (256, 1, 1),
+                shared_memory_bytes: 0,
+            },
+            (source, output, narrow(rows)?, narrow(row_bytes)?, narrow(head_dim)?),
+        )?;
+        Ok(())
+    }
+}

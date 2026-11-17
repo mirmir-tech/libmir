@@ -4,9 +4,12 @@
 //! derivation when the model loads.
 //!
 //! Usage: `model-spec <model> [value-rms] [attention-scale=X]
-//! [embedding-multiplier=X]`. `value-rms` declares an RMS norm without a
-//! learned scale on the values of every Q/K-normalized attention layer;
-//! `attention-scale` sets the softmax scale of every attention layer.
+//! [embedding-multiplier=X] [norm-weight-offset=X] [tie-word-embeddings]`.
+//! `value-rms` declares an RMS norm without a learned scale on the values of
+//! every Q/K-normalized attention layer; `attention-scale` sets the softmax
+//! scale of every attention layer; `norm-weight-offset` is added to every
+//! norm weight of the decoder (1 for Gemma's `1 + weight`, Q/K norms
+//! included); `tie-word-embeddings` reuses the embedding as the output head.
 #![allow(clippy::print_stdout)]
 
 use std::{env, fs, path::PathBuf};
@@ -36,6 +39,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(("embedding-multiplier", value)) => {
                 spec.decoder.embedding_multiplier = value.parse()?;
             },
+            Some(("norm-weight-offset", value)) => {
+                let offset = value.parse()?;
+                spec.decoder.final_norm.weight_offset = offset;
+                for layer in &mut spec.decoder.layers {
+                    layer.input_norm.weight_offset = offset;
+                    layer.post_attention_norm.weight_offset = offset;
+                }
+            },
+            None if arg == "tie-word-embeddings" => spec.decoder.tie_word_embeddings = true,
             _ => return Err(format!("unknown declaration {arg}").into()),
         }
     }

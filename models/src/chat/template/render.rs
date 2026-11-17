@@ -8,7 +8,43 @@ use time::OffsetDateTime;
 use super::config::TemplateTokens;
 use crate::error::Result;
 
+/// Renders the template; one that refuses a system message (Mistral's
+/// `raise_exception` on roles) renders again with the system text leading
+/// the first user message, as llama.cpp's minja polyfills such templates.
 pub(super) fn render_model_template(
+    body: &str,
+    conversation: &Conversation,
+    tokens: &TemplateTokens,
+    controls: super::TemplateControls,
+) -> Result<String> {
+    match render_once(body, conversation, tokens, controls) {
+        Err(error) if conversation.messages.iter().any(|message| message.role == "system") => {
+            render_once(body, &without_system(conversation), tokens, controls).map_err(|_| error)
+        },
+        rendered => rendered,
+    }
+}
+
+fn without_system(conversation: &Conversation) -> Conversation {
+    let mut pending = Vec::new();
+    let mut messages = Vec::with_capacity(conversation.messages.len());
+    for message in &conversation.messages {
+        if message.role == "system" {
+            pending.push(message.content.clone());
+        } else if message.role == "user" && !pending.is_empty() {
+            pending.push(message.content.clone());
+            let mut user = message.clone();
+            user.content = pending.join("\n");
+            pending.clear();
+            messages.push(user);
+        } else {
+            messages.push(message.clone());
+        }
+    }
+    Conversation { messages, ..conversation.clone() }
+}
+
+fn render_once(
     body: &str,
     conversation: &Conversation,
     tokens: &TemplateTokens,

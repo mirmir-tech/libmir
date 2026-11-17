@@ -1,4 +1,5 @@
-//! `RoPE` scaling and sliding-window layers from `<arch>.rope.scaling.*` and
+//! `RoPE` scaling (`YaRN`, linear) and sliding-window layers from
+//! `<arch>.rope.scaling.*` and
 //! `<arch>.attention.sliding_window[_pattern]`.
 
 use serde_json::{Map, Value, json};
@@ -13,6 +14,12 @@ pub(super) fn rope_scaling(
     config: &mut Map<String, Value>,
 ) {
     let key = |name: &str| format!("{architecture}.rope.scaling.{name}");
+    if header.string(&key("type")) == Some("linear") {
+        if let Some(factor) = header.get(&key("factor")).and_then(decimal) {
+            config.insert("rope_scaling".into(), json!({"rope_type": "linear", "factor": factor}));
+        }
+        return;
+    }
     if header.string(&key("type")) != Some("yarn") {
         return;
     }
@@ -39,7 +46,8 @@ pub(super) fn rope_scaling(
 
 /// `layer_types` for a model with a sliding window: llama.cpp's
 /// `set_swa_pattern(n)` makes layer `i` sliding when `i % n < n - 1`, with
-/// `n` from `attention.sliding_window_pattern` (default 2 for gpt-oss).
+/// `n` from `attention.sliding_window_pattern` (default 2 for gpt-oss, 6 for
+/// Gemma 3: `llama-model.cpp` `LLM_ARCH_GEMMA3`, v1.0.0).
 pub(super) fn layer_types(
     header: &GgufHeader,
     architecture: &str,
@@ -52,9 +60,14 @@ pub(super) fn layer_types(
     ) else {
         return;
     };
-    let pattern = header
-        .unsigned(&key("attention.sliding_window_pattern"))
-        .or_else(|| (architecture == "gpt-oss").then_some(2));
+    let pattern =
+        header
+            .unsigned(&key("attention.sliding_window_pattern"))
+            .or(match architecture {
+                "gpt-oss" => Some(2),
+                "gemma3" => Some(6),
+                _ => None,
+            });
     let Some(pattern) = pattern.filter(|&pattern| pattern > 0) else {
         return;
     };

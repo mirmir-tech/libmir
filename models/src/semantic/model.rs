@@ -105,6 +105,18 @@ pub struct DecoderLayerSpec {
 pub struct NormalizationSpec {
     pub kind: NormalizationKind,
     pub epsilon: f64,
+    /// Added to the learned weight before scaling: 1 for norms that scale by
+    /// `1 + weight` (Gemma's), which no configuration declares.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub weight_offset: f64,
+}
+
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde `skip_serializing_if` passes a reference"
+)]
+fn is_zero(value: &f64) -> bool {
+    *value == 0.0
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

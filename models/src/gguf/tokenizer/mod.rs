@@ -7,60 +7,36 @@
 
 use serde_json::{Map, Value, json};
 
-use super::{GgufModel, MetadataValue};
+mod bpe;
+mod spm;
+
+use super::{GgufHeader, GgufModel, MetadataValue};
 use crate::error::{ModelsError, Result};
 
 /// GGUF token types (`gguf-py` `TokenType`).
 const NORMAL: i64 = 1;
+const UNKNOWN: i64 = 2;
 const CONTROL: i64 = 3;
 const USER_DEFINED: i64 = 4;
 const UNUSED: i64 = 5;
 const BYTE: i64 = 6;
 
-/// A byte-level BPE pre-tokenizer as the source model's `tokenizer.json`
-/// declares it.
-struct PreTokenizer {
-    pattern: &'static str,
-    nfc: bool,
-    ignore_merges: bool,
-}
-
-/// `tokenizer.ggml.pre` → the source tokenizer. `qwen2`: Qwen2/Qwen3
-/// `tokenizer.json` (Qwen/Qwen3-8B revision b968826), which llama.cpp v1.0
-/// `llama-vocab.cpp` also attributes to `qwen2`.
-fn pre_tokenizer(name: &str) -> Option<PreTokenizer> {
-    match name {
-        "qwen2" => Some(PreTokenizer {
-            pattern: r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+",
-            nfc: true,
-            ignore_merges: false,
-        }),
-        // o200k: openai/gpt-oss-20b `tokenizer.json` (revision 6cee5e8), the
-        // pattern llama.cpp v1.0.0 lists for `LLAMA_VOCAB_PRE_TYPE_GPT4O`.
-        "gpt-4o" => Some(PreTokenizer {
-            pattern: r"[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+[\p{Ll}\p{Lm}\p{Lo}\p{M}]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n/]*|\s*[\r\n]+|\s+(?!\S)|\s+",
-            nfc: false,
-            ignore_merges: true,
-        }),
-        _ => None,
-    }
-}
-
-/// Builds `tokenizer.json` for byte-level BPE vocabularies (`gpt2`).
+/// Builds `tokenizer.json` for the vocabulary's tokenizer model.
 pub fn tokenizer(model: &GgufModel) -> Result<Value> {
     let header = model.header();
-    let kind = header.string("tokenizer.ggml.model").unwrap_or("");
-    if kind != "gpt2" {
-        return Err(ModelsError::InvalidGguf(format!(
+    match header.string("tokenizer.ggml.model").unwrap_or("") {
+        "gpt2" => bpe::tokenizer(header),
+        "llama" => spm::tokenizer(header),
+        kind => Err(ModelsError::InvalidGguf(format!(
             "tokenizer model `{kind}` is not yet supported"
-        )));
+        ))),
     }
-    let pre_name = header.string("tokenizer.ggml.pre").unwrap_or("");
-    let pre = pre_tokenizer(pre_name).ok_or_else(|| {
-        ModelsError::InvalidGguf(format!("pre-tokenizer `{pre_name}` has no declared pattern"))
-    })?;
+}
+
+/// The vocabulary and added tokens by GGUF token type; `UNKNOWN` joins the
+/// vocabulary and is returned as the unknown token.
+fn vocabulary(header: &GgufHeader) -> Result<Vocabulary<'_>> {
     let tokens = strings(header.get("tokenizer.ggml.tokens"), "tokenizer.ggml.tokens")?;
-    let merges = strings(header.get("tokenizer.ggml.merges"), "tokenizer.ggml.merges")?;
     let types = header
         .get("tokenizer.ggml.token_type")
         .and_then(MetadataValue::as_array)
@@ -70,15 +46,20 @@ pub fn tokenizer(model: &GgufModel) -> Result<Value> {
     }
     let mut vocab = Map::new();
     let mut added = Vec::new();
+    let mut unknown = None;
     for (id, (token, kind)) in tokens.iter().zip(types).enumerate() {
         match kind.as_i64() {
             Some(NORMAL | BYTE) => {
                 vocab.insert((*token).to_owned(), json!(id));
             },
-            Some(kind @ (CONTROL | USER_DEFINED)) => added.push(json!({
-                "id": id, "content": token, "single_word": false, "lstrip": false,
-                "rstrip": false, "normalized": false, "special": kind == CONTROL,
-            })),
+            Some(UNKNOWN) => {
+                vocab.insert((*token).to_owned(), json!(id));
+                unknown = Some(*token);
+                added.push(added_token(id, token, true));
+            },
+            Some(kind @ (CONTROL | USER_DEFINED)) => {
+                added.push(added_token(id, token, kind == CONTROL));
+            },
             Some(UNUSED) => {},
             other => {
                 return Err(ModelsError::InvalidGguf(format!(
@@ -87,29 +68,21 @@ pub fn tokenizer(model: &GgufModel) -> Result<Value> {
             },
         }
     }
-    let byte_level = json!({"type": "ByteLevel", "add_prefix_space": false, "trim_offsets": false, "use_regex": false});
-    Ok(json!({
-        "version": "1.0",
-        "truncation": null,
-        "padding": null,
-        "added_tokens": added,
-        "normalizer": if pre.nfc { json!({"type": "NFC"}) } else { Value::Null },
-        "pre_tokenizer": {"type": "Sequence", "pretokenizers": [
-            {"type": "Split", "pattern": {"Regex": pre.pattern}, "behavior": "Isolated", "invert": false},
-            byte_level,
-        ]},
-        "post_processor": byte_level,
-        "decoder": byte_level,
-        "model": {
-            "type": "BPE", "dropout": null, "unk_token": null, "continuing_subword_prefix": "",
-            "end_of_word_suffix": "", "fuse_unk": false, "byte_fallback": false, "ignore_merges": pre.ignore_merges,
-            "vocab": vocab,
-            "merges": merges.iter().map(|merge| merge.split_once(' ').map_or_else(
-                || json!([merge, ""]),
-                |(left, right)| json!([left, right]),
-            )).collect::<Vec<_>>(),
-        },
-    }))
+    Ok(Vocabulary { tokens, vocab, added, unknown })
+}
+
+struct Vocabulary<'a> {
+    tokens: Vec<&'a str>,
+    vocab: Map<String, Value>,
+    added: Vec<Value>,
+    unknown: Option<&'a str>,
+}
+
+fn added_token(id: usize, token: &str, special: bool) -> Value {
+    json!({
+        "id": id, "content": token, "single_word": false, "lstrip": false,
+        "rstrip": false, "normalized": false, "special": special,
+    })
 }
 
 /// `tokenizer_config.json` with the chat template and special tokens the

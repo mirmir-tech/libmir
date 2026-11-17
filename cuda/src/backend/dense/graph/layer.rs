@@ -3,10 +3,10 @@ use runtime::kv::{BlockTable, KvWritePlan};
 
 use super::{
     arguments::{AttentionArguments, KvArguments},
-    weights::CapturedDenseWeights,
+    weights::{CapturedDenseWeights, DenseSwiGluWeightsOwned},
 };
 use crate::{
-    DecodeDenseSwiGlu, DenseSwiGluWeights, PagedPrefillBatch, PrefillDenseSwiGlu, Result,
+    DecodeDenseSwiGlu, PagedPrefillBatch, PrefillDenseSwiGlu, Result,
     backend::attention::graph::{Configs, Dynamic, Geometry, Kernels, Nodes},
     kernels::{
         MergeAttentionArguments, QkvPostprocessArguments, SplitAttentionArguments,
@@ -19,16 +19,6 @@ pub(in crate::backend) struct PreparedDecodeDense {
     pub input: DeviceBuffer<bf16>,
     pub output: DeviceBuffer<bf16>,
     pub weights: DenseSwiGluWeightsOwned,
-}
-
-pub(in crate::backend) struct DenseSwiGluWeightsOwned(CapturedDenseWeights);
-
-impl TryFrom<DenseSwiGluWeights<'_>> for DenseSwiGluWeightsOwned {
-    type Error = crate::Error;
-
-    fn try_from(weights: DenseSwiGluWeights<'_>) -> Result<Self> {
-        Ok(Self(weights.try_into()?))
-    }
 }
 
 pub(in crate::backend) struct CapturedDenseLayer {
@@ -160,6 +150,9 @@ impl CapturedDenseLayer {
             geometry.pairing_dim,
             dynamic.position,
             geometry.theta,
+            geometry.rope_scaling.factor,
+            geometry.rope_scaling.slope,
+            geometry.rope_scaling.offset,
             geometry.epsilon,
             u32::from(geometry.separate_qkv),
             u32::from(geometry.normalization.query),

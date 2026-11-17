@@ -91,6 +91,7 @@ fn rotary(position: &PositionEncodingSpec, head_dim: usize) -> Result<Option<Rot
         dimensions,
         pairing: dimensions,
         theta: narrow("RoPE theta", *theta)?,
+        scaling: crate::kernels::RotaryScaling::NONE,
     }))
 }
 

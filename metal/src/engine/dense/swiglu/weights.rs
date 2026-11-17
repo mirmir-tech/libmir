@@ -88,6 +88,9 @@ fn rope_frequencies(config: DenseSwiGluLayerConfig, stream: &Stream) -> Result<O
     config
         .rope_scaling
         .map(|scaling| match scaling {
+            models::layout::RopeScaling::Linear { .. } => Err(crate::engine::Error::InvalidModel(
+                "Metal dense attention has no linear RoPE scaling yet".into(),
+            )),
             models::layout::RopeScaling::PiecewiseFrequency {
                 factor,
                 low_frequency_factor,

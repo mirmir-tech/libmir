@@ -30,6 +30,7 @@ pub enum ArchitectureCapability {
     RotaryPositionEncoding,
     MultiSectionRotary,
     InterleavedMultiSectionRotary,
+    LinearRopeScaling,
     PiecewiseRopeScaling,
     YarnRopeScaling,
     DenseFeedForward,
@@ -174,6 +175,9 @@ fn position(position: &PositionEncodingSpec, capabilities: &mut BTreeSet<Archite
         },
     }
     match rotary.scaling {
+        Some(RopeScalingSpec::Linear { .. }) => {
+            capabilities.insert(ArchitectureCapability::LinearRopeScaling);
+        },
         Some(RopeScalingSpec::PiecewiseFrequency { .. }) => {
             capabilities.insert(ArchitectureCapability::PiecewiseRopeScaling);
         },

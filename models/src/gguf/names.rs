@@ -10,7 +10,7 @@ const GLOBAL: [(&str, &str); 3] = [
 ];
 
 /// Per-block tensors: `blk.N.<role>` → `model.layers.N.<name>`.
-const BLOCK: [(&str, &str); 17] = [
+const BLOCK: [(&str, &str); 18] = [
     ("attn_norm", "input_layernorm"),
     ("attn_q", "self_attn.q_proj"),
     ("attn_k", "self_attn.k_proj"),
@@ -24,11 +24,16 @@ const BLOCK: [(&str, &str); 17] = [
     ("ffn_down", "mlp.down_proj"),
     ("ffn_gate_inp", "mlp.gate"),
     ("post_attention_norm", "post_attention_layernorm"),
+    ("post_ffw_norm", "post_feedforward_layernorm"),
     ("ffn_gate_exps", "mlp.experts.gate_proj"),
     ("ffn_up_exps", "mlp.experts.up_proj"),
     ("ffn_down_exps", "mlp.experts.down_proj"),
     ("ffn_gate_up_exps", "mlp.experts.gate_up_proj"),
 ];
+
+/// In a block with both output norms (Gemma's sandwich), `ffn_norm` is the
+/// norm before the feed-forward rather than after attention.
+pub const SANDWICH_FEED_FORWARD_NORM: (&str, &str) = ("ffn_norm", "pre_feedforward_layernorm");
 
 /// Roles whose `SafeTensors` name carries no `.weight` suffix.
 const BARE: [(&str, &str); 1] = [("attn_sinks.weight", "self_attn.sinks")];

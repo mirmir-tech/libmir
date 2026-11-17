@@ -15,6 +15,11 @@ pub(super) use value::{
 };
 use value::{partial_rotary_factor, rope_theta};
 
+/// The `config.json` key GGUF imports write for Llama-family files, and its
+/// one value; Hugging Face checkpoints never carry it.
+pub const QUERY_KEY_ROWS: &str = "mir_query_key_rows";
+pub const QUERY_KEY_ROWS_INTERLEAVED: &str = "rope_interleaved";
+
 impl DecoderConfig {
     pub fn from_layout(layout: &ModelLayout) -> Result<Self> {
         let mut config = Self::from_config_path(&layout.config_path)?;
@@ -55,12 +60,7 @@ impl DecoderConfig {
             None => attention::layer_types(decoder, num_hidden_layers)?,
         };
         let partial_rotary_factor = partial_rotary_factor(decoder)?;
-        let explicit_head_dim =
-            optional_usize(decoder, &["head_dim", "attention_head_dim", "kv_channels"])?;
-        if explicit_head_dim.is_none() && !hidden_size.is_multiple_of(num_attention_heads) {
-            return Err(invalid("hidden_size must be divisible by num_attention_heads"));
-        }
-        let head_dim = explicit_head_dim.unwrap_or(hidden_size / num_attention_heads);
+        let head_dim = head_dim(decoder, hidden_size, num_attention_heads)?;
         let config = Self {
             hidden_size,
             intermediate_size: intermediate_size(decoder)?,
@@ -75,22 +75,18 @@ impl DecoderConfig {
             global_head_dim: optional_usize(decoder, &["global_head_dim"])?,
             num_global_key_value_heads: optional_usize(decoder, &["num_global_key_value_heads"])?,
             vocab_size: require_usize(decoder, &["vocab_size"])?,
-            max_position_embeddings: optional_usize(
-                decoder,
-                &["max_position_embeddings", "max_sequence_length", "seq_length", "n_positions"],
-            )?
-            .unwrap_or(4096),
-            rms_norm_eps: optional_f64(
-                decoder,
-                &["rms_norm_eps", "layer_norm_epsilon", "layernorm_epsilon", "norm_epsilon"],
-            )?
-            .unwrap_or(1e-5),
+            max_position_embeddings: max_position_embeddings(decoder)?,
+            rms_norm_eps: rms_norm_eps(decoder)?,
             rope_theta: rope_theta(decoder)?,
             rope_scaling: rope::scaling(decoder)?,
             partial_rotary_factor,
             rope_layout: features::rope_layout(decoder)?,
             full_attention_rope_theta: attention::rope_theta(decoder, "full_attention"),
-            sliding_attention_rope_theta: attention::rope_theta(decoder, "sliding_attention"),
+            // Gemma 3 names its sliding layers' base `rope_local_base_freq`,
+            // and they are unscaled (`Gemma3TextModel.rotary_emb_local`).
+            sliding_attention_rope_theta: attention::rope_theta(decoder, "sliding_attention")
+                .or(optional_f64(decoder, &["rope_local_base_freq"])?),
+            sliding_attention_rope_unscaled: decoder.get("rope_local_base_freq").is_some(),
             full_attention_rope_type: attention::rope_type(decoder, "full_attention")?,
             sliding_attention_rope_type: attention::rope_type(decoder, "sliding_attention")?,
             full_attention_partial_rotary_factor: attention::partial_rotary_factor(
@@ -133,6 +129,7 @@ impl DecoderConfig {
             attention_bias: optional_bool(decoder, "attention_bias")?.unwrap_or(false),
             attention_sinks: optional_bool(decoder, "attention_sinks")?.unwrap_or(false),
             swiglu_limit: optional_f64(decoder, &["swiglu_limit"])?,
+            query_key_rows_interleaved: query_key_rows_interleaved(decoder)?,
             initial_context_length: optional_usize(decoder, &["initial_context_length"])?,
             state_space,
         };
@@ -208,5 +205,38 @@ fn decoder_value(value: &Value) -> &Value {
 }
 
 fn attention_scale(decoder: &Value) -> Result<Option<f64>> {
-    optional_f64(decoder, &["attention_scale", "attention_multiplier"])
+    // Gemma: scores scale by `query_pre_attn_scalar ** -0.5`.
+    Ok(
+        optional_f64(decoder, &["attention_scale", "attention_multiplier"])?.or(optional_f64(
+            decoder,
+            &["query_pre_attn_scalar"],
+        )?
+        .map(|scalar| scalar.powf(-0.5))),
+    )
+}
+
+fn query_key_rows_interleaved(decoder: &Value) -> Result<bool> {
+    match optional_string(decoder, QUERY_KEY_ROWS)?.as_deref() {
+        None => Ok(false),
+        Some(QUERY_KEY_ROWS_INTERLEAVED) => Ok(true),
+        Some(other) => Err(invalid(format!("unknown {QUERY_KEY_ROWS} `{other}`"))),
+    }
+}
+
+fn head_dim(decoder: &Value, hidden_size: usize, heads: usize) -> Result<usize> {
+    let explicit = optional_usize(decoder, &["head_dim", "attention_head_dim", "kv_channels"])?;
+    if explicit.is_none() && !hidden_size.is_multiple_of(heads) {
+        return Err(invalid("hidden_size must be divisible by num_attention_heads"));
+    }
+    Ok(explicit.unwrap_or(hidden_size / heads))
+}
+
+fn max_position_embeddings(decoder: &Value) -> Result<usize> {
+    let names = ["max_position_embeddings", "max_sequence_length", "seq_length", "n_positions"];
+    Ok(optional_usize(decoder, &names)?.unwrap_or(4096))
+}
+
+fn rms_norm_eps(decoder: &Value) -> Result<f64> {
+    let names = ["rms_norm_eps", "layer_norm_epsilon", "layernorm_epsilon", "norm_epsilon"];
+    Ok(optional_f64(decoder, &names)?.unwrap_or(1e-5))
 }

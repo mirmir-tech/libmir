@@ -8,8 +8,9 @@ mod vision;
 pub use decoder::{
     AttentionLayerType, AttentionOutput, DecoderConfig, HybridBlockKind, HybridBlockPattern,
     HybridLayer, HybridLayerBlock, LatentRoutedConfig, LinearAttentionConfig, Mamba2Config,
-    PredictionModules, RopeScaling, RotaryEmbeddingLayout, StateSpaceHybridConfig,
-    StateSpaceStateDType, TimeStepBound, TimeStepLimit,
+    PredictionModules, QUERY_KEY_ROWS, QUERY_KEY_ROWS_INTERLEAVED, RopeScaling,
+    RotaryEmbeddingLayout, StateSpaceHybridConfig, StateSpaceStateDType, TimeStepBound,
+    TimeStepLimit,
 };
 pub use encoder::{EncoderConfig, EncoderPositionEmbedding, EncoderRopeScaling, NormKind};
 pub use files::{ModelLayout, WeightFile};

@@ -138,6 +138,7 @@ fn attention_config(
             dimensions: rotary_dim,
             pairing: pairing_dim(decoder, layer, head_dim, rotary_dim)?,
             theta: to_f32("RoPE theta", rope_theta)?,
+            scaling: super::rotary::scaling(spec)?,
         }),
         rms_norm_epsilon: to_f32("RMS norm epsilon", decoder.rms_norm_eps)?,
         attention_scale: to_f32("attention scale", spec.scale)?,
@@ -213,7 +214,7 @@ fn to_f64(value: usize) -> Result<f64> {
     Ok(f64::from(value))
 }
 
-fn to_f32(label: &str, value: f64) -> Result<f32> {
+pub(super) fn to_f32(label: &str, value: f64) -> Result<f32> {
     if !value.is_finite() || value < f64::from(f32::MIN) || value > f64::from(f32::MAX) {
         return Err(unsupported(format!("{label} is outside finite f32 range")));
     }
@@ -222,6 +223,6 @@ fn to_f32(label: &str, value: f64) -> Result<f32> {
     Ok(value)
 }
 
-fn unsupported(message: impl Into<String>) -> Error {
+pub(super) fn unsupported(message: impl Into<String>) -> Error {
     Error::UnsupportedDecoderLayer(message.into())
 }

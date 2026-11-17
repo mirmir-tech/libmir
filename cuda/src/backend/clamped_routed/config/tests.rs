@@ -36,6 +36,7 @@ fn spec(
     let norm = NormalizationSpec {
         kind: NormalizationKind::Rms,
         epsilon: 1.0e-5,
+        weight_offset: 0.0,
     };
     SemanticModelSpec {
         schema_version: 1,

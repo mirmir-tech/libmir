@@ -70,6 +70,7 @@ fn config() -> DenseSwiGluConfig {
                 dimensions: 32,
                 pairing: 32,
                 theta: 10_000.0,
+                scaling: crate::kernels::RotaryScaling::NONE,
             }),
             rms_norm_epsilon: 1.0e-6,
             attention_scale: 32.0_f32.sqrt().recip(),

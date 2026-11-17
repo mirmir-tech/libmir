@@ -52,12 +52,13 @@ impl<'a> DenseLayerFeedForwardBindings<'a> {
 }
 
 /// Gemma-style norms on each sub-block's output before its residual add, and
-/// a learned scalar on the layer output.
+/// a learned scalar on the layer output when the checkpoint has one (Gemma
+/// 4; Gemma 3 has none).
 #[derive(Debug, Clone, Copy)]
 pub struct DenseSandwichBindings<'a> {
     pub attention_output_norm: &'a TensorBinding,
     pub feed_forward_output_norm: &'a TensorBinding,
-    pub layer_scale: &'a TensorBinding,
+    pub layer_scale: Option<&'a TensorBinding>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -81,7 +82,7 @@ impl WeightBindingPlan {
                 Ok::<_, ModelsError>(DenseSandwichBindings {
                     attention_output_norm: layer(self, index, LayerTensorRole::PostAttentionNorm)?,
                     feed_forward_output_norm,
-                    layer_scale: layer(self, index, LayerTensorRole::LayerScale)?,
+                    layer_scale: optional(self, index, LayerTensorRole::LayerScale),
                 })
             })
             .transpose()?;
@@ -140,13 +141,10 @@ impl<'a> DenseDecoderLayerBindings<'a> {
             self.post_attention_norm,
         ];
         bindings.extend(self.feed_forward.bindings());
-        bindings.extend(self.sandwich.into_iter().flat_map(|sandwich| {
-            [
-                sandwich.attention_output_norm,
-                sandwich.feed_forward_output_norm,
-                sandwich.layer_scale,
-            ]
-        }));
+        if let Some(sandwich) = self.sandwich {
+            bindings.extend([sandwich.attention_output_norm, sandwich.feed_forward_output_norm]);
+            bindings.extend(sandwich.layer_scale);
+        }
         bindings.extend(self.attention.query_norm);
         bindings.extend(self.attention.key_norm);
         bindings.into_iter().flat_map(TensorBinding::physical_sources).collect()

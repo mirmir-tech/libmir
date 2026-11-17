@@ -13,7 +13,7 @@ mod rotary;
 mod tests;
 
 pub use batch::BatchedQkvPostprocess;
-pub use rotary::RotaryEmbedding;
+pub use rotary::{RotaryEmbedding, RotaryScaling};
 
 cuda_export!(
     pub QkvPostprocessKernel = "libmir_cuda_qkv_postprocess_bf16"(
@@ -34,6 +34,9 @@ cuda_export!(
         pairing_dim: u32,
         start_position: u32,
         theta: f32,
+        rope_factor: f32,
+        rope_slope: f32,
+        rope_offset: f32,
         epsilon: f32,
         separate_inputs: u32,
         normalize_query: u32,
@@ -59,6 +62,9 @@ pub type QkvPostprocessArguments<'a> = (
     u32,
     u32,
     u32,
+    f32,
+    f32,
+    f32,
     f32,
     f32,
     u32,

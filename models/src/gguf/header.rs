@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, fs::File, io::Read, path::Path};
 
 use super::{
     GgmlType, GgufTensor, MAGIC, MetadataValue,
-    names::safetensors_name,
+    names::{SANDWICH_FEED_FORWARD_NORM, safetensors_name},
     reader::{ParseError, Parsed, Reader, invalid},
     type_bytes, value,
 };
@@ -118,8 +118,19 @@ impl GgufHeader {
     /// tensors without a mapped role keep their GGUF name.
     pub fn mapped_catalog(&self, file: &Path) -> Result<TensorCatalog> {
         let mut catalog = self.catalog(file)?;
+        let sandwich = |name: &str| {
+            let block = name.strip_suffix(".ffn_norm.weight")?;
+            self.tensors
+                .iter()
+                .any(|tensor| tensor.name == format!("{block}.post_ffw_norm.weight"))
+                .then(|| {
+                    let layer = block.strip_prefix("blk.")?;
+                    Some(format!("model.layers.{layer}.{}.weight", SANDWICH_FEED_FORWARD_NORM.1))
+                })
+                .flatten()
+        };
         for tensor in &mut catalog.tensors {
-            if let Some(name) = safetensors_name(&tensor.name) {
+            if let Some(name) = sandwich(&tensor.name).or_else(|| safetensors_name(&tensor.name)) {
                 tensor.name = name;
             }
         }

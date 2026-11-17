@@ -7,6 +7,7 @@ mod state_space;
 
 pub use attention::AttentionLayerType;
 pub use features::{AttentionOutput, LinearAttentionConfig, RotaryEmbeddingLayout};
+pub use parse::{QUERY_KEY_ROWS, QUERY_KEY_ROWS_INTERLEAVED};
 pub use rope::RopeScaling;
 pub use state_space::{
     HybridBlockKind, HybridBlockPattern, HybridLayer, HybridLayerBlock, LatentRoutedConfig,
@@ -34,6 +35,8 @@ pub struct DecoderConfig {
     pub rope_layout: RotaryEmbeddingLayout,
     pub full_attention_rope_theta: Option<f64>,
     pub sliding_attention_rope_theta: Option<f64>,
+    /// Sliding layers rotate without `rope_scaling` (Gemma 3).
+    pub sliding_attention_rope_unscaled: bool,
     pub full_attention_rope_type: Option<String>,
     pub sliding_attention_rope_type: Option<String>,
     pub full_attention_partial_rotary_factor: Option<f64>,
@@ -58,6 +61,10 @@ pub struct DecoderConfig {
     pub attention_bias: bool,
     pub attention_sinks: bool,
     pub swiglu_limit: Option<f64>,
+    /// Query and key projection rows interleave each head's rotary halves
+    /// pairwise, as llama.cpp's converter writes Llama-family GGUF files;
+    /// loaders restore the `rotate_half` order.
+    pub query_key_rows_interleaved: bool,
     pub initial_context_length: Option<usize>,
     pub state_space: Option<StateSpaceHybridConfig>,
 }

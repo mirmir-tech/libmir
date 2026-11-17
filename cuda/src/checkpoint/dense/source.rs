@@ -87,9 +87,10 @@ fn layer_bindings(bindings: DenseDecoderLayerBindings<'_>) -> Vec<&TensorBinding
     values.extend(gated(bindings));
     values.extend(bindings.attention.query_norm);
     values.extend(bindings.attention.key_norm);
-    values.extend(bindings.sandwich.into_iter().flat_map(|sandwich| {
-        [sandwich.attention_output_norm, sandwich.feed_forward_output_norm, sandwich.layer_scale]
-    }));
+    if let Some(sandwich) = bindings.sandwich {
+        values.extend([sandwich.attention_output_norm, sandwich.feed_forward_output_norm]);
+        values.extend(sandwich.layer_scale);
+    }
     values
 }
 

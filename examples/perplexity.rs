@@ -5,8 +5,10 @@
 //! is replayed token by token through decode, so each position sees exactly
 //! the tokens before it.
 //!
-//! Usage: `perplexity <model> <text> [chunks=N] [context=N] [prefill=N]`,
-//! where `prefill` sets the CUDA prefill chunk in tokens.
+//! Usage: `perplexity <model> <text> [chunks=N] [context=N] [prefill=N]
+//! [bos=ID]`, where `prefill` sets the CUDA prefill chunk in tokens and `bos`
+//! starts the text and replaces each chunk's first token, as
+//! `llama-perplexity` does for models whose vocabulary adds a BOS token.
 #![allow(clippy::print_stdout)]
 
 use std::{env, fs, io::Write, path::PathBuf};
@@ -20,11 +22,14 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let text = args.next().map(PathBuf::from).ok_or("missing text path")?;
     let mut chunks = usize::MAX;
     let mut context = 512_usize;
+    let mut bos = None;
     #[allow(unused_mut)]
     let mut config = RuntimeConfig::default();
     for option in args.filter_map(|option| option.into_string().ok()) {
         if let Some(value) = option.strip_prefix("chunks=") {
             chunks = value.parse()?;
+        } else if let Some(value) = option.strip_prefix("bos=") {
+            bos = Some(value.parse::<u32>()?);
         } else if let Some(value) = option.strip_prefix("context=") {
             context = value.parse()?;
         } else if let Some(value) = option.strip_prefix("prefill=") {
@@ -39,7 +44,11 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     }
     let tokenizer = Tokenizer::from_file(model_path.join("tokenizer.json"))?;
-    let tokens = tokenizer.encode(fs::read_to_string(text)?, false)?.get_ids().to_vec();
+    let mut tokens = tokenizer.encode(fs::read_to_string(text)?, false)?.get_ids().to_vec();
+    // `llama-perplexity` tokenizes with the BOS token in front of the text.
+    if let Some(bos) = bos {
+        tokens.insert(0, bos);
+    }
     let chunks = chunks.min(tokens.len() / context);
     let first = context / 2;
     let library = Library::new(config);
@@ -47,6 +56,11 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (mut total, mut count) = (0.0_f64, 0_u32);
     let mut stdout = std::io::stdout().lock();
     for chunk in tokens.chunks_exact(context).take(chunks) {
+        let mut chunk = chunk.to_vec();
+        if let (Some(bos), Some(first)) = (bos, chunk.first_mut()) {
+            *first = bos;
+        }
+        let chunk = chunk.as_slice();
         let mut session = model.session();
         let output = session.prefill(&chunk[..=first], SamplingLogits::Full, &mut |_| {})?;
         let mut logits = output.logits.ok_or("prefill returned no logits")?.values;

@@ -34,11 +34,23 @@ __device__ float libmir_qkv_normalized(
   return __bfloat162float(__float2bfloat16_rn(value * inverse_rms * scale));
 }
 
+// Each pair's rotary frequency with long-context scaling: `smooth` blends
+// from the full `factor` (0) to none (1) linearly in the frequency, which
+// covers no scaling (factor 1), linear scaling (slope and offset 0) and
+// Llama 3's piecewise scaling.
+__device__ __forceinline__ float libmir_rope_frequency(
+    unsigned int pair, unsigned int pairing_dim, float theta, float factor, float slope,
+    float offset) {
+  const float frequency = powf(theta, -2.0f * pair / pairing_dim);
+  const float smooth = fminf(fmaxf(fmaf(slope, frequency, -offset), 0.0f), 1.0f);
+  return frequency * ((1.0f - smooth) / factor + smooth);
+}
+
 __device__ void libmir_qkv_transform(
     const __nv_bfloat16* input, const __nv_bfloat16* weight,
     __nv_bfloat16* output, unsigned int head_dim, unsigned int rotary_dim,
-    unsigned int pairing_dim, unsigned int position, float theta,
-    float inverse_rms, unsigned int normalize) {
+    unsigned int pairing_dim, unsigned int position, float theta, float factor,
+    float slope, float offset, float inverse_rms, unsigned int normalize) {
   const unsigned int half = pairing_dim / 2u;
   const unsigned int rotary_pairs = rotary_dim / 2u;
   for (unsigned int pair = threadIdx.x; pair < half; pair += blockDim.x) {
@@ -51,7 +63,8 @@ __device__ void libmir_qkv_transform(
       output[pair + half] = __float2bfloat16_rn(second);
       continue;
     }
-    const float frequency = powf(theta, -2.0f * pair / pairing_dim);
+    const float frequency =
+        libmir_rope_frequency(pair, pairing_dim, theta, factor, slope, offset);
     float sine;
     float cosine;
     sincosf(position * frequency, &sine, &cosine);
@@ -76,7 +89,8 @@ extern "C" __global__ void libmir_cuda_qkv_postprocess_bf16(
     unsigned int tokens, unsigned int query_heads, unsigned int kv_heads,
     unsigned int head_dim, unsigned int value_head_dim,
     unsigned int rotary_dim, unsigned int pairing_dim,
-    unsigned int start_position, float theta, float epsilon,
+    unsigned int start_position, float theta, float rope_factor, float rope_slope,
+    float rope_offset, float epsilon,
     unsigned int separate_inputs, unsigned int normalize_query, unsigned int normalize_key,
     unsigned int normalize_value) {
   const unsigned int heads_per_token = query_heads + 2u * kv_heads;
@@ -121,7 +135,8 @@ extern "C" __global__ void libmir_cuda_qkv_postprocess_bf16(
       ? libmir_qkv_inverse_rms(input, head_dim, epsilon) : 1.0f;
   libmir_qkv_transform(
       input, weight, output, head_dim, rotary_dim, pairing_dim,
-      start_position + token, theta, inverse_rms, normalize);
+      start_position + token, theta, rope_factor, rope_slope, rope_offset, inverse_rms,
+      normalize);
 }
 
 extern "C" __global__ void libmir_cuda_qkv_postprocess_batch_bf16(
@@ -133,8 +148,8 @@ extern "C" __global__ void libmir_cuda_qkv_postprocess_batch_bf16(
     unsigned int query_heads, unsigned int kv_heads,
     unsigned int head_dim, unsigned int value_head_dim,
     unsigned int rotary_dim, unsigned int pairing_dim,
-    float theta, float epsilon, unsigned int separate_inputs,
-    unsigned int normalize_query,
+    float theta, float rope_factor, float rope_slope, float rope_offset, float epsilon,
+    unsigned int separate_inputs, unsigned int normalize_query,
     unsigned int normalize_key, unsigned int normalize_value) {
   const unsigned int heads_per_token = query_heads + 2u * kv_heads;
   const unsigned int logical_row = blockIdx.x;
@@ -179,5 +194,5 @@ extern "C" __global__ void libmir_cuda_qkv_postprocess_batch_bf16(
   const unsigned int position = positions[token];
   libmir_qkv_transform(
       input, weight, output, head_dim, rotary_dim, pairing_dim, position,
-      theta, inverse_rms, normalize);
+      theta, rope_factor, rope_slope, rope_offset, inverse_rms, normalize);
 }

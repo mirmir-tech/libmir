@@ -40,11 +40,16 @@ impl CudaBackend {
         load: DenseSwiGluLayerLoadConfig,
         progress: &mut dyn FnMut(u64, String),
     ) -> Result<CudaMoeModelTemplate> {
-        let source = ModelSource::discover(decoder, bindings, catalog)?;
+        let source =
+            ModelSource::discover(semantic.decoder.tie_word_embeddings, bindings, catalog)?;
         let tensors = source.upload(self)?;
         let mut completed = source.payload_bytes()?;
         progress(completed, "model boundary tensors".into());
         let embedding = ProjectionWeight::load_binding_prepared(self, &tensors, source.embedding)?;
+        let offset = semantic.decoder.final_norm.weight_offset;
+        if offset != 0.0 {
+            tensors.add_bf16(source.final_norm, offset)?;
+        }
         let final_norm = tensor(&tensors, source.final_norm)?.clone();
         let output = ProjectionWeight::load_binding_prepared(self, &tensors, source.output)?;
         let mut layers = Vec::with_capacity(decoder.num_hidden_layers);
@@ -92,11 +97,11 @@ pub(super) struct ModelSource<'a> {
 
 impl<'a> ModelSource<'a> {
     pub(super) fn discover(
-        decoder: &DecoderConfig,
+        tied: bool,
         bindings: &'a WeightBindingPlan,
         catalog: &'a TensorCatalog,
     ) -> Result<Self> {
-        let boundary = bindings.decoder_boundary_with_tied_output(decoder.tie_word_embeddings)?;
+        let boundary = bindings.decoder_boundary_with_tied_output(tied)?;
         let final_norm = required(catalog, &boundary.final_norm.source)?;
         let mut seen = std::collections::HashSet::new();
         let mut tensors = Vec::new();

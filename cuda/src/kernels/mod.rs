@@ -38,6 +38,7 @@ mod projection_pack;
 mod qkv;
 mod qmm;
 mod rms_norm_shift;
+mod rope_rows;
 mod router;
 mod row;
 mod sampling;
@@ -136,13 +137,14 @@ pub use paged::{
     PagedKvStore, PagedPrefillAttention, SplitAttentionWorkspace, SplitPagedAttention,
 };
 pub use projection_pack::ProjectionPackSplit;
-pub use qkv::RotaryEmbedding;
 pub(crate) use qkv::{
     BatchedQkvPostprocess, QkvNormalization, QkvPostprocess, QkvPostprocessArguments,
     QkvPostprocessKernel, QkvPostprocessSpec,
 };
+pub use qkv::{RotaryEmbedding, RotaryScaling};
 pub use qmm::{AffineQmmLaunch, AffineQmmSpec, AffineQuantizedQmm};
 pub use rms_norm_shift::ShiftedRmsNorm;
+pub use rope_rows::RopeRows;
 pub(crate) use router::{RoutePattern, RoutePatternGenerator, RoutePatternSpec};
 pub use router::{RouterSpec, RouterTopK, RouterUnitSpec, RouterUnitTopK};
 pub use row::{CopyRowsBf16, GatherRowsBf16, SelectRowBf16};

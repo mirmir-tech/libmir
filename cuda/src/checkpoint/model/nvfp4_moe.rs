@@ -43,7 +43,8 @@ impl CudaBackend {
         load: NvFp4MoeLayerLoadConfig,
         progress: &mut dyn FnMut(u64, String),
     ) -> Result<CudaMoeModelTemplate> {
-        let source = ModelSource::discover(decoder, bindings, catalog)?;
+        let source =
+            ModelSource::discover(semantic.decoder.tie_word_embeddings, bindings, catalog)?;
         let tensors = source.upload(self)?;
         let mut completed = source.payload_bytes()?;
         progress(completed, "model boundary tensors".into());

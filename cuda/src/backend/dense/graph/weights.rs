@@ -224,3 +224,14 @@ impl CapturedDown {
         }
     }
 }
+
+/// Captured weights of one layer, owned by its prepared decode graph.
+pub(in crate::backend) struct DenseSwiGluWeightsOwned(pub(super) CapturedDenseWeights);
+
+impl TryFrom<DenseSwiGluWeights<'_>> for DenseSwiGluWeightsOwned {
+    type Error = crate::Error;
+
+    fn try_from(weights: DenseSwiGluWeights<'_>) -> Result<Self> {
+        Ok(Self(weights.try_into()?))
+    }
+}

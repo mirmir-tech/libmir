@@ -9,6 +9,7 @@ const ROTARY: RotaryEmbedding = RotaryEmbedding {
     dimensions: 6,
     pairing: 8,
     theta: 10_000.0,
+    scaling: RotaryScaling::NONE,
 };
 
 #[test]

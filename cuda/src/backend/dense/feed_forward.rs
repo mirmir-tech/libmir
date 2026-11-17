@@ -110,6 +110,14 @@ impl DenseFeedForward {
             sandwich.feed_forward_output_norm,
             &mut scratch.normalized,
         )?;
+        let Some(layer_scalar) = sandwich.layer_scalar else {
+            return self.hidden_ops.add(
+                &self.stream,
+                &scratch.residual,
+                &scratch.normalized,
+                output,
+            );
+        };
         self.hidden_ops.add(
             &self.stream,
             &scratch.residual,
@@ -119,7 +127,7 @@ impl DenseFeedForward {
         self.hidden_ops.multiply_scalar(
             &self.stream,
             &scratch.attention,
-            scalar(sandwich.layer_scalar)?,
+            scalar(layer_scalar)?,
             output,
         )
     }

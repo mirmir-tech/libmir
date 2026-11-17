@@ -23,6 +23,7 @@ pub(super) fn compile(
     let norm = NormalizationSpec {
         kind: NormalizationKind::Rms,
         epsilon: decoder.rms_norm_eps,
+        weight_offset: 0.0,
     };
     if let Some(hybrid) = &decoder.state_space {
         return state_space::compile(decoder, hybrid, norm);
@@ -114,12 +115,19 @@ fn rotary(decoder: &DecoderConfig, index: usize) -> PositionEncodingSpec {
             },
         },
         algorithm: decoder.rope_type_for_layer(index).map(str::to_owned),
-        scaling: decoder.rope_scaling.map(rope_scaling),
+        scaling: if decoder.sliding_attention_rope_unscaled
+            && decoder.layer_type(index) == AttentionLayerType::Sliding
+        {
+            None
+        } else {
+            decoder.rope_scaling.map(rope_scaling)
+        },
     })
 }
 
 fn rope_scaling(scaling: RopeScaling) -> RopeScalingSpec {
     match scaling {
+        RopeScaling::Linear { factor } => RopeScalingSpec::Linear { factor },
         RopeScaling::PiecewiseFrequency {
             factor,
             low_frequency_factor,

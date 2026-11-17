@@ -102,6 +102,7 @@ pub(in crate::backend) struct Geometry {
     pub(in crate::backend) scale: f32,
     pub(in crate::backend) split_threshold: u32,
     pub(in crate::backend) theta: f32,
+    pub(in crate::backend) rope_scaling: crate::kernels::RotaryScaling,
     pub(in crate::backend) epsilon: f32,
     pub(in crate::backend) normalization: crate::kernels::QkvNormalization,
     pub(in crate::backend) separate_qkv: bool,

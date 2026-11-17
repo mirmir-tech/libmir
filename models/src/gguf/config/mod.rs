@@ -9,6 +9,7 @@ use serde_json::{Map, Value, json};
 
 mod attention;
 mod defaults;
+mod llama3;
 
 use super::{GgufModel, MetadataValue};
 use crate::error::{ModelsError, Result};
@@ -60,7 +61,11 @@ pub fn config(model: &GgufModel) -> Result<Value> {
         )));
     }
     let rotary = header.unsigned(&key("rope.dimension_count"));
-    if rotary.is_some() && rotary != header.unsigned(&key("attention.key_length")) {
+    let head_dim = header.unsigned(&key("attention.key_length")).or_else(|| {
+        let heads = header.unsigned(&key("attention.head_count")).filter(|&heads| heads > 0)?;
+        Some(header.unsigned(&key("embedding_length"))? / heads)
+    });
+    if rotary.is_some() && rotary != head_dim {
         return Err(ModelsError::InvalidGguf(format!(
             "{architecture}: rope.dimension_count covers part of each head; not yet supported"
         )));
@@ -81,6 +86,7 @@ pub fn config(model: &GgufModel) -> Result<Value> {
         config.insert("hidden_act".into(), json!(activation));
     }
     defaults::fixed(architecture, &mut config);
+    llama3::rope_scaling(model, &mut config)?;
     attention::rope_scaling(header, architecture, &mut config);
     attention::layer_types(header, architecture, &mut config);
     let bias = model.tensors().any(|tensor| tensor.name.ends_with(".attn_q.bias"));
@@ -94,19 +100,23 @@ pub fn config(model: &GgufModel) -> Result<Value> {
     Ok(Value::Object(config))
 }
 
-/// `generation_config.json` from the special token ids the metadata declares.
+/// `generation_config.json` from the special token ids the metadata declares;
+/// an end-of-turn token distinct from EOS also ends generation (Gemma's
+/// `<end_of_turn>`, as its Hugging Face `generation_config.json` lists).
 #[must_use]
 pub fn generation_config(model: &GgufModel) -> Value {
     let header = model.header();
     let mut config = Map::new();
-    for (name, field) in [
-        ("tokenizer.ggml.bos_token_id", "bos_token_id"),
-        ("tokenizer.ggml.eos_token_id", "eos_token_id"),
-    ] {
-        if let Some(id) = header.unsigned(name) {
-            config.insert(field.into(), json!(id));
-        }
+    if let Some(id) = header.unsigned("tokenizer.ggml.bos_token_id") {
+        config.insert("bos_token_id".into(), json!(id));
     }
+    let eos = header.unsigned("tokenizer.ggml.eos_token_id");
+    let eot = header.unsigned("tokenizer.ggml.eot_token_id").filter(|&eot| Some(eot) != eos);
+    match (eos, eot) {
+        (Some(eos), Some(eot)) => config.insert("eos_token_id".into(), json!([eos, eot])),
+        (Some(id), None) | (None, Some(id)) => config.insert("eos_token_id".into(), json!(id)),
+        (None, None) => None,
+    };
     Value::Object(config)
 }
 

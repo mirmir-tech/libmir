@@ -5,6 +5,8 @@ use crate::error::Result;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RopeScaling {
+    /// Every frequency divided by `factor` (`rope_type = linear`).
+    Linear { factor: f64 },
     PiecewiseFrequency {
         factor: f64,
         low_frequency_factor: f64,
@@ -31,7 +33,7 @@ impl RopeScaling {
                 high_frequency_factor,
                 original_context_len,
             } => Some((factor, low_frequency_factor, high_frequency_factor, original_context_len)),
-            Self::Yarn { .. } => None,
+            Self::Linear { .. } | Self::Yarn { .. } => None,
         }
     }
 
@@ -53,7 +55,7 @@ impl RopeScaling {
                 attention_factor,
                 truncate,
             )),
-            Self::PiecewiseFrequency { .. } => None,
+            Self::Linear { .. } | Self::PiecewiseFrequency { .. } => None,
         }
     }
 }
@@ -68,6 +70,13 @@ pub(super) fn scaling(config: &Value) -> Result<Option<RopeScaling>> {
     let rope_type = string(value, "rope_type")?;
     if rope_type == "yarn" {
         return yarn(value).map(Some);
+    }
+    if rope_type == "linear" {
+        let factor = number(value, "factor")?;
+        if !factor.is_finite() || factor <= 0.0 {
+            return Err(invalid("invalid linear rope_scaling factor"));
+        }
+        return Ok(Some(RopeScaling::Linear { factor }));
     }
     if rope_type != "llama3" {
         return Err(invalid(format!("unsupported rope_scaling type {rope_type}")));
