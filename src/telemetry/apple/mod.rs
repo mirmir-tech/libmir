@@ -1,7 +1,11 @@
-//! Apple silicon GPU readings. Utilization, temperature and power come from
-//! macmon's `IOReport` and `IOHID` sampling under `metal-telemetry`; those are
-//! private macOS interfaces, so builds without it report the chip name only.
+//! Apple silicon GPU readings. Under `metal-telemetry`, utilization,
+//! temperature and power come from macmon's `IOReport` and `IOHID` sampling.
+//! Those are private macOS interfaces, which the Mac App Store rejects, so
+//! builds without it read utilization from public `IOKit` registry properties
+//! and report no temperature or power.
 
+#[cfg(not(feature = "metal-telemetry"))]
+mod accelerator;
 #[cfg(feature = "metal-telemetry")]
 mod sampler;
 
@@ -16,7 +20,10 @@ use super::DeviceTelemetrySnapshot;
 #[cfg(not(feature = "metal-telemetry"))]
 #[must_use]
 pub fn snapshot() -> DeviceTelemetrySnapshot {
-    named_snapshot()
+    DeviceTelemetrySnapshot {
+        utilization_percent: accelerator::utilization_percent(),
+        ..named_snapshot()
+    }
 }
 
 fn named_snapshot() -> DeviceTelemetrySnapshot {

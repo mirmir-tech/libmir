@@ -65,11 +65,12 @@ default = []
 cpu = ["dep:cpu"]
 cuda = ["dep:cuda", "dep:nvml-wrapper", "dep:sysinfo"]
 cuda-diagnostics = ["cuda", "cuda/diagnostics"]
-metal = ["dep:metal", "dep:sysinfo"]
+metal = ["dep:core-foundation", "dep:metal", "dep:sysinfo"]
 # Apple silicon GPU utilization, temperature and power, sampled by macmon
 # through IOReport and IOHID. Those are private macOS interfaces, which the Mac
-# App Store rejects; without this feature `metal` reports the chip name only.
-# Takes effect together with `metal` on macOS on Apple silicon.
+# App Store rejects; without this feature `metal` reads utilization from public
+# IOKit registry properties and reports no temperature or power. Takes effect
+# together with `metal` on macOS on Apple silicon.
 metal-telemetry = ["dep:macmon"]
 
 [dependencies]
@@ -95,6 +96,7 @@ uuid.workspace = true
 nvml-wrapper = { version = "0.12.1", optional = true }
 
 [target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+core-foundation = { version = "0.10", optional = true }
 macmon = { version = "0.8.1", default-features = false, optional = true }
 
 [dev-dependencies]
