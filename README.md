@@ -32,6 +32,10 @@ For Apple Metal:
 libmir = { version = "0.6.2", features = ["metal"] }
 ```
 
+`metal` reports only the chip name in device telemetry. Add `metal-telemetry`
+for GPU utilization, temperature and power; it samples them through private
+macOS interfaces (IOReport and IOHID), so leave it out of Mac App Store builds.
+
 For NVIDIA CUDA:
 
 ```toml

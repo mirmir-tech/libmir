@@ -65,7 +65,12 @@ default = []
 cpu = ["dep:cpu"]
 cuda = ["dep:cuda", "dep:nvml-wrapper", "dep:sysinfo"]
 cuda-diagnostics = ["cuda", "cuda/diagnostics"]
-metal = ["dep:macmon", "dep:metal"]
+metal = ["dep:metal", "dep:sysinfo"]
+# Apple silicon GPU utilization, temperature and power, sampled by macmon
+# through IOReport and IOHID. Those are private macOS interfaces, which the Mac
+# App Store rejects; without this feature `metal` reports the chip name only.
+# Takes effect together with `metal` on macOS on Apple silicon.
+metal-telemetry = ["dep:macmon"]
 
 [dependencies]
 llguidance = "=1.8.0"
