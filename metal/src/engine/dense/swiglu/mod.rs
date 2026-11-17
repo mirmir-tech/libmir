@@ -4,6 +4,8 @@ mod config;
 mod layer;
 mod model;
 mod projection;
+mod residual;
+mod routed;
 mod weights;
 
 #[cfg(test)]

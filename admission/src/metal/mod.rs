@@ -109,9 +109,10 @@ pub fn plan(spec: &SemanticModelSpec) -> Result<MetalDecoderPlan> {
 }
 
 fn select_runtime(layers: &[LayerLowering]) -> Result<MetalDecoderRuntime> {
-    if layers.iter().all(|layer| {
-        layer.feed_forward == FeedForwardLowering::Dense
-            && matches!(layer.mixer, MixerLowering::Softmax { window: None, .. })
+    if layers.iter().all(|layer| match (layer.feed_forward, layer.mixer) {
+        (FeedForwardLowering::Dense, MixerLowering::Softmax { .. }) => true,
+        (FeedForwardLowering::Routed, MixerLowering::Softmax { window: None, sinks, .. }) => !sinks,
+        _ => false,
     }) {
         return Ok(MetalDecoderRuntime::Dense);
     }

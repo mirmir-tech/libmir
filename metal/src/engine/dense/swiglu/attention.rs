@@ -78,13 +78,23 @@ pub(super) fn forward(
             config.attention_scale,
             stream,
         )?,
-        None => queries.scaled_dot_product_attention(
-            &context.keys,
-            &context.values,
-            config.attention_scale,
-            causal,
-            stream,
-        )?,
+        // A sliding cache's bulk write carries its causal window mask.
+        None => match context.mask.as_ref() {
+            Some(mask) => queries.masked_scaled_dot_product_attention(
+                &context.keys,
+                &context.values,
+                config.attention_scale,
+                mask,
+                stream,
+            )?,
+            None => queries.scaled_dot_product_attention(
+                &context.keys,
+                &context.values,
+                config.attention_scale,
+                causal,
+                stream,
+            )?,
+        },
     };
     let output = output.transpose(&[0, 2, 1, 3], stream)?;
     let output_width = config.heads * config.head_dim;
@@ -118,16 +128,22 @@ pub(super) fn rope_layout(
             input.rope(
                 RopeOptions {
                     dimensions: config.head_dim,
-                    traditional: false,
+                    traditional: config.rope_traditional,
                     base: Some(config.rope_base),
-                    scale: 1.0,
+                    scale: config.rope_position_scale,
                     offset: position,
                 },
                 stream,
             )
         },
         |frequencies| {
-            input.rope_with_frequencies(config.head_dim, false, frequencies, position, stream)
+            input.rope_with_frequencies(
+                config.head_dim,
+                config.rope_traditional,
+                frequencies,
+                position,
+                stream,
+            )
         },
     )?;
     if config.rope_attention_factor.to_bits() == 1.0_f32.to_bits() {

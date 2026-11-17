@@ -50,7 +50,7 @@ fn companions(binding: &TensorBinding, expected: BlockProjectionLayout) -> Resul
 }
 
 #[allow(clippy::too_many_arguments)]
-fn validate(
+pub(super) fn validate(
     layout: &ExpertLayout,
     experts: usize,
     hidden: usize,

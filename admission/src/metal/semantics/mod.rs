@@ -18,6 +18,21 @@ pub(super) fn validate(
     spec: &SemanticModelSpec,
     runtime: MetalDecoderRuntime,
 ) -> Result<()> {
+    // The dense runtime applies any declared embedding factor (Gemma 3's
+    // sqrt(hidden)); it does not add norm weight offsets, which a GGUF import
+    // has already folded into the stored weights.
+    if runtime == MetalDecoderRuntime::Dense {
+        let offset = std::iter::once(spec.decoder.final_norm.weight_offset).chain(
+            spec.decoder.layers.iter().flat_map(|layer| {
+                [layer.input_norm.weight_offset, layer.post_attention_norm.weight_offset]
+            }),
+        );
+        if offset.into_iter().any(|offset| offset != 0.0) {
+            return Err(ArchitectureError::invalid(
+                "Metal Dense cannot execute norm weight offsets",
+            ));
+        }
+    }
     let embedding = if runtime == MetalDecoderRuntime::DenseAndRouted {
         f64::from(
             u32::try_from(decoder.hidden_size)
@@ -27,7 +42,7 @@ pub(super) fn validate(
     } else {
         1.0
     };
-    if spec.decoder.embedding_multiplier != embedding {
+    if runtime != MetalDecoderRuntime::Dense && spec.decoder.embedding_multiplier != embedding {
         return Err(ArchitectureError::invalid(format!(
             "Metal {runtime:?} requires embedding_multiplier={embedding}; requested {}",
             spec.decoder.embedding_multiplier
@@ -62,12 +77,10 @@ pub(super) fn validate(
             .map_err(|_| ArchitectureError::invalid("Metal head dimension exceeds u32"))?;
         let scale = match runtime {
             MetalDecoderRuntime::DenseAndRouted => 1.0,
-            MetalDecoderRuntime::ClampedRouted => {
+            MetalDecoderRuntime::ClampedRouted | MetalDecoderRuntime::Dense => {
                 decoder.attention_scale.unwrap_or_else(|| f64::from(head_dim).sqrt().recip())
             },
-            MetalDecoderRuntime::Dense | MetalDecoderRuntime::SharedRouted => {
-                f64::from(head_dim).sqrt().recip()
-            },
+            MetalDecoderRuntime::SharedRouted => f64::from(head_dim).sqrt().recip(),
         };
         if attention.scale != scale {
             return Err(ArchitectureError::invalid(format!(

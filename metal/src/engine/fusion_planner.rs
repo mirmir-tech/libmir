@@ -55,6 +55,7 @@ impl<'a> FusionPlanner<'a> {
                 self.config.dense_gate_up.enabled(),
                 false,
             ),
+            FeedForwardLowering::Routed => (self.config.dense_attention.enabled(), false, false),
             FeedForwardLowering::DenseAndRouted => (
                 self.config.hybrid_attention.enabled(),
                 self.config.hybrid_dense_gate_up.enabled(),
@@ -74,7 +75,9 @@ impl<'a> FusionPlanner<'a> {
         match feed_forward {
             FeedForwardLowering::DenseAndRouted => self.config.routed_expert_gate_up,
             FeedForwardLowering::SharedRouted => self.config.shared_expert_gate_up,
-            FeedForwardLowering::Dense | FeedForwardLowering::ClampedRouted => FusionMode::Disabled,
+            FeedForwardLowering::Dense
+            | FeedForwardLowering::Routed
+            | FeedForwardLowering::ClampedRouted => FusionMode::Disabled,
         }
     }
 

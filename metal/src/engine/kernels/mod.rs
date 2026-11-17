@@ -3,6 +3,7 @@ mod bitsandbytes;
 mod direct_fp8;
 pub(super) mod expert;
 pub(super) mod gated_delta;
+pub(super) mod ggml;
 mod gptq;
 mod mxfp4;
 mod nvfp4;
@@ -203,6 +204,7 @@ pub(super) struct Kernels {
     expert_reduce: expert::reduce::ExpertReduceKernel,
     gated_delta_recurrence: mirtal::MetalKernel<6, 2>,
     gated_delta_decode: mirtal::MetalKernel<8, 2>,
+    ggml: ggml::GgmlKernels,
     gptq: gptq::GptqKernels,
     paged_attention: mirtal::MetalKernel<6, 1>,
     paged_attention_batched: mirtal::MetalKernel<29, 1>,

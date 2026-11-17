@@ -15,6 +15,9 @@ use crate::engine::{
 pub struct DenseSwiGluModel {
     pub(super) layers: Vec<DenseSwiGluLayer>,
     cache_step: usize,
+    /// Factor on token embeddings before the first layer (Gemma's
+    /// sqrt(hidden)).
+    embedding_multiplier: Option<f32>,
     pub(super) embedding: BoundEmbedding,
     pub(super) output_projection: OutputProjection,
     pub(super) final_norm: NormWeight,
@@ -37,17 +40,24 @@ impl DenseSwiGluModel {
     ) -> Result<Self> {
         let compatible = lowering.len() == decoder.num_hidden_layers
             && lowering.iter().all(|layer| {
-                layer.feed_forward == FeedForwardLowering::Dense
-                    && matches!(layer.mixer, MixerLowering::Softmax { window: None, .. })
+                matches!(
+                    layer.feed_forward,
+                    FeedForwardLowering::Dense | FeedForwardLowering::Routed
+                ) && matches!(layer.mixer, MixerLowering::Softmax { .. })
             });
+        if decoder.final_logit_softcapping.is_some() {
+            return Err(crate::engine::Error::InvalidModel(
+                "dense Metal decoder has no final logit softcap".into(),
+            ));
+        }
         if !compatible {
             return Err(crate::engine::Error::InvalidModel(
-                "dense SwiGLU loader requires non-windowed softmax and dense layers".into(),
+                "dense SwiGLU loader requires softmax attention with gated or routed MLPs".into(),
             ));
         }
         let mut layers = Vec::with_capacity(decoder.num_hidden_layers);
         for (index, lowered) in lowering.iter().enumerate() {
-            let config = DenseSwiGluLayerConfig::from_decoder(decoder)?;
+            let config = DenseSwiGluLayerConfig::from_decoder(decoder, index)?;
             layers.push(DenseSwiGluLayer::load(
                 tensors,
                 bindings.dense_decoder_layer(index)?,
@@ -62,9 +72,15 @@ impl DenseSwiGluModel {
         } else {
             OutputProjection::Linear(BoundLinear::load(tensors, boundary.output, stream)?)
         };
+        let embedding_multiplier = decoder
+            .embedding_multiplier
+            .filter(|multiplier| multiplier.to_bits() != 1.0_f64.to_bits())
+            .map(|multiplier| multiplier.to_string().parse::<f32>())
+            .transpose()?;
         Ok(Self {
             layers,
             cache_step,
+            embedding_multiplier,
             embedding: BoundEmbedding::load(tensors, boundary.embedding, stream)?,
             output_projection,
             final_norm: NormWeight::load_name(tensors, &boundary.final_norm.source)?,
@@ -73,7 +89,7 @@ impl DenseSwiGluModel {
 
     pub fn new_cache(&self, stream: &Stream) -> Result<DecoderCache> {
         DecoderCache::new_with_pool_capacity(
-            &vec![None; self.layers.len()],
+            &self.layers.iter().map(|layer| layer.config.window).collect::<Vec<_>>(),
             self.cache_step,
             crate::engine::KvPageFormat::resolve(stream.config().kv_cache.dtype)?,
             stream.config().kv_cache.block_size,
@@ -138,7 +154,7 @@ impl DenseSwiGluModel {
         causal: bool,
         stream: &Stream,
     ) -> Result<Array> {
-        let hidden = self.embedding.lookup(token_ids, stream)?;
+        let hidden = self.embed(token_ids, stream)?;
         let shape = token_ids.shape()?;
         let batch = usize::try_from(shape[0])?;
         let sequence = usize::try_from(shape[1])?;
@@ -166,6 +182,15 @@ impl DenseSwiGluModel {
             },
             LayerLoopOptions::new(false, evaluation_step, false),
         )
+    }
+
+    /// Token embeddings, scaled by the declared multiplier.
+    pub(super) fn embed(&self, token_ids: &Array, stream: &Stream) -> Result<Array> {
+        let hidden = self.embedding.lookup(token_ids, stream)?;
+        match self.embedding_multiplier {
+            Some(multiplier) => hidden.multiply_scalar(multiplier, stream),
+            None => Ok(hidden),
+        }
     }
 
     #[must_use]

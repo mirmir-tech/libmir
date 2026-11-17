@@ -4,13 +4,17 @@ use super::fixtures::{AnyResult, dense_and_routed, dense_contract};
 use crate::metal;
 
 #[test]
-fn rejects_unimplemented_embedding_scale_and_value_normalization() -> AnyResult<()> {
+fn rejects_unimplemented_norm_offset_scale_and_value_normalization() -> AnyResult<()> {
     let (task, spec) = dense_contract()?;
+    // Dense applies an embedding factor (Gemma 3) but not norm weight offsets.
     let mut embedding = spec.clone();
     embedding.decoder.embedding_multiplier = 2.0;
+    assert!(metal::admit(&task, Some(&embedding)).is_ok());
+    let mut offset = spec.clone();
+    offset.decoder.layers[0].input_norm.weight_offset = 1.0;
     assert!(
-        metal::admit(&task, Some(&embedding))
-            .is_err_and(|error| error.to_string().contains("embedding_multiplier"))
+        metal::admit(&task, Some(&offset))
+            .is_err_and(|error| error.to_string().contains("norm weight offsets"))
     );
     let mut scale = spec.clone();
     if let MixerSpec::SoftmaxAttention(attention) = &mut scale.decoder.layers[0].mixer {

@@ -4,6 +4,7 @@
 //! builds the tensor catalog the binding layer reads. Payloads are never read.
 
 mod config;
+mod dequantize;
 mod header;
 mod import;
 mod names;
@@ -21,6 +22,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub use dequantize::dequantize;
 pub use header::GgufHeader;
 pub use import::Import;
 pub use names::safetensors_name;

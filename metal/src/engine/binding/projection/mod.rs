@@ -1,13 +1,13 @@
 use models::weights::{AffineStorageDType, BindingTransform, TensorBinding, TensorStorage};
 
 use crate::engine::{
-    Array, DenseLinear, Error, ModelTensors, QuantizedLinear, Result, RouterOutput, Stream,
-    linear::GptqLinear,
+    Array, DenseLinear, Error, ModelTensors, QuantizedLinear, Result, Stream, linear::GptqLinear,
 };
 mod bitsandbytes;
 mod embedding;
 mod float8;
 mod fusion;
+mod ggml;
 mod gptq;
 mod graph;
 mod mxfp4;
@@ -18,6 +18,7 @@ mod routing;
 use bitsandbytes::BitsAndBytes4BitLinear;
 pub(in crate::engine) use embedding::BoundEmbedding;
 use float8::Float8Linear;
+use ggml::GgmlLinear;
 pub(in crate::engine) use graph::GraphLinear;
 use mxfp4::MxFp4Linear;
 pub(in crate::engine) use mxfp4::MxFp4LinearLayout;
@@ -34,6 +35,7 @@ pub(in crate::engine) enum BoundLinear {
     MxFp4(MxFp4Linear),
     MxFp8(MxFp8Linear),
     NvFp4(NvFp4Linear),
+    Ggml(GgmlLinear),
 }
 impl BoundLinear {
     pub(in crate::engine) fn load_nvfp4_bank(
@@ -108,6 +110,7 @@ impl BoundLinear {
                     nvfp4::NvFp4Fallback::Gathered(linear) => Ok(Self::NvFp4(linear)),
                 }
             },
+            TensorStorage::Ggml { .. } => ggml::linear(tensors, binding, stream).map(Self::Ggml),
             _ => Err(unsupported("linear", binding)),
         }
     }
@@ -121,6 +124,7 @@ impl BoundLinear {
             Self::BitsAndBytes4Bit(linear) => linear.forward(input, stream),
             Self::MxFp4(linear) => linear.forward(input, stream),
             Self::MxFp8(linear) => linear.forward(input, stream),
+            Self::Ggml(linear) => linear.forward(input, stream),
             Self::NvFp4(_) => Err(Error::InvalidQuantization(
                 "gathered NVFP4 matrix bank does not support ordinary execution".into(),
             )),
@@ -147,6 +151,7 @@ impl BoundLinear {
             Self::Gptq(_) => Err(Error::InvalidQuantization(
                 "activation-ordered GPTQ does not support gathered execution".into(),
             )),
+            Self::Ggml(linear) => linear.gather(input, indices, sorted, stream),
         }
     }
 
@@ -163,49 +168,6 @@ impl BoundLinear {
         }
     }
 
-    pub(in crate::engine) fn route(
-        &self,
-        input: &Array,
-        norm_scale: &Array,
-        expert_scale: &Array,
-        eps: f32,
-        top_k: i32,
-        stream: &Stream,
-    ) -> Result<RouterOutput> {
-        match self {
-            Self::Affine(linear) => {
-                linear.route(input, norm_scale, expert_scale, eps, top_k, stream)
-            },
-            Self::Dense(linear) => {
-                let normalized = input.rms_norm(norm_scale, eps, stream)?;
-                linear.forward(&normalized, stream)?.router_top_k(expert_scale, top_k, stream)
-            },
-            Self::Float8(linear) => {
-                let normalized = input.rms_norm(norm_scale, eps, stream)?;
-                linear.forward(&normalized, stream)?.router_top_k(expert_scale, top_k, stream)
-            },
-            Self::Gptq(linear) => {
-                let normalized = input.rms_norm(norm_scale, eps, stream)?;
-                linear.forward(&normalized, stream)?.router_top_k(expert_scale, top_k, stream)
-            },
-            Self::BitsAndBytes4Bit(linear) => {
-                let normalized = input.rms_norm(norm_scale, eps, stream)?;
-                linear.forward(&normalized, stream)?.router_top_k(expert_scale, top_k, stream)
-            },
-            Self::MxFp4(linear) => {
-                let normalized = input.rms_norm(norm_scale, eps, stream)?;
-                linear.forward(&normalized, stream)?.router_top_k(expert_scale, top_k, stream)
-            },
-            Self::MxFp8(linear) => {
-                let normalized = input.rms_norm(norm_scale, eps, stream)?;
-                linear.forward(&normalized, stream)?.router_top_k(expert_scale, top_k, stream)
-            },
-            Self::NvFp4(_) => Err(Error::InvalidQuantization(
-                "gathered NVFP4 matrix bank cannot be used as a router".into(),
-            )),
-        }
-    }
-
     pub(in crate::engine) fn has_bias(&self) -> bool {
         match self {
             Self::Dense(linear) => linear.has_bias(),
@@ -213,6 +175,7 @@ impl BoundLinear {
             Self::Float8(linear) => linear.has_bias(),
             Self::MxFp4(linear) => linear.has_bias(),
             Self::MxFp8(linear) => linear.has_bias(),
+            Self::Ggml(linear) => linear.has_bias(),
             Self::Gptq(_) | Self::NvFp4(_) | Self::BitsAndBytes4Bit(_) => false,
         }
     }
@@ -226,7 +189,8 @@ impl BoundLinear {
             | Self::BitsAndBytes4Bit(_)
             | Self::MxFp4(_)
             | Self::MxFp8(_)
-            | Self::NvFp4(_) => None,
+            | Self::NvFp4(_)
+            | Self::Ggml(_) => None,
         }
     }
 

@@ -1,6 +1,10 @@
 use std::time::Instant;
 
-use super::{attention, config::DenseSwiGluLayerConfig, weights::DenseSwiGluWeights};
+use super::{
+    attention,
+    config::DenseSwiGluLayerConfig,
+    weights::{DenseSwiGluWeights, FeedForwardWeights},
+};
 use crate::engine::{
     Array, DecoderCache, Error, FusedAttention, FusedGateUp, KvCache, ModelTensors, Result, Stream,
     decoder::{LayerContext, LoweredLayer, LoweredPackedLayer, MixerKind},
@@ -91,7 +95,10 @@ impl DenseSwiGluLayer {
             ProjectionBiases::new(
                 [weights.attention.query.has_bias(), weights.attention.key.has_bias()],
                 Some(weights.attention.value.has_bias()),
-                [weights.mlp.gate.has_bias(), weights.mlp.up.has_bias()],
+                match &weights.feed_forward {
+                    FeedForwardWeights::Gated(mlp) => [mlp.gate.has_bias(), mlp.up.has_bias()],
+                    FeedForwardWeights::Routed(_) => [false, false],
+                },
             ),
         );
         let fused_attention = fusion
@@ -105,11 +112,12 @@ impl DenseSwiGluLayer {
             })
             .transpose()?
             .flatten();
-        let fused_gate_up = fusion
-            .gate_up
-            .then(|| weights.mlp.gate.fuse_gate_up(&weights.mlp.up, stream))
-            .transpose()?
-            .flatten();
+        let fused_gate_up = match &weights.feed_forward {
+            FeedForwardWeights::Gated(mlp) if fusion.gate_up => {
+                mlp.gate.fuse_gate_up(&mlp.up, stream)?
+            },
+            _ => None,
+        };
         fused_attention.as_ref().map_or(Ok(()), |fused| fused.warm(stream))?;
         fused_gate_up.as_ref().map_or(Ok(()), |fused| fused.warm(stream))?;
         Ok(Self {
@@ -137,7 +145,7 @@ impl DenseSwiGluLayer {
             self.config,
             attention::AttentionContext { cache, position, causal, stream },
         )?;
-        let output = input.add(&attention, stream)?;
+        let output = self.attention_residual(input, &attention, stream)?;
         emit_profile(&output, stream, "attention", causal, started)?;
         Ok(output)
     }
@@ -148,19 +156,18 @@ impl DenseSwiGluLayer {
             self.weights
                 .post_attention_norm
                 .apply(input, self.config.rms_norm_eps, stream)?;
-        let fused = (input.shape()?.get(1) == Some(&1))
-            .then_some(self.fused_gate_up.as_ref())
-            .flatten();
-        let (gate, up) = gate_up_tuning::forward(
-            &self.weights.mlp.gate,
-            &self.weights.mlp.up,
-            fused,
-            &normalized,
-            stream,
-        )?;
-        let activated = gate.silu_mul(&up, stream)?;
-        let feed_forward = self.weights.mlp.down.forward(&activated, stream)?;
-        let output = input.add(&feed_forward, stream)?;
+        let feed_forward = match &self.weights.feed_forward {
+            FeedForwardWeights::Gated(mlp) => {
+                let fused = (input.shape()?.get(1) == Some(&1))
+                    .then_some(self.fused_gate_up.as_ref())
+                    .flatten();
+                let (gate, up) =
+                    gate_up_tuning::forward(&mlp.gate, &mlp.up, fused, &normalized, stream)?;
+                mlp.down.forward(&self.gated(&gate, &up, stream)?, stream)?
+            },
+            FeedForwardWeights::Routed(routed) => routed.forward(&normalized, stream)?,
+        };
+        let output = self.feed_forward_residual(input, &feed_forward, stream)?;
         emit_profile(&output, stream, "feed_forward", causal, started)?;
         Ok(output)
     }

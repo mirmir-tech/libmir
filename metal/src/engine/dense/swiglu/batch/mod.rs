@@ -4,6 +4,7 @@ use self::attention::packed_attention;
 use super::{
     layer::DenseSwiGluLayer,
     model::{DenseSwiGluModel, OutputProjection},
+    weights::FeedForwardWeights,
 };
 use crate::engine::{
     Array, DecoderCache, KvCache, Result, Stream, decode, decoder::forward_packed_layers,
@@ -17,7 +18,7 @@ impl DenseSwiGluModel {
         positions: &[i32],
         stream: &Stream,
     ) -> Result<Array> {
-        let hidden = self.embedding.lookup(token_ids, stream)?;
+        let hidden = self.embed(token_ids, stream)?;
         let hidden = forward_packed_layers(&self.layers, hidden, caches, positions, stream)?;
         let hidden = self.final_norm.apply(&hidden, 1.0e-6, stream)?;
         let logits = match &self.output_projection {
@@ -35,7 +36,7 @@ impl DenseSwiGluModel {
         positions: &[i32],
         stream: &Stream,
     ) -> Result<Array> {
-        let mut hidden = self.embedding.lookup(token_ids, stream)?;
+        let mut hidden = self.embed(token_ids, stream)?;
         let shape = token_ids.shape()?;
         let position = positions.iter().copied().min().map_or(Ok(0), usize::try_from)?;
         let evaluation_step = crate::engine::decoder::prefill_evaluation_step(
@@ -87,7 +88,7 @@ impl DenseSwiGluLayer {
             false,
             stream,
         )?;
-        input.add(&attention, stream)
+        self.attention_residual(input, &attention, stream)
     }
 
     pub(super) fn mix_packed_prefill(
@@ -108,7 +109,7 @@ impl DenseSwiGluLayer {
             true,
             stream,
         )?;
-        input.add(&attention, stream)
+        self.attention_residual(input, &attention, stream)
     }
 
     pub(super) fn feed_forward_packed(
@@ -121,17 +122,22 @@ impl DenseSwiGluLayer {
             self.weights
                 .post_attention_norm
                 .apply(input, self.config.rms_norm_eps, stream)?;
+        let mlp = match &self.weights.feed_forward {
+            FeedForwardWeights::Gated(mlp) => mlp,
+            FeedForwardWeights::Routed(routed) => {
+                return self.feed_forward_residual(
+                    input,
+                    &routed.forward(&normalized, stream)?,
+                    stream,
+                );
+            },
+        };
         let fused = (batch_size <= 2).then_some(self.fused_gate_up.as_ref()).flatten();
         let (gate, up) = fused.map_or_else(
-            || {
-                Ok((
-                    self.weights.mlp.gate.forward(&normalized, stream)?,
-                    self.weights.mlp.up.forward(&normalized, stream)?,
-                ))
-            },
+            || Ok((mlp.gate.forward(&normalized, stream)?, mlp.up.forward(&normalized, stream)?)),
             |fused| fused.forward_pair(&normalized, stream),
         )?;
-        let activated = gate.silu_mul(&up, stream)?;
-        input.add(&self.weights.mlp.down.forward(&activated, stream)?, stream)
+        let activated = self.gated(&gate, &up, stream)?;
+        self.feed_forward_residual(input, &mlp.down.forward(&activated, stream)?, stream)
     }
 }

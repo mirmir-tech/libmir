@@ -131,7 +131,12 @@ fn packed_attention_rows(
             Ok((query, context, mode))
         })
         .collect::<Result<Vec<_>>>()?;
-    let mut outputs = grouped_attention(&prepared, config.attention_scale, causal, stream)?;
+    // Rows whose sliding cache masks a bulk write run alone with that mask.
+    let mut outputs = if prepared.iter().any(|(_, context, _)| context.mask.is_some()) {
+        std::iter::repeat_with(|| None).take(prepared.len()).collect()
+    } else {
+        grouped_attention(&prepared, config.attention_scale, causal, stream)?
+    };
     prepared
         .into_iter()
         .enumerate()
@@ -144,6 +149,15 @@ fn packed_attention_rows(
                     .paged
                     .as_ref()
                     .is_none_or(|paged| paged.key_scales.is_none() && paged.value_scales.is_none());
+            if let Some(mask) = context.mask.as_ref() {
+                return query.masked_scaled_dot_product_attention(
+                    &context.keys,
+                    &context.values,
+                    config.attention_scale,
+                    mask,
+                    stream,
+                );
+            }
             if view || context.paged.is_none() {
                 return query.scaled_dot_product_attention(
                     &context.keys,

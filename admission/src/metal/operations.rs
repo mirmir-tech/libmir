@@ -23,6 +23,9 @@ pub enum MixerLowering {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FeedForwardLowering {
     Dense,
+    /// Routed `SwiGLU` experts with no shared expert and no clamp
+    /// (`Qwen3-MoE`), run by the dense runtime in place of its gated MLP.
+    Routed,
     DenseAndRouted,
     SharedRouted,
     ClampedRouted,
@@ -81,7 +84,8 @@ fn lower_mixer(layer: usize, mixer: &MixerSpec) -> Result<MixerLowering> {
 fn lower_feed_forward(layer: usize, feed_forward: &FeedForwardSpec) -> Result<FeedForwardLowering> {
     match feed_forward {
         FeedForwardSpec::Dense {
-            activation: ActivationSpec::SwiGlu { clamp: None, up_shift: 0.0, .. },
+            activation:
+                ActivationSpec::SwiGlu { clamp: None, up_shift: 0.0, .. } | ActivationSpec::GeluTanh,
             ..
         } => Ok(FeedForwardLowering::Dense),
         FeedForwardSpec::DenseAndRouted {
@@ -92,6 +96,14 @@ fn lower_feed_forward(layer: usize, feed_forward: &FeedForwardSpec) -> Result<Fe
             Ok(FeedForwardLowering::DenseAndRouted)
         },
         FeedForwardSpec::Routed { shared: Some(_), .. } => Ok(FeedForwardLowering::SharedRouted),
+        FeedForwardSpec::Routed { routed, shared: None }
+            if matches!(
+                routed.activation,
+                ActivationSpec::SwiGlu { clamp: None, up_shift, .. } if up_shift == 0.0
+            ) =>
+        {
+            Ok(FeedForwardLowering::Routed)
+        },
         FeedForwardSpec::Routed { routed, shared: None }
             if matches!(
                 routed.activation,

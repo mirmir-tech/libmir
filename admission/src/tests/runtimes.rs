@@ -46,13 +46,16 @@ fn admits_every_generation_runtime_without_a_device() -> AnyResult<()> {
 }
 
 #[test]
-fn preserves_backend_specific_window_admission() -> AnyResult<()> {
+fn admits_windowed_dense_layers_on_both_backends() -> AnyResult<()> {
     let (task, mut semantic) = dense_contract()?;
     if let MixerSpec::SoftmaxAttention(attention) = &mut semantic.decoder.layers[0].mixer {
         attention.window = Some(128);
     }
 
-    assert!(metal::admit(&task, Some(&semantic)).is_err());
+    assert_eq!(
+        metal::admit(&task, Some(&semantic))?,
+        metal::MetalArchitecture::Generation(metal::MetalDecoderRuntime::Dense)
+    );
     assert_eq!(
         cuda::admit(&task, Some(&semantic))?,
         cuda::CudaArchitecture::Generation(cuda::CudaDecoderRuntime::Dense)
