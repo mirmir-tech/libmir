@@ -4,6 +4,8 @@
 
 mod batch;
 mod execution;
+#[cfg(test)]
+mod tests;
 
 pub use execution::CudaAttentionHybridExecution;
 use mircuda::{DeviceBuffer, bf16};
