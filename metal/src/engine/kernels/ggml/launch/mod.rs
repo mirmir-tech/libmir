@@ -8,6 +8,10 @@ use crate::engine::{Array, Error, Result, Stream, kernels::template};
 /// Rows per simdgroup and simdgroups per threadgroup of the GEMV.
 const ROWS: usize = 1;
 pub(super) const SIMDGROUPS: usize = 4;
+/// Tokens the GEMV serves: it decodes each weight sub-block once for all of
+/// them, which beats the 8-token simdgroup-matrix tile for two tokens
+/// (`Q4_K` 4096 to 12288: 128 vs 162 us) but not for three or more.
+const GEMV_TOKENS: usize = 2;
 /// Tokens of one simdgroup-matrix launch: two 8-token tiles; more spill
 /// registers, so wider batches run in chunks.
 const MMA_TOKENS: usize = 16;
@@ -45,7 +49,7 @@ pub(super) fn gemv(
         return joined.reshape(&shape, stream);
     }
     let spec = [mirtal::OutputSpec::new(mirtal::Shape::new(shape)?, dtype)];
-    if tokens > 1 {
+    if tokens > GEMV_TOKENS {
         // Two simdgroups of two 8-row tiles; see `kernels/ggml/mma.metal`.
         let [output] = mma.dispatch(
             stream.native(),

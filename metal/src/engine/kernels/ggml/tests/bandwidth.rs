@@ -40,7 +40,7 @@ fn gemv_bandwidth() -> Result<()> {
                 (0..copies).map(|_| weight(&data, rows, &stream)).collect::<Result<Vec<_>>>()?;
             stream.eval_many(&weights.iter().collect::<Vec<_>>())?;
             let matrix = GgmlMatrix::new(ggml_type, columns, &weights[0])?;
-            for tokens in [1, 2, 8, 16, 32, 64] {
+            for tokens in [1, 2, 3, 4, 8, 16, 32, 64] {
                 let input = Array::from_f32(
                     &vec![0.5; tokens * columns],
                     &[i32::try_from(tokens)?, i32::try_from(columns)?],
