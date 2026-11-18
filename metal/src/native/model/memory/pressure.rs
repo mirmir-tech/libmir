@@ -5,7 +5,9 @@ const PRESSURE_DIVISOR: usize = 2;
 const PRESSURE_PREFILL_TOKENS: usize = 128;
 const PREFILL_MEMORY_RESERVE_DIVISOR: usize = 8;
 const PREFILL_MINIMUM_RESERVE: usize = 2 * 1024 * 1024 * 1024;
-const PREFILL_WORKSPACE_KV_COPIES: usize = 16;
+/// Resident bytes a prompt token costs, in K/V copies: its own pages plus
+/// the prefix snapshot's tail. Step workspace is checked separately per wave.
+const PREFILL_WORKSPACE_KV_COPIES: usize = 2;
 const PREFIX_RECLAIM_PRESSURE_PERCENT: usize = 50;
 
 impl LoadedModel {

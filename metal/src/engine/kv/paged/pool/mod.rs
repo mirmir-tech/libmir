@@ -21,9 +21,19 @@ pub(super) struct Arena {
     pub(super) kv_heads: usize,
     pub(super) head_dim: usize,
     pub(super) references: Vec<usize>,
+    /// Per page, the storage that may append to it while others share it.
+    pub(super) writers: Vec<u64>,
 }
 
 impl Arena {
+    /// Whether `storage` may write `page` in place. Paged caches only append,
+    /// so the page's last sole writer extends it past every other holder's
+    /// length (each is a snapshot of it at an earlier length); any other
+    /// holder must copy the page first.
+    pub(super) fn appendable(&self, page: usize, storage: u64) -> bool {
+        self.references[page] == 1 || self.writers[page] == storage
+    }
+
     pub(super) fn allocate(&mut self) -> Result<u32> {
         let index = self
             .references
@@ -219,6 +229,7 @@ fn create(key: ArenaKey, capacity: usize, stream: &Stream) -> Result<Arena> {
         kv_heads: key.kv_heads,
         head_dim: key.head_dim,
         references: vec![0; capacity],
+        writers: vec![0; capacity],
     })
 }
 

@@ -171,7 +171,12 @@ The target shape is:
   completion-balanced waves before streaming, while dense models retain
   completion-first interleaving. Derive routed wave width from the scheduler
   token budget and resident cache capacity; do not impose a model-name rule or
-  a fixed row limit.
+  a fixed row limit. The memory-bounded cohort charges two K/V copies per
+  prompt token (its pages plus the snapshot tail); per-wave workspace stays in
+  `packed_prefill_fits`. Sixteen copies held Qwen3-30B Q8_0 and Gemma-4-26B at
+  1–2 rows per cohort: C10 TG 14.3→58.7 and 39.9→128.4 tok/s at depth 4096,
+  Qwen3.6 neutral in ABBA. Routed decode interleaving on top added little and
+  was not adopted (`2026-11-18-metal-serving-pages`).
 - Decode cohort admission uses exactly `decode_batch_wait_us`. Never multiply
   that window after a multi-row step or retain a hidden refill horizon; a
   latency/occupancy tradeoff must be explicit or backend-measured.
@@ -219,16 +224,23 @@ The target shape is:
   primitives: their K/V page buffers are graph outputs, so the MLX page-backed
   view consumes them directly. Append and attention remain ordered on one
   explicit Metal stream without a scalar dependency or Rust-side synchronization.
-  Prefix snapshots share physical pages through reference counts. Diverging
-  sessions copy only a shared page, while an arena grows lazily only after its
-  reserved physical pages are exhausted. Sliding layers retain their bounded
+  Prefix snapshots share physical pages through reference counts. A page's
+  last sole writer (`Arena::writers`) keeps appending to it in place while
+  shared: caches only append, so those writes land past every other holder's
+  length. Any other holder copies the page before writing, while an arena
+  grows lazily only after its reserved physical pages are exhausted. Without
+  the writer rule each server session copied its partial terminal page after
+  the prefix snapshot and decoded through the native paged reader: Llama-3.1-8B
+  C1 40.9→50.2 tok/s (3 alternating rounds, Workmir's
+  `2026-11-18-metal-serving-pages`). Sliding layers retain their bounded
   ring and recurrent linear-attention layers retain their state.
 - `MIRMIR_METAL_PAGED_ATTENTION_MIN_CONTEXT=<positive integer>` selects the
   physical-page activation threshold; the default is `128`. Below it Mirmir
   uses a temporary contiguous MLX cache before promoting it to physical pages.
   On the first update at the threshold, the Rust cache backfills head-major pages
-  from live device K/V and releases the persistent contiguous cache. Identity
-  page tables expose a zero-copy device view to MLX fast SDPA. Quantized K/V is
+  from live device K/V and releases the persistent contiguous cache. A page
+  table that is one physical run, at any arena offset, exposes a zero-copy
+  device view to MLX fast SDPA; only multi-run tables count as fragmented. Quantized K/V is
   not production-ready.
 - Native paged SDPA is selected automatically from 8,192 cached tokens only for
   benchmarked shapes: head dimensions up to 256 and divisible by 32, with a GQA
@@ -573,10 +585,11 @@ The target shape is:
   what overlaps MLX execution with host graph construction; moving it after the
   model call serializes decode even though the token remains on the device.
 - Paged KV allocation is always available. Native paged SDPA is a shape-based
-  execution choice, not the definition of paged caching: identity page tables
+  execution choice, not the definition of paged caching: single-run page tables
   use MLX SDPA over a zero-copy page view when that kernel is faster. Supported
-  fragmented/COW page tables must use native paged SDPA instead of gathering a
-  contiguous K/V tensor. Keep this policy model-agnostic in `engine/kv/policy.rs`.
+  multi-run (fragmented) page tables must use native paged SDPA instead of
+  gathering a contiguous K/V tensor. Keep this policy model-agnostic in
+  `engine/kv/policy.rs`.
 - `mirmir chat --bench` measures the production `libmir::Engine` chat prefill and
   decode path, not `LoadedModel` directly. It keeps model weights and Metal
   kernels warm but clears the device prefix cache before each run, preventing
@@ -722,8 +735,10 @@ The target shape is:
   actual per-step replay cap. Preserve FIFO and existing cohort/handoff ownership.
 - Workmir's `2026-09-09-cached-refill-admission` passes Qwen semantics and
   cancellation but fails default promotion: refill TTFT ~1 s→47 ms costs +22%
-  survivor decode in ABBA (limit 15%). Keep this explicit opt-in tradeoff;
-  do not globally enable routed interleaving. GPT-OSS new-mode execution is open.
+  survivor decode in ABBA (limit 15%). Keep this cached-refill exception an
+  explicit opt-in tradeoff. The result concerns one short cached refill during
+  hybrid Qwen3.5 C3 decode; it does not by itself decide the routed prefill
+  schedule's `interleave_decode`. GPT-OSS new-mode execution is open.
 
 ## Decode timing attribution
 
