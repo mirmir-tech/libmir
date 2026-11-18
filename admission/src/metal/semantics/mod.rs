@@ -18,19 +18,19 @@ pub(super) fn validate(
     spec: &SemanticModelSpec,
     runtime: MetalDecoderRuntime,
 ) -> Result<()> {
-    // The dense runtime applies any declared embedding factor (Gemma 3's
-    // sqrt(hidden)); it does not add norm weight offsets, which a GGUF import
-    // has already folded into the stored weights.
-    if runtime == MetalDecoderRuntime::Dense {
+    // Only the dense runtime adds Gemma's unit norm offset (the GGUF import
+    // has already folded it into the stored weights); it also applies any
+    // declared embedding factor (Gemma 3's sqrt(hidden)).
+    if runtime != MetalDecoderRuntime::Dense {
         let offset = std::iter::once(spec.decoder.final_norm.weight_offset).chain(
             spec.decoder.layers.iter().flat_map(|layer| {
                 [layer.input_norm.weight_offset, layer.post_attention_norm.weight_offset]
             }),
         );
         if offset.into_iter().any(|offset| offset != 0.0) {
-            return Err(ArchitectureError::invalid(
-                "Metal Dense cannot execute norm weight offsets",
-            ));
+            return Err(ArchitectureError::invalid(format!(
+                "Metal {runtime:?} cannot execute norm weight offsets"
+            )));
         }
     }
     let embedding = if runtime == MetalDecoderRuntime::DenseAndRouted {

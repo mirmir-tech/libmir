@@ -1,6 +1,6 @@
 use models::layout::{AttentionLayerType, DecoderConfig, RopeScaling};
 
-use crate::engine::{Error, Result};
+use crate::engine::{Error, Result, lowering::NormalizationLowering};
 
 /// The gate activation of the layer's gated MLP (`act(gate) * up`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +45,8 @@ pub(super) struct DenseSwiGluLayerConfig {
     pub(super) activation: GateActivation,
     /// Experts each token selects, for layers with routed experts.
     pub(super) top_k_experts: Option<usize>,
+    /// How the layer's norms scale: by their weight, or by `1 + weight`.
+    pub(super) norm: NormalizationLowering,
 }
 
 impl DenseSwiGluLayerConfig {
@@ -88,9 +90,15 @@ impl DenseSwiGluLayerConfig {
             window: decoder.layer_sliding_window(layer),
             activation: GateActivation::from_name(decoder.hidden_activation.as_deref())?,
             top_k_experts: decoder.num_experts.and(decoder.top_k_experts),
+            norm: NormalizationLowering::Rms,
         };
         config.validate()?;
         Ok(config)
+    }
+
+    /// The constant added to every norm weight of the layer.
+    pub(super) const fn norm_shift(self) -> f32 {
+        norm_shift(self.norm)
     }
 
     fn validate(self) -> Result<()> {
@@ -112,5 +120,13 @@ impl DenseSwiGluLayerConfig {
             return Err(Error::InvalidModel(format!("non-finite dense SwiGLU config: {self:?}")));
         }
         Ok(())
+    }
+}
+
+/// The constant a norm adds to its learned weight.
+pub(super) const fn norm_shift(norm: NormalizationLowering) -> f32 {
+    match norm {
+        NormalizationLowering::Rms => 0.0,
+        NormalizationLowering::RmsUnitOffset => 1.0,
     }
 }

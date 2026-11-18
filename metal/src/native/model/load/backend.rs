@@ -157,6 +157,7 @@ fn load_dense(
         decoder,
         bindings,
         lowering.layers(),
+        lowering.final_norm(),
         KV_CACHE_STEP,
         stream,
     )?))

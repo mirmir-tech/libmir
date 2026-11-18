@@ -46,6 +46,16 @@ impl BoundLinear {
         nvfp4::individual_bank(tensors, bindings, stream).map(Self::NvFp4)
     }
 
+    /// A gathered MXFP4 expert bank; see [`MxFp4Linear::bank`].
+    pub(in crate::engine) fn mxfp4_bank(
+        blocks: &Array,
+        scales: Array,
+        bias: Array,
+        stream: &Stream,
+    ) -> Result<Self> {
+        MxFp4Linear::bank(blocks, scales, bias, stream).map(Self::MxFp4)
+    }
+
     pub(in crate::engine) fn load(
         tensors: &ModelTensors,
         binding: &TensorBinding,

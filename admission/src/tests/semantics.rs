@@ -6,15 +6,22 @@ use crate::metal;
 #[test]
 fn rejects_unimplemented_norm_offset_scale_and_value_normalization() -> AnyResult<()> {
     let (task, spec) = dense_contract()?;
-    // Dense applies an embedding factor (Gemma 3) but not norm weight offsets.
+    // Dense applies an embedding factor and Gemma's unit norm offset (3), but
+    // no other offset.
     let mut embedding = spec.clone();
     embedding.decoder.embedding_multiplier = 2.0;
     assert!(metal::admit(&task, Some(&embedding)).is_ok());
     let mut offset = spec.clone();
     offset.decoder.layers[0].input_norm.weight_offset = 1.0;
+    offset.decoder.final_norm.weight_offset = 1.0;
+    let plan = metal::plan(&offset)?;
+    assert_eq!(plan.layers()[0].input_norm, metal::NormalizationLowering::RmsUnitOffset);
+    assert_eq!(plan.final_norm(), metal::NormalizationLowering::RmsUnitOffset);
+    assert!(metal::admit(&task, Some(&offset)).is_ok());
+    offset.decoder.layers[0].input_norm.weight_offset = 0.5;
     assert!(
         metal::admit(&task, Some(&offset))
-            .is_err_and(|error| error.to_string().contains("norm weight offsets"))
+            .is_err_and(|error| error.to_string().contains("weight offset"))
     );
     let mut scale = spec.clone();
     if let MixerSpec::SoftmaxAttention(attention) = &mut scale.decoder.layers[0].mixer {

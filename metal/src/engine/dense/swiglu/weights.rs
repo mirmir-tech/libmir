@@ -55,6 +55,8 @@ impl DenseSwiGluWeights {
         normalization: QkNormalization,
         stream: &Stream,
     ) -> Result<Self> {
+        // Gemma's `1 + weight` applies to every norm of the layer.
+        let shift = config.norm_shift();
         let norm = |binding: Option<&models::weights::TensorBinding>| {
             match normalization {
                 QkNormalization::None => return Ok(None),
@@ -71,7 +73,9 @@ impl DenseSwiGluWeights {
                 QkNormalization::QueryKeyRms => {},
             }
             binding
-                .map(|binding| NormWeight::load_name(tensors, &binding.source))
+                .map(|binding| {
+                    NormWeight::load_name_adjusted(tensors, &binding.source, shift, stream)
+                })
                 .transpose()
         };
         let feed_forward = match bindings.feed_forward {
@@ -90,10 +94,17 @@ impl DenseSwiGluWeights {
             },
         };
         Ok(Self {
-            input_norm: NormWeight::load_name(tensors, &bindings.input_norm.source)?,
-            post_attention_norm: NormWeight::load_name(
+            input_norm: NormWeight::load_name_adjusted(
+                tensors,
+                &bindings.input_norm.source,
+                shift,
+                stream,
+            )?,
+            post_attention_norm: NormWeight::load_name_adjusted(
                 tensors,
                 &bindings.post_attention_norm.source,
+                shift,
+                stream,
             )?,
             attention: AttentionWeights {
                 query: BoundLinear::load(tensors, bindings.attention.query, stream)?,
@@ -113,13 +124,17 @@ impl DenseSwiGluWeights {
                         ));
                     }
                     Ok(SandwichNorms {
-                        attention_output: NormWeight::load_name(
+                        attention_output: NormWeight::load_name_adjusted(
                             tensors,
                             &sandwich.attention_output_norm.source,
+                            shift,
+                            stream,
                         )?,
-                        feed_forward_output: NormWeight::load_name(
+                        feed_forward_output: NormWeight::load_name_adjusted(
                             tensors,
                             &sandwich.feed_forward_output_norm.source,
+                            shift,
+                            stream,
                         )?,
                     })
                 })

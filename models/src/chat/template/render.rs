@@ -3,9 +3,8 @@ use std::collections::BTreeMap;
 use foundation::conversation::{Conversation, ToolChoice};
 use minijinja::{Environment, Error, ErrorKind, Value};
 use minijinja_contrib::pycompat::unknown_method_callback;
-use time::OffsetDateTime;
 
-use super::config::TemplateTokens;
+use super::{clock::strftime_now, config::TemplateTokens};
 use crate::error::Result;
 
 /// Renders the template; one that refuses a system message (Mistral's
@@ -111,17 +110,6 @@ fn is_iterable(value: &Value) -> bool {
 
 fn raise_exception(message: &str) -> std::result::Result<String, Error> {
     Err(Error::new(ErrorKind::InvalidOperation, message.to_owned()))
-}
-
-fn strftime_now(format: &str) -> std::result::Result<String, Error> {
-    if format != "%Y-%m-%d" {
-        return Err(Error::new(
-            ErrorKind::InvalidOperation,
-            format!("unsupported strftime_now format `{format}`"),
-        ));
-    }
-    let now = OffsetDateTime::now_utc();
-    Ok(format!("{:04}-{:02}-{:02}", now.year(), now.month() as u8, now.day()))
 }
 
 #[cfg(test)]

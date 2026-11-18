@@ -72,7 +72,7 @@ fn does_not_admit_linear_attention_through_the_dense_runtime() -> Result<()> {
 }
 
 #[test]
-fn preserves_windows_and_rejects_them_from_the_dense_runtime() -> Result<()> {
+fn preserves_windows_for_the_dense_runtime() -> Result<()> {
     let mut spec = dense_spec()?;
     if let MixerSpec::SoftmaxAttention(attention) = &mut spec.decoder.layers[0].mixer {
         attention.window = Some(128);
@@ -86,20 +86,26 @@ fn preserves_windows_and_rejects_them_from_the_dense_runtime() -> Result<()> {
             window: Some(128)
         }
     );
-    assert!(plan(&spec).is_err());
+    // The dense runtime runs sliding layers (Gemma 3) with the cache's mask.
+    assert_eq!(plan(&spec)?.runtime(), DecoderRuntime::Dense);
     Ok(())
 }
 
 #[test]
 fn rejects_an_activation_the_dense_operator_does_not_implement() -> Result<()> {
     let mut spec = dense_spec()?;
+    // Tanh GELU (Gemma's GeGLU) lowers; an ungated activation does not.
     if let FeedForwardSpec::Dense { activation, .. } = &mut spec.decoder.layers[0].feed_forward {
         *activation = ActivationSpec::GeluTanh;
+    }
+    assert!(lower_layer(&spec.decoder.layers[0]).is_ok());
+    if let FeedForwardSpec::Dense { activation, .. } = &mut spec.decoder.layers[0].feed_forward {
+        *activation = ActivationSpec::ReluSquared;
     }
 
     let error = lower_layer(&spec.decoder.layers[0])
         .err()
-        .ok_or_else(|| Error::InvalidModel("dense GELU was admitted".into()))?;
+        .ok_or_else(|| Error::InvalidModel("dense relu^2 was admitted".into()))?;
 
     assert!(error.to_string().contains("feed-forward activation composition"));
     Ok(())

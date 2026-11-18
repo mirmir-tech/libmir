@@ -8,6 +8,9 @@ use crate::{ArchitectureError, Result};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NormalizationLowering {
     Rms,
+    /// RMS norm scaling by `1 + weight` (Gemma's), declared as a weight offset
+    /// of one.
+    RmsUnitOffset,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -54,13 +57,22 @@ pub fn lower_layer(layer: &DecoderLayerSpec) -> Result<LayerLowering> {
     })
 }
 
-fn lower_normalization(
+pub(super) fn lower_normalization(
     layer: usize,
     position: &str,
     normalization: NormalizationSpec,
 ) -> Result<NormalizationLowering> {
     match normalization.kind {
-        NormalizationKind::Rms => Ok(NormalizationLowering::Rms),
+        NormalizationKind::Rms if normalization.weight_offset.to_bits() == 0.0_f64.to_bits() => {
+            Ok(NormalizationLowering::Rms)
+        },
+        NormalizationKind::Rms if normalization.weight_offset.to_bits() == 1.0_f64.to_bits() => {
+            Ok(NormalizationLowering::RmsUnitOffset)
+        },
+        NormalizationKind::Rms => Err(ArchitectureError::invalid(format!(
+            "Metal cannot lower layer {layer} {position} weight offset {}",
+            normalization.weight_offset
+        ))),
         NormalizationKind::Layer => Err(ArchitectureError::invalid(format!(
             "Metal cannot lower layer {layer} {position} layer normalization"
         ))),

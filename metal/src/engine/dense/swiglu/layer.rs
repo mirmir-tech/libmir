@@ -88,6 +88,10 @@ impl DenseSwiGluLayer {
         else {
             return Err(Error::InvalidModel("dense layer requires softmax attention".into()));
         };
+        if lowering.post_attention_norm != lowering.input_norm {
+            return Err(Error::InvalidModel("dense layer norms scale differently".into()));
+        }
+        let config = DenseSwiGluLayerConfig { norm: lowering.input_norm, ..config };
         let weights =
             DenseSwiGluWeights::load_bindings(tensors, bindings, config, normalization, stream)?;
         let fusion = FusionPlanner::new(stream).projections(

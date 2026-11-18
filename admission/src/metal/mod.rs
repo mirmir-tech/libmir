@@ -26,6 +26,7 @@ pub enum MetalDecoderRuntime {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MetalDecoderPlan {
     layers: Vec<LayerLowering>,
+    final_norm: NormalizationLowering,
     runtime: MetalDecoderRuntime,
 }
 
@@ -33,6 +34,11 @@ impl MetalDecoderPlan {
     #[must_use]
     pub fn layers(&self) -> &[LayerLowering] {
         &self.layers
+    }
+
+    #[must_use]
+    pub const fn final_norm(&self) -> NormalizationLowering {
+        self.final_norm
     }
 
     #[must_use]
@@ -104,8 +110,13 @@ fn sequence_scoring(config: &EncoderConfig) -> Result<MetalArchitecture> {
 
 pub fn plan(spec: &SemanticModelSpec) -> Result<MetalDecoderPlan> {
     let layers = spec.decoder.layers.iter().map(lower_layer).collect::<Result<Vec<_>>>()?;
+    let final_norm = operations::lower_normalization(
+        spec.decoder.layers.len(),
+        "final",
+        spec.decoder.final_norm,
+    )?;
     let runtime = select_runtime(&layers)?;
-    Ok(MetalDecoderPlan { layers, runtime })
+    Ok(MetalDecoderPlan { layers, final_norm, runtime })
 }
 
 fn select_runtime(layers: &[LayerLowering]) -> Result<MetalDecoderRuntime> {

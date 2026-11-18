@@ -1,13 +1,13 @@
 //! gpt-oss experts from GGUF: GGML MXFP4 banks repacked once, at load, into
-//! the native layout of the MXFP4 expert kernels; gate and up rows are
-//! interleaved as the fused native bank stores them.
+//! OCP nibbles, which read as words are MLX's MXFP4 layout, so the experts
+//! run through MLX `gather_mxfp4` like the MXFP4 `SafeTensors` checkpoints.
 
 use models::{
     gguf::GgmlType,
     weights::{TensorBinding, TensorStorage},
 };
 
-use super::{ClampedRoutedConfig, ExpertLayout, native::validate};
+use super::{BoundLinear, ClampedRoutedConfig, ExpertLayout};
 use crate::engine::{Array, Error, ModelTensors, Result, Stream};
 
 /// Whether every routed projection is a GGML MXFP4 bank.
@@ -26,31 +26,18 @@ pub(super) fn ggml_layout(
 ) -> Result<ExpertLayout> {
     let hidden = usize::try_from(config.hidden)?;
     let intermediate = usize::try_from(config.intermediate)?;
-    let (gate_blocks, gate_scales, gate_bias) = bank(tensors, gate, hidden, stream)?;
-    let (up_blocks, up_scales, up_bias) = bank(tensors, up, hidden, stream)?;
-    let (down_blocks, down_scales, down_bias) = bank(tensors, down, intermediate, stream)?;
-    let experts = experts(gate)?;
-    let layout = ExpertLayout::Native {
-        gate_up_blocks: interleave(&gate_blocks, &up_blocks, stream)?,
-        gate_up_scales: interleave(&gate_scales, &up_scales, stream)?,
-        gate_up_bias: interleave(&gate_bias, &up_bias, stream)?,
-        down_blocks,
-        down_scales,
-        down_bias,
-    };
-    validate(&layout, experts, hidden, intermediate, 2 * intermediate, gate, down)?;
-    if let ExpertLayout::Native {
-        gate_up_blocks,
-        gate_up_scales,
-        gate_up_bias,
-        ..
-    } = &layout
-    {
-        for array in [gate_up_blocks, gate_up_scales, gate_up_bias] {
+    let projection = |binding, columns| -> Result<BoundLinear> {
+        let (blocks, scales, bias) = bank(tensors, binding, columns, stream)?;
+        for array in [&blocks, &scales] {
             array.async_eval(stream)?;
         }
-    }
-    Ok(layout)
+        BoundLinear::mxfp4_bank(&blocks, scales, bias, stream)
+    };
+    Ok(ExpertLayout::Separate {
+        gate: projection(gate, hidden)?,
+        up: projection(up, hidden)?,
+        down: projection(down, intermediate)?,
+    })
 }
 
 /// One `[experts, rows, columns]` bank as native `[experts, rows, columns /
@@ -81,22 +68,6 @@ fn bank(
         scales.reshape(&[experts, rows, blocks_per_row], stream)?,
         tensors.get(bias)?,
     ))
-}
-
-/// `[experts, rows, ..]` gate and up as `[experts, 2 rows, ..]`, row 2j from
-/// gate row j and row 2j + 1 from up row j.
-fn interleave(gate: &Array, up: &Array, stream: &Stream) -> Result<Array> {
-    let shape = gate.shape()?;
-    let mut split = shape.clone();
-    split.insert(2, 1);
-    let joined = Array::concatenate(
-        &[&gate.reshape(&split, stream)?, &up.reshape(&split, stream)?],
-        2,
-        stream,
-    )?;
-    let mut fused = shape;
-    fused[1] *= 2;
-    joined.reshape(&fused, stream)
 }
 
 fn experts(binding: &TensorBinding) -> Result<usize> {

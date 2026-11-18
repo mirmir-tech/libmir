@@ -8,7 +8,7 @@ use super::{
 use crate::engine::{
     Array, DecoderCache, ModelTensors, NormWeight, Result, Stream, decode,
     decoder::{LayerContext, LayerLoopOptions, forward_layers},
-    lowering::{FeedForwardLowering, LayerLowering, MixerLowering},
+    lowering::{FeedForwardLowering, LayerLowering, MixerLowering, NormalizationLowering},
 };
 
 #[derive(Debug)]
@@ -35,6 +35,7 @@ impl DenseSwiGluModel {
         decoder: &DecoderConfig,
         bindings: &WeightBindingPlan,
         lowering: &[LayerLowering],
+        final_norm: NormalizationLowering,
         cache_step: usize,
         stream: &Stream,
     ) -> Result<Self> {
@@ -83,7 +84,12 @@ impl DenseSwiGluModel {
             embedding_multiplier,
             embedding: BoundEmbedding::load(tensors, boundary.embedding, stream)?,
             output_projection,
-            final_norm: NormWeight::load_name(tensors, &boundary.final_norm.source)?,
+            final_norm: NormWeight::load_name_adjusted(
+                tensors,
+                &boundary.final_norm.source,
+                super::config::norm_shift(final_norm),
+                stream,
+            )?,
         })
     }
 

@@ -35,14 +35,25 @@ pub(super) fn fixed(architecture: &str, config: &mut Map<String, Value>) {
         config.insert(QUERY_KEY_ROWS.into(), json!(QUERY_KEY_ROWS_INTERLEAVED));
     }
     if architecture == "gemma3" {
-        // llama.cpp v1.0.0 `llama-model.cpp` `LLM_ARCH_GEMMA3`: sliding layers
-        // rotate with base 10000; scores scale by `1 / sqrt(head_dim)`
-        // (27B differs, which GGUF does not record); embeddings scale by
+        // llama.cpp v1.0.0 `src/models/gemma3.cpp`: sliding layers rotate with
+        // base 10000; scores scale by `1 / sqrt(head_dim)`, except the 27B
+        // model (62 layers, which GGUF does not otherwise record), which
+        // scales by `1 / sqrt(n_embd / n_head)` as google/gemma-3-27b-it's
+        // `query_pre_attn_scalar` of 168 does; embeddings scale by
         // `sqrt(n_embd)`. The converter already added one to every norm
         // weight, so the norms are plain.
         config.insert("rope_local_base_freq".into(), json!(10_000.0));
-        if let Some(head_dim) = config.get("head_dim").cloned() {
-            config.insert("query_pre_attn_scalar".into(), head_dim);
+        let unsigned = |key: &str| config.get(key).and_then(Value::as_u64);
+        let scalar = match (
+            unsigned("num_hidden_layers"),
+            unsigned("hidden_size"),
+            unsigned("num_attention_heads"),
+        ) {
+            (Some(62), Some(hidden), Some(heads)) if heads > 0 => Some(hidden / heads),
+            _ => unsigned("head_dim"),
+        };
+        if let Some(scalar) = scalar {
+            config.insert("query_pre_attn_scalar".into(), json!(scalar));
         }
         if let Some(hidden) = config.get("hidden_size").and_then(Value::as_f64) {
             config.insert("embedding_multiplier".into(), json!(hidden.sqrt()));
@@ -69,3 +80,6 @@ fn query_key_rows_interleaved(architecture: &str) -> bool {
 pub(super) fn yarn_truncate(architecture: &str) -> Option<bool> {
     (architecture == "gpt-oss").then_some(false)
 }
+
+#[cfg(test)]
+mod tests;
