@@ -7,7 +7,7 @@ fn reservation_policy_has_one_stable_external_spelling() -> serde_json::Result<(
         assert_eq!(value.as_str(), Some(policy.to_string().as_str()));
         assert_eq!(serde_json::from_value::<DecodeReservation>(value)?, policy);
     }
-    assert_eq!(DecodeReservation::default(), DecodeReservation::OnePage);
+    assert_eq!(DecodeReservation::default(), DecodeReservation::GenerationBudget);
     Ok(())
 }
 

@@ -941,7 +941,8 @@ The target shape is:
   from generation's existing logical reservation limit. Preserve the request through
   scalar facade dispatch. The count includes the first prediction; raw prefill has
   no declared limit. CUDA keeps its existing policy; vision is unchanged.
-- `MetalCacheConfig::decode_reservation` offers OnePage (default) and GenerationBudget;
+- `MetalCacheConfig::decode_reservation` offers GenerationBudget (default since
+  2026-11-19, see below) and OnePage;
   the facade exports `MetalDecodeReservation`. Tokens64 remains test-only. Admit
   baseline pages before using spare capacity; optional tails must not trigger extra
   prefix eviction. Recheck pending plans and allow them to shrink before execution.
@@ -959,7 +960,7 @@ The target shape is:
 - Whole Qwen timing aborts after6 runs on28.2322% control prefill spread. All576
   completed IDs match, but no aggregate performance result qualifies. This run had
   no concurrent assistant-launched build/test/clippy; the drift cause remains unknown.
-  Keep OnePage default. Do not retry unchanged, average the partial series or claim
+  OnePage stayed default then. Do not retry unchanged, average the partial series or claim
   an MLX-LM win. Diagnose prefill instability before another timing series.
 
 ## Prefill drift hardware diagnosis
@@ -1009,7 +1010,7 @@ The target shape is:
   OnePage cohort has30 copied full K/V views, each GenerationBudget cohort30 aliases.
   Keep the615.070 ms baseline sample; no filtering or frequency normalization.
 - This does not rescue the earlier budget32 whole-request trials or qualify prefill,
-  memory deltas, chat quality, GPT-OSS, C2/C5, or an MLX-LM win. OnePage stays default.
+  memory deltas, chat quality, GPT-OSS, C2/C5, or an MLX-LM win. OnePage stayed default.
   Next assess budget256 preparation/memory and pressure/cache reuse, then protect
   prefill in a whole-request qualification. No unchanged retry or MLX-LM rerun.
 
@@ -1031,7 +1032,7 @@ The target shape is:
  180→200 MiB. Reclaim returns450 pages to the pool but does not shrink buffers;
   full session/prefix release drops all arenas. All30 recorded continuation IDs match.
   Cold/warm prefill timings are diagnostic only; preparation/whole-request latency
-  remains unqualified. Keep OnePage default and archived MLX-LM/decode references.
+  remained unqualified then; OnePage stayed default. Keep archived MLX-LM/decode references.
 
 
 ## Complete native budget256 qualification
@@ -1041,7 +1042,7 @@ The target shape is:
   and final benchmark drain. It measures native fixed-length work, not HTTP/EOS.
 - The single baseline-only attempt fails readiness within90s. Final four-sample
   spreads: prefill5.7324%, frequency6.3082% exceed3%; decode9.8916% is below15%.
-  All7680 recorded IDs match. No validation/candidate/A/B ran. Keep OnePage default,
+  All7680 recorded IDs match. No validation/candidate/A/B ran. OnePage stayed default;
   no incomplete means, shifted window, relaxed gate, unchanged retry or MLX-LM rerun.
 - The isolated resident decode gain does not qualify complete native generation.
   A separate application gap remains: mirmir configuration does not map public
@@ -1056,7 +1057,7 @@ The target shape is:
   from configuration deserialization. Its owning module is config/cache/mod.rs.
 - Workmir's `2026-09-09-reservation-config` adds the macOS application setting
   runtime.metal_decode_reservation using this same public type. No parallel app
-  enum or private backend dependency. OnePage remains the library default;
+  enum or private backend dependency. GenerationBudget is the library default;
   application auto removes its override. This is plumbing, not a timing promotion.
 
 
@@ -1071,6 +1072,21 @@ The target shape is:
   Physical arena pressure, full-budget output and whole-request timing remain
   separate evidence domains; do not infer them from HTTP logical cache counts.
 
+
+## GenerationBudget default
+
+- GenerationBudget is the default decode reservation since 2026-11-19. With
+  OnePage every concurrent session grows a page at a time, so sessions take
+  interleaved pages, their histories fragment and packed decode reads them per
+  row through native paged SDPA or a gather. A contiguous reservation keeps the
+  ordinary MLX view. One session is unaffected; shared prefix restorations still
+  start fragmented (shared prefix run plus a private tail).
+- Workmir's `2026-11-18-metal-serving-pages` A/B, one binary with and without the
+  setting, llama-benchy PP2048/TG128, depth 0/4096, C1/C2/C10, zero swap: TG
+  changes C2 +12–71% and C10 +15–82% across Llama-3.1-8B and Qwen3-30B-A3B GGUF,
+  gpt-oss-20b GGUF, Qwen3-4B BF16 and Qwen3.6-35B MXFP4; C1 within ±3% (one
+  first-cell Llama outlier). Qwen3-8B Q4_K_M C2/C5/C10 depth 0: 55.2/77.9/78.6 →
+  74.3/113.6/95.9 tok/s, against llama.cpp Metal 70.5/93.7/64.9.
 
 ## Queue-aged prefill collection
 
