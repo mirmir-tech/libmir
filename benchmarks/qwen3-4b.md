@@ -75,33 +75,3 @@ TG at 133% of vLLM with every request waiting for the slowest prefill);
 estimated request completion time is shorter in every measured cell. mirmir
 matches vLLM on load rows (95–104% PP) and trails on reuse prompt processing
 (87–98%). A CUDA prefill wave holds every admitted row (AD-030).
-
-## Metal — Apple M3 Max, 40-core GPU, 64 GiB
-
-| Property | Value |
-|:---|:---|
-| Machine | Apple M3 Max |
-| GPU | 40 cores |
-| Memory | 64 GiB unified |
-| Reference | MLX-LM 0.31.3 |
-| mirmir cells | 36 |
-| Reference cells | 26 |
-
-| Metric | mirmir | MLX-LM | Ratio | Cell wins |
-|:---|---:|---:|---:|---:|
-| PP tok/s | 545.0 | 593.4 | 91.8% | 5/26 |
-| TG tok/s | 22.10 | 27.34 | 80.8% | 6/26 |
-| TTFT ms | 19,149 | 17,405 | 1.100× | 5/26 |
-
-| Depth | Phase | Cells | PP mirmir | PP MLX | PP % | TG mirmir | TG MLX | TG % | TTFT mirmir ms | TTFT MLX ms | TTFT × |
-|---:|:---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 0 | plain | 4 | 964.0 | 934.8 | 103.1% | 47.26 | 43.21 | 109.4% | 6,748 | 6,931 | 0.974× |
-| 4,096 | load | 4 | 714.8 | 721.4 | 99.1% | 27.21 | 31.23 | 87.1% | 18,179 | 17,948 | 1.013× |
-| 4,096 | reuse | 4 | 479.6 | 571.1 | 84.0% | 23.98 | 29.10 | 82.4% | 13,849 | 11,318 | 1.224× |
-| 8,192 | load | 4 | 621.4 | 669.9 | 92.8% | 20.76 | 26.09 | 79.6% | 41,738 | 37,756 | 1.105× |
-| 8,192 | reuse | 4 | 403.2 | 482.8 | 83.5% | 18.44 | 26.67 | 69.2% | 16,102 | 13,347 | 1.206× |
-| 16,384 | load | 3 | 507.2 | 530.8 | 95.5% | 13.46 | 18.46 | 73.0% | 69,636 | 66,510 | 1.047× |
-| 16,384 | reuse | 3 | 283.7 | 328.6 | 86.3% | 12.37 | 18.68 | 66.2% | 15,573 | 13,436 | 1.159× |
-
-
-
