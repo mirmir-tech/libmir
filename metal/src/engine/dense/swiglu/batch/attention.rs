@@ -1,7 +1,7 @@
 use super::super::{attention, config::DenseSwiGluLayerConfig, weights::AttentionWeights};
 use crate::engine::{
     Array, Error, FusedAttention, KvCache, PagedContextMode, Result, Stream, attention::tuning,
-    native_paged_attention_mode, paged_attention_min_context,
+    paged_attention_min_context,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -108,19 +108,8 @@ fn packed_attention_rows(
             )?;
             let value = row_slice(values, row, config.kv_heads, config.head_dim, stream)?;
             let sequence = usize::try_from(query.shape()?[2])?;
-            let mode = if sequence == 1 && tune_paged {
-                PagedContextMode::Both
-            } else if sequence == 1 {
-                native_paged_attention_mode(
-                    config.head_dim,
-                    config.heads,
-                    config.kv_heads,
-                    usize::try_from(position)? + 1,
-                    stream.config().cache.force_native_paged_attention,
-                )
-            } else {
-                PagedContextMode::View
-            };
+            let mode =
+                super::row_context_mode(cache, config, position, sequence, tune_paged, stream)?;
             let context = cache.update_for_attention_mode(
                 &key,
                 &value,

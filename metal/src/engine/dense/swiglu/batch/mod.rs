@@ -141,3 +141,32 @@ impl DenseSwiGluLayer {
         self.feed_forward_residual(input, &mlp.down.forward(&activated, stream)?, stream)
     }
 }
+
+/// How one packed row reads its K/V context. A batched decode row exposes
+/// both a view and its pages so execution tuning can choose, except that a
+/// fragmented row never reads a gathered view faster than its pages.
+fn row_context_mode(
+    cache: &KvCache,
+    config: super::config::DenseSwiGluLayerConfig,
+    position: i32,
+    sequence: usize,
+    batched: bool,
+    stream: &Stream,
+) -> Result<crate::engine::PagedContextMode> {
+    use crate::engine::{PagedContextMode, native_paged_attention_mode};
+    let native = native_paged_attention_mode(
+        config.head_dim,
+        config.heads,
+        config.kv_heads,
+        usize::try_from(position)? + 1,
+        stream.config().cache.force_native_paged_attention,
+    );
+    Ok(match (sequence, batched) {
+        (1, true) if cache.fragmented_pages() && native != PagedContextMode::View => {
+            PagedContextMode::Native
+        },
+        (1, true) => PagedContextMode::Both,
+        (1, false) => native,
+        _ => PagedContextMode::View,
+    })
+}

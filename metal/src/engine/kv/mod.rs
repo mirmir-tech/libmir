@@ -201,6 +201,11 @@ impl KvCache {
         self.pages.as_ref().map_or(0, paged::PagedStore::page_count)
     }
 
+    /// Whether the active pages already form more than one physical run.
+    pub(crate) fn fragmented_pages(&self) -> bool {
+        self.pages.as_ref().is_some_and(|pages| pages.active() && pages.fragmented())
+    }
+
     pub fn update(&mut self, keys: &Array, values: &Array, stream: &Stream) -> Result<KvContext> {
         self.update_inner(keys, values, stream, 0, PagedContextMode::Both)
     }
