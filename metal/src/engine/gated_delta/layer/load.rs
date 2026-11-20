@@ -2,8 +2,7 @@ use models::weights::{LinearAttentionBindings, TensorBinding};
 
 use super::{CompiledDecode, GatedDeltaLayer, GatedDeltaLayerConfig};
 use crate::engine::{
-    Array, ModelTensors, NormWeight, QuantizedLinear, Result, Stream,
-    binding::{BoundLinear, adjusted_norm},
+    Array, ModelTensors, NormWeight, QuantizedLinear, Result, Stream, binding::BoundLinear,
 };
 
 impl GatedDeltaLayer {
@@ -17,24 +16,13 @@ impl GatedDeltaLayer {
         Self::load_prefix(tensors, prefix, config, group_size, norm_weight, None)
     }
 
-    pub fn load_with_norm_shift(
-        tensors: &ModelTensors,
-        prefix: &str,
-        config: GatedDeltaLayerConfig,
-        group_size: i32,
-        norm_shift: f32,
-        stream: &Stream,
-    ) -> Result<Self> {
-        let norm_weight =
-            NormWeight::load_adjusted(tensors, &format!("{prefix}.norm"), norm_shift, stream)?;
-        Self::load_prefix(tensors, prefix, config, group_size, norm_weight, Some(stream))
-    }
-
+    /// The gated output norm multiplies by its weight in both checkpoint
+    /// layouts: Hugging Face's zero-centred `(1 + w)` norms, which the caller
+    /// shifts, are the layer and Q/K norms only (`mlx_lm` `qwen3_5.sanitize`).
     pub fn load_bindings(
         tensors: &ModelTensors,
         bindings: LinearAttentionBindings<'_>,
         config: GatedDeltaLayerConfig,
-        norm_shift: f32,
         stream: &Stream,
     ) -> Result<Self> {
         let mut layer = Self {
@@ -45,7 +33,7 @@ impl GatedDeltaLayer {
             in_proj_a: BoundLinear::load(tensors, bindings.alpha, stream)?,
             out_proj: BoundLinear::load(tensors, bindings.output, stream)?,
             conv_weight: convolution(tensors, bindings.convolution, stream)?,
-            norm_weight: adjusted_norm(tensors, bindings.norm, norm_shift, stream)?,
+            norm_weight: NormWeight::load_name(tensors, &bindings.norm.source)?,
             a_log: tensors.get(&bindings.decay_log.source)?,
             dt_bias: tensors.get(&bindings.time_bias.source)?,
             compiled_decode: None,

@@ -233,8 +233,7 @@ fn attention(
                 })?,
                 decoder.rms_norm_eps,
             )?;
-            GatedDeltaLayer::load_bindings(tensors, bindings, config, norm_shift, stream)
-                .map(Attention::Linear)
+            GatedDeltaLayer::load_bindings(tensors, bindings, config, stream).map(Attention::Linear)
         },
         HybridMixerBindings::Softmax(bindings) => GatedFullAttention::load_bindings(
             tensors,
