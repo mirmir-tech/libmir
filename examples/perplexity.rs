@@ -6,8 +6,8 @@
 //! the tokens before it.
 //!
 //! Usage: `perplexity <model> <text> [chunks=N] [context=N] [prefill=N]
-//! [bos=ID]`, where `prefill` sets the CUDA prefill chunk in tokens and `bos`
-//! starts the text and replaces each chunk's first token, as
+//! [bos=ID]`, where `prefill` sets the CUDA or Metal prefill chunk in tokens
+//! and `bos` starts the text and replaces each chunk's first token, as
 //! `llama-perplexity` does for models whose vocabulary adds a BOS token.
 #![allow(clippy::print_stdout)]
 
@@ -37,7 +37,11 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             {
                 config.cuda.model_session.prefill_chunk_tokens = value.parse()?;
             }
-            #[cfg(not(feature = "cuda"))]
+            #[cfg(feature = "metal")]
+            {
+                config.metal.cache.prefill_step = Some(value.parse()?);
+            }
+            #[cfg(not(any(feature = "cuda", feature = "metal")))]
             let _ = value;
         } else {
             return Err(format!("unknown option {option}").into());
