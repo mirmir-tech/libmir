@@ -16,6 +16,7 @@ use super::CudaSpatialMergeVisionTower;
 use crate::{CudaConfig, Result, backend::CudaBackend, checkpoint::load_vision_tensors};
 
 #[test]
+#[ignore = "requires an idle CUDA device; measures the shared driver memory pool"]
 fn executes_a_complete_synthetic_spatial_merge_tower() -> Result<()> {
     let path =
         std::env::temp_dir().join(format!("libmir-cuda-spatial-merge-{}.bin", std::process::id()));

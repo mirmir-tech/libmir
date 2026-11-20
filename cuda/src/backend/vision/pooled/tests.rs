@@ -11,6 +11,7 @@ use super::CudaPooledVisionTower;
 use crate::{CudaConfig, Result, backend::CudaBackend, checkpoint::load_vision_tensors};
 
 #[test]
+#[ignore = "requires an idle CUDA device; measures the shared driver memory pool"]
 fn executes_a_complete_synthetic_pooled_tower_without_a_host_barrier() -> Result<()> {
     let path =
         std::env::temp_dir().join(format!("libmir-cuda-pooled-vision-{}.bin", std::process::id()));
