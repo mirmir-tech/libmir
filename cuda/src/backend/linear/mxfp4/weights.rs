@@ -71,7 +71,8 @@ impl MxFp4ExpertWeights {
                 },
                 down,
             ),
-            RoutedExpertBindings::Individual { .. } => {
+            RoutedExpertBindings::UngatedStacked { .. }
+            | RoutedExpertBindings::Individual { .. } => {
                 return Err(Error::UnsupportedDecoderLayer(
                     "MXFP4 CUDA experts require stacked checkpoint bindings".into(),
                 ));

@@ -3,7 +3,10 @@ use crate::config::HistoryBatching::{Joined, Persistent};
 
 #[test]
 fn persistent_decode_matches_joined_through_cohort_churn_and_ragged_fallback() -> Result<()> {
-    let mut stream = Stream::new_gpu()?;
+    // Selects the diagnostic history plans rather than the production path.
+    let mut config = crate::MetalConfig::default();
+    config.batch.dense_history = crate::config::DenseHistoryMode::PerRow;
+    let mut stream = Stream::new_gpu_with_config(std::sync::Arc::new(config))?;
     let attention = fixture(&stream)?;
     let mut baseline = (0..3).map(|_| KvCache::new(16)).collect::<Result<Vec<_>>>()?;
     let mut candidate = (0..3).map(|_| KvCache::new(16)).collect::<Result<Vec<_>>>()?;

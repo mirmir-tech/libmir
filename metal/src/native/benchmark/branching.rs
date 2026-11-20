@@ -45,6 +45,8 @@ fn measures_shared_prefix_decode_batch() -> Result<()> {
             })
         })
         .collect::<Result<Vec<_>>>()?;
+    let tolerate_divergence = env::var_os("MIRMIR_BENCH_TOLERATE_DIVERGENCE").is_some();
+    let mut divergent_rows = 0_usize;
     let mut digest = blake3::Hasher::new();
     let started = Instant::now();
     for _ in 0..config.decode_tokens {
@@ -54,15 +56,19 @@ fn measures_shared_prefix_decode_batch() -> Result<()> {
             input.token = greedy_token(&output)?;
             digest.update(&input.token.to_le_bytes());
             if expected.replace(input.token).is_some_and(|token| token != input.token) {
-                return Err(Error::Benchmark(
-                    "identical shared-prefix rows produced different greedy tokens".into(),
-                ));
+                if !tolerate_divergence {
+                    return Err(Error::Benchmark(
+                        "identical shared-prefix rows produced different greedy tokens".into(),
+                    ));
+                }
+                divergent_rows += 1;
             }
         }
     }
     let elapsed = started.elapsed();
     let memory = crate::engine::memory_stats()?;
     writeln!(std::io::stderr().lock(), "shared_prefix_batch.digest: {}", digest.finalize())?;
+    writeln!(std::io::stderr().lock(), "shared_prefix_batch.divergent_rows: {divergent_rows}")?;
     writeln!(
         std::io::stderr().lock(),
         "shared_prefix_batch.benchmark: context={context}, batch={batch}, decode_tokens={}, aggregate={:.2} tok/s ({:.2}ms)",

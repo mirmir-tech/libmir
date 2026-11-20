@@ -49,7 +49,7 @@ fn prepared_plan_does_not_retain_reclaimed_buffers() -> Result<()> {
     let next = Arc::new(History {
         buffers,
         shape: previous.shape,
-        tokens: 2,
+        tokens: vec![2; 2],
         reservation: Arc::clone(&previous.reservation),
     });
     stream.eval_many(&next.buffers.iter().collect::<Vec<_>>())?;

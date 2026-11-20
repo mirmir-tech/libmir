@@ -29,8 +29,8 @@ impl MetalPrefillCohort {
         requests: &[PrefillRequest],
     ) -> Result<Self> {
         super::validation::validate_requests(requests)?;
-        #[cfg(test)]
-        loaded.apply_history_pressure(crate::engine::memory_stats()?)?;
+        let prompt_tokens = requests.iter().map(|request| request.prompt_tokens.len()).sum();
+        loaded.apply_history_pressure(crate::engine::memory_stats()?, prompt_tokens)?;
         let model_id = loaded.info.manifest.id.clone();
         let mut prefixes = HashMap::with_capacity(requests.len());
         let mut leased_groups = HashSet::new();

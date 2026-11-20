@@ -18,9 +18,14 @@ pub use operations::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MetalDecoderRuntime {
     Dense,
+    DenseGelu,
     DenseAndRouted,
     SharedRouted,
+    /// Dense `SwiGLU` layers mixing linear and softmax attention.
+    DenseMixed,
     ClampedRouted,
+    /// Mamba-2 and attention mixers with sigmoid-routed experts (Nemotron-H).
+    StateSpaceHybrid,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -59,8 +64,9 @@ pub enum MetalArchitecture {
 #[must_use]
 pub const fn executes_vision(pipeline: VisionPipeline) -> bool {
     match pipeline {
-        VisionPipeline::PooledEncoder | VisionPipeline::SpatialMergeEncoder => true,
-        VisionPipeline::PixelShuffleEncoder => false,
+        VisionPipeline::PooledEncoder
+        | VisionPipeline::SpatialMergeEncoder
+        | VisionPipeline::PixelShuffleEncoder => true,
     }
 }
 
@@ -128,6 +134,12 @@ fn select_runtime(layers: &[LayerLowering]) -> Result<MetalDecoderRuntime> {
         return Ok(MetalDecoderRuntime::Dense);
     }
     if layers.iter().all(|layer| {
+        layer.feed_forward == FeedForwardLowering::DenseGelu
+            && matches!(layer.mixer, MixerLowering::Softmax { .. })
+    }) {
+        return Ok(MetalDecoderRuntime::DenseGelu);
+    }
+    if layers.iter().all(|layer| {
         layer.feed_forward == FeedForwardLowering::DenseAndRouted
             && matches!(layer.mixer, MixerLowering::Softmax { .. })
     }) {
@@ -140,11 +152,31 @@ fn select_runtime(layers: &[LayerLowering]) -> Result<MetalDecoderRuntime> {
     {
         return Ok(MetalDecoderRuntime::SharedRouted);
     }
+    if layers.iter().all(|layer| layer.feed_forward == FeedForwardLowering::Dense)
+        && layers.iter().any(|layer| layer.mixer == MixerLowering::Linear)
+    {
+        return Ok(MetalDecoderRuntime::DenseMixed);
+    }
     if layers.iter().all(|layer| {
         layer.feed_forward == FeedForwardLowering::ClampedRouted
             && matches!(layer.mixer, MixerLowering::Softmax { sinks: true, .. })
     }) {
         return Ok(MetalDecoderRuntime::ClampedRouted);
+    }
+    if layers.iter().any(|layer| layer.mixer == MixerLowering::StateSpace)
+        && layers.iter().any(|layer| matches!(layer.mixer, MixerLowering::Softmax { .. }))
+        && layers.iter().all(|layer| {
+            matches!(
+                layer.feed_forward,
+                FeedForwardLowering::LatentRouted | FeedForwardLowering::None
+            ) && matches!(
+                layer.mixer,
+                MixerLowering::StateSpace
+                    | MixerLowering::Softmax { sinks: false, window: None, .. }
+            )
+        })
+    {
+        return Ok(MetalDecoderRuntime::StateSpaceHybrid);
     }
     Err(ArchitectureError::invalid(
         "Metal has no runtime for the lowered decoder operation composition",

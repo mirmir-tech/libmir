@@ -56,14 +56,14 @@ fn inspect(context: usize, layers: usize) -> Result<()> {
             std::num::NonZeroUsize::new(256),
             |model, inputs| {
                 model.stream.set_history_batching(plan);
-                model.apply_history_pressure(pressure(40))?;
+                model.apply_history_pressure(pressure(40), 0)?;
                 let before = crate::engine::persistent_history::counts();
                 let mut result = plain(model, inputs)?;
                 let initial = inventory(model)?;
                 assert_eq!(initial, (2 * expected_layers, expected_layers * layer_bytes));
                 assert_eq!(model.stream.history_budget().snapshot().retained_bytes, initial.1);
                 let prefixes = model.prefixes.group_count();
-                model.apply_history_pressure(pressure(60))?;
+                model.apply_history_pressure(pressure(60), 0)?;
                 assert_eq!(model.prefixes.group_count(), prefixes);
                 assert_eq!(
                     model.stream.history_budget().snapshot().admission,
@@ -73,7 +73,7 @@ fn inspect(context: usize, layers: usize) -> Result<()> {
                 assert_eq!(model.stream.history_budget().snapshot().retained_bytes, 0);
                 let blocked = plain(model, inputs)?;
                 assert_eq!(inventory(model)?, (0, 0));
-                model.apply_history_pressure(pressure(40))?;
+                model.apply_history_pressure(pressure(40), 0)?;
                 let resumed = plain(model, inputs)?;
                 let restored = inventory(model)?;
                 assert_eq!(restored, initial);

@@ -45,14 +45,33 @@ pub(super) fn forward(
     };
     let queries = queries.reshape(&[1, sequence, config.heads, config.head_dim], stream)?;
     let queries = normalize(queries, weights.query_norm.as_ref(), config.rms_norm_eps, stream)?;
-    let queries =
-        rope_layout(&queries, weights.rope_frequencies.as_ref(), config, position, stream)?;
     let keys = keys.reshape(&[1, sequence, config.kv_heads, config.head_dim], stream)?;
     let keys = normalize(keys, weights.key_norm.as_ref(), config.rms_norm_eps, stream)?;
-    let keys = rope_layout(&keys, weights.rope_frequencies.as_ref(), config, position, stream)?;
     let values = values
         .reshape(&[1, sequence, config.kv_heads, config.head_dim], stream)?
         .transpose(&[0, 2, 1, 3], stream)?;
+    let output_width = config.heads * config.head_dim;
+    if let Some(attended) = super::batch::persistent_attention(
+        &queries,
+        &keys,
+        &values,
+        &mut [&mut *cache],
+        weights,
+        config,
+        &[position],
+        causal,
+        stream,
+    )? {
+        return weights.output.forward(
+            &attended
+                .transpose(&[0, 2, 1, 3], stream)?
+                .reshape(&[1, sequence, output_width], stream)?,
+            stream,
+        );
+    }
+    let queries =
+        rope_layout(&queries, weights.rope_frequencies.as_ref(), config, position, stream)?;
+    let keys = rope_layout(&keys, weights.rope_frequencies.as_ref(), config, position, stream)?;
     let mode = if sequence == 1 {
         native_paged_attention_mode(
             config.head_dim,
@@ -97,7 +116,6 @@ pub(super) fn forward(
         },
     };
     let output = output.transpose(&[0, 2, 1, 3], stream)?;
-    let output_width = config.heads * config.head_dim;
     weights
         .output
         .forward(&output.reshape(&[1, sequence, output_width], stream)?, stream)

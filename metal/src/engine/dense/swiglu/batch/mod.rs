@@ -1,4 +1,8 @@
 mod attention;
+mod history;
+pub(super) use history::persistent_attention;
+#[cfg(test)]
+mod tests;
 
 use self::attention::packed_attention;
 use super::{

@@ -97,7 +97,7 @@ fn rejected_composition_names_the_missing_backend_runtime() -> AnyResult<()> {
 }
 
 #[test]
-fn admits_dense_mixed_attention_only_on_cuda() -> AnyResult<()> {
+fn admits_dense_mixed_attention_on_both_backends() -> AnyResult<()> {
     let (task, dense) = dense_contract()?;
     let mut semantic = shared_routed(dense.clone());
     for (layer, original) in semantic.decoder.layers.iter_mut().zip(&dense.decoder.layers) {
@@ -107,7 +107,10 @@ fn admits_dense_mixed_attention_only_on_cuda() -> AnyResult<()> {
         cuda::admit(&task, Some(&semantic))?,
         cuda::CudaArchitecture::Generation(cuda::CudaDecoderRuntime::DenseMixed)
     );
-    assert!(metal::admit(&task, Some(&semantic)).is_err());
+    assert_eq!(
+        metal::admit(&task, Some(&semantic))?,
+        metal::MetalArchitecture::Generation(metal::MetalDecoderRuntime::DenseMixed)
+    );
     Ok(())
 }
 

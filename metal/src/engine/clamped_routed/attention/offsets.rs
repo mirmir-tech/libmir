@@ -1,4 +1,5 @@
-use super::*;
+use super::ClampedRoutedAttention;
+use crate::engine::{Array, Result, Stream};
 
 impl ClampedRoutedAttention {
     pub(super) fn rotated_batch(

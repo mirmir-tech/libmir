@@ -74,7 +74,7 @@ fn execute_model(
     Ok(())
 }
 
-fn write_config(root: &Path) -> Result<()> {
+pub(super) fn write_config(root: &Path) -> Result<()> {
     let config = json!({
         "architectures": ["MistralForCausalLM"],
         "model_type": "mistral",
@@ -95,7 +95,7 @@ fn write_config(root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn write_weights(path: &Path, dtype: &str) -> Result<()> {
+pub(super) fn write_weights(path: &Path, dtype: &str) -> Result<()> {
     let specs = [
         ("model.embed_tokens.weight", vec![4, 2]),
         ("model.norm.weight", vec![2]),

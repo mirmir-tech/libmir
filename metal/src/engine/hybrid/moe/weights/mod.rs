@@ -1,5 +1,5 @@
 use crate::engine::{
-    Array, NormWeight, Result, Stream,
+    Array, Error, NormWeight, Result, Stream,
     binding::BoundLinear,
     fused::gate_up::{split_interleaved_last, split_last},
 };
@@ -109,13 +109,27 @@ pub(super) struct LayerWeights {
     pub(super) input_norm: NormWeight,
     pub(super) post_attention_norm: NormWeight,
     pub(super) pre_dense_norm: NormWeight,
-    pub(super) post_dense_norm: NormWeight,
-    pub(super) pre_expert_norm: NormWeight,
-    pub(super) post_expert_norm: NormWeight,
     pub(super) post_feed_forward_norm: NormWeight,
     pub(super) layer_scalar: Array,
     pub(super) attention: AttentionWeights,
     pub(super) dense: DenseWeights,
+    pub(super) routed: Option<RoutedWeights>,
+}
+
+/// The expert branch; dense-only Gemma layers have none of these tensors.
+#[derive(Debug)]
+pub(super) struct RoutedWeights {
+    pub(super) post_dense_norm: NormWeight,
+    pub(super) pre_expert_norm: NormWeight,
+    pub(super) post_expert_norm: NormWeight,
     pub(super) router: RouterWeights,
     pub(super) experts: ExpertWeights,
+}
+
+impl LayerWeights {
+    pub(super) fn routed(&self) -> Result<&RoutedWeights> {
+        self.routed
+            .as_ref()
+            .ok_or_else(|| Error::InvalidModel("dense GELU layer has no expert branch".into()))
+    }
 }

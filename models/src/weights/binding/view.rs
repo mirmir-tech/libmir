@@ -35,6 +35,12 @@ pub enum RoutedExpertBindings<'a> {
         up: &'a TensorBinding,
         down: &'a TensorBinding,
     },
+    /// Stacked `[experts, intermediate, input]` tensors of experts that have
+    /// no gate projection.
+    UngatedStacked {
+        up: &'a TensorBinding,
+        down: &'a TensorBinding,
+    },
     Individual {
         tensors: &'a [TensorBinding],
         layer: LayerSlot,
@@ -65,6 +71,7 @@ impl<'a> RoutedExpertBindings<'a> {
         match self {
             Self::InterleavedGateUp { gate_up, down } => vec![gate_up, down],
             Self::SeparateGateUp { gate, up, down } => vec![gate, up, down],
+            Self::UngatedStacked { up, down } => vec![up, down],
             Self::Individual { tensors, layer } => tensors
                 .iter()
                 .filter(|binding| {

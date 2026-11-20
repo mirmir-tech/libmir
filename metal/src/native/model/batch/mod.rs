@@ -8,6 +8,7 @@ mod capacity;
 mod plan;
 #[cfg(test)]
 pub(in crate::native) mod profile;
+mod sampling;
 #[cfg(test)]
 mod tests;
 pub(in crate::native) use plan::DecodeExecution;
@@ -153,7 +154,7 @@ fn decode_states(
     states: &mut [(Uuid, SessionState)],
     #[cfg(test)] mut profile: Option<&mut profile::Profile>,
 ) -> Result<Vec<NativeOutput>> {
-    let token_ids = sample_batch(inputs, states, stream)?;
+    let token_ids = sampling::sample_batch(inputs, states, stream)?;
     token_ids.async_eval(stream)?;
     #[cfg(test)]
     if let Some(profile) = profile.as_deref_mut() {
@@ -171,7 +172,7 @@ fn decode_states(
     }
     let mut roots = vec![&logits];
     for (_, state) in states.iter() {
-        state.cache.extend_graph_roots(&mut roots);
+        state.cache.extend_prefill_graph_roots(&mut roots);
     }
     stream.eval_many_with_paged_arenas(&roots)?;
     #[cfg(test)]
@@ -192,33 +193,6 @@ fn decode_states(
         profile.mark(profile::Stage::Complete);
     }
     Ok(outputs)
-}
-
-fn sample_batch(
-    inputs: &[DecodeInput],
-    states: &mut [(Uuid, SessionState)],
-    stream: &crate::engine::Stream,
-) -> Result<Array> {
-    let logits = inputs
-        .iter()
-        .zip(states.iter_mut())
-        .map(|(input, (_, state))| step::take_pending(state, input.token))
-        .collect::<Result<Vec<_>>>()?;
-    if inputs.iter().all(|input| input.sampling == SamplingLogits::None) {
-        let refs = logits.iter().collect::<Vec<_>>();
-        return Ok(Array::concatenate(&refs, 0, stream)?.argmax(stream)?);
-    }
-    let sampled = inputs
-        .iter()
-        .zip(&logits)
-        .map(|(input, logits)| {
-            step::device_token(logits, &input.sampling, stream)?.ok_or_else(|| {
-                Error::InvalidDecodeBatch("packed row does not use device sampling".into())
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let refs = sampled.iter().collect::<Vec<_>>();
-    Ok(Array::concatenate(&refs, 0, stream)?)
 }
 
 fn complete_batch(

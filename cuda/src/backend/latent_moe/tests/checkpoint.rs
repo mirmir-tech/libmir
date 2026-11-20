@@ -56,8 +56,8 @@ fn matches_the_reference_on_a_real_latent_block() -> Result<()> {
     let config = LatentMoeConfig::from_hybrid(decoder.hidden_size, &hybrid.routed);
     let backend = CudaBackend::new(CudaConfig::default())?;
     let mut upload = backend.begin_tensor_upload();
-    let mut dense =
-        vec![routed.router, routed.correction_bias, routed.latent_input, routed.latent_output];
+    let latent = routed.latent.ok_or(Error::InvalidExecutionPlan("oracle layer has no latent"))?;
+    let mut dense = vec![routed.router, routed.correction_bias, latent.input, latent.output];
     if let Some(shared) = routed.shared {
         dense.extend([shared.up, shared.down]);
     }

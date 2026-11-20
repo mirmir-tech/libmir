@@ -181,6 +181,7 @@ impl LoadedModel {
             sessions: std::collections::HashMap::new(),
             recovery: super::recovery::ExecutionRecovery::Ready,
             prefill_reservations: crate::native::prefill::Reservations::default(),
+            history_prefill_reserved: false,
         })
     }
 }

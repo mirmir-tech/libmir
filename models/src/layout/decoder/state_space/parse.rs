@@ -17,7 +17,6 @@ use crate::{
 /// configuration does not declare a physical block sequence.
 pub(in crate::layout::decoder) fn state_space_hybrid(
     decoder: &Value,
-    hidden_size: usize,
 ) -> Result<Option<StateSpaceHybridConfig>> {
     let Some(raw) = decoder.get("layers_block_type") else {
         return Ok(None);
@@ -31,7 +30,7 @@ pub(in crate::layout::decoder) fn state_space_hybrid(
             blocks.physical().len()
         )));
     }
-    let mamba = mamba(decoder, hidden_size)?;
+    let mamba = mamba(decoder)?;
     let routed = routed(decoder)?;
     let prediction = prediction(decoder)?;
     Ok(Some(StateSpaceHybridConfig { blocks, mamba, routed, prediction }))
@@ -70,7 +69,7 @@ fn block_kinds(raw: &Value) -> Result<Vec<HybridBlockKind>> {
         .collect()
 }
 
-fn mamba(decoder: &Value, hidden_size: usize) -> Result<Mamba2Config> {
+fn mamba(decoder: &Value) -> Result<Mamba2Config> {
     let config = Mamba2Config {
         heads: positive(decoder, "mamba_num_heads")?,
         head_dim: positive(decoder, "mamba_head_dim")?,
@@ -89,11 +88,6 @@ fn mamba(decoder: &Value, hidden_size: usize) -> Result<Mamba2Config> {
     }
     if !config.heads.is_multiple_of(config.groups) {
         return Err(invalid("mamba_num_heads must be divisible by n_groups"));
-    }
-    if let Some(expand) = optional_usize(decoder, &["expand"])?
-        && expand.checked_mul(hidden_size) != Some(config.inner_size())
-    {
-        return Err(invalid("mamba_num_heads * mamba_head_dim must equal expand * hidden_size"));
     }
     Ok(config)
 }
@@ -131,7 +125,7 @@ fn routed(decoder: &Value) -> Result<LatentRoutedConfig> {
     Ok(LatentRoutedConfig {
         expert_count,
         top_k,
-        latent_size: positive(decoder, "moe_latent_size")?,
+        latent_size: optional_positive(decoder, "moe_latent_size")?,
         expert_intermediate_size: positive(decoder, "moe_intermediate_size")?,
         shared_intermediate_size,
         routed_scale,
@@ -190,4 +184,13 @@ fn positive(decoder: &Value, key: &str) -> Result<usize> {
         return Err(invalid(format!("{key} must be greater than zero")));
     }
     Ok(value)
+}
+
+/// Like [`positive`], but `null` and an absent key both mean the field is
+/// not configured.
+fn optional_positive(decoder: &Value, key: &str) -> Result<Option<usize>> {
+    if decoder.get(key).is_none_or(Value::is_null) {
+        return Ok(None);
+    }
+    positive(decoder, key).map(Some)
 }

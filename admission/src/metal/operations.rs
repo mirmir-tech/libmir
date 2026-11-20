@@ -1,6 +1,6 @@
 use models::semantic::{
     ActivationSpec, DecoderLayerSpec, FeedForwardSpec, MixerSpec, NormalizationKind,
-    NormalizationSpec, QkNormalization,
+    NormalizationSpec, QkNormalization, RouterNormalization,
 };
 
 use crate::{ArchitectureError, Result};
@@ -21,17 +21,24 @@ pub enum MixerLowering {
         normalization: QkNormalization,
     },
     Linear,
+    StateSpace,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FeedForwardLowering {
     Dense,
+    /// Gemma 4-style gated GELU with output norms and a layer scale.
+    DenseGelu,
     /// Routed `SwiGLU` experts with no shared expert and no clamp
     /// (`Qwen3-MoE`), run by the dense runtime in place of its gated MLP.
     Routed,
     DenseAndRouted,
     SharedRouted,
     ClampedRouted,
+    /// Sigmoid-routed `relu²` experts with an optional projected latent space.
+    LatentRouted,
+    /// The layer has no feed-forward block.
+    None,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -52,8 +59,8 @@ pub fn lower_layer(layer: &DecoderLayerSpec) -> Result<LayerLowering> {
             "post-attention",
             layer.post_attention_norm,
         )?,
-        mixer: lower_mixer(layer.index, &layer.mixer)?,
-        feed_forward: lower_feed_forward(layer.index, &layer.feed_forward)?,
+        mixer: lower_mixer(&layer.mixer),
+        feed_forward: lower_feed_forward(layer.index, &layer.feed_forward, &layer.mixer)?,
     })
 }
 
@@ -79,22 +86,34 @@ pub(super) fn lower_normalization(
     }
 }
 
-fn lower_mixer(layer: usize, mixer: &MixerSpec) -> Result<MixerLowering> {
+fn lower_mixer(mixer: &MixerSpec) -> MixerLowering {
     match mixer {
-        MixerSpec::SoftmaxAttention(attention) => Ok(MixerLowering::Softmax {
+        MixerSpec::SoftmaxAttention(attention) => MixerLowering::Softmax {
             sinks: attention.sinks,
             normalization: attention.qk_normalization,
             window: attention.window,
-        }),
-        MixerSpec::LinearAttention(_) => Ok(MixerLowering::Linear),
-        MixerSpec::StateSpace(_) => Err(ArchitectureError::invalid(format!(
-            "Metal cannot lower layer {layer} state-space mixer"
-        ))),
+        },
+        MixerSpec::LinearAttention(_) => MixerLowering::Linear,
+        MixerSpec::StateSpace(_) => MixerLowering::StateSpace,
     }
 }
 
-fn lower_feed_forward(layer: usize, feed_forward: &FeedForwardSpec) -> Result<FeedForwardLowering> {
+fn lower_feed_forward(
+    layer: usize,
+    feed_forward: &FeedForwardSpec,
+    mixer: &MixerSpec,
+) -> Result<FeedForwardLowering> {
+    // Gemma 4 normalizes values too and runs the windowed dense-and-routed
+    // execution; Gemma 3's gated GELU runs in the dense runtime.
+    let value_norm = matches!(
+        mixer,
+        MixerSpec::SoftmaxAttention(attention)
+            if attention.qk_normalization == QkNormalization::QueryKeyValueRms
+    );
     match feed_forward {
+        FeedForwardSpec::Dense { activation: ActivationSpec::GeluTanh, .. } if value_norm => {
+            Ok(FeedForwardLowering::DenseGelu)
+        },
         FeedForwardSpec::Dense {
             activation:
                 ActivationSpec::SwiGlu { clamp: None, up_shift: 0.0, .. } | ActivationSpec::GeluTanh,
@@ -124,6 +143,13 @@ fn lower_feed_forward(layer: usize, feed_forward: &FeedForwardSpec) -> Result<Fe
         {
             Ok(FeedForwardLowering::ClampedRouted)
         },
+        FeedForwardSpec::LatentRouted { routed, .. }
+            if routed.activation == ActivationSpec::ReluSquared
+                && routed.router_normalization == RouterNormalization::SigmoidBiasedTopK =>
+        {
+            Ok(FeedForwardLowering::LatentRouted)
+        },
+        FeedForwardSpec::None => Ok(FeedForwardLowering::None),
         _ => Err(ArchitectureError::invalid(format!(
             "Metal cannot lower layer {layer} feed-forward activation composition"
         ))),

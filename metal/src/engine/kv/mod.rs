@@ -1,13 +1,13 @@
 mod capacity;
 mod contiguous;
 mod format;
-#[cfg(test)]
 pub mod history;
 #[cfg(test)]
 mod inspection;
 mod lifecycle;
 mod paged;
 mod policy;
+mod rows;
 mod sliding;
 mod validation;
 
@@ -75,7 +75,6 @@ impl PagedKvContext {
 
 #[derive(Debug)]
 pub struct KvCache {
-    #[cfg(test)]
     history: Option<history::Row>,
     keys: Option<Array>,
     values: Option<Array>,
@@ -143,7 +142,6 @@ impl KvCache {
         }
         let reserve_tokens = usize::from(page_storage.is_some()) * step;
         Ok(Self {
-            #[cfg(test)]
             history: None,
             keys: None,
             values: None,
@@ -178,7 +176,6 @@ impl KvCache {
             ));
         }
         Ok(Self {
-            #[cfg(test)]
             history: None,
             keys: clone_array(self.keys.as_ref())?,
             values: clone_array(self.values.as_ref())?,

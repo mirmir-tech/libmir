@@ -3,9 +3,9 @@ use std::{
     thread,
 };
 
-use macmon::{Metrics, Sampler, SocInfo};
+use macmon::{Metrics, Sampler};
 
-use super::DeviceTelemetrySnapshot;
+use super::{DeviceTelemetrySnapshot, named_snapshot};
 
 const SAMPLE_INTERVAL_MS: u32 = 1_000;
 static SAMPLES: OnceLock<Mutex<SampleState>> = OnceLock::new();
@@ -52,13 +52,6 @@ fn from_metrics(metrics: &Metrics) -> DeviceTelemetrySnapshot {
     snapshot.temperature_celsius = finite_positive(metrics.temp.gpu_temp_avg);
     snapshot.power_watts = finite_positive_or_zero(metrics.gpu_power);
     snapshot
-}
-
-fn named_snapshot() -> DeviceTelemetrySnapshot {
-    DeviceTelemetrySnapshot {
-        device_name: SocInfo::new().map_or_else(|_| "Apple GPU".to_owned(), |soc| soc.chip_name),
-        ..DeviceTelemetrySnapshot::default()
-    }
 }
 
 fn finite_positive(value: f32) -> Option<f64> {

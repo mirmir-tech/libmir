@@ -171,7 +171,9 @@ fn feed_forward(feed_forward: &FeedForwardSpec) -> Result<()> {
             shared,
             routed_scale,
         } => {
-            nonzero(*latent_size)?;
+            if let Some(latent_size) = latent_size {
+                nonzero(*latent_size)?;
+            }
             routed_spec(routed)?;
             if let Some(shared) = shared {
                 nonzero(shared.intermediate_size)?;

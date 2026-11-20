@@ -26,7 +26,7 @@ pub(super) fn compile(
         weight_offset: 0.0,
     };
     if let Some(hybrid) = &decoder.state_space {
-        return state_space::compile(decoder, hybrid, norm);
+        return state_space::compile(decoder, hybrid, norm, tensors);
     }
     let layers = (0..decoder.num_hidden_layers)
         .map(|index| layer(decoder, tensors, index, norm))

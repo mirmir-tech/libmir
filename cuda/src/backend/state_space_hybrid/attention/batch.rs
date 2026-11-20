@@ -45,6 +45,10 @@ impl CudaAttentionHybridExecution {
         if let Some(batch) = &mut self.batch {
             return batch.bind_cache(&first.cache);
         }
+        // After a K/V resize the layer's configuration still names the block
+        // count it was loaded with; the batch follows the sessions' pages, as
+        // `bind_cache` does for a batch built before the resize.
+        self.config.cache.cache.block_count = first.cache.storage_spec().cache.block_count;
         self.batch = Some(BatchedDecodeAttentionBf16::new_with_cache_weights_workspace(
             &self.backend,
             self.config,

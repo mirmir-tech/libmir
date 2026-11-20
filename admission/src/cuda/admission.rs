@@ -1,7 +1,7 @@
 use models::{
     execution::TaskExecutionPlan,
     layout::{EncoderConfig, EncoderPositionEmbedding, EncoderRopeScaling, NormKind},
-    semantic::{KeyValueRelation, QkNormalization, SemanticModelSpec},
+    semantic::{FeedForwardSpec, KeyValueRelation, QkNormalization, SemanticModelSpec},
 };
 
 use super::{
@@ -48,7 +48,7 @@ fn generation(semantic: Option<&SemanticModelSpec>) -> Result<CudaArchitecture> 
     })?;
     let plan = CudaDecoderPlan::lower(semantic);
     let runtime = if plan.has_state_space_mixer() {
-        state_space_hybrid(&plan)?
+        state_space_hybrid(&plan, semantic)?
     } else if plan.all_shared_routed() && plan.has_linear_mixer() && plan.has_softmax_mixer() {
         CudaDecoderRuntime::SharedRouted
     } else if plan.has_linear_mixer()
@@ -77,7 +77,17 @@ fn generation(semantic: Option<&SemanticModelSpec>) -> Result<CudaArchitecture> 
 
 /// Mamba-2 and attention mixers, without Q/K normalization, sinks, or a
 /// linear-attention layer; latent routed experts or no feed-forward.
-fn state_space_hybrid(plan: &CudaDecoderPlan) -> Result<CudaDecoderRuntime> {
+fn state_space_hybrid(
+    plan: &CudaDecoderPlan,
+    semantic: &SemanticModelSpec,
+) -> Result<CudaDecoderRuntime> {
+    if semantic.decoder.layers.iter().any(|layer| {
+        matches!(layer.feed_forward, FeedForwardSpec::LatentRouted { latent_size: None, .. })
+    }) {
+        return Err(ArchitectureError::invalid(
+            "CUDA state-space hybrid runtime requires routed experts in a projected latent space; this checkpoint declares no moe_latent_size",
+        ));
+    }
     let supported = plan.layers().iter().all(|layer| {
         let mixer = match layer.mixer {
             CudaMixerLowering::StateSpace => true,

@@ -2,14 +2,17 @@ use std::time::Instant;
 
 use models::{
     layout::DecoderConfig,
-    weights::{HybridDecoderLayerBindings, HybridMixerBindings},
+    weights::{HybridMixerBindings, MixedDecoderLayerBindings, MixedFeedForwardBindings},
 };
 
-use super::super::super::{
-    Array, DecoderCache, Error, ExpertFusion, GatedDeltaLayer, GatedDeltaLayerConfig,
-    GatedFullAttention, GatedFullAttentionConfig, ModelTensors, NormWeight, Result,
-    SharedExpertMoe, SharedExpertMoeConfig, Stream, binding::adjusted_norm,
-    paged_attention_min_context,
+use super::{
+    super::super::{
+        Array, DecoderCache, Error, ExpertFusion, GatedDeltaLayer, GatedDeltaLayerConfig,
+        GatedFullAttention, GatedFullAttentionConfig, ModelTensors, NormWeight, Result,
+        SharedExpertMoe, SharedExpertMoeConfig, Stream, binding::adjusted_norm,
+        paged_attention_min_context,
+    },
+    feed_forward::{DenseMlp, FeedForward},
 };
 use crate::engine::{
     decoder::{LayerContext, LoweredLayer, MixerKind},
@@ -58,7 +61,7 @@ pub(super) struct HybridLinearMoeLayer {
     pub(super) attention: Attention,
     pub(super) input_norm: NormWeight,
     pub(super) post_attention_norm: NormWeight,
-    pub(super) moe: SharedExpertMoe,
+    pub(super) moe: FeedForward,
     pub(super) rms_norm_eps: f32,
 }
 
@@ -67,21 +70,35 @@ impl HybridLinearMoeLayer {
         tensors: &ModelTensors,
         decoder: &DecoderConfig,
         index: usize,
-        bindings: HybridDecoderLayerBindings<'_>,
+        bindings: MixedDecoderLayerBindings<'_>,
         lowering: LayerLowering,
         norm_shift: f32,
         stream: &Stream,
     ) -> Result<Self> {
         let attention = attention(tensors, decoder, bindings.mixer, norm_shift, stream)?;
-        let experts = SharedExpertMoeConfig::new(
-            decoder
-                .num_experts
-                .ok_or_else(|| Error::InvalidModel("missing MoE expert count".into()))?,
-            decoder
-                .top_k_experts
-                .ok_or_else(|| Error::InvalidModel("missing MoE top-k".into()))?,
-            decoder.moe_intermediate_size.unwrap_or(decoder.intermediate_size),
-        )?;
+        let moe = match bindings.feed_forward {
+            MixedFeedForwardBindings::Dense(dense) => {
+                FeedForward::Dense(Box::new(DenseMlp::load(tensors, dense, stream)?))
+            },
+            MixedFeedForwardBindings::SharedRouted(routed) => {
+                let experts = SharedExpertMoeConfig::new(
+                    decoder
+                        .num_experts
+                        .ok_or_else(|| Error::InvalidModel("missing MoE expert count".into()))?,
+                    decoder
+                        .top_k_experts
+                        .ok_or_else(|| Error::InvalidModel("missing MoE top-k".into()))?,
+                    decoder.moe_intermediate_size.unwrap_or(decoder.intermediate_size),
+                )?;
+                FeedForward::Routed(Box::new(SharedExpertMoe::load_bindings(
+                    tensors,
+                    routed,
+                    experts,
+                    lowering.feed_forward,
+                    stream,
+                )?))
+            },
+        };
         Ok(Self {
             index,
             attention,
@@ -92,13 +109,7 @@ impl HybridLinearMoeLayer {
                 norm_shift,
                 stream,
             )?,
-            moe: SharedExpertMoe::load_bindings(
-                tensors,
-                bindings.feed_forward,
-                experts,
-                lowering.feed_forward,
-                stream,
-            )?,
+            moe,
             rms_norm_eps: decoder.rms_norm_eps.to_string().parse()?,
         })
     }
@@ -160,7 +171,7 @@ impl HybridLinearMoeLayer {
         }
     }
 
-    pub(super) const fn has_fused_expert_gate_up(&self) -> bool {
+    pub(super) fn has_fused_expert_gate_up(&self) -> bool {
         self.moe.has_fused_routed_gate_up()
     }
 

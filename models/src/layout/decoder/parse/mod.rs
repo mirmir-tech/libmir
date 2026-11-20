@@ -44,13 +44,17 @@ impl DecoderConfig {
 
     pub fn from_value(value: &Value) -> Result<Self> {
         let decoder = decoder_value(value);
+        // Later layers would reuse earlier K/V tensors, which neither backend models.
+        if optional_usize(decoder, &["num_kv_shared_layers"])?.is_some_and(|layers| layers > 0) {
+            return Err(invalid("shared K/V layers are not supported"));
+        }
         let num_attention_heads = require_usize(decoder, &["num_attention_heads", "n_head"])?;
         if num_attention_heads == 0 {
             return Err(invalid("num_attention_heads must be greater than zero"));
         }
         let hidden_size = require_usize(decoder, &["hidden_size", "n_embd"])?;
         let defaults = defaults::for_checkpoint(decoder);
-        let state_space = state_space::state_space_hybrid(decoder, hidden_size)?;
+        let state_space = state_space::state_space_hybrid(decoder)?;
         let num_hidden_layers = match &state_space {
             Some(hybrid) => hybrid.blocks.layers().len(),
             None => require_usize(decoder, &["num_hidden_layers", "num_layers", "n_layer"])?,
@@ -60,7 +64,7 @@ impl DecoderConfig {
             None => attention::layer_types(decoder, num_hidden_layers)?,
         };
         let partial_rotary_factor = partial_rotary_factor(decoder)?;
-        let head_dim = head_dim(decoder, hidden_size, num_attention_heads)?;
+        let head_dim = resolve_head_dim(decoder, hidden_size, num_attention_heads)?;
         let config = Self {
             hidden_size,
             intermediate_size: intermediate_size(decoder)?,
@@ -196,6 +200,22 @@ fn hybrid_layer_types(hybrid: &StateSpaceHybridConfig) -> Vec<AttentionLayerType
         .collect()
 }
 
+fn resolve_head_dim(
+    decoder: &Value,
+    hidden_size: usize,
+    num_attention_heads: usize,
+) -> Result<usize> {
+    if let Some(head_dim) =
+        optional_usize(decoder, &["head_dim", "attention_head_dim", "kv_channels"])?
+    {
+        return Ok(head_dim);
+    }
+    if !hidden_size.is_multiple_of(num_attention_heads) {
+        return Err(invalid("hidden_size must be divisible by num_attention_heads"));
+    }
+    Ok(hidden_size / num_attention_heads)
+}
+
 fn decoder_value(value: &Value) -> &Value {
     ["text_config", "language_config", "llm_config"]
         .into_iter()
@@ -221,14 +241,6 @@ fn query_key_rows_interleaved(decoder: &Value) -> Result<bool> {
         Some(QUERY_KEY_ROWS_INTERLEAVED) => Ok(true),
         Some(other) => Err(invalid(format!("unknown {QUERY_KEY_ROWS} `{other}`"))),
     }
-}
-
-fn head_dim(decoder: &Value, hidden_size: usize, heads: usize) -> Result<usize> {
-    let explicit = optional_usize(decoder, &["head_dim", "attention_head_dim", "kv_channels"])?;
-    if explicit.is_none() && !hidden_size.is_multiple_of(heads) {
-        return Err(invalid("hidden_size must be divisible by num_attention_heads"));
-    }
-    Ok(explicit.unwrap_or(hidden_size / heads))
 }
 
 fn max_position_embeddings(decoder: &Value) -> Result<usize> {

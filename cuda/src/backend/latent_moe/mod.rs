@@ -29,12 +29,14 @@ pub struct LatentMoeConfig {
 }
 
 impl LatentMoeConfig {
-    /// Block geometry of a state-space hybrid decoder's routed blocks.
+    /// Block geometry of a state-space hybrid decoder's routed blocks. An
+    /// absent latent size yields an invalid geometry that [`Self::validate`]
+    /// rejects; admission refuses such decoders earlier with a clear error.
     #[must_use]
     pub fn from_hybrid(hidden: usize, routed: &models::layout::LatentRoutedConfig) -> Self {
         Self {
             hidden,
-            latent: routed.latent_size,
+            latent: routed.latent_size.unwrap_or(0),
             experts: routed.expert_count,
             top_k: routed.top_k,
             expert_intermediate: routed.expert_intermediate_size,

@@ -29,14 +29,19 @@ For Apple Metal:
 
 ```toml
 [dependencies]
-libmir = { version = "0.6.1", features = ["metal"] }
+libmir = { version = "0.6.2", features = ["metal"] }
 ```
+
+With `metal` alone, device telemetry reads GPU utilization from public `IOKit`
+registry properties. Add `metal-telemetry` for temperature and power as well;
+it samples them through private macOS interfaces (`IOReport` and `IOHID`), so
+leave it out of Mac App Store builds.
 
 For NVIDIA CUDA:
 
 ```toml
 [dependencies]
-libmir = { version = "0.6.1", default-features = false, features = ["cuda"] }
+libmir = { version = "0.6.2", default-features = false, features = ["cuda"] }
 ```
 
 ## Generate from a local checkpoint

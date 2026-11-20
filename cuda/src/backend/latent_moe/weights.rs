@@ -1,4 +1,6 @@
-use models::weights::{ExpertProjectionRole, LatentRoutedBindings, TensorCatalog};
+use models::weights::{
+    ExpertProjectionRole, LatentRoutedBindings, RoutedExpertBindings, TensorCatalog,
+};
 
 use super::LatentMoeConfig;
 use crate::{
@@ -58,13 +60,23 @@ impl LatentMoeWeights {
                 )?
                 .marlin(backend)
         };
+        let latent = bindings.latent.ok_or_else(|| {
+            Error::UnsupportedDecoderLayer(
+                "CUDA latent routed experts require latent projections".into(),
+            )
+        })?;
+        if !matches!(bindings.routed, RoutedExpertBindings::Individual { .. }) {
+            return Err(Error::UnsupportedDecoderLayer(
+                "CUDA latent routed experts require individual NVFP4 expert tensors".into(),
+            ));
+        }
         let projection =
             |binding| CheckpointProjectionWeight::load_binding_prepared(backend, tensors, binding);
         Ok(Self {
             router: tensor(&bindings.router.source)?,
             correction_bias: tensor(&bindings.correction_bias.source)?,
-            latent_input: projection(bindings.latent_input)?,
-            latent_output: projection(bindings.latent_output)?,
+            latent_input: projection(latent.input)?,
+            latent_output: projection(latent.output)?,
             up: bank(ExpertProjectionRole::Up, config.latent, config.expert_intermediate)?,
             down: bank(ExpertProjectionRole::Down, config.expert_intermediate, config.latent)?,
             shared: bindings

@@ -70,6 +70,7 @@ fn zero_budget_uses_joined_attention_without_retaining_history() -> Result<()> {
         [&update, &update],
         &update,
         0.125,
+        None,
         &stream,
     )?;
     assert_eq!(output.to_vec_f32(&stream)?, update.to_vec_f32(&stream)?);

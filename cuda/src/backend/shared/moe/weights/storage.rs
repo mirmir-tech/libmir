@@ -33,6 +33,8 @@ fn all(bindings: RoutedExpertBindings<'_>, predicate: impl Fn(&TensorBinding) ->
         RoutedExpertBindings::InterleavedGateUp { gate_up, down } => {
             [gate_up, down].into_iter().all(predicate)
         },
-        RoutedExpertBindings::Individual { .. } => false,
+        RoutedExpertBindings::UngatedStacked { .. } | RoutedExpertBindings::Individual { .. } => {
+            false
+        },
     }
 }
