@@ -9,6 +9,7 @@ mod paged;
 mod policy;
 mod rows;
 mod sliding;
+mod snapshot;
 mod validation;
 
 use std::sync::Arc;
@@ -85,6 +86,9 @@ pub struct KvCache {
     step: usize,
     max_context: Option<usize>,
     reserve_tokens: usize,
+    /// Tokens of the latest sliding update: a single token right after a
+    /// chunk is a prompt's last token and keeps the rewind margin.
+    last_update_tokens: usize,
 }
 
 impl KvCache {
@@ -154,6 +158,7 @@ impl KvCache {
             step,
             max_context,
             reserve_tokens,
+            last_update_tokens: 0,
         })
     }
 
@@ -167,30 +172,6 @@ impl KvCache {
             pages.reserve(self.reserve_tokens);
         }
         Ok(())
-    }
-
-    pub fn snapshot_at(&self, offset: usize) -> Result<Self> {
-        if offset > self.offset {
-            return Err(Error::InvalidModel(
-                "KV cache snapshot offset exceeds cached tokens".into(),
-            ));
-        }
-        Ok(Self {
-            history: None,
-            keys: clone_array(self.keys.as_ref())?,
-            values: clone_array(self.values.as_ref())?,
-            pages: self.pages.as_ref().map(|pages| pages.snapshot_at(offset)).transpose()?,
-            offset,
-            capacity: self.capacity,
-            write_index: self.write_index,
-            step: self.step,
-            max_context: self.max_context,
-            reserve_tokens: self.reserve_tokens,
-        })
-    }
-
-    pub(crate) const fn supports_prefix_offsets(&self) -> bool {
-        self.pages.is_some()
     }
 
     #[cfg(test)]

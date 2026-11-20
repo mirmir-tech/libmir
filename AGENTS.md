@@ -66,6 +66,15 @@ The target shape is:
   Rust or synchronize the Metal stream.
 - Preserve the explicit rotating write index across updates and snapshots;
   physical storage order must never be mistaken for temporal attention order.
+- Updates shorter than `SLIDING_REWIND_TOKENS` (64; a prompt's tail and last
+  token) keep that many extra masked keys, so a terminal prefix snapshot can
+  rewind (`KvCache::prefix_floor`) past the template tokens a following request
+  does not share. `snapshot_at` rewinds by shrinking the chronological view; the
+  in-place token write needs an exact window-sized ring. Prefix entries index
+  block boundaries down to the floor. Without this a Gemma 3 request that
+  shared a 4096-token system context with the previous one (llama-benchy depth,
+  a chat's next turn) re-prefilled it: 272 instead of 697 tok/s (llama.cpp 703).
+  Full 512-token chunks keep only the window, so plain prefill is unchanged.
 - Paged-attention dependency arrays are rank-one `[1]` buffers. A scalar `[]`
   changes the generated Metal argument into a value and makes kernels that
   index the dependency fail to compile.

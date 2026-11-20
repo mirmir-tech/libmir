@@ -3,6 +3,12 @@ use mirtal::DType;
 use super::{KvCache, KvContext, clone_array};
 use crate::engine::{Array, Error, Result, Stream};
 
+/// History a short sliding update keeps beyond its window (masked out), so a
+/// prefix snapshot rewinds past the prompt's last template tokens and a block:
+/// the next chat turn, or llama-benchy's measured request after its context
+/// probe. Decode compacts the ring back to the window.
+const SLIDING_REWIND_TOKENS: usize = 64;
+
 impl KvCache {
     pub(super) fn update_sliding(
         &mut self,
@@ -13,7 +19,12 @@ impl KvCache {
         needed: usize,
     ) -> Result<KvContext> {
         let limit = self.max_context.ok_or_else(|| Error::InvalidModel("missing window".into()))?;
-        if tokens == 1 && self.capacity == limit {
+        // A prompt's last token (right after its chunk) keeps the chronological
+        // view and its rewind margin for the prefix snapshot; decode compacts
+        // it, or a rewound snapshot's longer arrays, into the in-place ring.
+        let prompt_tail = tokens == 1 && self.last_update_tokens > 1;
+        self.last_update_tokens = tokens;
+        if tokens == 1 && !prompt_tail && self.capacity >= limit {
             return self.update_sliding_token(keys, values, stream, limit, needed);
         }
         self.update_sliding_chunk(keys, values, stream, limit, tokens, needed)
@@ -27,7 +38,7 @@ impl KvCache {
         limit: usize,
         needed: usize,
     ) -> Result<KvContext> {
-        if self.capacity > limit {
+        if self.capacity > limit || self.slots()? != limit {
             self.compact_sliding(limit, stream)?;
         }
         if self.write_index == limit {
@@ -53,11 +64,22 @@ impl KvCache {
         tokens: usize,
         needed: usize,
     ) -> Result<KvContext> {
-        let retained = self.offset.min(limit.saturating_sub(1));
-        let context_keys =
-            append(self.temporal(self.keys.as_ref(), limit, stream)?, keys, retained, stream)?;
-        let context_values =
-            append(self.temporal(self.values.as_ref(), limit, stream)?, values, retained, stream)?;
+        let previous_keys = self.temporal(self.keys.as_ref(), limit, stream)?;
+        let previous_values = self.temporal(self.values.as_ref(), limit, stream)?;
+        // A compacted decode ring holds just the window, less than the margin.
+        let held = previous_keys.as_ref().map_or(Ok(0), |keys| -> Result<usize> {
+            Ok(usize::try_from(keys.shape()?.get(2).copied().ok_or(Error::ShapeOverflow)?)?)
+        })?;
+        // Only short updates (a prompt's tail and last token) keep the margin:
+        // a full chunk itself holds as many past tokens for its successor.
+        let margin = if tokens < SLIDING_REWIND_TOKENS {
+            SLIDING_REWIND_TOKENS
+        } else {
+            0
+        };
+        let retained = self.offset.min(limit.saturating_sub(1) + margin).min(held);
+        let context_keys = append(previous_keys, keys, retained, stream)?;
+        let context_values = append(previous_values, values, retained, stream)?;
         self.capacity = retained + tokens;
         self.write_index = self.capacity;
         self.keys = Some(Array::from_native(context_keys.native().clone())?);
@@ -89,6 +111,13 @@ impl KvCache {
             return slice_tokens(current, 0, valid, stream).map(Some);
         }
         concatenate_slices(current, self.write_index, valid, stream).map(Some)
+    }
+
+    fn slots(&self) -> Result<usize> {
+        let Some(keys) = self.keys.as_ref() else {
+            return Ok(0);
+        };
+        Ok(usize::try_from(keys.shape()?.get(2).copied().ok_or(Error::ShapeOverflow)?)?)
     }
 
     fn compact_sliding(&mut self, limit: usize, stream: &Stream) -> Result<()> {

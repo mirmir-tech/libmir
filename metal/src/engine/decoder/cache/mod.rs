@@ -227,10 +227,14 @@ impl DecoderCache {
         }
     }
 
-    pub(crate) fn supports_prefix_offsets(&self) -> bool {
+    /// The smallest prefix length a snapshot of this cache restores exactly:
+    /// the deepest any layer can rewind. Recurrent state never rewinds.
+    pub(crate) fn prefix_floor(&self) -> Result<usize> {
         match &self.storage {
-            CacheStorage::Attention(caches) => caches.iter().all(KvCache::supports_prefix_offsets),
-            CacheStorage::HybridLinear(_) => false,
+            CacheStorage::Attention(caches) => {
+                Ok(caches.iter().map(KvCache::prefix_floor).max().unwrap_or(0))
+            },
+            CacheStorage::HybridLinear(_) => self.cached_tokens(),
         }
     }
 }
