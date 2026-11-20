@@ -29,6 +29,7 @@ mod latent_moe;
 mod linear_fp8;
 mod logit_softcap;
 mod mamba2;
+mod mla;
 mod mrope;
 mod mxfp4;
 mod nvfp4;
@@ -105,6 +106,10 @@ pub(crate) use logit_softcap::LogitSoftcap;
 pub use mamba2::{
     MAMBA2_CHUNK, MAMBA2_SCAN_ROWS, Mamba2DecodeBatch, Mamba2Geometry, Mamba2Kernels, Mamba2Launch,
     Mamba2Parameters,
+};
+pub use mla::{
+    LatentAbsorption, LatentAttention, LatentAttentionInputs, LatentAttentionLayer,
+    LatentAttentionSpec, LatentAttentionWorkspace, LatentCacheView,
 };
 pub use mrope::{Mrope, MropeSpec};
 pub use mxfp4::{
