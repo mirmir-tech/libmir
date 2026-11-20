@@ -56,7 +56,9 @@ impl RoutedMlp {
         }
         let sorted = input.sort_expert_inputs(&routing.indices, stream)?;
         let output = self.experts(&sorted.input, &sorted.indices, true, stream)?;
-        sorted.restore(&output, stream)?.weighted_sum(&routing.weights, -2, stream)
+        // One fused gather and weighted sum instead of the graph's restore and
+        // strided reduction (Qwen3-30B Q4_K_M 2048-token prefill +3%).
+        sorted.restore_weighted(&output, &routing.weights, stream)
     }
 
     fn experts(

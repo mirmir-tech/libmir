@@ -104,9 +104,30 @@ fn grouped_sorted_assignments_match_the_host_decoder() -> Result<()> {
         .astype(Dtype::Bfloat16, &stream)?;
     let rounded = x.astype(Dtype::Float32, &stream)?.to_vec_f32(&stream)?;
     let indices = Array::from_u32(&selected, &[i32::try_from(assignments)?])?;
-    let output = linear.gather(&x, &indices, true, &stream)?;
-    assert_eq!(output.shape()?, [i32::try_from(assignments)?, 1, 16]);
-    let output = output.astype(Dtype::Float32, &stream)?.to_vec_f32(&stream)?;
+    // This many assignments per expert take the dequantized bank; the grouped
+    // kernel serves sparser batches, so it is launched directly as well.
+    let banked = linear.gather(&x, &indices, true, &stream)?;
+    assert_eq!(banked.shape()?, [i32::try_from(assignments)?, 1, 16]);
+    let flat = x.reshape(&[i32::try_from(assignments)?, i32::try_from(COLUMNS)?], &stream)?;
+    let grouped = stream.kernels().ggml_grouped(
+        &stream,
+        [&flat, &linear.weight, &indices],
+        linear.matrix,
+        EXPERTS,
+    )?;
+    for output in [banked, grouped] {
+        let output = output.astype(Dtype::Float32, &stream)?.to_vec_f32(&stream)?;
+        assert_matches_host(&selected, &rounded, &host, &output)?;
+    }
+    Ok(())
+}
+
+fn assert_matches_host(
+    selected: &[u32],
+    rounded: &[f32],
+    host: &[f32],
+    output: &[f32],
+) -> Result<()> {
     for (assignment, &expert) in selected.iter().enumerate() {
         let x = &rounded[assignment * COLUMNS..][..COLUMNS];
         for row in 0..ROWS {

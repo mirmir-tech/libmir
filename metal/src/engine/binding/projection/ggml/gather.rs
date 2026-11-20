@@ -11,6 +11,13 @@ use crate::engine::{Array, Error, Result, Stream};
 /// once for MLX's `gather_mm`.
 const GATHERED_MAX_ASSIGNMENTS: usize = 512;
 
+/// Sorted assignments per expert from which dequantizing the whole bank for
+/// MLX's sorted `gather_mm` beats the grouped kernel: its cost follows the
+/// bank, the grouped kernel's the assignments. On M5 Pro (Qwen3-30B shapes,
+/// 128 experts) they cross near 40-48; at 128 per expert the bank path takes
+/// 4.0-4.6 instead of 8.3-10.2 ms per projection.
+const DENSE_MIN_ASSIGNMENTS_PER_EXPERT: usize = 48;
+
 impl GgmlLinear {
     pub(in crate::engine) fn gather(
         &self,
@@ -36,7 +43,10 @@ impl GgmlLinear {
         let mut output_shape = indices.shape()?;
         output_shape.extend([1, i32::try_from(rows)?]);
         if assignments > GATHERED_MAX_ASSIGNMENTS {
-            if !sorted || tokens(input)? != assignments {
+            if !sorted
+                || tokens(input)? != assignments
+                || assignments >= DENSE_MIN_ASSIGNMENTS_PER_EXPERT * experts
+            {
                 return self.gather_dense(input, indices, experts, sorted, stream);
             }
             let flat_input = input.reshape(

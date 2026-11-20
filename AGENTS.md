@@ -1379,6 +1379,19 @@ The target shape is:
   MLX-LM); unsorted `gather` was the cost. The 2048-token chunk cap lifts Qwen3.6
   C1 prefill from 0.81x to 1.13x. Scalar prefill pressure counts live allocations
   only: the reclaimable allocator cache halved Gemma 26B's C1 prefill.
+- Sorted GGUF expert prefill dequantizes the whole bank to the activation type
+  for MLX's sorted `gather_mm` from 48 assignments per expert
+  (`DENSE_MIN_ASSIGNMENTS_PER_EXPERT`); sparser batches keep the grouped
+  simdgroup kernel. That kernel sits at the FP32 simdgroup-MMA rate (5–6 TFLOPS
+  on M5 Pro): a GEMM-style rewrite with staged activations and 32x16 simdgroup
+  tiles measured the same, and removing every global load saved under 10%.
+  2048-token `prefill-profile`: Qwen3-30B Q4_K_M 1249→2035 tok/s (llama-bench
+  1828), Q8_0 1202→1921, Mixtral Q4_K_M 208→589, gpt-oss-20b 2590→2866. Beating
+  the bank path needs the M5 tensor units, not another simdgroup layout.
+- `mirtal::Stream::eval_many` (and libmir's `Stream::eval_many`) is
+  `async_eval`: time a kernel only after `synchronize()`, or read GPU intervals
+  from Metal System Trace with `MLX_MAX_OPS_PER_BUFFER=1`. Host timings around
+  `eval_many` alone attributed Qwen3-30B's MoE cost to the weighted sum.
 
 ## Memory admission at deep concurrency
 
