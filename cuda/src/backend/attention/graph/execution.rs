@@ -64,12 +64,12 @@ impl Geometry {
 }
 
 impl Kernels {
-    pub(in crate::backend) fn new(attention: &DecodeAttentionBf16) -> Self {
-        Self {
+    pub(in crate::backend) fn new(attention: &DecodeAttentionBf16) -> Result<Self> {
+        Ok(Self {
             qkv_postprocess: attention.qkv_postprocess.kernel(),
-            kv_store: attention.cache.kernel(),
+            kv_store: attention.cache.kernel()?,
             attention: attention.attention.captured_kernels(),
-        }
+        })
     }
 }
 

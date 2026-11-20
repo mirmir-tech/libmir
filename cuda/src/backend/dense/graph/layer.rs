@@ -106,7 +106,7 @@ impl CapturedDenseLayer {
         prefill.execute_batch(&mut self.block, input, self.weights.borrow(), batch, output)
     }
 
-    pub(in crate::backend) fn kernels(&self) -> Kernels {
+    pub(in crate::backend) fn kernels(&self) -> Result<Kernels> {
         Kernels::new(&self.block.attention)
     }
 

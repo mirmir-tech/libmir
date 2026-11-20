@@ -41,7 +41,8 @@ pub struct AffineSharedExpertMoeWeights {
     pub(super) shared_gate: CheckpointProjectionWeight,
     pub(super) shared_up: CheckpointProjectionWeight,
     pub(super) shared_down: CheckpointProjectionWeight,
-    pub(super) shared_output_gate: CheckpointProjectionWeight,
+    /// Sigmoid gate on the shared expert output; `DeepSeek` adds it ungated.
+    pub(super) shared_output_gate: Option<CheckpointProjectionWeight>,
 }
 
 impl AffineSharedExpertMoeWeights {
@@ -57,7 +58,9 @@ impl AffineSharedExpertMoeWeights {
             shared_gate: CheckpointProjectionWeight::Affine(affine("shared_expert.gate_proj")?),
             shared_up: CheckpointProjectionWeight::Affine(affine("shared_expert.up_proj")?),
             shared_down: CheckpointProjectionWeight::Affine(affine("shared_expert.down_proj")?),
-            shared_output_gate: CheckpointProjectionWeight::Affine(affine("shared_expert_gate")?),
+            shared_output_gate: Some(CheckpointProjectionWeight::Affine(affine(
+                "shared_expert_gate",
+            )?)),
         })
     }
 
@@ -120,11 +123,12 @@ impl AffineSharedExpertMoeWeights {
                 tensors,
                 bindings.shared_down,
             )?,
-            shared_output_gate: CheckpointProjectionWeight::load_binding_prepared(
-                backend,
-                tensors,
-                bindings.shared_output_gate,
-            )?,
+            shared_output_gate: bindings
+                .shared_output_gate
+                .map(|gate| {
+                    CheckpointProjectionWeight::load_binding_prepared(backend, tensors, gate)
+                })
+                .transpose()?,
         })
     }
 
@@ -178,13 +182,9 @@ impl AffineSharedExpertMoeWeights {
             config.group_size,
             config.expert_bits,
         )?;
-        self.shared_output_gate.validate(
-            1,
-            config.hidden_size,
-            1,
-            config.group_size,
-            config.router_bits,
-        )
+        self.shared_output_gate.as_ref().map_or(Ok(()), |gate| {
+            gate.validate(1, config.hidden_size, 1, config.group_size, config.router_bits)
+        })
     }
 
     pub(in crate::backend) fn storage_format(
@@ -212,11 +212,9 @@ impl AffineSharedExpertMoeWeights {
             merge_format(&mut expert_format, format, "shared expert")?;
         }
         let mut router_format = self.router.affine_format(1, hidden, experts)?;
-        merge_format(
-            &mut router_format,
-            self.shared_output_gate.affine_format(1, hidden, 1)?,
-            "shared router",
-        )?;
+        if let Some(gate) = &self.shared_output_gate {
+            merge_format(&mut router_format, gate.affine_format(1, hidden, 1)?, "shared router")?;
+        }
         if matches!(self.routed, RoutedSharedMoeWeights::Affine(_)) && router_format.is_none() {
             return Err(mixed_storage());
         }

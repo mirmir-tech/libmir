@@ -78,8 +78,10 @@ __device__ __forceinline__ float block_sum(float value, float* scratch) {
 }
 
 // One block per token: normalizes the latent, rotates the shared key and every
-// head's rotary query, stores the cache row and fills the rotary half of the
-// attention query. The absorbed half of the query comes from a batched GEMM.
+// head's rotary query, stores the cache row at the token's slot (none for
+// `NO_SLOT`: padding, or a shared page that already holds it) and fills the
+// rotary half of the attention query. The absorbed half of the query comes
+// from a batched GEMM.
 extern "C" __global__ void libmir_cuda_latent_prepare_bf16(
     const __nv_bfloat16* query, const __nv_bfloat16* latent,
     const __nv_bfloat16* norm_weight, const unsigned int* positions,
@@ -136,15 +138,15 @@ __device__ __forceinline__ float2 unpack(unsigned int word) {
 }
 
 // Grid (head groups, queries, splits); each warp attends one head of one query
-// token over its split of the visible tokens, sharing every 32-token tile of
-// cache rows with the other heads of the block.
+// token over its split of the tokens up to its position, sharing every
+// 32-token tile of cache rows with the other heads of the block.
 extern "C" __global__ void __launch_bounds__(BLOCK_THREADS)
 libmir_cuda_latent_attention_split_bf16(
     const __nv_bfloat16* query, const unsigned char* pages,
     const unsigned int* block_tables, const unsigned int* query_sequences,
-    const unsigned int* query_visible, float* partial_values,
+    const unsigned int* positions, float* partial_values,
     float* partial_statistics, unsigned int queries, unsigned int heads,
-    unsigned int max_blocks, unsigned int block_size, float scale) {
+    unsigned int table_stride, unsigned int block_size, float scale) {
   __shared__ unsigned int query_words[HEADS_PER_BLOCK][ROW_WORDS];
   __shared__ unsigned int tile[TILE_TOKENS][TILE_WORDS];
   const unsigned int query_token = blockIdx.y;
@@ -166,8 +168,8 @@ libmir_cuda_latent_attention_split_bf16(
                        index % ROW_WORDS]
         : 0u;
   }
-  const unsigned int visible = query_visible[query_token];
-  const unsigned int* table = block_tables + size_t(query_sequences[query_token]) * max_blocks;
+  const unsigned int visible = positions[query_token] + 1u;
+  const unsigned int* table = block_tables + size_t(query_sequences[query_token]) * table_stride;
   const unsigned int chunk = (visible + splits - 1u) / splits;
   const unsigned int begin = min(visible, split * chunk);
   const unsigned int end = min(visible, begin + chunk);

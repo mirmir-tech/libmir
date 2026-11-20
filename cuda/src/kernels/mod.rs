@@ -152,7 +152,9 @@ pub use qmm::{AffineQmmLaunch, AffineQmmSpec, AffineQuantizedQmm};
 pub use rms_norm_shift::ShiftedRmsNorm;
 pub use rope_rows::RopeRows;
 pub(crate) use router::{RoutePattern, RoutePatternGenerator, RoutePatternSpec};
-pub use router::{RouterSpec, RouterTopK, RouterUnitSpec, RouterUnitTopK};
+pub use router::{
+    RouterSpec, RouterTopK, RouterUnitScoring, RouterUnitSpec, RouterUnitTopK, RouterUnitWeighting,
+};
 pub use row::{CopyRowsBf16, GatherRowsBf16, SelectRowBf16};
 pub use sampling::{MAX_TOP_K, Sampling, SamplingSpec, SamplingWorkspace};
 pub use selected::{

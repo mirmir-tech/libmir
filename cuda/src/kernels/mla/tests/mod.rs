@@ -17,6 +17,9 @@ use super::{
 };
 use crate::Result;
 
+/// Block-table width of every test sequence.
+const MAX_BLOCKS: usize = 5;
+
 /// `DeepSeek` V2/V3 geometry with ten heads, so the second head group of the
 /// attention kernel is partly idle.
 const fn spec(
@@ -32,7 +35,6 @@ const fn spec(
         value_dim: 128,
         rotary_pairing,
         block_size: 16,
-        max_blocks: 5,
         max_queries,
         splits,
     }
@@ -84,15 +86,11 @@ fn run(scenario: &Scenario) -> Result<()> {
         })
         .collect::<Vec<_>>();
     let expected = sequences.iter().map(|sequence| model.attend(sequence)).collect::<Vec<_>>();
-    let blocks = scenario.lengths.len() * spec.max_blocks;
+    let blocks = scenario.lengths.len() * MAX_BLOCKS;
     // Scatter logical blocks over the pool in reverse so table lookups matter.
     let table = (0..blocks)
         .map(|index| u32::try_from(blocks - 1 - index))
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    let slot = |sequence: usize, position: usize| -> Result<u32> {
-        let physical = table[sequence * spec.max_blocks + position / spec.block_size];
-        Ok(physical * u32::try_from(spec.block_size)? + u32::try_from(position % spec.block_size)?)
-    };
 
     let attention = LatentAttention::compile(&runtime.compiler, spec)?;
     let mut workspace = attention.workspace(&runtime.pool, &runtime.stream)?;
@@ -117,21 +115,18 @@ fn run(scenario: &Scenario) -> Result<()> {
             })
             .collect::<Vec<_>>();
         let (mut query, mut latent, mut host) =
-            (Vec::new(), Vec::new(), [(); 4].map(|()| Vec::new()));
+            (Vec::new(), Vec::new(), [(); 3].map(|()| Vec::new()));
         for &(sequence, position) in &tokens {
             query.extend_from_slice(&sequences[sequence][position].query);
             latent.extend_from_slice(&sequences[sequence][position].latent);
+            let block = table[sequence * MAX_BLOCKS + position / spec.block_size];
+            let offset = u32::try_from(position % spec.block_size)?;
             host[0].push(u32::try_from(position)?);
-            host[1].push(slot(sequence, position)?);
+            host[1].push(block * u32::try_from(spec.block_size)? + offset);
             host[2].push(u32::try_from(sequence)?);
-            host[3].push(u32::try_from(position + 1)?);
         }
-        let [positions, slot_mapping, query_sequences, query_visible] = [
-            runtime.copy(&host[0])?,
-            runtime.copy(&host[1])?,
-            runtime.copy(&host[2])?,
-            runtime.copy(&host[3])?,
-        ];
+        let [positions, slot_mapping, query_sequences] =
+            [runtime.copy(&host[0])?, runtime.copy(&host[1])?, runtime.copy(&host[2])?];
         let (query, latent) = (runtime.copy_f32(&query)?, runtime.copy_f32(&latent)?);
         let mut absorption =
             LatentAbsorption::new(&runtime.context, &runtime.stream, spec, tokens.len())?;
@@ -144,6 +139,7 @@ fn run(scenario: &Scenario) -> Result<()> {
             LatentCacheView {
                 pages: &mut pages,
                 block_tables: &block_tables,
+                table_stride: MAX_BLOCKS,
             },
             LatentAttentionInputs {
                 query: &query,
@@ -151,7 +147,6 @@ fn run(scenario: &Scenario) -> Result<()> {
                 positions: &positions,
                 slot_mapping: &slot_mapping,
                 query_sequences: &query_sequences,
-                query_visible: &query_visible,
             },
             &mut workspace,
             &mut output,

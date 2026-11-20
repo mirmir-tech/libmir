@@ -21,6 +21,7 @@ pub(super) fn feed_forward(
         |projection| layer(plan, index, LayerTensorRole::SharedExpertProjection { projection });
     Ok(SharedRoutedFeedForwardBindings {
         router: layer(plan, index, LayerTensorRole::Router)?,
+        router_correction_bias: optional(plan, index, LayerTensorRole::RouterCorrectionBias),
         routed: if let Some(gate_up) = optional_expert(ExpertProjectionRole::GateUp) {
             RoutedExpertBindings::InterleavedGateUp {
                 gate_up,
@@ -48,6 +49,6 @@ pub(super) fn feed_forward(
         shared_gate: shared(FeedForwardProjectionRole::Gate)?,
         shared_up: shared(FeedForwardProjectionRole::Up)?,
         shared_down: shared(FeedForwardProjectionRole::Down)?,
-        shared_output_gate: layer(plan, index, LayerTensorRole::SharedExpertOutputGate)?,
+        shared_output_gate: optional(plan, index, LayerTensorRole::SharedExpertOutputGate),
     })
 }

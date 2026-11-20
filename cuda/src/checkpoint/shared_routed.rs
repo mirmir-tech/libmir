@@ -91,11 +91,13 @@ fn shared_routed_source<'a>(
     let individual = bindings
         .tensors
         .iter()
+        // Quantized per-expert tensors stream from the checkpoint into their
+        // banks; BF16 ones are stacked from the uploaded set.
         .filter(|binding| {
             matches!(
                 layer_tensor(&binding.role),
                 Some(LayerTensorRole::ExpertProjection { expert: Some(_), .. })
-            )
+            ) && !matches!(binding.storage, TensorStorage::Dense { .. })
         })
         .flat_map(|binding| binding.physical_sources())
         .collect::<HashSet<_>>();
@@ -103,6 +105,8 @@ fn shared_routed_source<'a>(
     for layer in 0..decoder.num_hidden_layers {
         if decoder.state_space.is_some() {
             names.extend(bindings.state_space_hybrid_layer(layer)?.physical_sources());
+        } else if decoder.latent.is_some() {
+            names.extend(bindings.latent_decoder_layer(layer)?.physical_sources());
         } else {
             names.extend(bindings.mixed_decoder_layer(layer)?.physical_sources());
         }

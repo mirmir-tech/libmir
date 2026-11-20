@@ -14,6 +14,7 @@ mod latent_moe;
 mod layer_scratch;
 mod linear;
 mod mamba2;
+mod mla;
 mod model;
 mod output;
 mod planning;
@@ -101,6 +102,7 @@ pub use mamba2::{
     Mamba2ScanPath, Mamba2Workspace,
 };
 use mircuda::{Compiler, Context, DeviceInfo, MemoryPool, Stream};
+pub use mla::{CudaLatentAttentionExecution, CudaLatentAttentionLayer, LatentAttentionState};
 pub use model::{
     CudaDecodeBatch, CudaModelSessionConfig, CudaMoeModelSession, CudaMoeModelTemplate,
     DEFAULT_PREFILL_CHUNK_TOKENS, RETAINED_CHUNK_SLACK_TOKENS, SMALL_PLAN_TOKENS,

@@ -7,8 +7,10 @@ use crate::error::{ModelsError, Result};
 
 mod feed_forward;
 use feed_forward::feed_forward;
+mod latent;
 mod mixed;
 pub(super) mod moe;
+pub use latent::{LatentAttentionBindings, LatentDecoderLayerBindings, LatentQueryBindings};
 pub use mixed::{DenseFeedForwardBindings, MixedDecoderLayerBindings, MixedFeedForwardBindings};
 
 #[derive(Debug, Clone, Copy)]
@@ -51,11 +53,14 @@ pub struct GatedSoftmaxBindings<'a> {
 #[derive(Debug, Clone, Copy)]
 pub struct SharedRoutedFeedForwardBindings<'a> {
     pub router: &'a TensorBinding,
+    /// Selection-only bias of a sigmoid router (`e_score_correction_bias`).
+    pub router_correction_bias: Option<&'a TensorBinding>,
     pub routed: RoutedExpertBindings<'a>,
     pub shared_gate: &'a TensorBinding,
     pub shared_up: &'a TensorBinding,
     pub shared_down: &'a TensorBinding,
-    pub shared_output_gate: &'a TensorBinding,
+    /// Sigmoid gate on the shared experts' output; `DeepSeek` has none.
+    pub shared_output_gate: Option<&'a TensorBinding>,
 }
 
 impl WeightBindingPlan {
@@ -105,13 +110,9 @@ impl<'a> GatedSoftmaxBindings<'a> {
 
 impl<'a> SharedRoutedFeedForwardBindings<'a> {
     fn bindings(self) -> Vec<&'a TensorBinding> {
-        let mut bindings = vec![
-            self.router,
-            self.shared_gate,
-            self.shared_up,
-            self.shared_down,
-            self.shared_output_gate,
-        ];
+        let mut bindings = vec![self.router, self.shared_gate, self.shared_up, self.shared_down];
+        bindings.extend(self.router_correction_bias);
+        bindings.extend(self.shared_output_gate);
         bindings.extend(self.routed.bindings());
         bindings
     }

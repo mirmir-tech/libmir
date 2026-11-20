@@ -71,6 +71,7 @@ impl SharedRoutedExecution {
                         config.router_bits,
                     ),
                     config.top_k,
+                    config.routing,
                 )?),
                 experts: Box::new(AutoAffineRoutedExperts::new(backend, config, weights, tokens)?),
             }),
@@ -87,13 +88,14 @@ impl SharedRoutedExecution {
                         DenseRole::Router,
                         &weights.router,
                     )?),
-                    top_k: RouterUnitTopK::compile(
+                    top_k: RouterUnitTopK::compile_scored(
                         backend.compiler(),
                         crate::kernels::RouterUnitSpec {
                             tokens,
                             experts: config.expert_count,
                             top_k: config.top_k,
                         },
+                        config.routing,
                     )?,
                     scores: backend
                         .pool()

@@ -153,6 +153,15 @@ fn binds_the_deepseek_v2_lite_schema() -> Result<()> {
     assert!((routed.output_scale - 2.5).abs() < f64::EPSILON);
     assert_eq!((shared.intermediate_size, shared.gated_output), (2 * EXPERT_WIDTH, false));
     assert_eq!(plan.tensors.len(), catalog.tensors.len());
+
+    let dense = plan.latent_decoder_layer(0)?;
+    assert!(matches!(dense.attention.query, LatentQueryBindings::Direct(_)));
+    assert!(matches!(dense.feed_forward, MixedFeedForwardBindings::Dense(_)));
+    let MixedFeedForwardBindings::SharedRouted(routed) = plan.latent_decoder_layer(1)?.feed_forward
+    else {
+        return Err(invalid("expected shared-routed bindings"));
+    };
+    assert!(routed.shared_output_gate.is_none());
     Ok(())
 }
 
@@ -166,6 +175,11 @@ fn binds_a_normalized_query_latent_and_a_corrected_sigmoid_router() -> Result<()
     };
     assert_eq!(routed.router_normalization, RouterNormalization::SigmoidBiasedTopK);
     assert_eq!(plan.tensors.len(), catalog.tensors.len());
+    let layer = plan.latent_decoder_layer(1)?;
+    assert!(matches!(layer.attention.query, LatentQueryBindings::Latent { .. }));
+    // Norms, query latent, key/value latent, output, router and its bias,
+    // three shared and twelve routed expert projections.
+    assert_eq!(layer.physical_sources().len(), 2 + 3 + 4 + 2 + 3 + 3 * EXPERTS);
     Ok(())
 }
 

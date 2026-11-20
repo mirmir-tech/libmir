@@ -1,5 +1,9 @@
 mod feed_forward;
+mod latent;
 mod state_space;
+pub(super) use latent::{
+    layers as latent_layers, validate_composition as validate_latent_composition,
+};
 use models::{
     layout::{AttentionLayerType, DecoderConfig},
     weights::{HybridMixerBindings, MixedDecoderLayerBindings, TensorCatalog, WeightBindingPlan},

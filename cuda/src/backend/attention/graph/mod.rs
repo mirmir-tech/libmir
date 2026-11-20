@@ -140,7 +140,7 @@ impl DecodeAttentionBf16 {
         let geometry = Geometry::new(&self)?;
         let dynamic = Dynamic::new(write_plan, table, geometry)?;
         self.attention.prepare_table(table)?;
-        let kernels = Kernels::new(&self);
+        let kernels = Kernels::new(&self)?;
         let configs = Configs::new(&self)?;
         let stream = self.stream.clone();
         let resources = Resources {

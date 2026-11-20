@@ -1,3 +1,4 @@
+mod latent;
 mod metal;
 use std::collections::BTreeSet;
 
@@ -100,7 +101,9 @@ fn cuda(
     actual: &str,
 ) -> (AdmissionStatus, String) {
     if execution.is_some_and(|contract| {
-        has_dense_routed_experts(contract) && !supports_dense_selected_experts(contract)
+        has_dense_routed_experts(contract)
+            && !supports_dense_selected_experts(contract)
+            && !latent::supported(contract)
     }) {
         return (
             AdmissionStatus::Unsupported,

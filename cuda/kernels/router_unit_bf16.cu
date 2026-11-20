@@ -3,7 +3,7 @@
 extern "C" __global__ void libmir_cuda_router_topk_unit_bf16(
     const __nv_bfloat16* scores, unsigned int* selected,
     __nv_bfloat16* weights, unsigned int experts, unsigned int top_k,
-    unsigned int tokens) {
+    unsigned int tokens, float scale) {
   const unsigned int token = blockIdx.x;
   if (token >= tokens) return;
   scores += token * experts;
@@ -19,6 +19,24 @@ extern "C" __global__ void libmir_cuda_router_topk_unit_bf16(
         ? __bfloat162float(scores[expert]) : -3.402823466e+38F;
     local_indices[item] = expert;
   }
+#ifdef LIBMIR_ROUTER_PROBABILITY
+  // Weights are softmax probabilities over every expert, not renormalized
+  // over the selected ones (`DeepSeek-V2`).
+  float all_maximum = local_values[0];
+#pragma unroll
+  for (unsigned int item = 1; item < 8; ++item) all_maximum = fmaxf(all_maximum, local_values[item]);
+  for (int offset = 16; offset > 0; offset >>= 1) {
+    all_maximum = fmaxf(all_maximum, __shfl_xor_sync(0xffffffffu, all_maximum, offset));
+  }
+  float all_sum = 0.0f;
+#pragma unroll
+  for (unsigned int item = 0; item < 8; ++item) {
+    if (local_indices[item] < experts) all_sum += expf(local_values[item] - all_maximum);
+  }
+  for (int offset = 16; offset > 0; offset >>= 1) {
+    all_sum += __shfl_xor_sync(0xffffffffu, all_sum, offset);
+  }
+#endif
   for (unsigned int rank = 0; rank < top_k; ++rank) {
     float best_score = local_values[0];
     unsigned int best = local_indices[0];
@@ -43,13 +61,20 @@ extern "C" __global__ void libmir_cuda_router_topk_unit_bf16(
     best_score = __shfl_sync(0xffffffffu, best_score, 0);
     if (lane == 0) {
       selected[rank] = best;
+#ifdef LIBMIR_ROUTER_PROBABILITY
+      weights[rank] = __float2bfloat16_rn(expf(best_score - all_maximum) / all_sum * scale);
+#else
       weights[rank] = __float2bfloat16_rn(best_score);
+#endif
     }
 #pragma unroll
     for (unsigned int item = 0; item < 8; ++item) {
       if (local_indices[item] == best) local_values[item] = -3.402823466e+38F;
     }
   }
+#ifdef LIBMIR_ROUTER_PROBABILITY
+  return;
+#endif
   if (lane != 0) return;
   const float maximum = __bfloat162float(weights[0]);
   float denominator = 0.0f;
@@ -59,6 +84,6 @@ extern "C" __global__ void libmir_cuda_router_topk_unit_bf16(
   for (unsigned int rank = 0; rank < top_k; ++rank) {
     const float probability =
         expf(__bfloat162float(weights[rank]) - maximum) / denominator;
-    weights[rank] = __float2bfloat16_rn(probability);
+    weights[rank] = __float2bfloat16_rn(probability * scale);
   }
 }

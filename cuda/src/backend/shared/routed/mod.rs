@@ -37,8 +37,9 @@ use self::{
 use crate::{
     CudaAffineGatedDeltaMoeLayer, CudaAffineGatedFullAttentionMoeLayer,
     CudaAffineGatedFullAttentionState, CudaAttentionHybridLayer, CudaBackend, CudaGatedDeltaState,
-    CudaMamba2HybridLayer, CudaMamba2State, CudaTensor, CudaTensorSet, DecodeAttentionBf16,
-    PagedKvCache, Result, backend::linear::CheckpointProjectionWeight,
+    CudaLatentAttentionLayer, CudaMamba2HybridLayer, CudaMamba2State, CudaTensor, CudaTensorSet,
+    DecodeAttentionBf16, LatentAttentionState, PagedKvCache, Result,
+    backend::linear::CheckpointProjectionWeight,
 };
 
 #[derive(Clone, Debug)]
@@ -47,6 +48,7 @@ enum SharedRoutedLayerTemplate {
     Full(Box<CudaAffineGatedFullAttentionMoeLayer>),
     Mamba2(Box<CudaMamba2HybridLayer>),
     Attention(Box<CudaAttentionHybridLayer>),
+    Latent(Box<CudaLatentAttentionLayer>),
 }
 
 #[derive(Debug)]
@@ -55,6 +57,7 @@ pub enum CudaSharedRoutedLayerState {
     Full(Box<CudaAffineGatedFullAttentionState>),
     Mamba2(CudaMamba2State),
     Attention(Box<DecodeAttentionBf16>),
+    Latent(Box<LatentAttentionState>),
 }
 
 #[derive(Clone, Debug)]
@@ -95,8 +98,11 @@ impl CudaSharedRoutedModelTemplate {
         speculation: Option<Speculation>,
     ) -> Result<Self> {
         let hybrid = decoder.state_space.is_some();
+        let latent = decoder.latent.is_some();
         if hybrid {
             load::validate_state_space_composition(&semantic.decoder.layers, max_sequence_blocks)?;
+        } else if latent {
+            load::validate_latent_composition(semantic, max_sequence_blocks)?;
         } else {
             load::validate_composition(semantic, max_sequence_blocks)?;
         }
@@ -138,6 +144,10 @@ impl CudaSharedRoutedModelTemplate {
                 .map(|_| PredictionTemplate::load(&load, semantic, bindings))
                 .transpose()?;
             (0.0, layers, prediction)
+        } else if latent {
+            let layers =
+                load::latent_layers(backend, decoder, semantic, tensors, catalog, bindings, cache)?;
+            (0.0, layers, None)
         } else {
             let norm_shift = infer_norm_shift(tensors, decoder, bindings)?;
             let layers = (0..decoder.num_hidden_layers)

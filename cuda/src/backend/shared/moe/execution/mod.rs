@@ -1,3 +1,5 @@
+mod shared;
+
 use mircuda::{DeviceBuffer, Event, Stream, bf16};
 
 use super::{
@@ -20,7 +22,7 @@ pub struct CudaAffineSharedExpertMoeExecution {
     routed: SharedRoutedExecution,
     shared_gate_up: SharedGateUp,
     shared_down: CheckpointProjection,
-    shared_output_gate: CheckpointProjection,
+    shared_output_gate: Option<CheckpointProjection>,
     shared_activation: ElementwiseBf16,
     output_add: ElementwiseBf16,
     sigmoid_multiply: SigmoidMultiplyBf16,
@@ -72,14 +74,20 @@ impl CudaAffineSharedExpertMoeExecution {
                 DenseRole::DenseDown,
                 &weights.shared_down,
             )?,
-            shared_output_gate: CheckpointProjection::new(
-                &shared_backend,
-                tokens,
-                config.hidden_size,
-                1,
-                DenseRole::Router,
-                &weights.shared_output_gate,
-            )?,
+            shared_output_gate: weights
+                .shared_output_gate
+                .as_ref()
+                .map(|gate| {
+                    CheckpointProjection::new(
+                        &shared_backend,
+                        tokens,
+                        config.hidden_size,
+                        1,
+                        DenseRole::Router,
+                        gate,
+                    )
+                })
+                .transpose()?,
             shared_activation: ElementwiseBf16::compile(
                 &backend.inner.compiler,
                 tokens * config.shared_intermediate_size,
@@ -191,49 +199,6 @@ impl CudaAffineSharedExpertMoeExecution {
             residual,
             &self.scratch.gated_shared_output,
             output,
-        )
-    }
-
-    fn shared(&mut self, input: &DeviceBuffer<bf16>) -> Result<()> {
-        let stream = self
-            .parallel
-            .as_ref()
-            .map_or(&self.backend.inner.stream, |parallel| &parallel.stream);
-        match &mut self.shared_gate_up {
-            SharedGateUp::Separate { gate, up } => {
-                gate.execute(input, &mut self.scratch.shared_gate)?;
-                up.execute(input, &mut self.scratch.shared_up)?;
-                self.shared_activation.gated(
-                    stream,
-                    &self.scratch.shared_gate,
-                    &self.scratch.shared_up,
-                    &mut self.scratch.shared_intermediate,
-                    self.config.activation.into(),
-                )?;
-            },
-            SharedGateUp::PackedNvFp4(operation) => {
-                operation.execute(
-                    input,
-                    &mut self.scratch.shared_gate_up,
-                    mircuda::MarlinNvFp4ThreadConfig::N128K64,
-                )?;
-                self.shared_activation.gated_concatenated(
-                    stream,
-                    &self.scratch.shared_gate_up,
-                    &mut self.scratch.shared_intermediate,
-                    self.config.shared_intermediate_size,
-                    self.config.activation.into(),
-                )?;
-            },
-        }
-        self.shared_down
-            .execute(&self.scratch.shared_intermediate, &mut self.scratch.shared_output)?;
-        self.shared_output_gate.execute(input, &mut self.scratch.shared_output_gate)?;
-        self.sigmoid_multiply.execute(
-            stream,
-            &self.scratch.shared_output,
-            &self.scratch.shared_output_gate,
-            &mut self.scratch.gated_shared_output,
         )
     }
 

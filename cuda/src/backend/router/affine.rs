@@ -4,7 +4,7 @@ use super::RouterSelection;
 use crate::{
     AffineQuantizedBf16Qmm, AffineQuantizedConfig, AffineQuantizedTensors, CudaBackend, Error,
     Result,
-    kernels::{RouterUnitSpec, RouterUnitTopK},
+    kernels::{RouterUnitScoring, RouterUnitSpec, RouterUnitTopK},
 };
 
 #[derive(Debug)]
@@ -23,8 +23,9 @@ impl CudaBackend {
         tokens: usize,
         projection: AffineQuantizedConfig,
         top_k: usize,
+        scoring: RouterUnitScoring,
     ) -> Result<AffineRouterBf16> {
-        AffineRouterBf16::new(self, tokens, projection, top_k)
+        AffineRouterBf16::new(self, tokens, projection, top_k, scoring)
     }
 }
 
@@ -34,6 +35,7 @@ impl AffineRouterBf16 {
         tokens: usize,
         projection: AffineQuantizedConfig,
         top_k: usize,
+        scoring: RouterUnitScoring,
     ) -> Result<Self> {
         let selections = tokens
             .checked_mul(top_k)
@@ -43,13 +45,14 @@ impl AffineRouterBf16 {
             .ok_or(Error::InvalidRouter("affine router score overflow"))?;
         Ok(Self {
             projection: backend.prepare_affine_quantized_bf16_qmm(tokens, projection, 1)?,
-            top_k: RouterUnitTopK::compile(
+            top_k: RouterUnitTopK::compile_scored(
                 &backend.inner.compiler,
                 RouterUnitSpec {
                     tokens,
                     experts: projection.output_features,
                     top_k,
                 },
+                scoring,
             )?,
             stream: backend.inner.stream.clone(),
             scores: backend.inner.pool.allocate(&backend.inner.stream, scores)?,

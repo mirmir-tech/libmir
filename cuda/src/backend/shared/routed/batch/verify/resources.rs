@@ -22,7 +22,7 @@ use crate::{
 pub(super) struct VerifyResources {
     stream: Stream,
     pub(super) rows: usize,
-    _workspace: SharedScratch<BatchedSplitAttentionWorkspace>,
+    _workspace: Option<SharedScratch<BatchedSplitAttentionWorkspace>>,
     token_staging: PinnedBuffer<u32>,
     token_ids: DeviceBuffer<u32>,
     paging: PagedDecodeBatch,
@@ -43,7 +43,7 @@ impl VerifyResources {
         let elements = checked(rows, template.decoder.hidden_size)?;
         let allocate = |count| backend.inner.pool.allocate(&backend.inner.stream, count);
         let (workspace_handle, attention_workspace) =
-            workspace::attention_workspace(template, rows)?;
+            workspace::attention_workspace(template, rows)?.unzip();
         Ok(Self {
             stream: backend.inner.stream.clone(),
             rows,
@@ -67,7 +67,7 @@ impl VerifyResources {
                         rows,
                         rows,
                         ExecutionPhase::Decode,
-                        Some(attention_workspace.clone()),
+                        attention_workspace.clone(),
                     )
                 })
                 .collect::<Result<Vec<_>>>()?,

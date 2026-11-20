@@ -4,8 +4,8 @@
 //! are absorbed into the latent space (`q_nope · W_UK`) so attention runs as
 //! multi-query attention over those rows, and the latent output is expanded
 //! per head (`· W_UVᵀ`). The same kernels serve decode, chunked prefill and
-//! batches: every query token carries its sequence and the number of tokens
-//! it sees.
+//! batches: every query token carries its sequence and its position and
+//! attends to the tokens up to it; its own row goes to its slot.
 
 mod absorb;
 mod execute;
@@ -37,9 +37,9 @@ cuda_export!(
     pub(crate) LatentSplitKernel = "libmir_cuda_latent_attention_split_bf16"(
         query: &DeviceBuffer<bf16>, pages: &DeviceBuffer<u8>,
         block_tables: &DeviceBuffer<u32>, query_sequences: &DeviceBuffer<u32>,
-        query_visible: &DeviceBuffer<u32>, partial_values: &mut DeviceBuffer<f32>,
+        positions: &DeviceBuffer<u32>, partial_values: &mut DeviceBuffer<f32>,
         partial_statistics: &mut DeviceBuffer<f32>, queries: u32, heads: u32,
-        max_blocks: u32, block_size: u32, scale: f32,
+        table_stride: u32, block_size: u32, scale: f32,
     )
 );
 
@@ -65,8 +65,6 @@ pub struct LatentAttentionSpec {
     pub value_dim: usize,
     pub rotary_pairing: RotaryPairing,
     pub block_size: usize,
-    /// Block-table width of one sequence.
-    pub max_blocks: usize,
     /// Query tokens one launch may carry.
     pub max_queries: usize,
     /// Partitions of every query's visible tokens, merged afterwards.
@@ -94,7 +92,6 @@ impl LatentAttentionSpec {
             && self.nope_dim > 0
             && self.value_dim > 0
             && self.block_size > 0
-            && self.max_blocks > 0
             && self.max_queries > 0
             && self.splits > 0
             // The kernel stages eight query rows and a 32-row tile in 48 KiB

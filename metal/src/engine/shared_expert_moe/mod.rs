@@ -115,7 +115,13 @@ impl SharedExpertMoe {
             shared_up,
             fused_shared_gate_up: None,
             shared_down: BoundLinear::load(tensors, bindings.shared_down, stream)?,
-            shared_output_gate: BoundLinear::load(tensors, bindings.shared_output_gate, stream)?,
+            shared_output_gate: BoundLinear::load(
+                tensors,
+                bindings.shared_output_gate.ok_or_else(|| {
+                    Error::InvalidModel("Metal shared experts require an output gate".into())
+                })?,
+                stream,
+            )?,
             shared_gate_up_mode: if fusion.gate_up {
                 planner.shared_dense_gate_up_mode()
             } else {

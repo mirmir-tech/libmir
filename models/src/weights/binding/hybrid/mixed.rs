@@ -29,24 +29,39 @@ pub struct MixedDecoderLayerBindings<'a> {
 
 impl WeightBindingPlan {
     pub fn mixed_decoder_layer(&self, index: usize) -> Result<MixedDecoderLayerBindings<'_>> {
-        let feed_forward = if optional(self, index, LayerTensorRole::Router).is_some() {
-            MixedFeedForwardBindings::SharedRouted(feed_forward(self, index)?)
-        } else {
-            let get = |projection| {
-                layer(self, index, LayerTensorRole::FeedForwardProjection { projection })
-            };
-            MixedFeedForwardBindings::Dense(DenseFeedForwardBindings {
-                gate: get(FeedForwardProjectionRole::Gate)?,
-                up: get(FeedForwardProjectionRole::Up)?,
-                down: get(FeedForwardProjectionRole::Down)?,
-            })
-        };
         Ok(MixedDecoderLayerBindings {
             input_norm: layer(self, index, LayerTensorRole::InputNorm)?,
             mixer: mixer(self, index)?,
             post_attention_norm: layer(self, index, LayerTensorRole::PostAttentionNorm)?,
-            feed_forward,
+            feed_forward: mixed_feed_forward(self, index)?,
         })
+    }
+}
+
+/// A routed feed-forward with shared experts where the layer has a router,
+/// a dense one otherwise.
+pub(super) fn mixed_feed_forward(
+    plan: &WeightBindingPlan,
+    index: usize,
+) -> Result<MixedFeedForwardBindings<'_>> {
+    if optional(plan, index, LayerTensorRole::Router).is_some() {
+        return feed_forward(plan, index).map(MixedFeedForwardBindings::SharedRouted);
+    }
+    let get =
+        |projection| layer(plan, index, LayerTensorRole::FeedForwardProjection { projection });
+    Ok(MixedFeedForwardBindings::Dense(DenseFeedForwardBindings {
+        gate: get(FeedForwardProjectionRole::Gate)?,
+        up: get(FeedForwardProjectionRole::Up)?,
+        down: get(FeedForwardProjectionRole::Down)?,
+    }))
+}
+
+impl<'a> MixedFeedForwardBindings<'a> {
+    pub(super) fn bindings(self) -> Vec<&'a TensorBinding> {
+        match self {
+            Self::Dense(value) => vec![value.gate, value.up, value.down],
+            Self::SharedRouted(value) => value.bindings(),
+        }
     }
 }
 
@@ -55,12 +70,7 @@ impl<'a> MixedDecoderLayerBindings<'a> {
     pub fn physical_sources(self) -> Vec<&'a str> {
         let mut bindings = vec![self.input_norm, self.post_attention_norm];
         bindings.extend(self.mixer.bindings());
-        match self.feed_forward {
-            MixedFeedForwardBindings::Dense(value) => {
-                bindings.extend([value.gate, value.up, value.down]);
-            },
-            MixedFeedForwardBindings::SharedRouted(value) => bindings.extend(value.bindings()),
-        }
+        bindings.extend(self.feed_forward.bindings());
         super::sources(bindings)
     }
 }

@@ -74,5 +74,6 @@ fn moe_config(
         expert_bits,
         router_bits,
         activation: GatedActivation::try_from(decoder)?,
+        routing: crate::kernels::RouterUnitScoring::RENORMALIZED,
     })
 }

@@ -87,13 +87,14 @@ pub(super) fn routing(
             DenseRole::Router,
             &weights.router,
         )?),
-        RouterUnitTopK::compile(
+        RouterUnitTopK::compile_scored(
             backend.compiler(),
             RouterUnitSpec {
                 tokens,
                 experts: config.expert_count,
                 top_k: config.top_k,
             },
+            config.routing,
         )?,
         backend.pool().allocate(backend.stream(), tokens * config.expert_count)?,
         backend.pool().allocate(backend.stream(), selections)?,

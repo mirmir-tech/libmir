@@ -1,4 +1,6 @@
 mod pattern;
+#[cfg(test)]
+mod tests;
 mod unit;
 
 use mircuda::{
@@ -6,7 +8,7 @@ use mircuda::{
     cuda_kernel_file,
 };
 pub use pattern::{RoutePattern, RoutePatternGenerator, RoutePatternSpec};
-pub use unit::{RouterUnitSpec, RouterUnitTopK};
+pub use unit::{RouterUnitScoring, RouterUnitSpec, RouterUnitTopK, RouterUnitWeighting};
 
 use super::geometry::require;
 use crate::{Error, Result};

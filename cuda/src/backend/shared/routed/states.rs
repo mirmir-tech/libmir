@@ -18,6 +18,7 @@ impl CudaSharedRoutedModelTemplate {
                 self.decoder.layer_head_dim(index),
             )),
             SharedRoutedLayerTemplate::Attention(layer) => Some(layer.storage(self.cache)),
+            SharedRoutedLayerTemplate::Latent(layer) => Some(layer.storage(self.cache)),
         }
     }
 
@@ -95,6 +96,11 @@ impl CudaSharedRoutedModelTemplate {
                     },
                     SharedRoutedLayerTemplate::Attention(layer) => {
                         CudaSharedRoutedLayerState::Attention(Box::new(
+                            layer.prepare_state_with_cache(cache.clone().ok_or_else(missing)?)?,
+                        ))
+                    },
+                    SharedRoutedLayerTemplate::Latent(layer) => {
+                        CudaSharedRoutedLayerState::Latent(Box::new(
                             layer.prepare_state_with_cache(cache.clone().ok_or_else(missing)?)?,
                         ))
                     },

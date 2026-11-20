@@ -26,8 +26,9 @@ pub struct LatentAttentionLayer<'a> {
 pub struct LatentCacheView<'a> {
     /// `[blocks · block_size, latent_rank + rope_dim]` BF16 rows.
     pub pages: &'a mut DeviceBuffer<u8>,
-    /// `[sequences, max_blocks]` physical block of every logical block.
+    /// `[sequences, table_stride]` physical block of every logical block.
     pub block_tables: &'a DeviceBuffer<u32>,
+    pub table_stride: usize,
 }
 
 /// Per-token device inputs; `tokens` is the absorption plan's token count.
@@ -37,13 +38,14 @@ pub struct LatentAttentionInputs<'a> {
     pub query: &'a DeviceBuffer<bf16>,
     /// `[tokens, latent_rank + rope_dim]` key/value down-projection.
     pub latent: &'a DeviceBuffer<bf16>,
+    /// Position of every token in its sequence; it attends to the tokens up
+    /// to and including it.
     pub positions: &'a DeviceBuffer<u32>,
-    /// Cache row each token's latent is stored into (`u32::MAX` skips it).
+    /// Cache row each token's latent is stored into; `u32::MAX` skips the
+    /// store (padding rows, shared pages that already hold the token).
     pub slot_mapping: &'a DeviceBuffer<u32>,
     /// Block-table row of every token's sequence.
     pub query_sequences: &'a DeviceBuffer<u32>,
-    /// Tokens of its sequence every query token attends to, itself included.
-    pub query_visible: &'a DeviceBuffer<u32>,
 }
 
 impl LatentAttention {
@@ -62,7 +64,7 @@ impl LatentAttention {
     ) -> Result<()> {
         let tokens = absorption.tokens();
         self.validate(tokens, layer, &cache, &inputs, output)?;
-        let LatentCacheView { pages, block_tables } = cache;
+        let LatentCacheView { pages, block_tables, table_stride } = cache;
         let spec = self.spec;
         self.prepare.launch(
             stream,
@@ -104,12 +106,12 @@ impl LatentAttention {
                 &*pages,
                 block_tables,
                 inputs.query_sequences,
-                inputs.query_visible,
+                inputs.positions,
                 &mut workspace.values,
                 &mut workspace.statistics,
                 narrow(tokens)?,
                 narrow(spec.heads)?,
-                narrow(spec.max_blocks)?,
+                narrow(table_stride)?,
                 narrow(spec.block_size)?,
                 layer.softmax_scale,
             ),
@@ -152,14 +154,9 @@ impl LatentAttention {
             inputs.query.len(),
         )?;
         require("latent input", product(tokens, spec.row_width())?, inputs.latent.len())?;
-        for (operand, buffer) in [
-            ("latent positions", inputs.positions),
-            ("latent slot mapping", inputs.slot_mapping),
-            ("latent query sequences", inputs.query_sequences),
-            ("latent query visibility", inputs.query_visible),
-        ] {
-            require(operand, tokens, buffer.len())?;
-        }
+        require("latent positions", tokens, inputs.positions.len())?;
+        require("latent slot mapping", tokens, inputs.slot_mapping.len())?;
+        require("latent query sequences", tokens, inputs.query_sequences.len())?;
         require("latent norm", spec.latent_rank, layer.latent_norm.len())?;
         let projected = product(spec.heads, spec.nope_dim + spec.value_dim)?;
         require(
@@ -168,7 +165,10 @@ impl LatentAttention {
             layer.key_value_up.len(),
         )?;
         require("latent rotary frequencies", spec.rope_dim / 2, layer.inverse_frequencies.len())?;
-        require("latent block tables", spec.max_blocks, cache.block_tables.len())?;
+        if cache.table_stride == 0 {
+            return Err(Error::InvalidPagedKv("latent block tables have no columns"));
+        }
+        require("latent block tables", cache.table_stride, cache.block_tables.len())?;
         require("latent pages", self.spec.page_bytes(1)?, cache.pages.len())?;
         require("latent output", product(tokens, spec.heads * spec.value_dim)?, output.len())
     }

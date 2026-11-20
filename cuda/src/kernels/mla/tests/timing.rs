@@ -41,19 +41,15 @@ fn decode(runtime: &Runtime, heads: usize, context: usize, splits: usize) -> Res
         value_dim: 128,
         rotary_pairing: RotaryPairing::Interleaved,
         block_size: 16,
-        max_blocks: context.div_ceil(16),
         max_queries: 1,
         splits,
     };
+    let blocks = context.div_ceil(spec.block_size);
     let mut values = Values::new(7);
     let attention = LatentAttention::compile(&runtime.compiler, spec)?;
     let mut workspace = attention.workspace(&runtime.pool, &runtime.stream)?;
-    let mut pages = runtime
-        .pool
-        .allocate_zeroed(&runtime.stream, spec.page_bytes(spec.max_blocks)?)?;
-    let table = (0..spec.max_blocks)
-        .map(u32::try_from)
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut pages = runtime.pool.allocate_zeroed(&runtime.stream, spec.page_bytes(blocks)?)?;
+    let table = (0..blocks).map(u32::try_from).collect::<std::result::Result<Vec<_>, _>>()?;
     let block_tables = runtime.copy(&table)?;
     let latent_norm = runtime.copy_f32(&vec![1.0; spec.latent_rank])?;
     let key_value_up = runtime.copy_f32(&values.take(heads * 256 * spec.latent_rank, 0.044))?;
@@ -70,9 +66,8 @@ fn decode(runtime: &Runtime, heads: usize, context: usize, splits: usize) -> Res
     let latent = runtime.copy_f32(&values.take(spec.row_width(), 1.0))?;
     let last = u32::try_from(context - 1)?;
     let positions = runtime.copy(&[last])?;
-    let slot_mapping = runtime.copy(&[last])?;
     let query_sequences = runtime.copy(&[0_u32])?;
-    let query_visible = runtime.copy(&[u32::try_from(context)?])?;
+    let slot_mapping = runtime.copy(&[last])?;
     let mut absorption = LatentAbsorption::new(&runtime.context, &runtime.stream, spec, 1)?;
     let mut output = runtime.pool.allocate::<bf16>(&runtime.stream, heads * spec.value_dim)?;
     runtime.measure(64, || {
@@ -83,6 +78,7 @@ fn decode(runtime: &Runtime, heads: usize, context: usize, splits: usize) -> Res
             LatentCacheView {
                 pages: &mut pages,
                 block_tables: &block_tables,
+                table_stride: blocks,
             },
             LatentAttentionInputs {
                 query: &query,
@@ -90,7 +86,6 @@ fn decode(runtime: &Runtime, heads: usize, context: usize, splits: usize) -> Res
                 positions: &positions,
                 slot_mapping: &slot_mapping,
                 query_sequences: &query_sequences,
-                query_visible: &query_visible,
             },
             &mut workspace,
             &mut output,

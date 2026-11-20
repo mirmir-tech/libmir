@@ -1,4 +1,5 @@
 mod admission;
+mod latent;
 pub use admission::admit;
 use models::semantic::{
     ActivationSpec, FeedForwardSpec, KeyValueRelation, MixerSpec, QkNormalization,
@@ -154,6 +155,9 @@ pub enum CudaDecoderRuntime {
     ClampedRouted,
     /// Mamba-2 and attention mixers with latent routed experts (Nemotron-H).
     StateSpaceHybrid,
+    /// Multi-head latent attention with dense or shared-routed feed-forwards
+    /// (`DeepSeek` V2/V3).
+    LatentAttention,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
