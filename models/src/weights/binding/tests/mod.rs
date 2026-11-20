@@ -18,6 +18,7 @@ mod block;
 mod dense;
 mod gptq;
 mod hybrid;
+mod latent;
 mod mistral;
 mod packed_integer;
 mod roles;

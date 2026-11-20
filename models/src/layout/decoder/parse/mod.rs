@@ -3,13 +3,17 @@ use std::{fs, path::Path};
 use serde_json::Value;
 
 use super::{
-    AttentionLayerType, DecoderConfig, StateSpaceHybridConfig, attention, defaults, features, rope,
-    state_space,
+    AttentionLayerType, DecoderConfig, attention, defaults, features, latent, rope, state_space,
 };
 use crate::{error::Result, layout::ModelLayout};
 
+mod fields;
 mod value;
 
+use fields::{
+    attention_scale, decoder_value, hybrid_layer_types, intermediate_size, max_position_embeddings,
+    query_key_rows_interleaved, resolve_head_dim, rms_norm_eps,
+};
 pub(super) use value::{
     invalid, optional_bool, optional_f64, optional_string, optional_usize, require_usize,
 };
@@ -59,12 +63,15 @@ impl DecoderConfig {
             Some(hybrid) => hybrid.blocks.layers().len(),
             None => require_usize(decoder, &["num_hidden_layers", "num_layers", "n_layer"])?,
         };
+        let latent = latent::latent_decoder(decoder)?;
         let layer_types = match &state_space {
             Some(hybrid) => hybrid_layer_types(hybrid),
             None => attention::layer_types(decoder, num_hidden_layers)?,
         };
+        let geometry = (hidden_size, num_attention_heads);
+        let (layer_types, head_dim) =
+            attention_geometry(decoder, latent.as_ref(), layer_types, geometry)?;
         let partial_rotary_factor = partial_rotary_factor(decoder)?;
-        let head_dim = resolve_head_dim(decoder, hidden_size, num_attention_heads)?;
         let config = Self {
             hidden_size,
             intermediate_size: intermediate_size(decoder)?,
@@ -136,6 +143,7 @@ impl DecoderConfig {
             query_key_rows_interleaved: query_key_rows_interleaved(decoder)?,
             initial_context_length: optional_usize(decoder, &["initial_context_length"])?,
             state_space,
+            latent,
         };
         config.validate()?;
         Ok(config)
@@ -169,86 +177,33 @@ impl DecoderConfig {
     }
 }
 
-fn intermediate_size(value: &Value) -> Result<usize> {
-    optional_usize(
-        value,
-        &[
-            "intermediate_size",
-            "ffn_hidden_size",
-            "n_inner",
-            "moe_intermediate_size",
-            "shared_expert_intermediate_size",
-        ],
-    )?
-    .ok_or_else(|| {
-        invalid("missing intermediate_size or ffn_hidden_size or n_inner or MoE intermediate size")
-    })
+/// Layer kinds and query/key head width: latent decoders attend through the
+/// latent in every softmax layer, with heads `nope + rope` wide.
+fn attention_geometry(
+    decoder: &Value,
+    latent: Option<&super::LatentDecoderConfig>,
+    layers: Vec<AttentionLayerType>,
+    (hidden_size, heads): (usize, usize),
+) -> Result<(Vec<AttentionLayerType>, usize)> {
+    match latent {
+        Some(latent) => Ok((latent_layer_types(layers)?, latent.attention.query_head_dim())),
+        None => Ok((layers, resolve_head_dim(decoder, hidden_size, heads)?)),
+    }
 }
 
-fn hybrid_layer_types(hybrid: &StateSpaceHybridConfig) -> Vec<AttentionLayerType> {
-    hybrid
-        .blocks
-        .layers()
-        .iter()
-        .map(|layer| {
-            if layer.is_state_space() {
-                AttentionLayerType::StateSpace
-            } else {
-                AttentionLayerType::Full
-            }
+/// Every softmax layer of a latent-attention decoder attends through the
+/// latent.
+fn latent_layer_types(layers: Vec<AttentionLayerType>) -> Result<Vec<AttentionLayerType>> {
+    layers
+        .into_iter()
+        .map(|layer| match layer {
+            AttentionLayerType::Full => Ok(AttentionLayerType::Latent),
+            AttentionLayerType::Linear => Ok(AttentionLayerType::Linear),
+            AttentionLayerType::Sliding
+            | AttentionLayerType::StateSpace
+            | AttentionLayerType::Latent => {
+                Err(invalid("latent attention supports only full-attention layers"))
+            },
         })
         .collect()
-}
-
-fn resolve_head_dim(
-    decoder: &Value,
-    hidden_size: usize,
-    num_attention_heads: usize,
-) -> Result<usize> {
-    if let Some(head_dim) =
-        optional_usize(decoder, &["head_dim", "attention_head_dim", "kv_channels"])?
-    {
-        return Ok(head_dim);
-    }
-    if !hidden_size.is_multiple_of(num_attention_heads) {
-        return Err(invalid("hidden_size must be divisible by num_attention_heads"));
-    }
-    Ok(hidden_size / num_attention_heads)
-}
-
-fn decoder_value(value: &Value) -> &Value {
-    ["text_config", "language_config", "llm_config"]
-        .into_iter()
-        .filter_map(|key| value.get(key))
-        .find(|section| section.is_object())
-        .unwrap_or(value)
-}
-
-fn attention_scale(decoder: &Value) -> Result<Option<f64>> {
-    // Gemma: scores scale by `query_pre_attn_scalar ** -0.5`.
-    Ok(
-        optional_f64(decoder, &["attention_scale", "attention_multiplier"])?.or(optional_f64(
-            decoder,
-            &["query_pre_attn_scalar"],
-        )?
-        .map(|scalar| scalar.powf(-0.5))),
-    )
-}
-
-fn query_key_rows_interleaved(decoder: &Value) -> Result<bool> {
-    match optional_string(decoder, QUERY_KEY_ROWS)?.as_deref() {
-        None => Ok(false),
-        Some(QUERY_KEY_ROWS_INTERLEAVED) => Ok(true),
-        Some(other) => Err(invalid(format!("unknown {QUERY_KEY_ROWS} `{other}`"))),
-    }
-}
-
-fn max_position_embeddings(decoder: &Value) -> Result<usize> {
-    let names = ["max_position_embeddings", "max_sequence_length", "seq_length", "n_positions"];
-    Ok(optional_usize(decoder, &names)?.unwrap_or(4096))
-}
-
-fn rms_norm_eps(decoder: &Value) -> Result<f64> {
-    let names = ["rms_norm_eps", "layer_norm_epsilon", "layernorm_epsilon", "norm_epsilon"];
-    Ok(optional_f64(decoder, &names)?.unwrap_or(1e-5))
 }

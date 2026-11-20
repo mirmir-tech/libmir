@@ -6,9 +6,9 @@ mod sidecar;
 mod validation;
 
 pub use attention::{
-    AttentionOutputSpec, AttentionSpec, KeyValueRelation, LinearAttentionSpec, MixerSpec,
-    PositionEncodingSpec, QkNormalization, RopeScalingSpec, RotaryLayoutSpec, RotarySpec,
-    StateSpaceSpec, StateSpaceStateDTypeSpec,
+    AttentionOutputSpec, AttentionSpec, KeyValueRelation, LatentAttentionSpec, LinearAttentionSpec,
+    MixerSpec, PositionEncodingSpec, QkNormalization, RopeScalingSpec, RotaryLayoutSpec,
+    RotaryPairingSpec, RotarySpec, StateSpaceSpec, StateSpaceStateDTypeSpec,
 };
 pub use feed_forward::{
     ActivationSpec, FeedForwardSpec, RoutedExpertsSpec, RouterNormalization, SharedExpertSpec,

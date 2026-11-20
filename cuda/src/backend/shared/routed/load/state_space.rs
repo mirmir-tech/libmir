@@ -107,7 +107,7 @@ pub(in crate::backend::shared::routed) fn validate_composition(
                 MixerSpec::SoftmaxAttention(attention) => {
                     attention.position == PositionEncodingSpec::None
                 },
-                MixerSpec::LinearAttention(_) => false,
+                MixerSpec::LinearAttention(_) | MixerSpec::LatentAttention(_) => false,
             };
             mixer
                 && matches!(

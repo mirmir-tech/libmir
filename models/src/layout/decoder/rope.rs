@@ -60,14 +60,29 @@ impl RopeScaling {
     }
 }
 
+/// The rotary scaling description: `rope_scaling`, or a flat
+/// `rope_parameters` (Transformers 5) naming a scaled rope type. Per-layer-type
+/// `rope_parameters` (Gemma) and unscaled types stay out of scope here.
+pub(super) fn scaling_value(config: &Value) -> Option<&Value> {
+    if let Some(value) = config.get("rope_scaling").filter(|value| !value.is_null()) {
+        return Some(value);
+    }
+    config.get("rope_parameters").filter(|parameters| {
+        rope_type_of(parameters).is_some_and(|kind| matches!(kind, "yarn" | "linear" | "llama3"))
+    })
+}
+
+/// `rope_type`, or the older `type` key `DeepSeek` V2 checkpoints write.
+fn rope_type_of(value: &Value) -> Option<&str> {
+    value.get("rope_type").or_else(|| value.get("type")).and_then(Value::as_str)
+}
+
 pub(super) fn scaling(config: &Value) -> Result<Option<RopeScaling>> {
-    let Some(value) = config.get("rope_scaling") else {
+    let Some(value) = scaling_value(config) else {
         return Ok(None);
     };
-    if value.is_null() {
-        return Ok(None);
-    }
-    let rope_type = string(value, "rope_type")?;
+    let rope_type =
+        rope_type_of(value).ok_or_else(|| invalid("rope_scaling.rope_type must be a string"))?;
     if rope_type == "yarn" {
         return yarn(value).map(Some);
     }
@@ -158,14 +173,6 @@ fn yarn_mscale(factor: f64, scale: f64) -> f64 {
     } else {
         0.1_f64.mul_add(scale * factor.ln(), 1.0)
     }
-}
-
-fn string(value: &Value, field: &str) -> Result<String> {
-    value
-        .get(field)
-        .and_then(Value::as_str)
-        .map(Into::into)
-        .ok_or_else(|| invalid(format!("rope_scaling.{field} must be a string")))
 }
 
 fn number(value: &Value, field: &str) -> Result<f64> {

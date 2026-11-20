@@ -16,6 +16,8 @@ pub enum CudaMixerLowering {
     },
     Linear,
     StateSpace,
+    /// Multi-head latent attention; no CUDA runtime executes it yet.
+    Latent,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -110,6 +112,11 @@ impl CudaDecoderPlan {
     }
 
     #[must_use]
+    pub fn has_latent_mixer(&self) -> bool {
+        self.layers.iter().any(|layer| layer.mixer == CudaMixerLowering::Latent)
+    }
+
+    #[must_use]
     pub fn has_state_space_mixer(&self) -> bool {
         self.layers.iter().any(|layer| layer.mixer == CudaMixerLowering::StateSpace)
     }
@@ -165,11 +172,11 @@ pub fn graph_normalization(plan: &CudaDecoderPlan) -> Result<CudaQkvNormalizatio
         .iter()
         .map(|layer| match layer.mixer {
             CudaMixerLowering::Softmax { normalization, .. } => Ok(normalization),
-            CudaMixerLowering::Linear | CudaMixerLowering::StateSpace => {
-                Err(ArchitectureError::invalid(
-                    "CUDA graph decoder requires softmax attention in every layer",
-                ))
-            },
+            CudaMixerLowering::Linear
+            | CudaMixerLowering::StateSpace
+            | CudaMixerLowering::Latent => Err(ArchitectureError::invalid(
+                "CUDA graph decoder requires softmax attention in every layer",
+            )),
         })
         .collect::<Result<Vec<_>>>()?;
     let Some(&first) = normalizations.first() else {
@@ -196,6 +203,7 @@ fn lower_mixer(spec: &MixerSpec) -> CudaMixerLowering {
         },
         MixerSpec::LinearAttention(_) => CudaMixerLowering::Linear,
         MixerSpec::StateSpace(_) => CudaMixerLowering::StateSpace,
+        MixerSpec::LatentAttention(_) => CudaMixerLowering::Latent,
     }
 }
 

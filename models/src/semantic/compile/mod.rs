@@ -1,3 +1,4 @@
+mod latent;
 mod state_space;
 mod tensors;
 
@@ -27,6 +28,9 @@ pub(super) fn compile(
     };
     if let Some(hybrid) = &decoder.state_space {
         return state_space::compile(decoder, hybrid, norm, tensors);
+    }
+    if let Some(latent) = &decoder.latent {
+        return latent::compile(decoder, latent, norm);
     }
     let layers = (0..decoder.num_hidden_layers)
         .map(|index| layer(decoder, tensors, index, norm))
@@ -101,7 +105,7 @@ fn mixer(decoder: &DecoderConfig, tensors: &TensorCatalog, index: usize) -> Resu
     }))
 }
 
-fn rotary(decoder: &DecoderConfig, index: usize) -> PositionEncodingSpec {
+pub(super) fn rotary(decoder: &DecoderConfig, index: usize) -> PositionEncodingSpec {
     PositionEncodingSpec::Rotary(RotarySpec {
         theta: decoder.rope_theta_for_layer(index).unwrap_or(10_000.0),
         partial_factor: decoder.partial_rotary_factor_for_layer(index).unwrap_or(1.0),
@@ -174,6 +178,7 @@ fn feed_forward(decoder: &DecoderConfig) -> Result<FeedForwardSpec> {
         intermediate_size: decoder.moe_intermediate_size.unwrap_or(decoder.intermediate_size),
         activation: activation.clone(),
         router_normalization: RouterNormalization::SoftmaxTopK,
+        output_scale: 1.0,
     };
     if decoder.attention_k_eq_v && decoder.hidden_activation.as_deref() == Some("gelu_pytorch_tanh")
     {
@@ -194,7 +199,7 @@ fn feed_forward(decoder: &DecoderConfig) -> Result<FeedForwardSpec> {
     Ok(FeedForwardSpec::Routed { routed, shared })
 }
 
-fn activation(decoder: &DecoderConfig) -> ActivationSpec {
+pub(super) fn activation(decoder: &DecoderConfig) -> ActivationSpec {
     match decoder.hidden_activation.as_deref() {
         Some("gelu_pytorch_tanh") => ActivationSpec::GeluTanh,
         Some("silu") | None => ActivationSpec::SwiGlu {
@@ -221,6 +226,6 @@ const fn attention_output(output: AttentionOutput) -> AttentionOutputSpec {
     }
 }
 
-fn invalid(message: impl Into<String>) -> ModelsError {
+pub(super) fn invalid(message: impl Into<String>) -> ModelsError {
     ModelsError::InvalidConfig(message.into())
 }

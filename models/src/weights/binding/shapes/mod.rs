@@ -1,6 +1,7 @@
 use super::{
-    AttentionProjectionRole, ExpertProjectionRole, FeedForwardProjectionRole, LatentProjectionRole,
-    LayerTensorRole, LinearAttentionTensorRole, LogicalTensorRole, StateSpaceTensorRole,
+    AttentionProjectionRole, ExpertProjectionRole, FeedForwardProjectionRole,
+    LatentAttentionTensorRole, LatentProjectionRole, LayerTensorRole, LinearAttentionTensorRole,
+    LogicalTensorRole, StateSpaceTensorRole,
 };
 use crate::semantic::{
     AttentionOutputSpec, DecoderLayerSpec, FeedForwardSpec, MixerSpec, SemanticModelSpec,
@@ -8,6 +9,7 @@ use crate::semantic::{
 
 mod clamped;
 mod feed_forward;
+mod latent;
 mod prediction;
 mod state_space;
 mod transforms;
@@ -59,7 +61,7 @@ fn layer(
         LayerTensorRole::LayerScale => Some(vec![1]),
         LayerTensorRole::AttentionProjection { projection } => {
             let MixerSpec::SoftmaxAttention(attention) = &layer.mixer else {
-                return None;
+                return latent::projection(&layer.mixer, hidden, *projection);
             };
             let query = attention.query_heads.checked_mul(attention.head_dim)?;
             let key_value = attention.key_value_heads.checked_mul(attention.head_dim)?;
@@ -111,6 +113,9 @@ fn layer(
         LayerTensorRole::RouterCorrectionBias => state_space::correction_bias(&layer.feed_forward),
         LayerTensorRole::LatentProjection { projection } => {
             state_space::latent(&layer.feed_forward, hidden, *projection)
+        },
+        LayerTensorRole::LatentAttention { tensor } => {
+            latent::tensor(&layer.mixer, hidden, *tensor)
         },
         LayerTensorRole::Auxiliary { .. } => None,
     }

@@ -44,6 +44,28 @@ fn bounds_clamped_sliding_layers_per_concurrent_session() -> crate::Result<()> {
 }
 
 #[test]
+fn prices_a_latent_layer_as_its_latent_and_rotary_key() -> crate::Result<()> {
+    let decoder = DecoderConfig::from_value(&json!({
+        "hidden_size": 2048,
+        "intermediate_size": 10_944,
+        "num_hidden_layers": 27,
+        "num_attention_heads": 16,
+        "num_key_value_heads": 16,
+        "vocab_size": 102_400,
+        "kv_lora_rank": 512,
+        "qk_nope_head_dim": 128,
+        "qk_rope_head_dim": 64,
+        "v_head_dim": 128
+    }))?;
+    let (growing, _) = kv_budget(&decoder, &RuntimeConfig::default(), &BackendTarget::Cuda);
+
+    // BF16: 27 layers of one 512-wide latent plus one 64-wide rotary key, not
+    // 16 heads of 192-wide keys and 128-wide values.
+    assert_eq!(growing, 27 * (512 + 64) * 2);
+    Ok(())
+}
+
+#[test]
 fn prices_mamba_state_and_convolution_history_per_sequence() -> crate::Result<()> {
     let decoder = DecoderConfig::from_value(&json!({
         "hidden_size": 4096,

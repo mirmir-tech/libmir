@@ -6,11 +6,12 @@ mod modernbert;
 mod vision;
 
 pub use decoder::{
-    AttentionLayerType, AttentionOutput, DecoderConfig, HybridBlockKind, HybridBlockPattern,
-    HybridLayer, HybridLayerBlock, LatentRoutedConfig, LinearAttentionConfig, Mamba2Config,
+    AttentionLayerType, AttentionOutput, DecoderConfig, ExpertRouting, HybridBlockKind,
+    HybridBlockPattern, HybridLayer, HybridLayerBlock, LatentAttentionConfig, LatentDecoderConfig,
+    LatentExpertsConfig, LatentRoutedConfig, LinearAttentionConfig, Mamba2Config,
     PredictionModules, QUERY_KEY_ROWS, QUERY_KEY_ROWS_INTERLEAVED, RopeScaling,
-    RotaryEmbeddingLayout, StateSpaceHybridConfig, StateSpaceStateDType, TimeStepBound,
-    TimeStepLimit,
+    RotaryEmbeddingLayout, RotaryPairing, StateSpaceHybridConfig, StateSpaceStateDType,
+    TimeStepBound, TimeStepLimit,
 };
 pub use encoder::{EncoderConfig, EncoderPositionEmbedding, EncoderRopeScaling, NormKind};
 pub use files::{ModelLayout, WeightFile};

@@ -41,7 +41,9 @@ pub(super) fn kv_budget(
                 KvStorageSpec::new(config.kv_cache, attention.key_value_heads, attention.head_dim)
                     .memory_budget(),
             ),
-            MixerSpec::LinearAttention(_) | MixerSpec::StateSpace(_) => None,
+            MixerSpec::LinearAttention(_)
+            | MixerSpec::StateSpace(_)
+            | MixerSpec::LatentAttention(_) => None,
         })
         .fold((0_u64, 0_u64), |(per_token, total), budget| {
             let bytes = |value: usize| u64::try_from(value).unwrap_or(u64::MAX);

@@ -1,12 +1,16 @@
 mod attention;
 mod defaults;
 mod features;
+mod latent;
 mod parse;
 mod rope;
 mod state_space;
 
 pub use attention::AttentionLayerType;
 pub use features::{AttentionOutput, LinearAttentionConfig, RotaryEmbeddingLayout};
+pub use latent::{
+    ExpertRouting, LatentAttentionConfig, LatentDecoderConfig, LatentExpertsConfig, RotaryPairing,
+};
 pub use parse::{QUERY_KEY_ROWS, QUERY_KEY_ROWS_INTERLEAVED};
 pub use rope::RopeScaling;
 pub use state_space::{
@@ -67,6 +71,8 @@ pub struct DecoderConfig {
     pub query_key_rows_interleaved: bool,
     pub initial_context_length: Option<usize>,
     pub state_space: Option<StateSpaceHybridConfig>,
+    /// Multi-head latent attention and its `DeepSeek` expert layout.
+    pub latent: Option<LatentDecoderConfig>,
 }
 
 #[cfg(test)]

@@ -61,9 +61,9 @@ pub use packed_integer::{
 };
 pub use prediction::PredictionLayerBindings;
 pub use roles::{
-    AttentionProjectionRole, ExpertProjectionRole, FeedForwardProjectionRole, LatentProjectionRole,
-    LayerTensorRole, LinearAttentionTensorRole, LogicalTensorRole, PredictionTensorRole,
-    StateSpaceTensorRole,
+    AttentionProjectionRole, ExpertProjectionRole, FeedForwardProjectionRole,
+    LatentAttentionTensorRole, LatentProjectionRole, LayerTensorRole, LinearAttentionTensorRole,
+    LogicalTensorRole, PredictionTensorRole, StateSpaceTensorRole,
 };
 pub use slot::LayerSlot;
 pub use state_space::{

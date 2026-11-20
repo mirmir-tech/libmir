@@ -37,6 +37,13 @@ pub struct RoutedExpertsSpec {
     pub intermediate_size: usize,
     pub activation: ActivationSpec,
     pub router_normalization: RouterNormalization,
+    /// Factor on the weighted sum of the selected experts' outputs.
+    #[serde(default = "unit_scale")]
+    pub output_scale: f64,
+}
+
+const fn unit_scale() -> f64 {
+    1.0
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -67,6 +74,9 @@ pub enum ActivationSpec {
 #[serde(rename_all = "snake_case")]
 pub enum RouterNormalization {
     SoftmaxTopK,
+    /// Select by softmax probability over every expert and weigh by that
+    /// probability, without renormalizing the selected weights.
+    SoftmaxProbabilityTopK,
     UnitTopK,
     /// Select by `sigmoid(logit) + correction_bias`, weight by the
     /// renormalized `sigmoid(logit)` of the selected experts.

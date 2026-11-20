@@ -1,10 +1,12 @@
 use std::collections::BTreeSet;
 
+mod feed_forward;
+
+use self::feed_forward::feed_forward;
 use super::{PoolingMode, TaskExecutionPlan};
 use crate::semantic::{
-    ActivationSpec, AttentionOutputSpec, FeedForwardSpec, MixerSpec, NormalizationKind,
-    PositionEncodingSpec, QkNormalization, RopeScalingSpec, RotaryLayoutSpec, RouterNormalization,
-    SemanticModelSpec,
+    AttentionOutputSpec, MixerSpec, NormalizationKind, PositionEncodingSpec, QkNormalization,
+    RopeScalingSpec, RotaryLayoutSpec, SemanticModelSpec,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -47,6 +49,10 @@ pub enum ArchitectureCapability {
     LatentRoutedExperts,
     ReluSquared,
     SigmoidBiasedTopKRouter,
+    LatentAttention,
+    SoftmaxProbabilityTopKRouter,
+    /// Routed expert output scaled by a factor other than one.
+    ScaledRoutedOutput,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -154,6 +160,11 @@ fn mixer(mixer: &MixerSpec, capabilities: &mut BTreeSet<ArchitectureCapability>)
             capabilities.insert(ArchitectureCapability::StateSpaceMixer);
             AttentionOutputSpec::Direct
         },
+        MixerSpec::LatentAttention(attention) => {
+            capabilities.insert(ArchitectureCapability::LatentAttention);
+            position(&attention.position, capabilities);
+            AttentionOutputSpec::Direct
+        },
     };
     if output == AttentionOutputSpec::Gated {
         capabilities.insert(ArchitectureCapability::GatedAttentionOutput);
@@ -186,64 +197,4 @@ fn position(position: &PositionEncodingSpec, capabilities: &mut BTreeSet<Archite
         },
         None => {},
     }
-}
-
-fn feed_forward(
-    feed_forward: &FeedForwardSpec,
-    capabilities: &mut BTreeSet<ArchitectureCapability>,
-) {
-    match feed_forward {
-        FeedForwardSpec::Dense { activation, .. } => {
-            capabilities.insert(ArchitectureCapability::DenseFeedForward);
-            activation_capability(activation, capabilities);
-        },
-        FeedForwardSpec::Routed { routed, shared } => {
-            routed_capabilities(routed, capabilities);
-            if let Some(shared) = shared {
-                capabilities.insert(ArchitectureCapability::SharedExpert);
-                activation_capability(&shared.activation, capabilities);
-            }
-        },
-        FeedForwardSpec::DenseAndRouted { dense_activation, routed, .. } => {
-            capabilities.insert(ArchitectureCapability::DenseFeedForward);
-            capabilities.insert(ArchitectureCapability::DenseAndRouted);
-            activation_capability(dense_activation, capabilities);
-            routed_capabilities(routed, capabilities);
-        },
-        FeedForwardSpec::LatentRouted { routed, shared, .. } => {
-            capabilities.insert(ArchitectureCapability::LatentRoutedExperts);
-            routed_capabilities(routed, capabilities);
-            if let Some(shared) = shared {
-                capabilities.insert(ArchitectureCapability::SharedExpert);
-                activation_capability(&shared.activation, capabilities);
-            }
-        },
-        FeedForwardSpec::None => {},
-    }
-}
-
-fn routed_capabilities(
-    routed: &crate::semantic::RoutedExpertsSpec,
-    capabilities: &mut BTreeSet<ArchitectureCapability>,
-) {
-    capabilities.insert(ArchitectureCapability::RoutedExperts);
-    capabilities.insert(match routed.router_normalization {
-        RouterNormalization::SoftmaxTopK => ArchitectureCapability::SoftmaxTopKRouter,
-        RouterNormalization::UnitTopK => ArchitectureCapability::UnitTopKRouter,
-        RouterNormalization::SigmoidBiasedTopK => ArchitectureCapability::SigmoidBiasedTopKRouter,
-    });
-    activation_capability(&routed.activation, capabilities);
-}
-
-fn activation_capability(
-    activation: &ActivationSpec,
-    capabilities: &mut BTreeSet<ArchitectureCapability>,
-) {
-    capabilities.insert(match activation {
-        ActivationSpec::SwiGlu { clamp: Some(_), .. } => ArchitectureCapability::ClampedSwiGlu,
-        ActivationSpec::SwiGlu { clamp: None, .. } => ArchitectureCapability::SwiGlu,
-        ActivationSpec::GeluTanh => ArchitectureCapability::GeluTanh,
-        ActivationSpec::NamedGated { .. } => ArchitectureCapability::NamedGatedActivation,
-        ActivationSpec::ReluSquared => ArchitectureCapability::ReluSquared,
-    });
 }

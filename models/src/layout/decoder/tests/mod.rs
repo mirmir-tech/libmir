@@ -4,6 +4,7 @@ use super::*;
 use crate::error::Result;
 
 mod gpt_oss;
+mod latent;
 mod mistral;
 mod rope;
 

@@ -9,6 +9,9 @@ pub enum AttentionLayerType {
     Linear,
     Sliding,
     StateSpace,
+    /// Full attention through a cached key/value latent
+    /// ([`super::LatentAttentionConfig`]).
+    Latent,
 }
 
 pub(super) fn layer_types(value: &Value, layer_count: usize) -> Result<Vec<AttentionLayerType>> {
@@ -108,7 +111,8 @@ impl DecoderConfig {
             AttentionLayerType::Full => self.global_head_dim.unwrap_or(self.head_dim),
             AttentionLayerType::Linear
             | AttentionLayerType::Sliding
-            | AttentionLayerType::StateSpace => self.head_dim,
+            | AttentionLayerType::StateSpace
+            | AttentionLayerType::Latent => self.head_dim,
         }
     }
 
@@ -124,7 +128,9 @@ impl DecoderConfig {
     #[must_use]
     pub fn rope_theta_for_layer(&self, index: usize) -> Option<f64> {
         match self.layer_type(index) {
-            AttentionLayerType::Full => self.full_attention_rope_theta.or(self.rope_theta),
+            AttentionLayerType::Full | AttentionLayerType::Latent => {
+                self.full_attention_rope_theta.or(self.rope_theta)
+            },
             AttentionLayerType::Linear | AttentionLayerType::StateSpace => None,
             AttentionLayerType::Sliding => self.sliding_attention_rope_theta.or(self.rope_theta),
         }
@@ -133,7 +139,9 @@ impl DecoderConfig {
     #[must_use]
     pub fn rope_type_for_layer(&self, index: usize) -> Option<&str> {
         match self.layer_type(index) {
-            AttentionLayerType::Full => self.full_attention_rope_type.as_deref(),
+            AttentionLayerType::Full | AttentionLayerType::Latent => {
+                self.full_attention_rope_type.as_deref()
+            },
             AttentionLayerType::Linear | AttentionLayerType::StateSpace => None,
             AttentionLayerType::Sliding => self.sliding_attention_rope_type.as_deref(),
         }
@@ -142,7 +150,9 @@ impl DecoderConfig {
     #[must_use]
     pub fn partial_rotary_factor_for_layer(&self, index: usize) -> Option<f64> {
         match self.layer_type(index) {
-            AttentionLayerType::Full => self.full_attention_partial_rotary_factor,
+            AttentionLayerType::Full | AttentionLayerType::Latent => {
+                self.full_attention_partial_rotary_factor
+            },
             AttentionLayerType::Linear | AttentionLayerType::StateSpace => None,
             AttentionLayerType::Sliding => self.sliding_attention_partial_rotary_factor,
         }

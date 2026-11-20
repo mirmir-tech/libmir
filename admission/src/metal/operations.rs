@@ -22,6 +22,8 @@ pub enum MixerLowering {
     },
     Linear,
     StateSpace,
+    /// Multi-head latent attention; no Metal runtime executes it yet.
+    Latent,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -95,6 +97,7 @@ fn lower_mixer(mixer: &MixerSpec) -> MixerLowering {
         },
         MixerSpec::LinearAttention(_) => MixerLowering::Linear,
         MixerSpec::StateSpace(_) => MixerLowering::StateSpace,
+        MixerSpec::LatentAttention(_) => MixerLowering::Latent,
     }
 }
 

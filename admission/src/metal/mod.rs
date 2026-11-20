@@ -126,6 +126,11 @@ pub fn plan(spec: &SemanticModelSpec) -> Result<MetalDecoderPlan> {
 }
 
 fn select_runtime(layers: &[LayerLowering]) -> Result<MetalDecoderRuntime> {
+    if layers.iter().any(|layer| layer.mixer == MixerLowering::Latent) {
+        return Err(ArchitectureError::invalid(
+            "Metal has no runtime for multi-head latent attention yet",
+        ));
+    }
     if layers.iter().all(|layer| match (layer.feed_forward, layer.mixer) {
         (FeedForwardLowering::Dense, MixerLowering::Softmax { .. }) => true,
         (FeedForwardLowering::Routed, MixerLowering::Softmax { window: None, sinks, .. }) => !sinks,

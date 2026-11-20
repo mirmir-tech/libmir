@@ -87,6 +87,9 @@ pub(super) fn build_layer(
         AttentionLayerType::StateSpace => Err(Error::UnsupportedDecoderLayer(
             "shared-routed linear mixer stack contains a state-space mixer".into(),
         )),
+        AttentionLayerType::Latent => Err(Error::UnsupportedDecoderLayer(
+            "shared-routed linear mixer stack contains latent attention".into(),
+        )),
     }
 }
 

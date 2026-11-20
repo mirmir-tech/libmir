@@ -109,7 +109,9 @@ fn attention_layout(
 fn dense_attention_layout(spec: &models::semantic::SemanticModelSpec) -> &'static str {
     let attentions = spec.decoder.layers.iter().filter_map(|layer| match &layer.mixer {
         MixerSpec::SoftmaxAttention(attention) => Some(attention),
-        MixerSpec::LinearAttention(_) | MixerSpec::StateSpace(_) => None,
+        MixerSpec::LinearAttention(_)
+        | MixerSpec::StateSpace(_)
+        | MixerSpec::LatentAttention(_) => None,
     });
     if attentions.clone().all(|attention| attention.sinks) {
         "grouped-query attention with learned sinks"

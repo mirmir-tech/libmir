@@ -47,6 +47,11 @@ fn generation(semantic: Option<&SemanticModelSpec>) -> Result<CudaArchitecture> 
         ArchitectureError::invalid("CUDA generation semantic contract is missing")
     })?;
     let plan = CudaDecoderPlan::lower(semantic);
+    if plan.has_latent_mixer() {
+        return Err(ArchitectureError::invalid(
+            "CUDA has no runtime for multi-head latent attention yet",
+        ));
+    }
     let runtime = if plan.has_state_space_mixer() {
         state_space_hybrid(&plan, semantic)?
     } else if plan.all_shared_routed() && plan.has_linear_mixer() && plan.has_softmax_mixer() {
@@ -96,7 +101,7 @@ fn state_space_hybrid(
                     && normalization == QkNormalization::None
                     && key_value_relation == KeyValueRelation::Separate
             },
-            CudaMixerLowering::Linear => false,
+            CudaMixerLowering::Linear | CudaMixerLowering::Latent => false,
         };
         mixer
             && matches!(

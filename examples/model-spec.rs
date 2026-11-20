@@ -72,6 +72,8 @@ fn attentions(
 ) -> impl Iterator<Item = &mut models::semantic::AttentionSpec> {
     spec.decoder.layers.iter_mut().filter_map(|layer| match &mut layer.mixer {
         MixerSpec::SoftmaxAttention(attention) => Some(attention),
-        MixerSpec::LinearAttention(_) | MixerSpec::StateSpace(_) => None,
+        MixerSpec::LinearAttention(_)
+        | MixerSpec::StateSpace(_)
+        | MixerSpec::LatentAttention(_) => None,
     })
 }

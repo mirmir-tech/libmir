@@ -92,14 +92,7 @@ fn mixer(mixer: &MixerSpec) -> Result<()> {
             {
                 return Err(invalid("invalid softmax attention specification"));
             }
-            if let PositionEncodingSpec::Rotary(rotary) = &attention.position
-                && (!rotary.theta.is_finite()
-                    || rotary.theta <= 0.0
-                    || !rotary.partial_factor.is_finite()
-                    || rotary.partial_factor <= 0.0)
-            {
-                return Err(invalid("invalid rotary position specification"));
-            }
+            rotary(&attention.position)?;
         },
         MixerSpec::LinearAttention(linear) => {
             let dimensions = [
@@ -114,6 +107,37 @@ fn mixer(mixer: &MixerSpec) -> Result<()> {
             }
         },
         MixerSpec::StateSpace(state) => state_space(state)?,
+        MixerSpec::LatentAttention(latent) => {
+            let dimensions = [
+                latent.query_heads,
+                latent.query_rank.unwrap_or(1),
+                latent.key_value_rank,
+                latent.nope_head_dim,
+                latent.value_head_dim,
+            ];
+            if dimensions.contains(&0)
+                || latent.rope_head_dim == 0
+                || !latent.rope_head_dim.is_multiple_of(2)
+                || !latent.scale.is_finite()
+                || latent.scale <= 0.0
+            {
+                return Err(invalid("invalid latent attention specification"));
+            }
+            norm(latent.latent_normalization.epsilon)?;
+            rotary(&latent.position)?;
+        },
+    }
+    Ok(())
+}
+
+fn rotary(position: &PositionEncodingSpec) -> Result<()> {
+    if let PositionEncodingSpec::Rotary(rotary) = position
+        && (!rotary.theta.is_finite()
+            || rotary.theta <= 0.0
+            || !rotary.partial_factor.is_finite()
+            || rotary.partial_factor <= 0.0)
+    {
+        return Err(invalid("invalid rotary position specification"));
     }
     Ok(())
 }
@@ -192,8 +216,11 @@ fn routed_spec(routed: &super::RoutedExpertsSpec) -> Result<()> {
     nonzero(routed.expert_count)?;
     nonzero(routed.top_k)?;
     nonzero(routed.intermediate_size)?;
-    if routed.top_k > routed.expert_count {
-        return Err(invalid("routed top-k exceeds expert count"));
+    if routed.top_k > routed.expert_count
+        || !routed.output_scale.is_finite()
+        || routed.output_scale <= 0.0
+    {
+        return Err(invalid("routed top-k exceeds expert count or output scale is invalid"));
     }
     activation_spec(&routed.activation)
 }

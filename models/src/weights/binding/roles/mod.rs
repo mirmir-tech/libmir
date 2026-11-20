@@ -85,6 +85,9 @@ pub enum LayerTensorRole {
     LatentProjection {
         projection: LatentProjectionRole,
     },
+    LatentAttention {
+        tensor: LatentAttentionTensorRole,
+    },
     Auxiliary {
         path: String,
     },
@@ -147,6 +150,25 @@ pub enum StateSpaceTensorRole {
     /// Gated grouped `RMSNorm` weight.
     GatedNorm,
     OutputProjection,
+}
+
+/// Multi-head latent attention projections besides the direct query
+/// (`q_proj`) and output projections, which keep their attention roles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LatentAttentionTensorRole {
+    /// Hidden state to the query latent (`q_a_proj`).
+    QueryDown,
+    QueryLatentNorm,
+    /// Query latent to every head's query (`q_b_proj`).
+    QueryUp,
+    /// Hidden state to the key/value latent plus the shared rotary key
+    /// (`kv_a_proj_with_mqa`).
+    KeyValueDown,
+    KeyValueLatentNorm,
+    /// Key/value latent to every head's position-free key and value
+    /// (`kv_b_proj`).
+    KeyValueUp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

@@ -93,7 +93,10 @@ fn kv_budget(
         .iter()
         .enumerate()
         .filter(|(_, layer)| {
-            matches!(layer, AttentionLayerType::Full | AttentionLayerType::Sliding)
+            matches!(
+                layer,
+                AttentionLayerType::Full | AttentionLayerType::Sliding | AttentionLayerType::Latent
+            )
         })
         .fold((0_u64, 0_u64), |(per_token, total), (index, layer)| {
             let cache = if *layer == AttentionLayerType::Sliding && bounded_sliding(decoder, target)
@@ -102,12 +105,7 @@ fn kv_budget(
             } else {
                 config.kv_cache
             };
-            let budget = KvStorageSpec::new(
-                cache,
-                decoder.layer_key_value_heads(index),
-                decoder.layer_head_dim(index),
-            )
-            .memory_budget();
+            let budget = layer_storage(decoder, index, cache).memory_budget();
             let data = u64::try_from(budget.data_bytes_per_token).unwrap_or(u64::MAX);
             let scales = u64::try_from(budget.scale_bytes_per_token).unwrap_or(u64::MAX);
             let growing =
@@ -121,6 +119,22 @@ fn kv_budget(
                 total.saturating_add(u64::try_from(budget.total_bytes).unwrap_or(u64::MAX)),
             )
         })
+}
+
+/// A latent-attention layer caches one latent and one shared rotary key per
+/// token, with no per-head keys or values.
+fn layer_storage(decoder: &DecoderConfig, index: usize, cache: CacheConfig) -> KvStorageSpec {
+    match (&decoder.latent, decoder.layer_type(index)) {
+        (Some(latent), AttentionLayerType::Latent) => KvStorageSpec {
+            value_head_dim: 0,
+            ..KvStorageSpec::new(cache, 1, latent.attention.cached_width())
+        },
+        _ => KvStorageSpec::new(
+            cache,
+            decoder.layer_key_value_heads(index),
+            decoder.layer_head_dim(index),
+        ),
+    }
 }
 
 fn sliding_cache(

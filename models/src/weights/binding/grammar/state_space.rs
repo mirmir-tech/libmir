@@ -80,7 +80,7 @@ pub(super) fn mixer(
         .all(|projection| has(LayerTensorRole::AttentionProjection { projection }))
             && !has(LayerTensorRole::QueryNorm)
             && !has(LayerTensorRole::KeyNorm)),
-        MixerSpec::LinearAttention(_) => Ok(false),
+        MixerSpec::LinearAttention(_) | MixerSpec::LatentAttention(_) => Ok(false),
     }
 }
 

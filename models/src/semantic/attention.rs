@@ -6,6 +6,53 @@ pub enum MixerSpec {
     SoftmaxAttention(AttentionSpec),
     LinearAttention(LinearAttentionSpec),
     StateSpace(StateSpaceSpec),
+    LatentAttention(LatentAttentionSpec),
+}
+
+/// Multi-head latent attention: keys and values are reconstructed per head
+/// from one shared latent, and every head shares one rotary key, so a token
+/// caches `key_value_rank + rope_head_dim` values.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LatentAttentionSpec {
+    pub query_heads: usize,
+    /// Rank of the normalized query down-projection; absent when queries
+    /// project directly from the hidden state.
+    pub query_rank: Option<usize>,
+    pub key_value_rank: usize,
+    pub nope_head_dim: usize,
+    pub rope_head_dim: usize,
+    pub value_head_dim: usize,
+    /// RMS normalization of the query latent and of the key/value latent.
+    pub latent_normalization: super::NormalizationSpec,
+    pub rotary_pairing: RotaryPairingSpec,
+    pub scale: f64,
+    /// Rotation of the `rope_head_dim` part; `None` for `NoPE` variants.
+    pub position: PositionEncodingSpec,
+}
+
+impl LatentAttentionSpec {
+    /// Query/key width of one head.
+    #[must_use]
+    pub const fn query_head_dim(&self) -> usize {
+        self.nope_head_dim + self.rope_head_dim
+    }
+
+    /// Values one token keeps in the cache.
+    #[must_use]
+    pub const fn cached_width(&self) -> usize {
+        self.key_value_rank + self.rope_head_dim
+    }
+}
+
+/// How the rotary rows of a projection pair up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RotaryPairingSpec {
+    /// Adjacent rows `(2i, 2i + 1)` rotate together.
+    Interleaved,
+    /// Rows `i` and `i + d/2` rotate together.
+    Halves,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
