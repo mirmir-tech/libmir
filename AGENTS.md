@@ -1087,6 +1087,15 @@ The target shape is:
   gpt-oss-20b GGUF, Qwen3-4B BF16 and Qwen3.6-35B MXFP4; C1 within ±3% (one
   first-cell Llama outlier). Qwen3-8B Q4_K_M C2/C5/C10 depth 0: 55.2/77.9/78.6 →
   74.3/113.6/95.9 tok/s, against llama.cpp Metal 70.5/93.7/64.9.
+- After merging develop's persistent batched K/V history (2026-11-20) the two
+  reservations measure the same: Qwen3-8B Q4_K_M, Qwen3-30B-A3B Q4_K_M and
+  gpt-oss-20b GGUF, depth 0/4096, C1–C10, within ±2% in a BA rerun
+  (`20261120T083009Z-gguf-metal-merged-reservation-ab`, `…-reservation-ba`).
+  GenerationBudget stays default; do not credit it with the earlier gains.
+- The first server of a new binary tunes Metal profiles cold (profiles are
+  keyed by executable hash) inside its first measured cells: one such
+  Qwen3-8B C1 cell read 41.3 instead of 49.1 tok/s. Warm a new binary before
+  any timed matrix.
 
 ## Queue-aged prefill collection
 
