@@ -63,7 +63,7 @@ impl ClampedRoutedModel {
             .iter()
             .map(|layer| match layer.mixer {
                 MixerLowering::Softmax { window, .. } => window,
-                MixerLowering::Linear | MixerLowering::StateSpace => {
+                MixerLowering::Linear | MixerLowering::StateSpace | MixerLowering::Latent => {
                     unreachable!("validated sink-attention mixer")
                 },
             })

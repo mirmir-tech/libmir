@@ -41,6 +41,10 @@ pub(super) fn new(
             MixerLowering::Softmax { window: Some(window), .. } => {
                 KvCache::new_with_window(step, Some(*window)).map(HybridLinearLayerCache::Full)
             },
+            // Admission refuses latent attention on Metal before loading.
+            MixerLowering::Latent => {
+                Err(Error::InvalidModel("Metal has no latent attention cache".into()))
+            },
         })
         .collect()
 }
