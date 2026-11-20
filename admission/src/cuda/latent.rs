@@ -59,7 +59,9 @@ pub(super) fn admit(
         if let FeedForwardSpec::Routed { routed, .. } = &layer.feed_forward
             && !matches!(
                 routed.router_normalization,
-                RouterNormalization::SoftmaxTopK | RouterNormalization::SoftmaxProbabilityTopK
+                RouterNormalization::SoftmaxTopK
+                    | RouterNormalization::SoftmaxProbabilityTopK
+                    | RouterNormalization::SigmoidBiasedTopK
             )
         {
             return Err(ArchitectureError::invalid(format!(

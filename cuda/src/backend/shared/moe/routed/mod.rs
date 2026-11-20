@@ -96,6 +96,7 @@ impl SharedRoutedExecution {
                             top_k: config.top_k,
                         },
                         config.routing,
+                        weights.router_correction_bias.as_ref(),
                     )?,
                     scores: backend
                         .pool()

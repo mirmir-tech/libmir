@@ -25,6 +25,15 @@ fn weighs_by_the_probability_over_every_expert() -> Result<()> {
     })
 }
 
+/// The bias moves the selection while the weights stay unbiased sigmoids.
+#[test]
+fn selects_by_biased_sigmoid_and_weighs_by_sigmoid() -> Result<()> {
+    check(RouterUnitScoring {
+        weighting: RouterUnitWeighting::SigmoidBiased,
+        scale: 2.5,
+    })
+}
+
 #[test]
 fn scales_probability_weights() -> Result<()> {
     check(RouterUnitScoring {
@@ -46,7 +55,18 @@ fn check(scoring: RouterUnitScoring) -> Result<()> {
         experts: EXPERTS,
         top_k: TOP_K,
     };
-    let router = RouterUnitTopK::compile_scored(&runtime.compiler, spec, scoring)?;
+    // A bias of up to a whole sigmoid unit reorders the selection.
+    let bias = (0..EXPERTS)
+        .map(|expert| f32::from(u16::try_from((expert * 53 + 7) % 64).unwrap_or(0)) / 64.0)
+        .collect::<Vec<_>>();
+    let device_bias = runtime.copy(&bias)?;
+    let sigmoid = scoring.weighting == RouterUnitWeighting::SigmoidBiased;
+    let router = RouterUnitTopK::compile_scored(
+        &runtime.compiler,
+        spec,
+        scoring,
+        sigmoid.then_some(&device_bias),
+    )?;
     let device_scores = runtime.copy(&scores)?;
     let mut selected = runtime.pool.allocate::<u32>(&runtime.stream, TOKENS * TOP_K)?;
     let mut weights = runtime.pool.allocate::<bf16>(&runtime.stream, TOKENS * TOP_K)?;
@@ -57,7 +77,7 @@ fn check(scoring: RouterUnitScoring) -> Result<()> {
             .iter()
             .map(|value| value.to_f32())
             .collect::<Vec<_>>();
-        let (indices, expected) = reference(&logits, scoring);
+        let (indices, expected) = reference(&logits, &bias, scoring);
         let rows = token * TOP_K..(token + 1) * TOP_K;
         let actual = selected[rows.clone()].iter().map(|&index| index as usize).collect::<Vec<_>>();
         assert_eq!(actual, indices, "token {token}");
@@ -75,15 +95,27 @@ fn check(scoring: RouterUnitScoring) -> Result<()> {
 
 /// Experts in descending logit order (lower index first on ties) and their
 /// weights.
-fn reference(logits: &[f32], scoring: RouterUnitScoring) -> (Vec<usize>, Vec<f32>) {
+fn reference(logits: &[f32], bias: &[f32], scoring: RouterUnitScoring) -> (Vec<usize>, Vec<f32>) {
+    let gate = |index: usize| (1.0 + (-logits[index]).exp()).recip();
+    let choice = |index: usize| match scoring.weighting {
+        RouterUnitWeighting::SigmoidBiased => gate(index) + bias[index],
+        RouterUnitWeighting::Renormalized | RouterUnitWeighting::Probability => logits[index],
+    };
     let mut order = (0..logits.len()).collect::<Vec<_>>();
-    order.sort_by(|&a, &b| logits[b].total_cmp(&logits[a]).then(a.cmp(&b)));
+    order.sort_by(|&a, &b| choice(b).total_cmp(&choice(a)).then(a.cmp(&b)));
     order.truncate(TOP_K);
+    if scoring.weighting == RouterUnitWeighting::SigmoidBiased {
+        let sum = order.iter().map(|&index| gate(index)).sum::<f32>();
+        let weights = order.iter().map(|&index| gate(index) / sum * scoring.scale).collect();
+        return (order, weights);
+    }
     let maximum = logits[order[0]];
     let exponent = |index: usize| (logits[index] - maximum).exp();
     let denominator = match scoring.weighting {
         RouterUnitWeighting::Renormalized => order.iter().map(|&index| exponent(index)).sum(),
-        RouterUnitWeighting::Probability => (0..logits.len()).map(exponent).sum::<f32>(),
+        RouterUnitWeighting::Probability | RouterUnitWeighting::SigmoidBiased => {
+            (0..logits.len()).map(exponent).sum::<f32>()
+        },
     };
     let weights = order
         .iter()

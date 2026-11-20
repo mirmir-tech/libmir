@@ -25,6 +25,7 @@ pub(super) fn supported(contract: &DecoderExecutionContract) -> bool {
                         routed.router_normalization,
                         RouterNormalization::SoftmaxTopK
                             | RouterNormalization::SoftmaxProbabilityTopK
+                            | RouterNormalization::SigmoidBiasedTopK
                     )
                     && contract.bindings.latent_decoder_layer(layer.index).is_ok_and(|bindings| {
                         matches!(

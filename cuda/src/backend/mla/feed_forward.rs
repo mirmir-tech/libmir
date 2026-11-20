@@ -73,7 +73,8 @@ fn scoring(normalization: RouterNormalization, output_scale: f64) -> Result<Rout
     let weighting = match normalization {
         RouterNormalization::SoftmaxTopK => RouterUnitWeighting::Renormalized,
         RouterNormalization::SoftmaxProbabilityTopK => RouterUnitWeighting::Probability,
-        RouterNormalization::UnitTopK | RouterNormalization::SigmoidBiasedTopK => {
+        RouterNormalization::SigmoidBiasedTopK => RouterUnitWeighting::SigmoidBiased,
+        RouterNormalization::UnitTopK => {
             return Err(Error::UnsupportedDecoderLayer(format!(
                 "CUDA latent-attention models have no {normalization:?} router yet"
             )));

@@ -3,7 +3,10 @@ use mircuda::{
     cuda_kernel_file,
 };
 
-use super::super::geometry::{narrow, product, require};
+use super::{
+    super::geometry::{narrow, product, require},
+    RouterUnitScoring, RouterUnitWeighting,
+};
 use crate::{Error, Result};
 
 cuda_export!(
@@ -14,45 +17,13 @@ cuda_export!(
     )
 );
 
-/// How the selected experts are weighted.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum RouterUnitWeighting {
-    /// Softmax over the selected logits.
-    Renormalized,
-    /// Softmax probability over every expert, not renormalized.
-    Probability,
-}
-
-/// Weighting of the selected experts and a factor on every weight, which
-/// scales the combined routed output.
-#[derive(Clone, Copy, Debug)]
-pub struct RouterUnitScoring {
-    pub weighting: RouterUnitWeighting,
-    pub scale: f32,
-}
-
-impl RouterUnitScoring {
-    pub const RENORMALIZED: Self = Self {
-        weighting: RouterUnitWeighting::Renormalized,
-        scale: 1.0,
-    };
-}
-
-// The scale is a fixed configuration constant; plans compare it exactly.
-impl PartialEq for RouterUnitScoring {
-    fn eq(&self, other: &Self) -> bool {
-        self.weighting == other.weighting && self.scale.to_bits() == other.scale.to_bits()
-    }
-}
-
-impl Eq for RouterUnitScoring {}
-
-impl std::hash::Hash for RouterUnitScoring {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.weighting.hash(state);
-        self.scale.to_bits().hash(state);
-    }
-}
+cuda_export!(
+    RouterSigmoidKernel = "libmir_cuda_router_topk_sigmoid_bf16"(
+        scores: &DeviceBuffer<bf16>, bias: &DeviceBuffer<f32>,
+        selected: &mut DeviceBuffer<u32>, weights: &mut DeviceBuffer<bf16>,
+        experts: u32, top_k: u32, tokens: u32, scale: f32,
+    )
+);
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct RouterUnitSpec {
@@ -63,20 +34,30 @@ pub struct RouterUnitSpec {
 
 #[derive(Clone, Debug)]
 pub struct RouterUnitTopK {
-    kernel: TypedKernel<RouterUnitKernel>,
+    kernel: UnitKernel,
     spec: RouterUnitSpec,
     scale: f32,
 }
 
+#[derive(Clone, Debug)]
+enum UnitKernel {
+    Logits(TypedKernel<RouterUnitKernel>),
+    /// The `[experts]` FP32 correction bias of the sigmoid router.
+    Sigmoid(TypedKernel<RouterSigmoidKernel>, DeviceBuffer<f32>),
+}
+
 impl RouterUnitTopK {
     pub fn compile(compiler: &Compiler, spec: RouterUnitSpec) -> Result<Self> {
-        Self::compile_scored(compiler, spec, RouterUnitScoring::RENORMALIZED)
+        Self::compile_scored(compiler, spec, RouterUnitScoring::RENORMALIZED, None)
     }
 
+    /// A sigmoid router takes its `[experts]` correction bias; the others
+    /// take none.
     pub fn compile_scored(
         compiler: &Compiler,
         spec: RouterUnitSpec,
         scoring: RouterUnitScoring,
+        correction_bias: Option<&DeviceBuffer<f32>>,
     ) -> Result<Self> {
         if !scoring.scale.is_finite() || scoring.scale <= 0.0 {
             return Err(Error::InvalidRouter("invalid unit router scale"));
@@ -95,11 +76,20 @@ impl RouterUnitTopK {
             options.extra_options.push("-DLIBMIR_ROUTER_PROBABILITY=1".into());
         }
         let module = compiler.compile(source, &options)?;
-        Ok(Self {
-            kernel: module.kernel()?,
-            spec,
-            scale: scoring.scale,
-        })
+        let kernel = match (scoring.weighting, correction_bias) {
+            (RouterUnitWeighting::SigmoidBiased, Some(bias)) if bias.len() >= spec.experts => {
+                UnitKernel::Sigmoid(module.kernel()?, bias.clone())
+            },
+            (RouterUnitWeighting::Renormalized | RouterUnitWeighting::Probability, None) => {
+                UnitKernel::Logits(module.kernel()?)
+            },
+            _ => {
+                return Err(Error::InvalidRouter(
+                    "a unit router takes a correction bias exactly when it routes by sigmoid",
+                ));
+            },
+        };
+        Ok(Self { kernel, spec, scale: scoring.scale })
     }
 
     pub fn execute(
@@ -117,22 +107,25 @@ impl RouterUnitTopK {
         let selections = product(self.spec.tokens, self.spec.top_k)?;
         require("unit router selected", selections, selected.len())?;
         require("unit router weights", selections, weights.len())?;
-        Ok(self.kernel.launch(
-            stream,
-            LaunchConfig {
-                grid: (narrow(self.spec.tokens)?, 1, 1),
-                block: (32, 1, 1),
-                shared_memory_bytes: 0,
-            },
-            (
-                scores,
-                selected,
-                weights,
-                narrow(self.spec.experts)?,
-                narrow(self.spec.top_k)?,
-                narrow(self.spec.tokens)?,
-                self.scale,
-            ),
-        )?)
+        let config = LaunchConfig {
+            grid: (narrow(self.spec.tokens)?, 1, 1),
+            block: (32, 1, 1),
+            shared_memory_bytes: 0,
+        };
+        let (experts, top_k, tokens) =
+            (narrow(self.spec.experts)?, narrow(self.spec.top_k)?, narrow(self.spec.tokens)?);
+        match &self.kernel {
+            UnitKernel::Logits(kernel) => kernel.launch(
+                stream,
+                config,
+                (scores, selected, weights, experts, top_k, tokens, self.scale),
+            )?,
+            UnitKernel::Sigmoid(kernel, bias) => kernel.launch(
+                stream,
+                config,
+                (scores, bias, selected, weights, experts, top_k, tokens, self.scale),
+            )?,
+        }
+        Ok(())
     }
 }

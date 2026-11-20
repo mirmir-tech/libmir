@@ -52,6 +52,7 @@ impl ModelLayout {
         let vocab_path = optional(root.join("vocab.json"));
         let tokenizer_path = optional(root.join("tokenizer.json"))
             .or_else(|| optional(root.join("tokenizer.model")))
+            .or_else(|| optional(root.join("tiktoken.model")))
             .or_else(|| vocab_path.clone());
         let merges_path = optional(root.join("merges.txt"));
         let added_tokens_path = optional(root.join("added_tokens.json"));

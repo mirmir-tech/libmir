@@ -10,6 +10,7 @@ mod policy;
 pub(crate) mod protocol;
 mod reasoning;
 mod sentencepiece;
+mod tiktoken;
 mod validation;
 
 pub use assets::TokenizerAssets;

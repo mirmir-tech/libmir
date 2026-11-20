@@ -53,6 +53,7 @@ impl AffineRouterBf16 {
                     top_k,
                 },
                 scoring,
+                None,
             )?,
             stream: backend.inner.stream.clone(),
             scores: backend.inner.pool.allocate(&backend.inner.stream, scores)?,

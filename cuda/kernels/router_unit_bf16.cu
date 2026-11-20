@@ -87,3 +87,63 @@ extern "C" __global__ void libmir_cuda_router_topk_unit_bf16(
     weights[rank] = __float2bfloat16_rn(probability * scale);
   }
 }
+
+// Sigmoid routing with a selection-only correction bias (`DeepSeek-V3`
+// `noaux_tc`, `Moonlight`): experts are chosen by `sigmoid(logit) + bias` and
+// weighted by their `sigmoid(logit)` renormalized over the chosen ones.
+extern "C" __global__ void libmir_cuda_router_topk_sigmoid_bf16(
+    const __nv_bfloat16* scores, const float* bias, unsigned int* selected,
+    __nv_bfloat16* weights, unsigned int experts, unsigned int top_k,
+    unsigned int tokens, float scale) {
+  const unsigned int token = blockIdx.x;
+  if (token >= tokens) return;
+  scores += token * experts;
+  selected += token * top_k;
+  weights += token * top_k;
+  const unsigned int lane = threadIdx.x;
+  float choices[8];
+  unsigned int indices[8];
+#pragma unroll
+  for (unsigned int item = 0; item < 8; ++item) {
+    const unsigned int expert = lane + item * 32;
+    choices[item] = expert < experts
+        ? 1.0f / (1.0f + expf(-__bfloat162float(scores[expert]))) + bias[expert]
+        : -3.402823466e+38F;
+    indices[item] = expert;
+  }
+  for (unsigned int rank = 0; rank < top_k; ++rank) {
+    float best_choice = choices[0];
+    unsigned int best = indices[0];
+#pragma unroll
+    for (unsigned int item = 1; item < 8; ++item) {
+      if (choices[item] > best_choice ||
+          (choices[item] == best_choice && indices[item] < best)) {
+        best_choice = choices[item];
+        best = indices[item];
+      }
+    }
+    for (int offset = 16; offset > 0; offset >>= 1) {
+      const float candidate = __shfl_down_sync(0xffffffffu, best_choice, offset);
+      const unsigned int index = __shfl_down_sync(0xffffffffu, best, offset);
+      if (candidate > best_choice || (candidate == best_choice && index < best)) {
+        best_choice = candidate;
+        best = index;
+      }
+    }
+    best = __shfl_sync(0xffffffffu, best, 0);
+    if (lane == 0) selected[rank] = best;
+#pragma unroll
+    for (unsigned int item = 0; item < 8; ++item) {
+      if (indices[item] == best) choices[item] = -3.402823466e+38F;
+    }
+  }
+  if (lane != 0) return;
+  float sum = 0.0f;
+  for (unsigned int rank = 0; rank < top_k; ++rank) {
+    sum += 1.0f / (1.0f + expf(-__bfloat162float(scores[selected[rank]])));
+  }
+  for (unsigned int rank = 0; rank < top_k; ++rank) {
+    const float gate = 1.0f / (1.0f + expf(-__bfloat162float(scores[selected[rank]])));
+    weights[rank] = __float2bfloat16_rn(gate / sum * scale);
+  }
+}

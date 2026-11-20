@@ -52,13 +52,11 @@ fn admits_latent_attention_on_cuda_and_refuses_it_on_metal() -> AnyResult<()> {
 }
 
 #[test]
-fn refuses_a_sigmoid_router_by_name() -> AnyResult<()> {
+fn admits_a_sigmoid_router_with_its_correction_bias() -> AnyResult<()> {
     let (task, semantic) = latent_contract("sigmoid")?;
-    let message = cuda::admit(&task, Some(&semantic))
-        .map(|_| ())
-        .err()
-        .map(|error| error.to_string())
-        .unwrap_or_default();
-    assert!(message.contains("SigmoidBiasedTopK"), "unexpected refusal: {message}");
+    assert_eq!(
+        cuda::admit(&task, Some(&semantic))?,
+        cuda::CudaArchitecture::Generation(cuda::CudaDecoderRuntime::LatentAttention)
+    );
     Ok(())
 }

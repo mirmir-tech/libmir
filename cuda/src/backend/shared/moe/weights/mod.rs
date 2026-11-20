@@ -1,3 +1,4 @@
+use mircuda::DeviceBuffer;
 use models::weights::{
     RoutedExpertBindings, SharedRoutedFeedForwardBindings, TensorCatalog, TensorStorage,
 };
@@ -14,6 +15,7 @@ use crate::{
     },
 };
 
+mod bias;
 mod format;
 mod nvfp4;
 mod storage;
@@ -37,6 +39,8 @@ pub(super) struct AffineRoutedMoeWeights {
 #[derive(Clone, Debug)]
 pub struct AffineSharedExpertMoeWeights {
     pub(super) router: CheckpointProjectionWeight,
+    /// `[experts]` FP32 selection bias of a sigmoid router.
+    pub(super) router_correction_bias: Option<DeviceBuffer<f32>>,
     pub(super) routed: RoutedSharedMoeWeights,
     pub(super) shared_gate: CheckpointProjectionWeight,
     pub(super) shared_up: CheckpointProjectionWeight,
@@ -50,6 +54,7 @@ impl AffineSharedExpertMoeWeights {
         let affine = |name: &str| AffineQuantizedWeight::load(tensors, &format!("{prefix}.{name}"));
         Ok(Self {
             router: CheckpointProjectionWeight::Affine(affine("gate")?),
+            router_correction_bias: None,
             routed: RoutedSharedMoeWeights::Affine(Box::new(AffineRoutedMoeWeights {
                 gate: affine("switch_mlp.gate_proj")?,
                 up: affine("switch_mlp.up_proj")?,
@@ -103,10 +108,15 @@ impl AffineSharedExpertMoeWeights {
                 ));
             },
         };
+        let router_correction_bias = bindings
+            .router_correction_bias
+            .map(|binding| bias::correction_bias(backend, tensors, binding))
+            .transpose()?;
         Ok(Self {
             router: CheckpointProjectionWeight::load_binding_prepared(
                 backend, tensors, bindings.router,
             )?,
+            router_correction_bias,
             routed,
             shared_gate: CheckpointProjectionWeight::load_binding_prepared(
                 backend,

@@ -95,6 +95,7 @@ pub(super) fn routing(
                 top_k: config.top_k,
             },
             config.routing,
+            weights.router_correction_bias.as_ref(),
         )?,
         backend.pool().allocate(backend.stream(), tokens * config.expert_count)?,
         backend.pool().allocate(backend.stream(), selections)?,

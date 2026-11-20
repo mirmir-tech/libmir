@@ -1,7 +1,6 @@
-//! A real multi-head latent attention checkpoint (DeepSeek-V2-Lite-Chat) is
-//! described completely, every tensor bound, admitted on CUDA and refused by
-//! name on Metal until it runs latent attention. Moonlight needs a tiktoken
-//! tokenizer first.
+//! A real multi-head latent attention checkpoint (DeepSeek-V2-Lite-Chat,
+//! Moonlight-16B-A3B) is described completely, every tensor bound, admitted
+//! on CUDA and refused by name on Metal until it runs latent attention.
 
 use libmir::{
     AdmissionCheckKind, AdmissionStatus, BackendTarget, Error, GenerationOverrides,
