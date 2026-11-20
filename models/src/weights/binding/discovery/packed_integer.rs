@@ -21,36 +21,42 @@ pub(super) fn storage(
     let scales = format!("{prefix}.weight_scale");
     let shape = format!("{prefix}.weight_shape");
     let scale = catalog.get(&scales).ok_or_else(|| {
-        ModelsError::InvalidConfig(format!("missing packed INT8 scales {scales}"))
+        ModelsError::InvalidConfig(format!("missing packed integer scales {scales}"))
     })?;
     let _shape_tensor = catalog.get(&shape).ok_or_else(|| {
-        ModelsError::InvalidConfig(format!("missing packed INT8 logical shape {shape}"))
+        ModelsError::InvalidConfig(format!("missing packed integer logical shape {shape}"))
     })?;
     let logical = logical.ok_or_else(|| {
         ModelsError::InvalidConfig(format!(
-            "packed INT8 tensor has no logical role: {}",
+            "packed integer tensor has no logical role: {}",
             tensor.name
         ))
     })?;
     let input = logical.last().copied().ok_or_else(|| {
-        ModelsError::InvalidConfig(format!("packed INT8 tensor has empty shape: {}", tensor.name))
+        ModelsError::InvalidConfig(format!(
+            "packed integer tensor has empty shape: {}",
+            tensor.name
+        ))
     })?;
     let packed = tensor.shape.last().copied().ok_or_else(|| {
-        ModelsError::InvalidConfig(format!("packed INT8 tensor has empty storage: {}", tensor.name))
+        ModelsError::InvalidConfig(format!(
+            "packed integer tensor has empty storage: {}",
+            tensor.name
+        ))
     })?;
     let packed_bits = packed
         .checked_mul(32)
-        .ok_or_else(|| ModelsError::InvalidConfig("packed INT8 width overflow".into()))?;
+        .ok_or_else(|| ModelsError::InvalidConfig("packed integer width overflow".into()))?;
     if input == 0 || !packed_bits.is_multiple_of(input) {
         return Err(ModelsError::InvalidConfig(format!(
-            "packed INT8 width is not integral: {}",
+            "packed integer width is not integral: {}",
             tensor.name
         )));
     }
     let bits = CompressedIntegerBits::try_from(u8::try_from(packed_bits / input)?)?;
     if tensor.dtype != "I32" {
         return Err(ModelsError::InvalidConfig(format!(
-            "packed INT8 words must use I32: {}",
+            "packed integer words must use I32: {}",
             tensor.name
         )));
     }
@@ -58,7 +64,7 @@ pub(super) fn storage(
     let group_indices = companion(prefix, "weight_g_idx", catalog);
     if zero_points.is_some() || group_indices.is_some() {
         return Err(ModelsError::InvalidConfig(format!(
-            "asymmetric or activation-ordered packed INT8 is not admitted: {}",
+            "asymmetric or activation-ordered packed integer is not admitted: {}",
             tensor.name
         )));
     }
@@ -87,23 +93,13 @@ pub(super) fn storage(
         storage_dtype: CompressedIntegerStorageDType::I32,
         scale_dtype: CompressedIntegerScaleDType::parse(scale)?,
     };
-    let storage = match bits {
-        CompressedIntegerBits::Four => TensorStorage::PackedInt4 {
-            format,
-            scales,
-            shape,
-            zero_points,
-            group_indices,
-        },
-        CompressedIntegerBits::Eight => TensorStorage::PackedInt8 {
-            format,
-            scales,
-            shape,
-            zero_points,
-            group_indices,
-        },
-    };
-    Ok(storage)
+    Ok(TensorStorage::PackedInteger {
+        format,
+        scales,
+        shape,
+        zero_points,
+        group_indices,
+    })
 }
 
 fn companion(prefix: &str, suffix: &str, catalog: &TensorCatalog) -> Option<String> {

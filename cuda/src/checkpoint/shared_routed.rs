@@ -133,8 +133,7 @@ fn raw_sources(bindings: &WeightBindingPlan) -> HashSet<&str> {
                     TensorStorage::AffineQuantized { .. }
                         | TensorStorage::BlockQuantized { .. }
                         | TensorStorage::Float8 { .. }
-                        | TensorStorage::PackedInt8 { .. }
-                        | TensorStorage::PackedInt4 { .. }
+                        | TensorStorage::PackedInteger { .. }
                         | TensorStorage::Awq { .. }
                         | TensorStorage::Gptq { .. }
                         | TensorStorage::BitsAndBytes4Bit { .. }

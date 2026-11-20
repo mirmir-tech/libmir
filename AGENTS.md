@@ -1388,6 +1388,21 @@ The target shape is:
   2048-token `prefill-profile`: Qwen3-30B Q4_K_M 1249→2035 tok/s (llama-bench
   1828), Q8_0 1202→1921, Mixtral Q4_K_M 208→589, gpt-oss-20b 2590→2866. Beating
   the bank path needs the M5 tensor units, not another simdgroup layout.
+- Compressed-tensors `pack-quantized` weights are one `TensorStorage::PackedInteger`
+  whose `format.bits` is 2, 3, 4 or 8. Its dense little-endian bitstream is MLX's
+  affine layout for every width, so Metal reinterprets the words (offset
+  `2^(bits-1)` as biases) and casts F16/F32 scales to BF16; groups must be 32,
+  64 or 128. Per-expert tensors stack into `gather_qmm` banks
+  (`BoundLinear::load_individual_bank`). CUDA still admits per-channel INT8 and
+  grouped INT4 with BF16 scales only. GSQ checkpoints (ISTA-DASLab) use exactly
+  these formats; their GGUF releases are ordinary ggml types.
+- Hugging Face Qwen3.5/3.6/3.8 checkpoints store zero-centred `(1 + w)` layer,
+  Q/K and final norms; MLX conversions fold the 1. `linear_moe` detects the raw
+  layout from the `[channels, 1, kernel]` convolution, as `mlx_lm`'s
+  `qwen3_5.sanitize` does, and shifts only those norms: the gated GDN output
+  norm multiplies by its weight in both layouts. Shifting it too gave Qwen3.6
+  GSQ 2-bit wikitext perplexity 16.93 instead of 6.83 (MLX 4-bit 6.08) and
+  Qwen3.8 GSQ 3-bit 10.46 instead of 6.35 (6.10).
 - `mirtal::Stream::eval_many` (and libmir's `Stream::eval_many`) is
   `async_eval`: time a kernel only after `synchronize()`, or read GPU intervals
   from Metal System Trace with `MLX_MAX_OPS_PER_BUFFER=1`. Host timings around

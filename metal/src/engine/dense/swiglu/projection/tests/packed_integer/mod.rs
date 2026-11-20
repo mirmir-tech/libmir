@@ -9,6 +9,8 @@ use models::weights::{
 
 use super::*;
 
+mod gsq;
+
 const INPUT: usize = 1_024;
 const OUTPUT: usize = 2;
 
@@ -67,7 +69,7 @@ fn int8_binding(role: LogicalTensorRole) -> TensorBinding {
         shape: vec![OUTPUT, INPUT / 4],
         logical_shape: Some(vec![OUTPUT, INPUT]),
         transforms: Vec::new(),
-        storage: TensorStorage::PackedInt8 {
+        storage: TensorStorage::PackedInteger {
             format: CompressedIntegerQuantization {
                 bits: CompressedIntegerBits::Eight,
                 scale_strategy: CompressedIntegerScaleStrategy::Channel,
@@ -93,7 +95,7 @@ fn int4_binding(role: LogicalTensorRole) -> TensorBinding {
         shape: vec![OUTPUT, INPUT / 8],
         logical_shape: Some(vec![OUTPUT, INPUT]),
         transforms: Vec::new(),
-        storage: TensorStorage::PackedInt4 {
+        storage: TensorStorage::PackedInteger {
             format: CompressedIntegerQuantization {
                 bits: CompressedIntegerBits::Four,
                 scale_strategy: CompressedIntegerScaleStrategy::Group { group_size: 128 },

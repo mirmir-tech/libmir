@@ -130,17 +130,10 @@ impl WeightBindingPlan {
     }
 
     #[must_use]
-    pub fn uses_packed_int8(&self) -> bool {
+    pub fn uses_packed_integer(&self) -> bool {
         self.tensors
             .iter()
-            .any(|binding| matches!(binding.storage, TensorStorage::PackedInt8 { .. }))
-    }
-
-    #[must_use]
-    pub fn uses_packed_int4(&self) -> bool {
-        self.tensors
-            .iter()
-            .any(|binding| matches!(binding.storage, TensorStorage::PackedInt4 { .. }))
+            .any(|binding| matches!(binding.storage, TensorStorage::PackedInteger { .. }))
     }
 
     #[must_use]

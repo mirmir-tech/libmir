@@ -161,12 +161,12 @@ fn load_experts(
             BoundLinear::load(tensors, down, stream)?,
         )),
         RoutedExpertBindings::Individual { .. } => Ok((
-            BoundLinear::load_nvfp4_bank(
+            BoundLinear::load_individual_bank(
                 tensors,
                 &bindings.individual(ExpertProjectionRole::Up),
                 stream,
             )?,
-            BoundLinear::load_nvfp4_bank(
+            BoundLinear::load_individual_bank(
                 tensors,
                 &bindings.individual(ExpertProjectionRole::Down),
                 stream,

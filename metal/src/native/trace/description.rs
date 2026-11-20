@@ -142,8 +142,7 @@ fn has_bias(binding: &models::weights::TensorBinding) -> bool {
         | TensorStorage::BlockQuantized { bias, .. }
         | TensorStorage::Ggml { bias, .. } => bias.is_some(),
         TensorStorage::AffineQuantized { output_bias, .. } => output_bias.is_some(),
-        TensorStorage::PackedInt8 { .. }
-        | TensorStorage::PackedInt4 { .. }
+        TensorStorage::PackedInteger { .. }
         | TensorStorage::Awq { .. }
         | TensorStorage::Gptq { .. }
         | TensorStorage::BitsAndBytes4Bit { .. }

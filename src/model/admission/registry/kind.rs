@@ -4,8 +4,7 @@ pub(super) const fn kind(encoding: &WeightEncoding) -> AdmissionCheckKind {
     match encoding {
         WeightEncoding::Dense { .. } => AdmissionCheckKind::Dense,
         WeightEncoding::Affine { .. } => AdmissionCheckKind::Affine,
-        WeightEncoding::PackedInt8 { .. } => AdmissionCheckKind::PackedInt8,
-        WeightEncoding::PackedInt4 { .. } => AdmissionCheckKind::PackedInt4,
+        WeightEncoding::PackedInteger { .. } => AdmissionCheckKind::PackedInteger,
         WeightEncoding::Awq { .. } => AdmissionCheckKind::Awq,
         WeightEncoding::Gptq { .. } => AdmissionCheckKind::Gptq,
         WeightEncoding::BitsAndBytes4Bit { .. } => AdmissionCheckKind::BitsAndBytes4Bit,

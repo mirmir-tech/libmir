@@ -13,7 +13,7 @@ impl WeightEncoding {
                 format.scale_dtype,
                 format.zero_point
             ),
-            Self::PackedInt8 { format } | Self::PackedInt4 { format } => format!(
+            Self::PackedInteger { format } => format!(
                 "Compressed INT{} {:?}/{:?}",
                 format.bits.get(),
                 format.scale_strategy,

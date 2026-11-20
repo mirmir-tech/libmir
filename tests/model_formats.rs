@@ -115,8 +115,8 @@ fn encoding(id: &str) -> Option<WeightEncoding> {
         "ggml_mxfp4" => ggml(GgmlType::MXFP4),
         "dense_f16" => WeightEncoding::Dense { dtype: "F16".into() },
         "dense_f32" => WeightEncoding::Dense { dtype: "F32".into() },
-        "packed_int8" => WeightEncoding::PackedInt8 { format: packed_int8() },
-        "packed_int4" => WeightEncoding::PackedInt4 { format: packed_int4() },
+        "packed_int8" => WeightEncoding::PackedInteger { format: packed_int8() },
+        "packed_int4" => WeightEncoding::PackedInteger { format: packed_int4() },
         "awq" => WeightEncoding::Awq { format: awq() },
         "gptq" => WeightEncoding::Gptq { format: gptq() },
         "fp8_e4m3" => WeightEncoding::Float8 {

@@ -9,6 +9,10 @@ use crate::{
 #[serde(try_from = "u8", into = "u8")]
 /// Bit width of a compressed-tensors packed integer value.
 pub enum CompressedIntegerBits {
+    /// Two-bit weight-only integer storage.
+    Two,
+    /// Three-bit weight-only integer storage.
+    Three,
     /// Four-bit weight-only integer storage.
     Four,
     /// Eight-bit weight-only integer storage.
@@ -19,6 +23,8 @@ impl CompressedIntegerBits {
     #[must_use]
     pub const fn get(self) -> u8 {
         match self {
+            Self::Two => 2,
+            Self::Three => 3,
             Self::Four => 4,
             Self::Eight => 8,
         }
@@ -36,6 +42,8 @@ impl TryFrom<u8> for CompressedIntegerBits {
 
     fn try_from(value: u8) -> Result<Self> {
         match value {
+            2 => Ok(Self::Two),
+            3 => Ok(Self::Three),
             4 => Ok(Self::Four),
             8 => Ok(Self::Eight),
             _ => Err(ModelsError::InvalidConfig(format!(
@@ -120,7 +128,7 @@ impl CompressedIntegerScaleDType {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-/// Complete contract for symmetric per-channel compressed-tensors INT8 storage.
+/// Complete contract for symmetric compressed-tensors integer storage.
 pub struct CompressedIntegerQuantization {
     pub bits: CompressedIntegerBits,
     pub scale_strategy: CompressedIntegerScaleStrategy,
@@ -133,11 +141,11 @@ pub struct CompressedIntegerQuantization {
 }
 
 impl CompressedIntegerQuantization {
+    /// Offset-binary values without zero points or reordering, densely packed
+    /// into little-endian I32 words.
     #[must_use]
-    pub fn is_symmetric_channel_int8(self) -> bool {
-        self.bits == CompressedIntegerBits::Eight
-            && self.scale_strategy == CompressedIntegerScaleStrategy::Channel
-            && self.signedness == CompressedIntegerSignedness::OffsetBinary
+    fn is_symmetric_dense(self) -> bool {
+        self.signedness == CompressedIntegerSignedness::OffsetBinary
             && self.zero_point == CompressedIntegerZeroPointMode::None
             && self.activation_order == CompressedIntegerActivationOrder::None
             && self.packing == CompressedIntegerPacking::DenseLittleEndian
@@ -145,17 +153,24 @@ impl CompressedIntegerQuantization {
     }
 
     #[must_use]
+    pub fn is_symmetric_channel_int8(self) -> bool {
+        self.bits == CompressedIntegerBits::Eight
+            && self.scale_strategy == CompressedIntegerScaleStrategy::Channel
+            && self.is_symmetric_dense()
+    }
+
+    /// Symmetric storage with one scale per group of input values, any width.
+    #[must_use]
+    pub fn is_symmetric_group(self) -> bool {
+        matches!(
+            self.scale_strategy,
+            CompressedIntegerScaleStrategy::Group { group_size } if group_size > 0
+        ) && self.is_symmetric_dense()
+    }
+
+    #[must_use]
     pub fn is_symmetric_group_int4(self) -> bool {
-        self.bits == CompressedIntegerBits::Four
-            && matches!(
-                self.scale_strategy,
-                CompressedIntegerScaleStrategy::Group { group_size } if group_size > 0
-            )
-            && self.signedness == CompressedIntegerSignedness::OffsetBinary
-            && self.zero_point == CompressedIntegerZeroPointMode::None
-            && self.activation_order == CompressedIntegerActivationOrder::None
-            && self.packing == CompressedIntegerPacking::DenseLittleEndian
-            && self.storage_dtype == CompressedIntegerStorageDType::I32
+        self.bits == CompressedIntegerBits::Four && self.is_symmetric_group()
     }
 }
 

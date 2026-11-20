@@ -159,7 +159,7 @@ fn runtime_raw_sources(binding: &TensorBinding) -> Vec<&str> {
         | TensorStorage::BlockQuantized { .. }
         | TensorStorage::Float8 { .. }
         | TensorStorage::Ggml { .. } => binding.physical_sources(),
-        TensorStorage::PackedInt8 { scales, .. } | TensorStorage::PackedInt4 { scales, .. } => {
+        TensorStorage::PackedInteger { scales, .. } => {
             vec![binding.source.as_str(), scales.as_str()]
         },
         _ => Vec::new(),
@@ -168,9 +168,7 @@ fn runtime_raw_sources(binding: &TensorBinding) -> Vec<&str> {
 
 fn packed_shape_source(binding: &TensorBinding) -> Option<&str> {
     match &binding.storage {
-        TensorStorage::PackedInt8 { shape, .. } | TensorStorage::PackedInt4 { shape, .. } => {
-            Some(shape)
-        },
+        TensorStorage::PackedInteger { shape, .. } => Some(shape),
         _ => None,
     }
 }

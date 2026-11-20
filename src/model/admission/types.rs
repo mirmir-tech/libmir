@@ -40,10 +40,8 @@ pub enum AdmissionCheckKind {
     Dense,
     /// Grouped affine integer weights.
     Affine,
-    /// Packed compressed-tensors INT8 weights.
-    PackedInt8,
-    /// Packed compressed-tensors INT4 weights.
-    PackedInt4,
+    /// Packed compressed-tensors integer weights of any admitted width.
+    PackedInteger,
     /// `AutoAWQ` GEMM packed weights.
     Awq,
     /// GPTQ input-packed weights.
@@ -90,13 +88,8 @@ pub enum WeightEncoding {
         /// Complete physical quantization contract.
         format: GroupedAffineQuantization,
     },
-    /// Compressed-tensors packed INT8 storage.
-    PackedInt8 {
-        /// Complete physical integer packing and quantization contract.
-        format: CompressedIntegerQuantization,
-    },
-    /// Compressed-tensors grouped INT4 storage.
-    PackedInt4 {
+    /// Compressed-tensors packed integer storage; `format.bits` is the width.
+    PackedInteger {
         /// Complete physical integer packing and quantization contract.
         format: CompressedIntegerQuantization,
     },
@@ -178,11 +171,8 @@ impl CheckpointEncoding {
                 TensorStorage::AffineQuantized { format, .. } => {
                     Some(WeightEncoding::Affine { format: *format })
                 },
-                TensorStorage::PackedInt8 { format, .. } => {
-                    Some(WeightEncoding::PackedInt8 { format: *format })
-                },
-                TensorStorage::PackedInt4 { format, .. } => {
-                    Some(WeightEncoding::PackedInt4 { format: *format })
+                TensorStorage::PackedInteger { format, .. } => {
+                    Some(WeightEncoding::PackedInteger { format: *format })
                 },
                 TensorStorage::Awq { format, .. } => Some(WeightEncoding::Awq { format: *format }),
                 TensorStorage::Gptq { format, .. } => {

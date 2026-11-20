@@ -45,14 +45,9 @@ pub enum TensorStorage {
         biases: Option<String>,
         output_bias: Option<String>,
     },
-    PackedInt8 {
-        format: CompressedIntegerQuantization,
-        scales: String,
-        shape: String,
-        zero_points: Option<String>,
-        group_indices: Option<String>,
-    },
-    PackedInt4 {
+    /// Compressed-tensors `pack-quantized` integers; `format.bits` is the
+    /// width.
+    PackedInteger {
         format: CompressedIntegerQuantization,
         scales: String,
         shape: String,
@@ -130,14 +125,7 @@ impl TensorBinding {
                 sources.extend(biases.as_deref());
                 sources.extend(output_bias.as_deref());
             },
-            TensorStorage::PackedInt8 {
-                scales,
-                shape,
-                zero_points,
-                group_indices,
-                ..
-            }
-            | TensorStorage::PackedInt4 {
+            TensorStorage::PackedInteger {
                 scales,
                 shape,
                 zero_points,

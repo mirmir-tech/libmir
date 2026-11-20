@@ -8,6 +8,10 @@ use crate::engine::{
     Result, Stream,
 };
 
+mod bank;
+
+pub(super) use bank::individual_bank;
+
 const NATIVE_INT8_GROUP_SIZE: usize = 64;
 
 pub(super) fn linear(
@@ -116,28 +120,18 @@ fn arrays(
     binding: &TensorBinding,
     stream: &Stream,
 ) -> Result<(QuantizedArrays, i32, i32)> {
-    let (TensorStorage::PackedInt8 {
+    let TensorStorage::PackedInteger {
         format,
         scales,
         zero_points,
         group_indices,
         ..
-    }
-    | TensorStorage::PackedInt4 {
-        format,
-        scales,
-        zero_points,
-        group_indices,
-        ..
-    }) = &binding.storage
+    } = &binding.storage
     else {
         return Err(invalid(binding, "binding is not a packed integer"));
     };
     let (group_size, repeat_scales) = native_format(*format, binding)?;
-    if format.scale_dtype != CompressedIntegerScaleDType::BF16
-        || zero_points.is_some()
-        || group_indices.is_some()
-    {
+    if zero_points.is_some() || group_indices.is_some() {
         return Err(invalid(binding, "format is not a native Metal packed-integer contract"));
     }
     let logical = binding
@@ -170,7 +164,19 @@ fn arrays(
     let weight = tensors.get(&binding.source)?;
     let scales = tensors.get(scales)?;
     require(&weight, Dtype::Int32, &expected_weight, binding)?;
-    require(&scales, Dtype::Bfloat16, &expected_scales, binding)?;
+    // MLX affine scales and biases share the activation type; GSQ checkpoints
+    // store some groups' scales in F32.
+    let stored = match format.scale_dtype {
+        CompressedIntegerScaleDType::BF16 => Dtype::Bfloat16,
+        CompressedIntegerScaleDType::F16 => Dtype::Float16,
+        CompressedIntegerScaleDType::F32 => Dtype::Float32,
+    };
+    require(&scales, stored, &expected_scales, binding)?;
+    let scales = if stored == Dtype::Bfloat16 {
+        scales
+    } else {
+        scales.astype(Dtype::Bfloat16, stream)?
+    };
     let graph = stream.native().graph();
     let weight = Array::from_native(graph.view_dtype(weight.native(), mirtal::DType::Uint32)?)?;
     let scales = if repeat_scales {
@@ -198,8 +204,11 @@ fn native_format(
     if format.is_symmetric_channel_int8() {
         return Ok((NATIVE_INT8_GROUP_SIZE, true));
     }
-    if format.is_symmetric_group_int4()
-        && let CompressedIntegerScaleStrategy::Group { group_size } = format.scale_strategy
+    // MLX affine storage is the same dense little-endian bitstream for every
+    // width, so 2/3/4/8-bit groups reinterpret their words in place.
+    if format.is_symmetric_group()
+        && let CompressedIntegerScaleStrategy::Group { group_size: group_size @ (32 | 64 | 128) } =
+            format.scale_strategy
     {
         return Ok((group_size, false));
     }

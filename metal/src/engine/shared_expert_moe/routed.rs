@@ -1,4 +1,4 @@
-use models::weights::RoutedExpertBindings;
+use models::weights::{ExpertProjectionRole, RoutedExpertBindings};
 
 use super::{
     super::{
@@ -55,9 +55,22 @@ impl RoutedGateUp {
                     BoundLinear::load(tensors, down, stream)?,
                 ))
             },
-            RoutedExpertBindings::UngatedStacked { .. }
-            | RoutedExpertBindings::Individual { .. } => Err(Error::InvalidModel(
-                "shared routed Metal execution requires gated stacked expert tensors".into(),
+            // Per-expert tensors (GSQ compressed-tensors checkpoints) stack into banks.
+            individual @ RoutedExpertBindings::Individual { .. } => {
+                let bank = |role| {
+                    BoundLinear::load_individual_bank(tensors, &individual.individual(role), stream)
+                };
+                Ok((
+                    Self::Separate {
+                        gate: bank(ExpertProjectionRole::Gate)?,
+                        up: bank(ExpertProjectionRole::Up)?,
+                        fused: None,
+                    },
+                    bank(ExpertProjectionRole::Down)?,
+                ))
+            },
+            RoutedExpertBindings::UngatedStacked { .. } => Err(Error::InvalidModel(
+                "shared routed Metal execution requires gated expert tensors".into(),
             )),
         }
     }

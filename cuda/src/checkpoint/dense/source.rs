@@ -104,9 +104,7 @@ fn packed_shape_sources(bindings: DenseDecoderLayerBindings<'_>) -> HashSet<&str
     .into_iter()
     .chain(gated(bindings))
     .filter_map(|binding| match &binding.storage {
-        TensorStorage::PackedInt8 { shape, .. } | TensorStorage::PackedInt4 { shape, .. } => {
-            Some(shape.as_str())
-        },
+        TensorStorage::PackedInteger { shape, .. } => Some(shape.as_str()),
         TensorStorage::BitsAndBytes4Bit { quant_state, .. } => Some(quant_state.as_str()),
         _ => None,
     })

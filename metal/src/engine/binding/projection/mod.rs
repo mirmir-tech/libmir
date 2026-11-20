@@ -38,12 +38,19 @@ pub(in crate::engine) enum BoundLinear {
     Ggml(GgmlLinear),
 }
 impl BoundLinear {
-    pub(in crate::engine) fn load_nvfp4_bank(
+    /// An expert bank stacked from per-expert projections: NVFP4 or
+    /// compressed-tensors packed integers.
+    pub(in crate::engine) fn load_individual_bank(
         tensors: &ModelTensors,
         bindings: &[&TensorBinding],
         stream: &Stream,
     ) -> Result<Self> {
-        nvfp4::individual_bank(tensors, bindings, stream).map(Self::NvFp4)
+        match bindings.first().map(|binding| &binding.storage) {
+            Some(TensorStorage::PackedInteger { .. }) => {
+                packed_integer::individual_bank(tensors, bindings, stream).map(Self::Affine)
+            },
+            _ => nvfp4::individual_bank(tensors, bindings, stream).map(Self::NvFp4),
+        }
     }
 
     /// A gathered MXFP4 expert bank; see [`MxFp4Linear::bank`].
@@ -86,7 +93,7 @@ impl BoundLinear {
                 i32::try_from(format.group_size)?,
             )
             .map(Self::Affine),
-            TensorStorage::PackedInt8 { .. } | TensorStorage::PackedInt4 { .. } => {
+            TensorStorage::PackedInteger { .. } => {
                 packed_integer::linear(tensors, binding, stream).map(Self::Affine)
             },
             TensorStorage::Awq { .. } => {

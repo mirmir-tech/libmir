@@ -208,10 +208,10 @@ fn experts(
         },
         HybridMoeExpertBindings::Individual { gate, up, down } => Ok(ExpertWeights {
             gate_up: ExpertGateUpWeights::Separate {
-                gate: BoundLinear::load_nvfp4_bank(tensors, gate, stream)?,
-                up: BoundLinear::load_nvfp4_bank(tensors, up, stream)?,
+                gate: BoundLinear::load_individual_bank(tensors, gate, stream)?,
+                up: BoundLinear::load_individual_bank(tensors, up, stream)?,
             },
-            down: BoundLinear::load_nvfp4_bank(tensors, down, stream)?,
+            down: BoundLinear::load_individual_bank(tensors, down, stream)?,
         }),
     }
 }

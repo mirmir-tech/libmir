@@ -67,8 +67,7 @@ impl CheckpointProjectionWeight {
             TensorStorage::Ggml { .. } => {
                 GgmlCheckpointWeight::load_binding(tensors, binding).map(Self::Ggml)
             },
-            TensorStorage::PackedInt8 { .. }
-            | TensorStorage::PackedInt4 { .. }
+            TensorStorage::PackedInteger { .. }
             | TensorStorage::Awq { .. }
             | TensorStorage::Gptq { .. }
             | TensorStorage::BitsAndBytes4Bit { .. } => packed(tensors, binding),

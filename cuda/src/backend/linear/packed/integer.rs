@@ -25,7 +25,7 @@ impl PackedIntegerWeight {
         output: usize,
     ) -> Result<Self> {
         match binding.storage {
-            TensorStorage::PackedInt8 { .. } | TensorStorage::PackedInt4 { .. } => {
+            TensorStorage::PackedInteger { .. } => {
                 CompressedInt8Weight::load_binding(tensors, binding, input, output)
                     .map(Self::Compressed)
             },

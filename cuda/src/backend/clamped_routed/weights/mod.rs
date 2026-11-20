@@ -166,8 +166,7 @@ pub(super) fn binding_bias(tensors: &CudaTensorSet, binding: &TensorBinding) -> 
         | TensorStorage::BlockQuantized { bias, .. }
         | TensorStorage::Ggml { bias, .. } => bias.as_deref(),
         TensorStorage::AffineQuantized { output_bias, .. } => output_bias.as_deref(),
-        TensorStorage::PackedInt8 { .. }
-        | TensorStorage::PackedInt4 { .. }
+        TensorStorage::PackedInteger { .. }
         | TensorStorage::Awq { .. }
         | TensorStorage::Gptq { .. }
         | TensorStorage::BitsAndBytes4Bit { .. }

@@ -15,8 +15,7 @@ pub(super) fn format(bindings: &WeightBindingPlan) -> ProjectionFormat {
         ProjectionFormat::MxFp8
     } else if bindings.uses_block_format(BlockFormat::NvFp4) {
         ProjectionFormat::NvFp4
-    } else if bindings.uses_packed_int8()
-        || bindings.uses_packed_int4()
+    } else if bindings.uses_packed_integer()
         || bindings.uses_awq()
         || bindings.uses_gptq()
         || bindings.uses_bitsandbytes_4bit()

@@ -44,7 +44,7 @@ impl BoundEmbedding {
                 )
                 .map(Self::Affine)
             },
-            TensorStorage::PackedInt8 { .. } | TensorStorage::PackedInt4 { .. } => {
+            TensorStorage::PackedInteger { .. } => {
                 super::packed_integer::embedding(tensors, binding, stream).map(Self::Affine)
             },
             TensorStorage::Float8 { .. } => {
