@@ -289,8 +289,10 @@ The target shape is:
   long-context digest regression.
 - `MIRMIR_METAL_PREFILL_STEP=<positive integer>` limits the number of prompt
   tokens in a causal MLX prefill graph. The default is 2048 for hybrid linear
-  or routed-expert decoders and 512 for dense softmax-only decoders; set it to
-  `1` only when comparing against scalar-prefill behavior.
+  or routed-expert decoders and for GGML (GGUF block) projections, which every
+  chunk dequantizes for MLX's matmul (Qwen3-8B Q8_0 1254 to 1440, Llama-3.1-8B
+  Q4_K_M 1457 to 1671 tok/s over 512), and 512 for other dense softmax-only
+  decoders; set it to `1` only when comparing against scalar-prefill behavior.
 - `MIRMIR_METAL_PREFILL_EVAL_LAYERS=<positive integer>` materializes a causal
   prefill graph after each specified number of layers, without moving tensors
   out of MLX. It is an experimental graph-size control for benchmark tuning;

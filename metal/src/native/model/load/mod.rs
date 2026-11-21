@@ -153,7 +153,7 @@ impl LoadedModel {
         let prefix_cache_bytes =
             prefix_cache_budget(metal_memory, stream.config().cache.prefix_cache_bytes);
         let model_prefill_step = contract.as_ref().map_or(0, |contract| {
-            prefill_step(&contract.semantic, stream.config().cache.prefill_step)
+            prefill_step(&contract.semantic, &contract.bindings, stream.config().cache.prefill_step)
         });
         Ok(Self {
             info: ModelInfo {
