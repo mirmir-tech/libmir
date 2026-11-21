@@ -10,7 +10,6 @@ mod scratch;
 mod weights;
 
 pub use execution::CudaLatentAttentionExecution;
-pub(in crate::backend) use scratch::{LatentScratch, LatentScratchKey};
 use mircuda::DeviceBuffer;
 use models::{
     layout::{DecoderConfig, RotaryPairing},
@@ -18,6 +17,7 @@ use models::{
     weights::{LatentDecoderLayerBindings, TensorCatalog},
 };
 use runtime::kv::{CacheConfig, KvStorageSpec};
+pub(in crate::backend) use scratch::{LatentScratch, LatentScratchKey};
 
 use self::weights::LatentWeights;
 use super::state_space_hybrid::NormedFeedForward;
