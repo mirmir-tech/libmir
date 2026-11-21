@@ -7,9 +7,8 @@ mod ggml;
 pub(super) mod weights;
 
 pub(in crate::backend) use ggml::{GgmlExpertGeometry, GgmlRoutedExperts};
-pub(in crate::backend) use weights::GgmlExpertWeights;
-
 use mircuda::{DeviceBuffer, Stream, bf16};
+pub(in crate::backend) use weights::GgmlExpertWeights;
 pub use weights::RoutedExpertWeights;
 use weights::RoutedExperts;
 
