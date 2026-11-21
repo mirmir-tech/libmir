@@ -609,6 +609,12 @@ The target shape is:
   `--bench-samples` (or their `MIRMIR_BENCH_*` environment variables). The
   report names the sampling path. Full-logit sampling is expected to be slower
   because it copies vocabulary logits to Rust every decode step.
+- MLX defaults `MLX_ENABLE_TF32=1`: on NAX GPUs (M5) float32 matmul, SDPA and
+  QMM run as TF32. The Workmir, libmir and mirmir `.cargo/config.toml` set it
+  to 0 for cargo-run tests, which compare float32 against exact references
+  (ten Metal tests failed by up to 5.5e-3 otherwise); binaries started directly
+  keep MLX's default. The test-only MXFP4 tile projection still differs from
+  MLX's NAX `gather_mxfp4` in one element of its bitwise gate.
 ## Mirtal Boundary
 
 - The model-agnostic execution layer is provided by the public `mirtal` crate.
