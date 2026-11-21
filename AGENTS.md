@@ -1341,6 +1341,12 @@ The target shape is:
   then rotates common-position rows together, appends one `[B, H, T, D]` tensor
   per layer and runs one SDPA call, the shape MLX-LM's batched K/V cache uses.
   Workmir's Qwen3-4B native ABBA measures 1.35–1.71x on B=2/5/10 with 0–5% spread.
+- Layers with supplied RoPE frequencies (Llama 3 scaling) rotate through
+  `rope_with_frequencies_batched`; ragged rows honour the layer's traditional
+  layout and position scale. Excluding frequency layers had sent every
+  Llama-3.1 batch to per-row attention: GGUF Q4_K_M C2 at depth 4096 decoded
+  51.8 instead of 68.1 tok/s (llama.cpp 62.1). YaRN's attention factor still
+  takes the per-row path.
 - The path needs one shared position and a stable row order. Ready rows arrive in
   request-completion order, so `stable_packed_order` sorts them by session only
   when positions match. Do not split rows into per-position cohorts: staggered

@@ -7,9 +7,11 @@ use super::super::{
 };
 use crate::engine::{Array, KvCache, Result, Stream, persistent_history};
 
-/// Rotates `[B, S, H, D]` rows into `[B, H, S, D]`, each at its own position.
+/// Rotates `[B, S, H, D]` rows into `[B, H, S, D]`, each at its own position,
+/// with the layer's frequencies (Llama 3 scaling) or generated ones.
 fn rotate(
     input: &Array,
+    frequencies: Option<&Array>,
     config: DenseSwiGluLayerConfig,
     positions: &[i32],
     stream: &Stream,
@@ -17,21 +19,34 @@ fn rotate(
     if let Some(position) =
         positions.first().copied().filter(|first| positions.iter().all(|p| p == first))
     {
-        return dense_attention::rope_layout(input, None, config, position, stream);
+        return dense_attention::rope_layout(input, frequencies, config, position, stream);
     }
     let offsets = positions.iter().map(|p| Ok(u32::try_from(*p)?)).collect::<Result<Vec<_>>>()?;
     let offsets = mirtal::Array::from_slice(&offsets, [offsets.len()])?;
     let input = input.transpose(&[0, 2, 1, 3], stream)?;
-    Array::from_native(stream.native().graph().rope_batched(
-        input.native(),
-        mirtal::RopeOptions {
-            dimensions: usize::try_from(config.head_dim)?,
-            traditional: false,
-            base: Some(config.rope_base),
-            scale: 1.0,
-            offset: &offsets,
-        },
-    )?)
+    let graph = stream.native().graph();
+    let dimensions = usize::try_from(config.head_dim)?;
+    Array::from_native(match frequencies {
+        Some(frequencies) => graph.rope_with_frequencies_batched(
+            input.native(),
+            frequencies.native(),
+            mirtal::FrequencyRopeOptions {
+                dimensions,
+                traditional: config.rope_traditional,
+                offset: &offsets,
+            },
+        )?,
+        None => graph.rope_batched(
+            input.native(),
+            mirtal::RopeOptions {
+                dimensions,
+                traditional: config.rope_traditional,
+                base: Some(config.rope_base),
+                scale: config.rope_position_scale,
+                offset: &offsets,
+            },
+        )?,
+    })
 }
 
 /// Returns `None` before touching any cache when per-row attention must run.
@@ -47,10 +62,7 @@ pub(in crate::engine::dense::swiglu) fn persistent_attention(
     causal: bool,
     stream: &Stream,
 ) -> Result<Option<Array>> {
-    if causal
-        || weights.rope_frequencies.is_some()
-        || config.rope_attention_factor.to_bits() != 1.0_f32.to_bits()
-    {
+    if causal || config.rope_attention_factor.to_bits() != 1.0_f32.to_bits() {
         return Ok(None);
     }
     persistent_history::attend(
@@ -63,7 +75,7 @@ pub(in crate::engine::dense::swiglu) fn persistent_attention(
         },
         caches,
         positions,
-        |input| rotate(input, config, positions, stream),
+        |input| rotate(input, weights.rope_frequencies.as_ref(), config, positions, stream),
         stream,
     )
 }
