@@ -1,4 +1,5 @@
 use mircuda::{DeviceBuffer, LaunchConfig, Stream, bf16};
+use models::semantic::QueryTemperature;
 
 use super::{
     HEADS_PER_BLOCK, LatentAbsorption, LatentAttention, LatentAttentionWorkspace, LatentSplit,
@@ -23,6 +24,8 @@ pub struct LatentAttentionLayer<'a> {
     /// Factor on the rotary cosine and sine (`YaRN` `mscale` ratio).
     pub rope_scale: f32,
     pub softmax_scale: f32,
+    /// Position-dependent query scale on top of `softmax_scale`.
+    pub temperature: Option<QueryTemperature>,
 }
 
 /// The paged latent cache one launch reads and extends.
@@ -94,6 +97,11 @@ impl LatentAttention {
             ),
         )?;
         absorption.absorb_query(stream, inputs.query, &layer.up, workspace)?;
+        #[allow(clippy::cast_possible_truncation)]
+        let (temperature_beta, temperature_window) = match layer.temperature {
+            Some(temperature) => (temperature.beta as f32, narrow(temperature.window)?),
+            None => (0.0, 0),
+        };
         let (heads_per_block, threads) = match &self.split {
             LatentSplit::Warp(_) => (HEADS_PER_BLOCK, HEADS_PER_BLOCK * 32),
             LatentSplit::TensorCore(_) => (MMA_HEADS, MMA_THREADS),
@@ -120,6 +128,8 @@ impl LatentAttention {
             narrow(table_stride)?,
             narrow(spec.block_size)?,
             layer.softmax_scale,
+            temperature_beta,
+            temperature_window,
         );
         match &self.split {
             LatentSplit::Warp(kernel) => kernel.launch(stream, config, arguments)?,
@@ -154,7 +164,14 @@ impl LatentAttention {
         output: &DeviceBuffer<bf16>,
     ) -> Result<()> {
         let spec = self.spec;
-        if tokens == 0 || tokens > spec.max_queries || !layer.softmax_scale.is_finite() {
+        let temperature = layer
+            .temperature
+            .is_none_or(|temperature| temperature.window > 0 && temperature.beta.is_finite());
+        if tokens == 0
+            || tokens > spec.max_queries
+            || !layer.softmax_scale.is_finite()
+            || !temperature
+        {
             return Err(Error::InvalidPagedKv("invalid latent attention launch"));
         }
         let rows = product(tokens, spec.heads)?;

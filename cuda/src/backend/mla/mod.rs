@@ -13,7 +13,7 @@ pub use execution::CudaLatentAttentionExecution;
 use mircuda::DeviceBuffer;
 use models::{
     layout::{DecoderConfig, RotaryPairing},
-    semantic::{DecoderLayerSpec, MixerSpec, RotaryPairingSpec},
+    semantic::{DecoderLayerSpec, MixerSpec, QueryTemperature, RotaryPairingSpec},
     weights::{LatentDecoderLayerBindings, TensorCatalog},
 };
 use runtime::kv::{CacheConfig, KvStorageSpec};
@@ -39,6 +39,7 @@ pub(super) struct LatentGeometry {
     pub(super) latent_epsilon: f32,
     pub(super) rope_scale: f32,
     pub(super) softmax_scale: f32,
+    pub(super) temperature: Option<QueryTemperature>,
 }
 
 impl LatentGeometry {
@@ -122,6 +123,7 @@ impl CudaLatentAttentionLayer {
             latent_epsilon: latent.latent_normalization.epsilon as f32,
             rope_scale,
             softmax_scale: latent.scale as f32,
+            temperature: latent.query_temperature,
         };
         let feed_forward = NormedFeedForward {
             norm: tensors

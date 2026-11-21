@@ -210,6 +210,7 @@ impl CudaLatentAttentionExecution {
                 epsilon: self.geometry.latent_epsilon,
                 rope_scale: self.geometry.rope_scale,
                 softmax_scale: self.geometry.softmax_scale,
+                temperature: self.geometry.temperature,
             },
             LatentCacheView {
                 pages: pages.latent_rows_mut()?,

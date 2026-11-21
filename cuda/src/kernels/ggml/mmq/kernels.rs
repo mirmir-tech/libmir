@@ -21,6 +21,8 @@ pub(super) struct MmqArguments<'a> {
     pub(super) ld: u32,
     pub(super) stride: u32,
     pub(super) offset: u32,
+    pub(super) expert_rows: u32,
+    pub(super) first_row: u32,
 }
 
 macro_rules! mmq_kernels {
@@ -31,7 +33,7 @@ macro_rules! mmq_kernels {
             tile_experts: &DeviceBuffer<u32>,
             tile_rows: &DeviceBuffer<u32>, tile_count: &DeviceBuffer<u32>,
             weight: &DeviceBuffer<u8>, output: &mut DeviceBuffer<bf16>, rows: u32,
-            columns: u32, ld: u32, stride: u32, offset: u32,
+            columns: u32, ld: u32, stride: u32, offset: u32, expert_rows: u32, first_row: u32,
         ));)*
 
         #[derive(Clone, Debug)]
@@ -56,11 +58,11 @@ macro_rules! mmq_kernels {
             ) -> Result<()> {
                 let MmqArguments {
                     quantized, scales, offsets, counts, tile_experts, tile_rows, tile_count,
-                    weight, output, rows, columns, ld, stride, offset,
+                    weight, output, rows, columns, ld, stride, offset, expert_rows, first_row,
                 } = arguments;
                 let arguments = (
                     quantized, scales, offsets, counts, tile_experts, tile_rows, tile_count,
-                    weight, output, rows, columns, ld, stride, offset,
+                    weight, output, rows, columns, ld, stride, offset, expert_rows, first_row,
                 );
                 match self {
                     $(Self::$variant(kernel) => kernel.launch(stream, config, arguments)?,)*

@@ -1509,3 +1509,16 @@ The target shape is:
 - On GB10, nsys hardware CUDA tracing drops kernels without GPU timestamps
   (only load kernels remain). Profile with `-t cuda-sw
   --capture-range=cudaProfilerApi --capture-range-end=stop`.
+- Mistral 4's `llama_4_scaling_beta` is `QueryTemperature`: queries at
+  position `p` scale by `1 + beta * ln(1 + floor(p / window))` (one below
+  `original_max_position_embeddings`), applied to the softmax scale inside
+  both attention kernels. GGUF maps llama.cpp's `attention.temperature_scale`
+  only when its length is the `YaRN` window. unsloth's Mistral Small 4 GGUF
+  records neither, so it (and llama.cpp) runs without it past 8192 tokens.
+- GGML expert banks may fuse gate and up as halves of each expert's matrix
+  (GGUF `ffn_gate_up_exps`, binding `FusedGateUp { interleaved: false }`);
+  `GgmlBankRows` tells the MMQ and gathered kernels each projection's rows
+  per expert and first row, so the bank is read in place.
+- GGUF control and user-defined tokens inside the model's id range (Tekken's
+  first thousand) are model vocabulary entries too, as the source
+  `tokenizer.json` lists them; otherwise `tokenizers` renumbers them.

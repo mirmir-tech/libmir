@@ -78,9 +78,10 @@ impl Gathered {
         weights: &GgmlExpertWeights,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
-        let gate = find(&self.gate_up, weights.gate.kind())?;
-        let up = find(&self.gate_up, weights.up.kind())?;
-        let down = find(&self.down, weights.down.kind())?;
+        let (gate_bank, up_bank, down_bank) = (weights.gate(), weights.up(), weights.down());
+        let gate = find(&self.gate_up, gate_bank.kind())?;
+        let up = find(&self.gate_up, up_bank.kind())?;
+        let down = find(&self.down, down_bank.kind())?;
         let count = checked(self.rows, routing.top_k)?;
         gate.quantize(stream, input, &mut self.input, self.rows)?;
         let shared = GgmlSelections {
@@ -88,8 +89,8 @@ impl Gathered {
             count,
             group: routing.top_k,
         };
-        gate.multiply(stream, &self.input, weights.gate.blocks(), &shared, &mut self.gate)?;
-        up.multiply(stream, &self.input, weights.up.blocks(), &shared, &mut self.up)?;
+        gate.multiply(stream, &self.input, gate_bank.operand(), &shared, &mut self.gate)?;
+        up.multiply(stream, &self.input, up_bank.operand(), &shared, &mut self.up)?;
         self.activation.execute_separate(
             stream,
             &self.gate,
@@ -103,7 +104,7 @@ impl Gathered {
             count,
             group: 1,
         };
-        down.multiply(stream, &self.intermediate, weights.down.blocks(), &own, &mut self.partial)?;
+        down.multiply(stream, &self.intermediate, down_bank.operand(), &own, &mut self.partial)?;
         down.combine(stream, &self.partial, routing.weights, output, routing.top_k)
     }
 }

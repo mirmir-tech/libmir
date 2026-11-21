@@ -2,9 +2,10 @@
 //! it: every head's keys and values are expanded from the latent and nothing
 //! is absorbed.
 
-use models::layout::RotaryPairing;
+use mircuda::bf16;
+use models::{layout::RotaryPairing, semantic::QueryTemperature};
 
-use super::super::LatentAttentionSpec;
+use super::{super::LatentAttentionSpec, fixture::Values};
 
 pub(super) struct Model {
     pub spec: LatentAttentionSpec,
@@ -14,6 +15,7 @@ pub(super) struct Model {
     pub epsilon: f32,
     pub rope_scale: f32,
     pub softmax_scale: f32,
+    pub temperature: Option<QueryTemperature>,
 }
 
 pub(super) struct Token {
@@ -81,12 +83,15 @@ impl Model {
         for head in 0..spec.heads {
             let query = &token.query[head * width..(head + 1) * width];
             let rope_query = self.rotate(&query[spec.nope_dim..], position);
+            #[allow(clippy::cast_possible_truncation)]
+            let scale = self.softmax_scale
+                * self.temperature.map_or(1.0, |temperature| temperature.factor(position) as f32);
             let scores = visible
                 .iter()
                 .map(|key| {
                     let nope = &key.nope_keys[head * spec.nope_dim..(head + 1) * spec.nope_dim];
                     let dot = dot(&query[..spec.nope_dim], nope) + dot(&rope_query, &key.rope_key);
-                    dot * self.softmax_scale
+                    dot * scale
                 })
                 .collect::<Vec<_>>();
             let maximum = scores.iter().copied().fold(f32::NEG_INFINITY, f32::max);
@@ -127,4 +132,34 @@ fn float(value: usize) -> f32 {
 
 fn dot(left: &[f32], right: &[f32]) -> f32 {
     left.iter().zip(right).map(|(a, b)| a * b).sum()
+}
+
+/// Random layer weights of `spec` around a unit latent norm.
+pub(super) fn model(
+    spec: LatentAttentionSpec,
+    values: &mut Values,
+    rope_scale: f32,
+    temperature: Option<QueryTemperature>,
+) -> Model {
+    let latent_norm = values
+        .take(spec.latent_rank, 0.2)
+        .into_iter()
+        .map(|value| bf16::from_f32(1.0 + value).to_f32())
+        .collect();
+    let rows = spec.heads * (spec.nope_dim + spec.value_dim);
+    let rope = f32::from(u16::try_from(spec.rope_dim).unwrap_or(1));
+    let inverse_frequencies = (0..spec.rope_dim / 2)
+        .map(|pair| 10_000_f32.powf(-2.0 * f32::from(u16::try_from(pair).unwrap_or(0)) / rope))
+        .collect();
+    Model {
+        spec,
+        latent_norm,
+        key_value_up: values.take(rows * spec.latent_rank, 0.044),
+        inverse_frequencies,
+        epsilon: 1e-6,
+        rope_scale,
+        softmax_scale: 3.0
+            / f32::from(u16::try_from(spec.nope_dim + spec.rope_dim).unwrap_or(1)).sqrt(),
+        temperature,
+    }
 }

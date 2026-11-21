@@ -19,6 +19,33 @@ pub use mmq::{GgmlGroupedMmq, GgmlMmqGroups, GgmlMmqInput, GgmlMmqPlacement, Ggm
 use models::gguf::GgmlType;
 pub use repack::{GgmlMxFp4Repack, GgmlRowPlacement};
 
+/// Where one projection's rows sit in each expert's matrix of a bank.
+///
+/// The matrix holds `expert_rows` rows and the projection's start at
+/// `first_row`; a fused gate/up bank holds the gate rows, then the up rows.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GgmlBankRows {
+    pub expert_rows: usize,
+    pub first_row: usize,
+}
+
+impl GgmlBankRows {
+    /// A bank whose experts' matrices are exactly the projection.
+    #[must_use]
+    pub const fn whole(rows: usize) -> Self {
+        Self { expert_rows: rows, first_row: 0 }
+    }
+
+    /// Whether `rows` projection rows fit each expert's matrix.
+    fn check(self, rows: usize) -> Result<()> {
+        if self.first_row.checked_add(rows).is_some_and(|end| end <= self.expert_rows) {
+            Ok(())
+        } else {
+            Err(Error::InvalidExecutionPlan("GGML projection rows exceed the expert matrix"))
+        }
+    }
+}
+
 use super::geometry::product;
 use crate::{Error, Result};
 

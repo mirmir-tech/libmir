@@ -29,6 +29,29 @@ pub struct LatentAttentionSpec {
     pub scale: f64,
     /// Rotation of the `rope_head_dim` part; `None` for `NoPE` variants.
     pub position: PositionEncodingSpec,
+    /// Position-dependent scale on every query; absent when all positions
+    /// attend at `scale`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query_temperature: Option<QueryTemperature>,
+}
+
+/// Llama 4 attention temperature tuning: the query at position `p` scales
+/// by `1 + beta · ln(1 + floor(p / window))`, which is one below `window`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QueryTemperature {
+    pub beta: f64,
+    pub window: usize,
+}
+
+impl QueryTemperature {
+    /// The factor on a query at `position`.
+    #[must_use]
+    pub fn factor(&self, position: usize) -> f64 {
+        #[allow(clippy::cast_precision_loss)]
+        let periods = (position / self.window) as f64;
+        self.beta.mul_add(periods.ln_1p(), 1.0)
+    }
 }
 
 impl LatentAttentionSpec {

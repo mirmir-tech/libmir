@@ -9,7 +9,7 @@ use mircuda::{
 
 use super::{
     super::geometry::{narrow, product, require},
-    GgmlActivations, GgmlKernelType,
+    GgmlActivations, GgmlBankRows, GgmlKernelType,
     linear::QuantizeQ8,
 };
 use crate::{Error, Result};
@@ -120,7 +120,7 @@ impl GgmlGatheredLinear {
         &self,
         stream: &Stream,
         activations: &GgmlActivations,
-        weight: &DeviceBuffer<u8>,
+        (weight, bank): (&DeviceBuffer<u8>, GgmlBankRows),
         selections: &GgmlSelections<'_>,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
@@ -129,7 +129,10 @@ impl GgmlGatheredLinear {
         }
         let inputs = selections.count.div_ceil(selections.group);
         activations.require(product(inputs, self.spec.columns / 32)?)?;
-        require("GGML expert bank", self.spec.bank_bytes()?, weight.len())?;
+        bank.check(self.spec.rows)?;
+        let bank_bytes =
+            product(self.spec.experts, self.spec.kind.bytes(bank.expert_rows, self.spec.columns)?)?;
+        require("GGML expert bank", bank_bytes, weight.len())?;
         require("GGML expert selections", selections.count, selections.selected.len())?;
         require("GGML expert output", product(selections.count, self.spec.rows)?, output.len())?;
         let (quantized, scales) = activations.buffers();
@@ -151,6 +154,8 @@ impl GgmlGatheredLinear {
                 narrow(selections.group)?,
                 narrow(self.spec.rows)?,
                 narrow(self.spec.columns)?,
+                narrow(bank.expert_rows)?,
+                narrow(bank.first_row)?,
             ),
         )
     }

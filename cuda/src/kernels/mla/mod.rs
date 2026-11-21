@@ -39,7 +39,8 @@ cuda_export!(
         block_tables: &DeviceBuffer<u32>, query_sequences: &DeviceBuffer<u32>,
         positions: &DeviceBuffer<u32>, partial_values: &mut DeviceBuffer<f32>,
         partial_statistics: &mut DeviceBuffer<f32>, queries: u32, heads: u32,
-        table_stride: u32, block_size: u32, scale: f32,
+        table_stride: u32, block_size: u32, scale: f32, temperature_beta: f32,
+        temperature_window: u32,
     )
 );
 
@@ -49,7 +50,8 @@ cuda_export!(
         block_tables: &DeviceBuffer<u32>, query_sequences: &DeviceBuffer<u32>,
         positions: &DeviceBuffer<u32>, partial_values: &mut DeviceBuffer<f32>,
         partial_statistics: &mut DeviceBuffer<f32>, queries: u32, heads: u32,
-        table_stride: u32, block_size: u32, scale: f32,
+        table_stride: u32, block_size: u32, scale: f32, temperature_beta: f32,
+        temperature_window: u32,
     )
 );
 

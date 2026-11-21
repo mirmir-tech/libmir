@@ -17,7 +17,7 @@ __device__ void ggml_mmq(
     const unsigned int* counts, const unsigned int* tile_experts, const unsigned int* tile_rows,
     const unsigned int* tile_count, const unsigned char* weight, __nv_bfloat16* output,
     unsigned int rows, unsigned int columns, unsigned int ld, unsigned int stride,
-    unsigned int offset) {
+    unsigned int offset, unsigned int expert_rows, unsigned int first_row) {
   __shared__ unsigned int a_words[kTileRows][kRowWords];
   __shared__ float4 a_scales[kTileRows][kStageSubs];
   __shared__ unsigned int b_words[kTileColumns][kRowWords];
@@ -37,8 +37,10 @@ __device__ void ggml_mmq(
   constexpr unsigned int per_block = Block::elements / kSub;
   const unsigned long long row_bytes =
       static_cast<unsigned long long>(columns / Block::elements) * Block::bytes;
+  // The expert's matrix holds `expert_rows` rows, this projection's from
+  // `first_row` (gate then up halves of a fused bank).
   const unsigned char* bank =
-      weight + static_cast<unsigned long long>(expert) * rows * row_bytes;
+      weight + (static_cast<unsigned long long>(expert) * expert_rows + first_row) * row_bytes;
   const unsigned int lane = threadIdx.x & 31u;
   const unsigned int warp = threadIdx.x >> 5u;
   const unsigned int group = lane >> 2u;
@@ -222,9 +224,11 @@ extern "C" __global__ void libmir_cuda_ggml_mmq_tiles(
       const unsigned int* counts, const unsigned int* tile_experts,                         \
       const unsigned int* tile_rows, const unsigned int* tile_count,                        \
       const unsigned char* weight, __nv_bfloat16* output, unsigned int rows,                \
-      unsigned int columns, unsigned int ld, unsigned int stride, unsigned int offset) {    \
+      unsigned int columns, unsigned int ld, unsigned int stride, unsigned int offset,      \
+      unsigned int expert_rows, unsigned int first_row) {                                   \
     ggml_mmq<BLOCK>(quantized, scales, offsets, counts, tile_experts, tile_rows, tile_count, \
-                    weight, output, rows, columns, ld, stride, offset);                     \
+                    weight, output, rows, columns, ld, stride, offset, expert_rows,         \
+                    first_row);                                                             \
   }
 
 LIBMIR_CUDA_GGML_MMQ(q4_0, Q4_0)

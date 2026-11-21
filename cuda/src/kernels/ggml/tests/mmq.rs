@@ -8,7 +8,7 @@ use super::{
 };
 use crate::{
     Result,
-    kernels::ggml::{GgmlGroupedMmq, GgmlMmqGroups, GgmlMmqInput, GgmlMmqPlacement},
+    kernels::ggml::{GgmlBankRows, GgmlGroupedMmq, GgmlMmqGroups, GgmlMmqInput, GgmlMmqPlacement},
 };
 
 const EXPERTS: usize = 3;
@@ -28,59 +28,72 @@ fn grouped_mmq_matches_the_reference_per_expert() -> Result<()> {
     for (kind, columns) in KINDS.into_iter().flat_map(|kind| [(kind, 512), (kind, 768)]) {
         let blocks = Blocks::random(kind, EXPERTS * ROWS, columns, 0x2545_f491)?;
         let weight = dequantize(kind, &blocks.bytes, EXPERTS * ROWS, columns);
-        let input = reference::input(total * columns, 0x9e37_79b9);
-        let mut operation = GgmlGroupedMmq::compile(
-            &fixture.compiler,
-            &fixture.pool,
-            &fixture.stream,
-            &[kind],
-            EXPERTS,
-            ROWS,
-            columns,
-            total,
-        )?;
-        let mut activations = operation.activations(&fixture.pool, &fixture.stream)?;
-        let device_offsets = fixture.copy(&offsets)?;
-        let device_counts =
-            fixture.copy(&counts.map(u32::try_from).map(|count| count.unwrap_or(0)))?;
-        let groups = GgmlMmqGroups {
-            offsets: &device_offsets,
-            counts: &device_counts,
-        };
-        let device_input = fixture.copy(&input)?;
-        let device_weight = fixture.copy(&blocks.bytes)?;
-        let mut output = fixture.copy(&vec![bf16::ZERO; total * placement.ld])?;
-        operation.prepare(
-            &fixture.stream,
-            GgmlMmqInput::Rows(&device_input),
-            total,
-            groups,
-            &mut activations,
-        )?;
-        operation.multiply(
-            &fixture.stream, &activations, groups, kind, &device_weight, &mut output, placement,
-        )?;
-        let actual = fixture.read(&output)?;
-        for expert in 0..EXPERTS {
-            let first = usize::try_from(offsets[expert])?;
-            for row in first..first + counts[expert] {
-                for column in 0..ROWS {
-                    let at = (expert * ROWS + column) * columns;
-                    let (expected, magnitude) = reference::dot(
-                        &input[row * columns..(row + 1) * columns],
-                        &weight[at..at + columns],
-                    );
-                    let value = f64::from(actual[row * placement.ld + 2 * column + 1].to_f32());
-                    assert!(
-                        (value - expected).abs() <= 1e-2f64.mul_add(magnitude, 1e-3),
-                        "{kind:?} columns {columns} expert {expert} [{row}, {column}]: \
-                         {value} vs {expected}"
-                    );
+        // The whole matrix, and the second half of every expert's rows as
+        // the up projection of a fused gate/up bank reads it.
+        for (rows, bank) in [
+            (ROWS, GgmlBankRows::whole(ROWS)),
+            (ROWS / 2, GgmlBankRows { expert_rows: ROWS, first_row: ROWS / 2 }),
+        ] {
+            let input = reference::input(total * columns, 0x9e37_79b9);
+            let mut operation = GgmlGroupedMmq::compile(
+                &fixture.compiler,
+                &fixture.pool,
+                &fixture.stream,
+                &[kind],
+                EXPERTS,
+                rows,
+                columns,
+                total,
+            )?;
+            let mut activations = operation.activations(&fixture.pool, &fixture.stream)?;
+            let device_offsets = fixture.copy(&offsets)?;
+            let device_counts =
+                fixture.copy(&counts.map(u32::try_from).map(|count| count.unwrap_or(0)))?;
+            let groups = GgmlMmqGroups {
+                offsets: &device_offsets,
+                counts: &device_counts,
+            };
+            let device_input = fixture.copy(&input)?;
+            let device_weight = fixture.copy(&blocks.bytes)?;
+            let mut output = fixture.copy(&vec![bf16::ZERO; total * placement.ld])?;
+            operation.prepare(
+                &fixture.stream,
+                GgmlMmqInput::Rows(&device_input),
+                total,
+                groups,
+                &mut activations,
+            )?;
+            operation.multiply(
+                &fixture.stream,
+                &activations,
+                groups,
+                kind,
+                (&device_weight, bank),
+                &mut output,
+                placement,
+            )?;
+            let actual = fixture.read(&output)?;
+            for expert in 0..EXPERTS {
+                let first = usize::try_from(offsets[expert])?;
+                for row in first..first + counts[expert] {
+                    for column in 0..rows {
+                        let at = (expert * ROWS + bank.first_row + column) * columns;
+                        let (expected, magnitude) = reference::dot(
+                            &input[row * columns..(row + 1) * columns],
+                            &weight[at..at + columns],
+                        );
+                        let value = f64::from(actual[row * placement.ld + 2 * column + 1].to_f32());
+                        assert!(
+                            (value - expected).abs() <= 1e-2f64.mul_add(magnitude, 1e-3),
+                            "{kind:?} columns {columns} expert {expert} [{row}, {column}]: \
+                             {value} vs {expected}"
+                        );
+                    }
                 }
             }
+            // Even columns stay untouched.
+            assert!(actual.iter().step_by(2).all(|value| value.to_f32() == 0.0));
         }
-        // Even columns stay untouched.
-        assert!(actual.iter().step_by(2).all(|value| value.to_f32() == 0.0));
     }
     Ok(())
 }

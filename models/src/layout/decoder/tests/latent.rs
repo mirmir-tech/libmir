@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use super::*;
 use crate::{
     layout::{AttentionLayerType, ExpertRouting, RopeScaling, RotaryPairing},
-    semantic::ExpertGroupLimit,
+    semantic::{ExpertGroupLimit, QueryTemperature},
 };
 
 fn deepseek_v2_lite() -> Value {
@@ -121,6 +121,10 @@ fn reads_mistral_small_4_from_its_text_config_and_rope_parameters() -> Result<()
 
     assert_eq!(latent.attention.query_rank.map(std::num::NonZeroUsize::get), Some(1024));
     assert_eq!(latent.attention.cached_width(), 320);
+    assert_eq!(
+        latent.attention.query_temperature,
+        Some(QueryTemperature { beta: 0.1, window: 8192 })
+    );
     assert!(close(
         latent.attention.scale,
         128_f64.sqrt().recip() * yarn_mscale(128.0, 1.0).powi(2)

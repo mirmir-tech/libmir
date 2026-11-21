@@ -64,6 +64,17 @@ fn pre_tokenizer(name: &str) -> Option<PreTokenizer> {
             nfc: false,
             ignore_merges: false,
         }),
+        // Tekken: the o200k word classes without contractions, single
+        // digits. Source: mistralai/Mistral-Small-4-119B-2603 `tokenizer.json`
+        // (a11f36b), which llama.cpp lists as `tekken` and `pixtral`.
+        "tekken" | "pixtral" => Some(PreTokenizer {
+            patterns: &[
+                r"[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+[\p{Ll}\p{Lm}\p{Lo}\p{M}]*|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n/]*|\s*[\r\n]+|\s+(?!\S)|\s+",
+            ],
+            individual_digits: false,
+            nfc: false,
+            ignore_merges: true,
+        }),
         // The tiktoken Han-run split; tiktoken keeps whole matched tokens.
         "kimi-k2" => Some(PreTokenizer {
             patterns: &[crate::tokenizer::HAN_RUNS_CASED_WORDS],

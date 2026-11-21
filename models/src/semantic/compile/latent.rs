@@ -80,6 +80,7 @@ fn mixer(
         },
         scale: attention.scale,
         position,
+        query_temperature: attention.query_temperature,
     }))
 }
 

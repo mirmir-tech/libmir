@@ -15,6 +15,8 @@ type GatheredArguments<'a> = (
     u32,
     u32,
     u32,
+    u32,
+    u32,
 );
 
 macro_rules! gathered_kernels {
@@ -22,7 +24,7 @@ macro_rules! gathered_kernels {
         $(cuda_export!(pub(super) $variant = $symbol(
             quantized: &DeviceBuffer<u32>, scales: &DeviceBuffer<f32>, weight: &DeviceBuffer<u8>,
             selected: &DeviceBuffer<u32>, output: &mut DeviceBuffer<bf16>, selections: u32,
-            group: u32, rows: u32, columns: u32,
+            group: u32, rows: u32, columns: u32, expert_rows: u32, first_row: u32,
         ));)*
 
         #[derive(Clone, Debug)]

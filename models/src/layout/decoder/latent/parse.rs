@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use super::{
     ExpertGroupLimit, ExpertRouting, LatentAttentionConfig, LatentDecoderConfig,
-    LatentExpertsConfig, RotaryPairing,
+    LatentExpertsConfig, QueryTemperature, RotaryPairing,
 };
 use crate::{
     error::{ModelsError, Result},
@@ -35,6 +35,7 @@ pub(in crate::layout::decoder) fn latent_decoder(
             RotaryPairing::Halves
         },
         scale: 1.0,
+        query_temperature: query_temperature(decoder)?,
     };
     let query_width = f64::from(u32::try_from(attention.query_head_dim())?);
     let scale = query_width.sqrt().recip() * mscale_all_dim(decoder)?.powi(2);
@@ -60,6 +61,25 @@ fn mscale_all_dim(decoder: &Value) -> Result<f64> {
         return Ok(1.0);
     }
     Ok(0.1_f64.mul_add(all_dim * factor.ln(), 1.0))
+}
+
+/// Mistral 4's `llama_4_scaling_beta`, which scales queries past every
+/// `original_max_position_embeddings` window; zero or absent leaves them.
+fn query_temperature(decoder: &Value) -> Result<Option<QueryTemperature>> {
+    let Some(scaling) = rope::scaling_value(decoder) else {
+        return Ok(None);
+    };
+    let Some(beta) = optional_f64(scaling, &["llama_4_scaling_beta"])?.filter(|beta| *beta != 0.0)
+    else {
+        return Ok(None);
+    };
+    let window = optional_usize(scaling, &["original_max_position_embeddings"])?
+        .filter(|window| *window > 0)
+        .ok_or_else(|| invalid("llama_4_scaling_beta requires original_max_position_embeddings"))?;
+    if !beta.is_finite() {
+        return Err(invalid("llama_4_scaling_beta must be finite"));
+    }
+    Ok(Some(QueryTemperature { beta, window }))
 }
 
 fn experts(decoder: &Value) -> Result<Option<LatentExpertsConfig>> {

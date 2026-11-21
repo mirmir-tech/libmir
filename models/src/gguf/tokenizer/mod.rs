@@ -68,6 +68,17 @@ fn vocabulary(header: &GgufHeader) -> Result<Vocabulary<'_>> {
             },
         }
     }
+    // Added tokens inside the model's id range (Tekken's first thousand
+    // control tokens) are model entries too, as the source `tokenizer.json`
+    // lists them; otherwise the model's ids have gaps that added ids fill.
+    let model_end = vocab.values().filter_map(Value::as_u64).max().unwrap_or(0);
+    for token in &added {
+        if let (Some(id), Some(content)) = (token["id"].as_u64(), token["content"].as_str())
+            && id < model_end
+        {
+            vocab.entry(content.to_owned()).or_insert_with(|| json!(id));
+        }
+    }
     Ok(Vocabulary { tokens, vocab, added, unknown })
 }
 

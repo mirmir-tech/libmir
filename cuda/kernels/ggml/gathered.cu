@@ -10,15 +10,20 @@ template <typename Block>
 __device__ void ggml_gemv_gathered(
     const unsigned int* quantized, const float4* scales, const unsigned char* weight,
     const unsigned int* selected, __nv_bfloat16* output, unsigned int selections,
-    unsigned int group, unsigned int rows, unsigned int columns) {
+    unsigned int group, unsigned int rows, unsigned int columns, unsigned int expert_rows,
+    unsigned int first_row) {
   const unsigned int selection = blockIdx.y;
   if (selection >= selections) return;
   const unsigned long long subs = columns / kSub;
   const unsigned long long token = selection / group;
-  const unsigned long long matrix =
-      static_cast<unsigned long long>(rows) * (columns / Block::elements) * Block::bytes;
+  // The expert's matrix holds `expert_rows` rows, this projection's from
+  // `first_row` (gate then up halves of a fused bank).
+  const unsigned long long row_bytes = (columns / Block::elements) * Block::bytes;
+  const unsigned char* matrix =
+      weight + (static_cast<unsigned long long>(selected[selection]) * expert_rows + first_row) *
+                   row_bytes;
   ggml_gemv<Block, 1u>(
-      quantized + token * subs * 8u, scales + token * subs, weight + selected[selection] * matrix,
+      quantized + token * subs * 8u, scales + token * subs, matrix,
       output + static_cast<unsigned long long>(selection) * rows, 1u, rows, columns, 0u, 1u);
 }
 
@@ -48,9 +53,10 @@ extern "C" __global__ void libmir_cuda_ggml_combine_bf16(
   extern "C" __global__ void libmir_cuda_ggml_gemv_gathered_bf16_##SUFFIX(                    \
       const unsigned int* quantized, const float4* scales, const unsigned char* weight,        \
       const unsigned int* selected, __nv_bfloat16* output, unsigned int selections,            \
-      unsigned int group, unsigned int rows, unsigned int columns) {                           \
-    ggml_gemv_gathered<BLOCK>(                                                                 \
-        quantized, scales, weight, selected, output, selections, group, rows, columns);        \
+      unsigned int group, unsigned int rows, unsigned int columns, unsigned int expert_rows,   \
+      unsigned int first_row) {                                                                \
+    ggml_gemv_gathered<BLOCK>(quantized, scales, weight, selected, output, selections, group,  \
+                              rows, columns, expert_rows, first_row);                          \
   }
 
 LIBMIR_CUDA_GGML_GATHERED(q4_0, Q4_0)

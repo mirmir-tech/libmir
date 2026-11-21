@@ -94,10 +94,10 @@ pub use gated_delta::{
     GatedDeltaRecurrenceMode, GatedDeltaSpec, GatedDeltaTransformSpec, GatedDeltaTransforms,
 };
 pub use ggml::{
-    GGML_GEMV_MAX_TOKENS, GgmlActivations, GgmlDequantize, GgmlEmbedding, GgmlEmbeddingOperands,
-    GgmlExpertSpec, GgmlGatheredLinear, GgmlGroupedMmq, GgmlKernelType, GgmlLinear, GgmlMmqGroups,
-    GgmlMmqInput, GgmlMmqPlacement, GgmlMxFp4Repack, GgmlRouteCombine, GgmlRowPlacement,
-    GgmlSelections, GgmlSpec,
+    GGML_GEMV_MAX_TOKENS, GgmlActivations, GgmlBankRows, GgmlDequantize, GgmlEmbedding,
+    GgmlEmbeddingOperands, GgmlExpertSpec, GgmlGatheredLinear, GgmlGroupedMmq, GgmlKernelType,
+    GgmlLinear, GgmlMmqGroups, GgmlMmqInput, GgmlMmqPlacement, GgmlMxFp4Repack, GgmlRouteCombine,
+    GgmlRowPlacement, GgmlSelections, GgmlSpec,
 };
 pub use gptq::{GptqLaunch, GptqLinear, GptqSpec};
 pub use latent_moe::{ReluSquaredBf16, SigmoidRouter, SigmoidRouterOutputs, SigmoidRouterSpec};

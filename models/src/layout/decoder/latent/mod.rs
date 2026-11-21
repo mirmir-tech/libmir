@@ -7,7 +7,7 @@ use std::num::NonZeroUsize;
 
 pub(super) use parse::latent_decoder;
 
-use crate::semantic::ExpertGroupLimit;
+use crate::semantic::{ExpertGroupLimit, QueryTemperature};
 
 /// A decoder whose attention layers all use multi-head latent attention.
 #[derive(Debug, Clone, PartialEq)]
@@ -34,6 +34,8 @@ pub struct LatentAttentionConfig {
     pub rotary_pairing: RotaryPairing,
     /// Softmax scale, including `YaRN`'s `mscale_all_dim` correction.
     pub scale: f64,
+    /// `llama_4_scaling_beta` over `original_max_position_embeddings`.
+    pub query_temperature: Option<QueryTemperature>,
 }
 
 impl LatentAttentionConfig {

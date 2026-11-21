@@ -5,11 +5,11 @@ mod timing;
 use std::ops::Range;
 
 use mircuda::bf16;
-use models::layout::RotaryPairing;
+use models::{layout::RotaryPairing, semantic::QueryTemperature};
 
 use self::{
     fixture::{Runtime, Values},
-    reference::{Model, Token},
+    reference::{Token, model},
 };
 use super::{
     LatentAbsorption, LatentAttention, LatentAttentionInputs, LatentAttentionLayer,
@@ -48,6 +48,7 @@ struct Scenario {
     lengths: Vec<usize>,
     launches: Vec<Vec<(usize, Range<usize>)>>,
     rope_scale: f32,
+    temperature: Option<QueryTemperature>,
     layout: LatentUpLayout,
 }
 
@@ -60,6 +61,7 @@ fn prefill_then_decode_matches_expanded_attention() -> Result<()> {
             lengths: vec![77],
             launches: vec![vec![(0, 0..76)], vec![(0, 76..77)]],
             rope_scale: 1.0,
+            temperature: None,
             layout: LatentUpLayout::Fused,
         })?;
     }
@@ -74,6 +76,8 @@ fn chunked_batch_matches_expanded_attention() -> Result<()> {
             lengths: vec![25, 9],
             launches: vec![vec![(0, 0..20)], vec![(0, 20..25), (1, 0..9)]],
             rope_scale: 0.8,
+            // Queries past positions 8, 16 and 24 scale up.
+            temperature: Some(QueryTemperature { beta: 0.5, window: 8 }),
             layout: LatentUpLayout::Split,
         })?;
     }
@@ -84,7 +88,7 @@ fn run(scenario: &Scenario) -> Result<()> {
     let runtime = Runtime::new()?;
     let spec = scenario.spec;
     let mut values = Values::new(0x5eed);
-    let model = model(spec, &mut values, scenario.rope_scale);
+    let model = model(spec, &mut values, scenario.rope_scale, scenario.temperature);
     let sequences = tokens(spec, &scenario.lengths, &mut values);
     let expected = sequences.iter().map(|sequence| model.attend(sequence)).collect::<Vec<_>>();
     let blocks = scenario.lengths.len() * MAX_BLOCKS;
@@ -115,6 +119,7 @@ fn run(scenario: &Scenario) -> Result<()> {
         epsilon: model.epsilon,
         rope_scale: model.rope_scale,
         softmax_scale: model.softmax_scale,
+        temperature: model.temperature,
     };
     for launch in &scenario.launches {
         let tokens = launch
@@ -190,29 +195,6 @@ fn tokens(spec: LatentAttentionSpec, lengths: &[usize], values: &mut Values) -> 
                 .collect()
         })
         .collect()
-}
-
-fn model(spec: LatentAttentionSpec, values: &mut Values, rope_scale: f32) -> Model {
-    let latent_norm = values
-        .take(spec.latent_rank, 0.2)
-        .into_iter()
-        .map(|value| bf16::from_f32(1.0 + value).to_f32())
-        .collect();
-    let rows = spec.heads * (spec.nope_dim + spec.value_dim);
-    let rope = f32::from(u16::try_from(spec.rope_dim).unwrap_or(1));
-    let inverse_frequencies = (0..spec.rope_dim / 2)
-        .map(|pair| 10_000_f32.powf(-2.0 * f32::from(u16::try_from(pair).unwrap_or(0)) / rope))
-        .collect();
-    Model {
-        spec,
-        latent_norm,
-        key_value_up: values.take(rows * spec.latent_rank, 0.044),
-        inverse_frequencies,
-        epsilon: 1e-6,
-        rope_scale,
-        softmax_scale: 3.0
-            / f32::from(u16::try_from(spec.nope_dim + spec.rope_dim).unwrap_or(1)).sqrt(),
-    }
 }
 
 /// GGUF's split layout of `kv_b_proj`: per head, the key rows transposed to

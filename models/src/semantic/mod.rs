@@ -7,8 +7,8 @@ mod validation;
 
 pub use attention::{
     AttentionOutputSpec, AttentionSpec, KeyValueRelation, LatentAttentionSpec, LinearAttentionSpec,
-    MixerSpec, PositionEncodingSpec, QkNormalization, RopeScalingSpec, RotaryLayoutSpec,
-    RotaryPairingSpec, RotarySpec, StateSpaceSpec, StateSpaceStateDTypeSpec,
+    MixerSpec, PositionEncodingSpec, QkNormalization, QueryTemperature, RopeScalingSpec,
+    RotaryLayoutSpec, RotaryPairingSpec, RotarySpec, StateSpaceSpec, StateSpaceStateDTypeSpec,
 };
 pub use feed_forward::{
     ActivationSpec, ExpertGroupLimit, FeedForwardSpec, RoutedExpertsSpec, RouterNormalization,

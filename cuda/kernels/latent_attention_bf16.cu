@@ -131,6 +131,14 @@ extern "C" __global__ void libmir_cuda_latent_prepare_bf16(
   }
 }
 
+// Llama 4 attention temperature: the query at `position` scales by
+// `1 + beta · ln(1 + floor(position / window))`; a zero window leaves it.
+__device__ __forceinline__ float query_scale(
+    float scale, unsigned int position, float beta, unsigned int window) {
+  if (window == 0u) return scale;
+  return scale * fmaf(beta, log1pf(float(position / window)), 1.0f);
+}
+
 __device__ __forceinline__ float2 unpack(unsigned int word) {
   __nv_bfloat162 pair;
   *reinterpret_cast<unsigned int*>(&pair) = word;
@@ -146,7 +154,8 @@ libmir_cuda_latent_attention_split_bf16(
     const unsigned int* block_tables, const unsigned int* query_sequences,
     const unsigned int* positions, float* partial_values,
     float* partial_statistics, unsigned int queries, unsigned int heads,
-    unsigned int table_stride, unsigned int block_size, float scale) {
+    unsigned int table_stride, unsigned int block_size, float scale,
+    float temperature_beta, unsigned int temperature_window) {
   __shared__ unsigned int query_words[HEADS_PER_BLOCK][ROW_WORDS];
   __shared__ unsigned int tile[TILE_TOKENS][TILE_WORDS];
   const unsigned int query_token = blockIdx.y;
@@ -169,6 +178,7 @@ libmir_cuda_latent_attention_split_bf16(
         : 0u;
   }
   const unsigned int visible = positions[query_token] + 1u;
+  scale = query_scale(scale, visible - 1u, temperature_beta, temperature_window);
   const unsigned int* table = block_tables + size_t(query_sequences[query_token]) * table_stride;
   const unsigned int chunk = (visible + splits - 1u) / splits;
   const unsigned int begin = min(visible, split * chunk);
@@ -368,7 +378,8 @@ libmir_cuda_latent_attention_mma_bf16(
     const unsigned int* block_tables, const unsigned int* query_sequences,
     const unsigned int* positions, float* partial_values,
     float* partial_statistics, unsigned int queries, unsigned int heads,
-    unsigned int table_stride, unsigned int block_size, float scale) {
+    unsigned int table_stride, unsigned int block_size, float scale,
+    float temperature_beta, unsigned int temperature_window) {
   __shared__ __align__(16) __nv_bfloat16 keys[MMA_TILE][MMA_STRIDE];
   __shared__ float scores[MMA_WARPS][MMA_ROWS][MMA_SCORE_STRIDE];
   const unsigned int query_token = blockIdx.y;
@@ -396,6 +407,7 @@ libmir_cuda_latent_attention_mma_bf16(
   }
 
   const unsigned int visible = positions[query_token] + 1u;
+  scale = query_scale(scale, visible - 1u, temperature_beta, temperature_window);
   const unsigned int* table = block_tables + size_t(query_sequences[query_token]) * table_stride;
   const unsigned int chunk = (visible + gridDim.z - 1u) / gridDim.z;
   const unsigned int begin = min(visible, split * chunk);

@@ -11,7 +11,7 @@ use mircuda::{
 
 use super::{
     super::geometry::{narrow, product, require},
-    GgmlActivations, GgmlKernelType,
+    GgmlActivations, GgmlBankRows, GgmlKernelType,
     linear::QuantizeQ8,
 };
 use crate::{Error, Result};
@@ -139,7 +139,7 @@ impl GgmlGroupedMmq {
         activations: &GgmlActivations,
         groups: GgmlMmqGroups<'_>,
         kind: GgmlKernelType,
-        weight: &DeviceBuffer<u8>,
+        (weight, bank): (&DeviceBuffer<u8>, GgmlBankRows),
         output: &mut DeviceBuffer<bf16>,
         placement: GgmlMmqPlacement,
     ) -> Result<()> {
@@ -149,9 +149,10 @@ impl GgmlGroupedMmq {
             .find(|(candidate, _)| *candidate == kind)
             .map(|(_, kernel)| kernel)
             .ok_or(Error::InvalidExecutionPlan("GGML grouped GEMM has no kernel for the bank"))?;
+        bank.check(self.rows)?;
         require(
             "GGML grouped bank",
-            product(self.experts, kind.bytes(self.rows, self.columns)?)?,
+            product(self.experts, kind.bytes(bank.expert_rows, self.columns)?)?,
             weight.len(),
         )?;
         let last = (self.rows - 1) * placement.stride + placement.offset;
@@ -182,6 +183,8 @@ impl GgmlGroupedMmq {
                 ld: narrow(placement.ld)?,
                 stride: narrow(placement.stride)?,
                 offset: narrow(placement.offset)?,
+                expert_rows: narrow(bank.expert_rows)?,
+                first_row: narrow(bank.first_row)?,
             },
         )
     }

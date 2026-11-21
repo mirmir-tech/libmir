@@ -1,9 +1,13 @@
-use models::weights::{RoutedExpertBindings, RoutedFeedForwardBindings, TensorStorage};
+use mircuda::DeviceBuffer;
+use models::weights::{
+    BindingTransform, RoutedExpertBindings, RoutedFeedForwardBindings, TensorBinding, TensorStorage,
+};
 
 use super::super::DenseSwiGluConfig;
 use crate::{
     CudaBackend, CudaTensor, CudaTensorDType, CudaTensorSet, Error, GgmlCheckpointWeight, Result,
     backend::DenseExpertWeights,
+    kernels::{GgmlBankRows, GgmlKernelType},
 };
 
 /// A layer's router and expert banks, bound at execution like the gated
@@ -24,36 +28,118 @@ pub(super) enum RoutedExperts {
 /// `experts * out` rows.
 #[derive(Clone, Debug)]
 pub(in crate::backend) struct GgmlExpertWeights {
-    pub(in crate::backend) gate: GgmlCheckpointWeight,
-    pub(in crate::backend) up: GgmlCheckpointWeight,
-    pub(in crate::backend) down: GgmlCheckpointWeight,
+    gate_up: GgmlGateUp,
+    down: GgmlCheckpointWeight,
+    hidden: usize,
+    intermediate: usize,
+}
+
+#[derive(Clone, Debug)]
+enum GgmlGateUp {
+    Separate {
+        gate: GgmlCheckpointWeight,
+        up: GgmlCheckpointWeight,
+    },
+    /// One bank whose experts hold their gate rows, then their up rows
+    /// (GGUF `ffn_gate_up_exps`).
+    Halves(GgmlCheckpointWeight),
+}
+
+/// One projection of an expert bank: its blocks and where its rows sit.
+#[derive(Clone, Copy, Debug)]
+pub(in crate::backend) struct GgmlExpertBank<'a> {
+    weight: &'a GgmlCheckpointWeight,
+    rows: GgmlBankRows,
+}
+
+impl<'a> GgmlExpertBank<'a> {
+    pub(in crate::backend) fn kind(&self) -> GgmlKernelType {
+        self.weight.kind()
+    }
+
+    pub(in crate::backend) fn operand(&self) -> (&'a DeviceBuffer<u8>, GgmlBankRows) {
+        (self.weight.blocks(), self.rows)
+    }
 }
 
 impl GgmlExpertWeights {
-    /// Separate GGML gate, up and down banks, when all three are GGML.
+    pub(in crate::backend) const fn gate(&self) -> GgmlExpertBank<'_> {
+        self.half(0)
+    }
+
+    pub(in crate::backend) const fn up(&self) -> GgmlExpertBank<'_> {
+        self.half(1)
+    }
+
+    pub(in crate::backend) const fn down(&self) -> GgmlExpertBank<'_> {
+        GgmlExpertBank {
+            weight: &self.down,
+            rows: GgmlBankRows::whole(self.hidden),
+        }
+    }
+
+    const fn half(&self, half: usize) -> GgmlExpertBank<'_> {
+        let intermediate = self.intermediate;
+        match &self.gate_up {
+            GgmlGateUp::Separate { gate, up } => GgmlExpertBank {
+                weight: if half == 0 {
+                    gate
+                } else {
+                    up
+                },
+                rows: GgmlBankRows::whole(intermediate),
+            },
+            GgmlGateUp::Halves(gate_up) => GgmlExpertBank {
+                weight: gate_up,
+                rows: GgmlBankRows {
+                    expert_rows: 2 * intermediate,
+                    first_row: half * intermediate,
+                },
+            },
+        }
+    }
+}
+
+impl GgmlExpertWeights {
+    /// GGML gate, up and down banks, separate or with gate and up in one
+    /// bank of halves, when all are GGML.
     pub(in crate::backend) fn load(
         tensors: &CudaTensorSet,
         bindings: RoutedExpertBindings<'_>,
         (experts, hidden, intermediate): (usize, usize, usize),
     ) -> Result<Option<Self>> {
-        let RoutedExpertBindings::SeparateGateUp { gate, up, down } = bindings else {
-            return Ok(None);
+        let ggml = |binding: &TensorBinding| matches!(binding.storage, TensorStorage::Ggml { .. });
+        let (gate_up, down) = match bindings {
+            RoutedExpertBindings::SeparateGateUp { gate, up, down }
+                if [gate, up, down].iter().all(|binding| ggml(binding)) =>
+            {
+                let separate = GgmlGateUp::Separate {
+                    gate: GgmlCheckpointWeight::load_binding(tensors, gate)?,
+                    up: GgmlCheckpointWeight::load_binding(tensors, up)?,
+                };
+                (separate, down)
+            },
+            RoutedExpertBindings::InterleavedGateUp { gate_up, down }
+                if ggml(gate_up)
+                    && ggml(down)
+                    && gate_up
+                        .transforms
+                        .contains(&BindingTransform::FusedGateUp { interleaved: false }) =>
+            {
+                (GgmlGateUp::Halves(GgmlCheckpointWeight::load_binding(tensors, gate_up)?), down)
+            },
+            _ => return Ok(None),
         };
-        if ![gate, up, down]
-            .iter()
-            .all(|binding| matches!(binding.storage, TensorStorage::Ggml { .. }))
-        {
-            return Ok(None);
+        match &gate_up {
+            GgmlGateUp::Separate { gate, up } => {
+                gate.validate(hidden, experts * intermediate)?;
+                up.validate(hidden, experts * intermediate)?;
+            },
+            GgmlGateUp::Halves(gate_up) => gate_up.validate(hidden, experts * 2 * intermediate)?,
         }
-        let weights = Self {
-            gate: GgmlCheckpointWeight::load_binding(tensors, gate)?,
-            up: GgmlCheckpointWeight::load_binding(tensors, up)?,
-            down: GgmlCheckpointWeight::load_binding(tensors, down)?,
-        };
-        weights.gate.validate(hidden, experts * intermediate)?;
-        weights.up.validate(hidden, experts * intermediate)?;
-        weights.down.validate(intermediate, experts * hidden)?;
-        Ok(Some(weights))
+        let down = GgmlCheckpointWeight::load_binding(tensors, down)?;
+        down.validate(intermediate, experts * hidden)?;
+        Ok(Some(Self { gate_up, down, hidden, intermediate }))
     }
 }
 

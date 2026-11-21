@@ -13,6 +13,7 @@ use super::{
     super::{GgufHeader, MetadataValue},
     decimal,
 };
+use crate::error::{ModelsError, Result};
 
 /// Inserts the latent geometry and expert routing when the metadata
 /// declares a key/value latent; returns whether it did.
@@ -111,4 +112,35 @@ pub(super) fn yarn_mscale(
     let mscale = multiplier / 0.1;
     scaling.insert("mscale_all_dim".into(), json!(mscale));
     scaling.insert("mscale".into(), json!(mscale));
+}
+
+/// llama.cpp's attention temperature (`attention.temperature_scale` over
+/// `temperature_length` positions) is Mistral 4's `llama_4_scaling_beta`
+/// over the `YaRN` window; any other window has no config form.
+pub(super) fn query_temperature(
+    header: &GgufHeader,
+    architecture: &str,
+    config: &mut Map<String, Value>,
+) -> Result<()> {
+    let key = |name: &str| format!("{architecture}.{name}");
+    let Some(beta) = header.get(&key("attention.temperature_scale")).and_then(decimal) else {
+        return Ok(());
+    };
+    let length = header.unsigned(&key("attention.temperature_length"));
+    let Some(Value::Object(scaling)) = config.get_mut("rope_scaling") else {
+        return Err(unsupported(architecture));
+    };
+    if length.is_none()
+        || length != scaling.get("original_max_position_embeddings").and_then(Value::as_u64)
+    {
+        return Err(unsupported(architecture));
+    }
+    scaling.insert("llama_4_scaling_beta".into(), json!(beta));
+    Ok(())
+}
+
+fn unsupported(architecture: &str) -> ModelsError {
+    ModelsError::InvalidGguf(format!(
+        "{architecture}: attention temperature outside the YaRN window is not yet supported"
+    ))
 }

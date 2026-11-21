@@ -53,8 +53,11 @@ fn import_config_and_template_match_the_source() -> TestResult {
     let (gguf, source) = paths()?;
     let model = GgufModel::open(&gguf)?;
     let import = Import::derive(&model)?;
-    let original: serde_json::Value =
+    let source: serde_json::Value =
         serde_json::from_slice(&std::fs::read(source.join("config.json"))?)?;
+    // Multimodal checkpoints (Mistral 3/4) nest the decoder's fields.
+    let original = source.get("text_config").unwrap_or(&source);
+    let latent = original.get("kv_lora_rank").is_some_and(|rank| !rank.is_null());
     for key in [
         "hidden_size",
         "num_hidden_layers",
@@ -66,11 +69,25 @@ fn import_config_and_template_match_the_source() -> TestResult {
         "rope_theta",
         "max_position_embeddings",
         "tie_word_embeddings",
+        // Latent attention and its experts (expert groups stay out: older
+        // `deepseek2` conversions do not record them).
+        "kv_lora_rank",
+        "q_lora_rank",
+        "qk_nope_head_dim",
+        "qk_rope_head_dim",
+        "v_head_dim",
+        "num_experts_per_tok",
+        "moe_intermediate_size",
+        "n_shared_experts",
+        "first_k_dense_replace",
+        "routed_scaling_factor",
     ] {
         let number =
             |value: &serde_json::Value| value.as_f64().or_else(|| value.as_bool().map(f64::from));
-        // Only fields the source declares (latent attention has no head_dim).
-        let Some(expected) = number(&original[key]) else {
+        // Only fields the source declares; a latent decoder's `head_dim` is
+        // its query width, which the absorbed import does not record.
+        let Some(expected) = number(&original[key]).filter(|_| !(latent && key == "head_dim"))
+        else {
             continue;
         };
         let Some(derived) = number(&import.config[key]) else {

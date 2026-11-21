@@ -4,8 +4,8 @@ use mircuda::{DeviceBuffer, Stream, bf16};
 
 use super::{GgmlExpertGeometry, Routing, checked, tiling};
 use crate::{
-    CudaBackend, Error, GgmlCheckpointWeight, Result,
-    backend::dense::routed::weights::GgmlExpertWeights,
+    CudaBackend, Error, Result,
+    backend::dense::routed::weights::{GgmlExpertBank, GgmlExpertWeights},
     kernels::{
         DenseGateUpLayout, GgmlActivations, GgmlGroupedMmq, GgmlMmqGroups, GgmlMmqInput,
         GgmlMmqPlacement, GgmlRouteCombine, SelectedDenseDispatch, SelectedDenseMoe,
@@ -173,11 +173,19 @@ impl Grouped {
             stream,
             &hidden_activations,
             groups,
-            &weights.gate,
+            weights.gate(),
             fused,
             interleaved(0),
         )?;
-        project(gate_up, stream, &hidden_activations, groups, &weights.up, fused, interleaved(1))?;
+        project(
+            gate_up,
+            stream,
+            &hidden_activations,
+            groups,
+            weights.up(),
+            fused,
+            interleaved(1),
+        )?;
         self.operation.activate_compact(stream, fused, activated)?;
         let activated = GgmlMmqInput::Rows(activated);
         self.down
@@ -188,7 +196,7 @@ impl Grouped {
             stream,
             &intermediate_activations,
             groups,
-            &weights.down,
+            weights.down(),
             projected,
             rows,
         )?;
@@ -208,19 +216,11 @@ fn project(
     stream: &Stream,
     activations: &GgmlActivations,
     groups: GgmlMmqGroups<'_>,
-    weight: &GgmlCheckpointWeight,
+    bank: GgmlExpertBank<'_>,
     output: &mut DeviceBuffer<bf16>,
     placement: GgmlMmqPlacement,
 ) -> Result<()> {
-    operation.multiply(
-        stream,
-        activations,
-        groups,
-        weight.kind(),
-        weight.blocks(),
-        output,
-        placement,
-    )
+    operation.multiply(stream, activations, groups, bank.kind(), bank.operand(), output, placement)
 }
 
 const fn poisoned() -> Error {

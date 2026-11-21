@@ -61,6 +61,7 @@ fn decode(runtime: &Runtime, heads: usize, context: usize, splits: usize) -> Res
         epsilon: 1e-6,
         rope_scale: 1.0,
         softmax_scale: 0.07,
+        temperature: None,
     };
     let query = runtime.copy_f32(&values.take(heads * 192, 1.0))?;
     let latent = runtime.copy_f32(&values.take(spec.row_width(), 1.0))?;

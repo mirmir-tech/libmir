@@ -7,8 +7,8 @@ use crate::{
     Bf16Projection, CudaBackend, CudaTensor, DensePlanRequest, DenseRole, Error, ExecutionPhase,
     Result,
     kernels::{
-        GGML_GEMV_MAX_TOKENS, GgmlActivations, GgmlDequantize, GgmlGroupedMmq, GgmlKernelType,
-        GgmlLinear, GgmlMmqGroups, GgmlMmqInput, GgmlMmqPlacement, GgmlSpec,
+        GGML_GEMV_MAX_TOKENS, GgmlActivations, GgmlBankRows, GgmlDequantize, GgmlGroupedMmq,
+        GgmlKernelType, GgmlLinear, GgmlMmqGroups, GgmlMmqInput, GgmlMmqPlacement, GgmlSpec,
     },
 };
 
@@ -199,9 +199,9 @@ impl GgmlBf16Linear {
                     stride: 1,
                     offset: 0,
                 };
+                let bank = (&weight.blocks, GgmlBankRows::whole(self.output_features));
                 operation.multiply(
-                    &self.stream, &activations, groups, weight.kind, &weight.blocks, output,
-                    placement,
+                    &self.stream, &activations, groups, weight.kind, bank, output, placement,
                 )
             },
             Path::Dense { dequantize, projection, scratch } => {

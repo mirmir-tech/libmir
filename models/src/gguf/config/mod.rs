@@ -77,6 +77,11 @@ pub fn config(model: &GgufModel) -> Result<Value> {
             "{architecture}: rope.dimension_count covers part of each head; not yet supported"
         )));
     }
+    // GGUF defines the head width as `embedding_length / head_count` unless
+    // `attention.key_length` overrides it (llama.cpp `n_embd_head_k`).
+    if !latent && let Some(head_dim) = head_dim {
+        config.entry("head_dim").or_insert_with(|| json!(head_dim));
+    }
     if let Some(vocabulary) = header.get("tokenizer.ggml.tokens").and_then(MetadataValue::as_array)
     {
         config.insert("vocab_size".into(), json!(vocabulary.len()));
@@ -97,6 +102,7 @@ pub fn config(model: &GgufModel) -> Result<Value> {
     attention::rope_scaling(header, architecture, &mut config);
     if latent {
         latent::yarn_mscale(header, architecture, &mut config);
+        latent::query_temperature(header, architecture, &mut config)?;
     }
     attention::layer_types(header, architecture, &mut config);
     let bias = model.tensors().any(|tensor| tensor.name.ends_with(".attn_q.bias"));

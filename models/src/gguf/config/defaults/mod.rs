@@ -23,9 +23,8 @@ pub(super) fn model_type(architecture: &str) -> &str {
 /// (`src/models/*.cpp`, v1.0.0) instead of declaring it.
 pub(super) fn activation(architecture: &str) -> Option<&'static str> {
     match architecture {
-        "llama" | "mistral" | "qwen2" | "qwen3" | "qwen3moe" | "gpt-oss" | "deepseek2" => {
-            Some("silu")
-        },
+        "llama" | "mistral" | "qwen2" | "qwen3" | "qwen3moe" | "gpt-oss" | "deepseek2"
+        | "mistral4" => Some("silu"),
         "gemma3" => Some("gelu_pytorch_tanh"),
         _ => None,
     }
