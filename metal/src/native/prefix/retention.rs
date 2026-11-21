@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use super::PrefixCache;
+use super::{PrefixCache, PrefixEntry, index::PrefixKey};
 
 impl PrefixCache {
     pub(in crate::native) fn reserve_batch_slots(&mut self, count: usize) -> bool {
@@ -97,6 +97,34 @@ impl PrefixCache {
     pub(in crate::native) fn reserve_miss_slot(&mut self) {
         if self.groups.len() >= self.capacity || self.resident_bytes() >= self.byte_capacity {
             self.evict_oldest();
+        }
+    }
+
+    /// A terminal snapshot that continued `entry`'s prefix holds those tokens
+    /// too (sharing its pages): lookups of the prefix move to `group`, and the
+    /// source group is evicted first. Ten llama-benchy requests that arrive in
+    /// two waves otherwise lose the second wave's contexts to the first wave's
+    /// terminals. A snapshot that cannot rewind that far (sliding layers)
+    /// leaves the source alone.
+    pub(super) fn supersede(
+        &mut self,
+        key: PrefixKey,
+        entry: PrefixEntry,
+        group: u64,
+        block_size: Option<usize>,
+        floor: usize,
+        tokens: usize,
+    ) {
+        let moved = PrefixEntry::new(group, entry.position, block_size, floor);
+        if entry.position >= tokens || moved.continuation_position < floor {
+            return;
+        }
+        self.entries.insert(key, moved);
+        if let Some(index) =
+            self.group_recency.iter().position(|value| *value == entry.memory_group)
+            && let Some(source) = self.group_recency.remove(index)
+        {
+            self.group_recency.push_front(source);
         }
     }
 

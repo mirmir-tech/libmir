@@ -41,3 +41,30 @@ fn logical_cohort_releases_only_leased_source_groups() -> Result<()> {
     assert!(leased.into_iter().all(|prefix| prefix.is_some()));
     Ok(())
 }
+
+#[test]
+fn a_continuation_supersedes_its_source_before_unused_prefixes() -> Result<()> {
+    let mut cache = PrefixCache::new(2, usize::MAX);
+    let logits = Array::from_u32(&[0], &[1])?;
+    let insert = |cache: &mut PrefixCache, tokens: &[u32]| -> Result<()> {
+        let mut state = SessionState::new(DecoderCache::new(&[], 1)?);
+        state.position = tokens.len();
+        cache.insert("model", tokens, &state, &logits, Some(2), 100)
+    };
+    // Two contexts with a trailing probe token, as llama-benchy loads them.
+    insert(&mut cache, &[1, 2, 3, 4, 9])?;
+    insert(&mut cache, &[5, 6, 7, 8, 9])?;
+    // The first context's measured request leases it and stores a terminal.
+    let leased = cache.lease_longest("model", &[1, 2, 3, 4, 7, 7])?;
+    assert_eq!(leased.map(|prefix| prefix.restored.0.position), Some(4));
+    insert(&mut cache, &[1, 2, 3, 4, 7, 7])?;
+
+    // The consumed source goes first: the waiting context survives, and the
+    // shared prefix now restores from the continuation.
+    assert_eq!(cache.groups.len(), 2);
+    let waiting = cache.lease_longest("model", &[5, 6, 7, 8, 7, 7])?;
+    assert_eq!(waiting.map(|prefix| prefix.restored.0.position), Some(4));
+    let shared = cache.lease_longest("model", &[1, 2, 3, 4, 8])?;
+    assert_eq!(shared.map(|prefix| prefix.restored.0.position), Some(4));
+    Ok(())
+}

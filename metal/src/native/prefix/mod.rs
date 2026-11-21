@@ -83,6 +83,8 @@ impl PrefixCache {
         )?;
         let floor = state.cache.prefix_floor()?;
         let block_size = block_size.filter(|size| *size > 0);
+        let superseded = longest_indexed_prefix(model, tokens, &self.entries)
+            .filter(|(_, entry)| entry.memory_group != memory_group);
         for (key, position) in indexed_prefixes(model, tokens, block_size, floor) {
             self.entries
                 .insert(key, PrefixEntry::new(memory_group, position, block_size, floor));
@@ -91,6 +93,9 @@ impl PrefixCache {
         group.terminal = Some(snapshot);
         group.bytes = group.bytes.max(bytes);
         self.touch_group(memory_group);
+        if let Some((key, entry)) = superseded {
+            self.supersede(key, entry, memory_group, block_size, floor, tokens.len());
+        }
         self.remove_unindexed_groups();
         self.enforce_limits();
         self.trace_snapshot("terminal", tokens.len());
