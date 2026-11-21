@@ -56,7 +56,8 @@ impl MetalPrefillCohort {
         if initially_evicted {
             crate::engine::clear_memory_cache()?;
         }
-        let pressure_evicted = hits > 0 && loaded.reclaim_unleased_prefixes_for_prefill()?;
+        let pending = requests.iter().map(|request| request.prompt_tokens.len()).sum();
+        let pressure_evicted = hits > 0 && loaded.reclaim_unleased_prefixes_for_prefill(pending)?;
         let evicted = initially_evicted || pressure_evicted;
         tracing::debug!(
             model = model_id,

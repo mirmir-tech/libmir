@@ -221,8 +221,18 @@ The target shape is:
   either variant or another chunk policy from these unstable timing means.
   See Workmir's `2026-09-07-uniform-prefill` and `2026-09-07-checkpoint-retention`.
 - `MIRMIR_METAL_PREFIX_CACHE_ENTRIES=<usize>` bounds device prefix snapshots;
-  the default is `16`, while `0` disables the cache. Entries are keyed by model
+  the default is `10`, while `0` disables the cache. Entries are keyed by model
   identity and the full token prefix, never by recyclable runtime block IDs.
+  32 entries made Qwen3-30B Q8_0 depth-4096 C10 context loads take 67-75 s
+  instead of 20 s: retained snapshots raise memory pressure. A terminal that
+  continued a leased prefix takes over its lookup entry and sends the source
+  group to the front of eviction (`PrefixCache::supersede`).
+- Unleased prefixes are cleared before prefill only when the cohort's prompt
+  tokens fit neither the headroom nor the arenas' free pages; their pages stay
+  in arena capacity, so clearing for the high weight share alone freed 1.8 MB
+  of 2 GB snapshots and dropped contexts queued requests were about to restore.
+  Qwen3-30B Q8_0 depth-4096 C10 prefill: 1093 to 1208 tok/s, worst TTFT 31.7
+  to 22.1 s (llama.cpp 876).
 - `MIRMIR_METAL_KV_RESERVE_TOKENS=<positive integer>` sets the minimum physical
   page arena reserved before prefill. The default is one 256-token allocation
   step; prompts larger than that reserve their complete token count. This keeps
