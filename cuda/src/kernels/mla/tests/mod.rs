@@ -20,15 +20,17 @@ use crate::Result;
 /// Block-table width of every test sequence.
 const MAX_BLOCKS: usize = 5;
 
-/// `DeepSeek` V2/V3 geometry with ten heads, so the second head group of the
-/// attention kernel is partly idle.
+/// The latent geometry of `DeepSeek` V2/V3 checkpoints. Ten heads run the
+/// warp kernel with a partly idle second head group; whole groups of
+/// sixteen run the tensor-core kernel.
 const fn spec(
+    heads: usize,
     rotary_pairing: RotaryPairing,
     max_queries: usize,
     splits: usize,
 ) -> LatentAttentionSpec {
     LatentAttentionSpec {
-        heads: 10,
+        heads,
         latent_rank: 512,
         rope_dim: 64,
         nope_dim: 128,
@@ -51,24 +53,31 @@ struct Scenario {
 
 #[test]
 fn prefill_then_decode_matches_expanded_attention() -> Result<()> {
-    run(&Scenario {
-        spec: spec(RotaryPairing::Interleaved, 76, 3),
-        lengths: vec![77],
-        launches: vec![vec![(0, 0..76)], vec![(0, 76..77)]],
-        rope_scale: 1.0,
-        layout: LatentUpLayout::Fused,
-    })
+    // One split spans three 32-row tiles, so the running maximum rescales.
+    for (heads, splits) in [(10, 3), (32, 3), (10, 1), (16, 1)] {
+        run(&Scenario {
+            spec: spec(heads, RotaryPairing::Interleaved, 76, splits),
+            lengths: vec![77],
+            launches: vec![vec![(0, 0..76)], vec![(0, 76..77)]],
+            rope_scale: 1.0,
+            layout: LatentUpLayout::Fused,
+        })?;
+    }
+    Ok(())
 }
 
 #[test]
 fn chunked_batch_matches_expanded_attention() -> Result<()> {
-    run(&Scenario {
-        spec: spec(RotaryPairing::Halves, 20, 1),
-        lengths: vec![25, 9],
-        launches: vec![vec![(0, 0..20)], vec![(0, 20..25), (1, 0..9)]],
-        rope_scale: 0.8,
-        layout: LatentUpLayout::Split,
-    })
+    for heads in [10, 16] {
+        run(&Scenario {
+            spec: spec(heads, RotaryPairing::Halves, 20, 1),
+            lengths: vec![25, 9],
+            launches: vec![vec![(0, 0..20)], vec![(0, 20..25), (1, 0..9)]],
+            rope_scale: 0.8,
+            layout: LatentUpLayout::Split,
+        })?;
+    }
+    Ok(())
 }
 
 fn run(scenario: &Scenario) -> Result<()> {

@@ -1,7 +1,8 @@
 use mircuda::{DeviceBuffer, LaunchConfig, Stream, bf16};
 
 use super::{
-    HEADS_PER_BLOCK, LatentAbsorption, LatentAttention, LatentAttentionWorkspace, LatentUpWeights,
+    HEADS_PER_BLOCK, LatentAbsorption, LatentAttention, LatentAttentionWorkspace, LatentSplit,
+    LatentUpWeights, MMA_HEADS, MMA_THREADS,
 };
 use crate::{
     Error, Result,
@@ -93,32 +94,37 @@ impl LatentAttention {
             ),
         )?;
         absorption.absorb_query(stream, inputs.query, &layer.up, workspace)?;
-        self.split.launch(
-            stream,
-            LaunchConfig {
-                grid: (
-                    narrow(spec.heads.div_ceil(HEADS_PER_BLOCK))?,
-                    narrow(tokens)?,
-                    narrow(spec.splits)?,
-                ),
-                block: (narrow(HEADS_PER_BLOCK * 32)?, 1, 1),
-                shared_memory_bytes: 0,
-            },
-            (
-                &workspace.query,
-                &*pages,
-                block_tables,
-                inputs.query_sequences,
-                inputs.positions,
-                &mut workspace.values,
-                &mut workspace.statistics,
+        let (heads_per_block, threads) = match &self.split {
+            LatentSplit::Warp(_) => (HEADS_PER_BLOCK, HEADS_PER_BLOCK * 32),
+            LatentSplit::TensorCore(_) => (MMA_HEADS, MMA_THREADS),
+        };
+        let config = LaunchConfig {
+            grid: (
+                narrow(spec.heads.div_ceil(heads_per_block))?,
                 narrow(tokens)?,
-                narrow(spec.heads)?,
-                narrow(table_stride)?,
-                narrow(spec.block_size)?,
-                layer.softmax_scale,
+                narrow(spec.splits)?,
             ),
-        )?;
+            block: (narrow(threads)?, 1, 1),
+            shared_memory_bytes: 0,
+        };
+        let arguments = (
+            &workspace.query,
+            &*pages,
+            block_tables,
+            inputs.query_sequences,
+            inputs.positions,
+            &mut workspace.values,
+            &mut workspace.statistics,
+            narrow(tokens)?,
+            narrow(spec.heads)?,
+            narrow(table_stride)?,
+            narrow(spec.block_size)?,
+            layer.softmax_scale,
+        );
+        match &self.split {
+            LatentSplit::Warp(kernel) => kernel.launch(stream, config, arguments)?,
+            LatentSplit::TensorCore(kernel) => kernel.launch(stream, config, arguments)?,
+        }
         let rows = product(tokens, spec.heads)?;
         self.merge.launch(
             stream,

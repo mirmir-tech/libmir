@@ -1466,3 +1466,20 @@ The target shape is:
   the plain prefill. `records_a_real_pixel_shuffle_tower_output` writes a real
   checkpoint's soft tokens for comparison with the CUDA recorder once a checkpoint
   that fits 64 GiB is available.
+
+## Latent attention on CUDA
+
+- Absorbed MLA attends on tensor cores (`libmir_cuda_latent_attention_mma_bf16`)
+  when heads come in groups of sixteen and the cache row splits into four
+  16-column quarters within 48 KiB of shared memory; other geometries keep
+  the warp-per-head kernel. Both write the same split partials for `merge`.
+  The tensor-core kernel cut V2-Lite GGUF prefill attention from 29.9 to
+  6.1 ms per 512 tokens and decode at 4K context from 66–72 to 35 µs per
+  layer (16 heads); BF16 parity with transformers is unchanged. Kernel tests
+  need a split longer than one 32-row tile, or rescaling bugs pass.
+- `clear_prefix_cache` drops sessions and prefix checkpoints but keeps the
+  shared-routed prefill shapes, as graph execution keeps its plans; dropping
+  them made `prefill-profile` rebuild every layer (~95 ms per 512 tokens).
+- On GB10, nsys hardware CUDA tracing drops kernels without GPU timestamps
+  (only load kernels remain). Profile with `-t cuda-sw
+  --capture-range=cudaProfilerApi --capture-range-end=stop`.

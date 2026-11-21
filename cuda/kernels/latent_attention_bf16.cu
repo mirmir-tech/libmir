@@ -303,3 +303,248 @@ extern "C" __global__ void libmir_cuda_latent_attention_merge_bf16(
     output[size_t(row) * LIBMIR_LATENT_RANK + d] = __float2bfloat16_rn(value * inverse_denominator);
   }
 }
+
+// Tensor-core variant of the split kernel for geometries whose heads come in
+// groups of sixteen: a block attends the sixteen heads of one query token,
+// which share the cache rows and the causal limit. Four warps each take a
+// quarter of the row for Q·Kᵀ (bf16 m16n8k16), sum their partial scores in
+// shared memory, and then each accumulates a quarter of the latent values
+// with P·V. It writes the split kernel's partial values and statistics.
+#define MMA_ROWS 16
+#define MMA_WARPS 4
+#define MMA_THREADS (MMA_WARPS * 32)
+#define MMA_TILE 32
+#define MMA_STRIDE (LATENT_ROW + 8)
+#define MMA_SCORE_STRIDE (MMA_TILE + 8)
+#define MMA_SHARED_BYTES \
+  (MMA_TILE * MMA_STRIDE * 2 + MMA_WARPS * MMA_ROWS * MMA_SCORE_STRIDE * 4)
+#if LATENT_ROW % (16 * MMA_WARPS) == 0 && MMA_SHARED_BYTES <= 48 * 1024
+#define MMA_K_STEPS (LATENT_ROW / (16 * MMA_WARPS))
+#define MMA_VALUE_SLICE (LIBMIR_LATENT_RANK / MMA_WARPS)
+#define MMA_VALUE_TILES (MMA_VALUE_SLICE / 8)
+static_assert(MMA_VALUE_TILES % 2 == 0, "value tiles load in pairs");
+
+__device__ __forceinline__ void mma_bf16_16x8x16(
+    float (&c)[4], const unsigned int (&a)[4], unsigned int b0, unsigned int b1) {
+  asm volatile(
+      "mma.sync.aligned.m16n8k16.row.col.f32.bf16.bf16.f32 {%0,%1,%2,%3}, "
+      "{%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};\n"
+      : "+f"(c[0]), "+f"(c[1]), "+f"(c[2]), "+f"(c[3])
+      : "r"(a[0]), "r"(a[1]), "r"(a[2]), "r"(a[3]), "r"(b0), "r"(b1));
+}
+
+__device__ __forceinline__ void load_transposed(unsigned int (&r)[4], const void* address) {
+  const unsigned int shared = static_cast<unsigned int>(__cvta_generic_to_shared(address));
+  asm volatile(
+      "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0,%1,%2,%3}, [%4];\n"
+      : "=r"(r[0]), "=r"(r[1]), "=r"(r[2]), "=r"(r[3])
+      : "r"(shared));
+}
+
+__device__ __forceinline__ void copy_async(void* target, const void* source) {
+  const unsigned int shared = static_cast<unsigned int>(__cvta_generic_to_shared(target));
+  asm volatile("cp.async.cg.shared.global [%0], [%1], 16;\n" ::"r"(shared), "l"(source));
+}
+
+__device__ __forceinline__ unsigned int pack(float low, float high) {
+  const __nv_bfloat162 pair = __floats2bfloat162_rn(low, high);
+  return *reinterpret_cast<const unsigned int*>(&pair);
+}
+
+__device__ __forceinline__ float quad_max(float value) {
+  value = fmaxf(value, __shfl_xor_sync(0xffffffffu, value, 1));
+  return fmaxf(value, __shfl_xor_sync(0xffffffffu, value, 2));
+}
+
+__device__ __forceinline__ float quad_sum(float value) {
+  value += __shfl_xor_sync(0xffffffffu, value, 1);
+  return value + __shfl_xor_sync(0xffffffffu, value, 2);
+}
+
+// Grid (head groups of sixteen, queries, splits).
+extern "C" __global__ void __launch_bounds__(MMA_THREADS)
+libmir_cuda_latent_attention_mma_bf16(
+    const __nv_bfloat16* query, const unsigned char* pages,
+    const unsigned int* block_tables, const unsigned int* query_sequences,
+    const unsigned int* positions, float* partial_values,
+    float* partial_statistics, unsigned int queries, unsigned int heads,
+    unsigned int table_stride, unsigned int block_size, float scale) {
+  __shared__ __align__(16) __nv_bfloat16 keys[MMA_TILE][MMA_STRIDE];
+  __shared__ float scores[MMA_WARPS][MMA_ROWS][MMA_SCORE_STRIDE];
+  const unsigned int query_token = blockIdx.y;
+  const unsigned int split = blockIdx.z;
+  if (query_token >= queries) return;
+  const unsigned int lane = threadIdx.x & 31u;
+  const unsigned int warp = threadIdx.x >> 5u;
+  // Fragment coordinates: rows `group` and `group + 8`, column pair `2 * pair`.
+  const unsigned int group = lane >> 2u;
+  const unsigned int pair = lane & 3u;
+  const unsigned int first_head = blockIdx.x * MMA_ROWS;
+
+  // This warp's quarter of the sixteen query rows, as A fragments.
+  const __nv_bfloat16* rows = query + (size_t(query_token) * heads + first_head) * LATENT_ROW;
+  unsigned int query_fragments[MMA_K_STEPS][4];
+#pragma unroll
+  for (unsigned int step = 0; step < MMA_K_STEPS; ++step) {
+    const unsigned int column = (warp * MMA_K_STEPS + step) * 16u + 2u * pair;
+    const __nv_bfloat16* upper = rows + group * LATENT_ROW + column;
+    const __nv_bfloat16* lower = upper + 8u * LATENT_ROW;
+    query_fragments[step][0] = *reinterpret_cast<const unsigned int*>(upper);
+    query_fragments[step][1] = *reinterpret_cast<const unsigned int*>(lower);
+    query_fragments[step][2] = *reinterpret_cast<const unsigned int*>(upper + 8);
+    query_fragments[step][3] = *reinterpret_cast<const unsigned int*>(lower + 8);
+  }
+
+  const unsigned int visible = positions[query_token] + 1u;
+  const unsigned int* table = block_tables + size_t(query_sequences[query_token]) * table_stride;
+  const unsigned int chunk = (visible + gridDim.z - 1u) / gridDim.z;
+  const unsigned int begin = min(visible, split * chunk);
+  const unsigned int end = min(visible, begin + chunk);
+  const uint4* vectors = reinterpret_cast<const uint4*>(pages);
+  float maximum[2] = {NEGATIVE_INFINITY, NEGATIVE_INFINITY};
+  float denominator[2] = {0.0f, 0.0f};
+  float values[MMA_VALUE_TILES][4];
+#pragma unroll
+  for (unsigned int tile = 0; tile < MMA_VALUE_TILES; ++tile) {
+#pragma unroll
+    for (unsigned int i = 0; i < 4; ++i) values[tile][i] = 0.0f;
+  }
+
+  for (unsigned int start = begin; start < end; start += MMA_TILE) {
+    const unsigned int count = min(MMA_TILE, end - start);
+    __syncthreads();
+    // Rows past the split stay zero: their weights are zero, and stale
+    // shared memory could hold non-finite values that zero does not cancel.
+    for (unsigned int index = threadIdx.x; index < MMA_TILE * ROW_VECTORS;
+         index += MMA_THREADS) {
+      const unsigned int local = index / ROW_VECTORS;
+      void* target = &keys[local][8u * (index % ROW_VECTORS)];
+      if (local < count) {
+        const unsigned int token = start + local;
+        const size_t page_row =
+            size_t(table[token / block_size]) * block_size + token % block_size;
+        copy_async(target, vectors + page_row * ROW_VECTORS + index % ROW_VECTORS);
+      } else {
+        *reinterpret_cast<uint4*>(target) = make_uint4(0u, 0u, 0u, 0u);
+      }
+    }
+    asm volatile("cp.async.commit_group;\ncp.async.wait_group 0;\n" ::: "memory");
+    __syncthreads();
+
+    float partial[MMA_TILE / 8][4];
+#pragma unroll
+    for (unsigned int tile = 0; tile < MMA_TILE / 8; ++tile) {
+#pragma unroll
+      for (unsigned int i = 0; i < 4; ++i) partial[tile][i] = 0.0f;
+    }
+#pragma unroll
+    for (unsigned int step = 0; step < MMA_K_STEPS; ++step) {
+      const unsigned int column = (warp * MMA_K_STEPS + step) * 16u + 2u * pair;
+#pragma unroll
+      for (unsigned int tile = 0; tile < MMA_TILE / 8; ++tile) {
+        const __nv_bfloat16* key = &keys[8u * tile + group][column];
+        mma_bf16_16x8x16(partial[tile], query_fragments[step],
+                         *reinterpret_cast<const unsigned int*>(key),
+                         *reinterpret_cast<const unsigned int*>(key + 8));
+      }
+    }
+#pragma unroll
+    for (unsigned int tile = 0; tile < MMA_TILE / 8; ++tile) {
+      const unsigned int column = 8u * tile + 2u * pair;
+      *reinterpret_cast<float2*>(&scores[warp][group][column]) =
+          make_float2(partial[tile][0], partial[tile][1]);
+      *reinterpret_cast<float2*>(&scores[warp][group + 8u][column]) =
+          make_float2(partial[tile][2], partial[tile][3]);
+    }
+    __syncthreads();
+
+    // Every warp sums the same full scores, so each holds the weights of
+    // its own value quarter without another exchange.
+    float weights[MMA_TILE / 8][4];
+    float tile_maximum[2] = {NEGATIVE_INFINITY, NEGATIVE_INFINITY};
+#pragma unroll
+    for (unsigned int tile = 0; tile < MMA_TILE / 8; ++tile) {
+#pragma unroll
+      for (unsigned int i = 0; i < 4; ++i) {
+        const unsigned int row = group + 8u * (i >> 1u);
+        const unsigned int column = 8u * tile + 2u * pair + (i & 1u);
+        float sum = 0.0f;
+#pragma unroll
+        for (unsigned int source = 0; source < MMA_WARPS; ++source) {
+          sum += scores[source][row][column];
+        }
+        weights[tile][i] = column < count ? sum * scale : NEGATIVE_INFINITY;
+        tile_maximum[i >> 1u] = fmaxf(tile_maximum[i >> 1u], weights[tile][i]);
+      }
+    }
+    float alpha[2];
+    float tile_sum[2] = {0.0f, 0.0f};
+#pragma unroll
+    for (unsigned int half = 0; half < 2; ++half) {
+      const float next = fmaxf(maximum[half], quad_max(tile_maximum[half]));
+      alpha[half] = expf(maximum[half] - next);
+      maximum[half] = next;
+    }
+#pragma unroll
+    for (unsigned int tile = 0; tile < MMA_TILE / 8; ++tile) {
+#pragma unroll
+      for (unsigned int i = 0; i < 4; ++i) {
+        weights[tile][i] = expf(weights[tile][i] - maximum[i >> 1u]);
+        tile_sum[i >> 1u] += weights[tile][i];
+      }
+    }
+#pragma unroll
+    for (unsigned int half = 0; half < 2; ++half) {
+      denominator[half] = fmaf(denominator[half], alpha[half], quad_sum(tile_sum[half]));
+    }
+#pragma unroll
+    for (unsigned int tile = 0; tile < MMA_VALUE_TILES; ++tile) {
+      values[tile][0] *= alpha[0];
+      values[tile][1] *= alpha[0];
+      values[tile][2] *= alpha[1];
+      values[tile][3] *= alpha[1];
+    }
+
+    // The score accumulators of two adjacent key tiles are the A fragment
+    // of one 16-key step; the value rows load transposed as B fragments.
+    const unsigned int matrix = lane >> 3u;
+    const unsigned int matrix_row = lane & 7u;
+#pragma unroll
+    for (unsigned int step = 0; step < MMA_TILE / 16; ++step) {
+      const unsigned int weight_fragment[4] = {
+          pack(weights[2u * step][0], weights[2u * step][1]),
+          pack(weights[2u * step][2], weights[2u * step][3]),
+          pack(weights[2u * step + 1u][0], weights[2u * step + 1u][1]),
+          pack(weights[2u * step + 1u][2], weights[2u * step + 1u][3]),
+      };
+      const unsigned int key = 16u * step + 8u * (matrix & 1u) + matrix_row;
+#pragma unroll
+      for (unsigned int tile = 0; tile < MMA_VALUE_TILES; tile += 2) {
+        const unsigned int column = warp * MMA_VALUE_SLICE + 8u * tile + 8u * (matrix >> 1u);
+        unsigned int value_fragments[4];
+        load_transposed(value_fragments, &keys[key][column]);
+        mma_bf16_16x8x16(values[tile], weight_fragment, value_fragments[0],
+                         value_fragments[1]);
+        mma_bf16_16x8x16(values[tile + 1u], weight_fragment, value_fragments[2],
+                         value_fragments[3]);
+      }
+    }
+  }
+
+#pragma unroll
+  for (unsigned int half = 0; half < 2; ++half) {
+    const unsigned int head = first_head + group + 8u * half;
+    const size_t row = (size_t(split) * queries + query_token) * heads + head;
+    float* target = partial_values + row * LIBMIR_LATENT_RANK + warp * MMA_VALUE_SLICE;
+#pragma unroll
+    for (unsigned int tile = 0; tile < MMA_VALUE_TILES; ++tile) {
+      *reinterpret_cast<float2*>(target + 8u * tile + 2u * pair) =
+          make_float2(values[tile][2u * half], values[tile][2u * half + 1u]);
+    }
+    if (warp == 0u && pair == 0u) {
+      partial_statistics[2u * row] = maximum[half];
+      partial_statistics[2u * row + 1u] = denominator[half];
+    }
+  }
+}
+#endif

@@ -196,10 +196,11 @@ impl GenerationExecution for MixedMixerExecution {
     }
 
     fn clear_sessions(&mut self) {
-        self.combined.clear();
+        // Session state and its prefix checkpoints go; prefill shapes are
+        // session-free scratch and stay, as graph execution keeps its plans,
+        // so the next prefill does not rebuild every layer's kernels.
         self.sessions.clear();
         self.decode_batches.clear();
-        self.prefill_batches.clear();
         self.checkpoints.clear();
     }
 

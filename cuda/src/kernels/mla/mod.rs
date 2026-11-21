@@ -44,6 +44,16 @@ cuda_export!(
 );
 
 cuda_export!(
+    pub(crate) LatentMmaKernel = "libmir_cuda_latent_attention_mma_bf16"(
+        query: &DeviceBuffer<bf16>, pages: &DeviceBuffer<u8>,
+        block_tables: &DeviceBuffer<u32>, query_sequences: &DeviceBuffer<u32>,
+        positions: &DeviceBuffer<u32>, partial_values: &mut DeviceBuffer<f32>,
+        partial_statistics: &mut DeviceBuffer<f32>, queries: u32, heads: u32,
+        table_stride: u32, block_size: u32, scale: f32,
+    )
+);
+
+cuda_export!(
     pub(crate) LatentMergeKernel = "libmir_cuda_latent_attention_merge_bf16"(
         partial_values: &DeviceBuffer<f32>, partial_statistics: &DeviceBuffer<f32>,
         output: &mut DeviceBuffer<bf16>, rows: u32, splits: u32,
@@ -53,6 +63,9 @@ cuda_export!(
 /// Heads one attention block serves; it must match `HEADS_PER_BLOCK` in the
 /// kernel source.
 const HEADS_PER_BLOCK: usize = 8;
+/// Heads of one tensor-core block (`MMA_ROWS`) and its threads.
+const MMA_HEADS: usize = 16;
+const MMA_THREADS: usize = 128;
 
 /// Fixed geometry of one latent attention layer and its execution limits.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -105,13 +118,24 @@ impl LatentAttentionSpec {
             Err(Error::InvalidPagedKv("invalid latent attention geometry"))
         }
     }
+
+    /// Whether the tensor-core kernel serves this geometry: whole groups of
+    /// sixteen heads, a row split into four 16-column quarters, and its
+    /// key tile and score exchange in 48 KiB of static shared memory (as the
+    /// kernel source's `#if` requires).
+    const fn tensor_cores(&self) -> bool {
+        let row = self.row_width();
+        self.heads.is_multiple_of(MMA_HEADS)
+            && row.is_multiple_of(64)
+            && 32 * (row + 8) * 2 + 4 * MMA_HEADS * 40 * 4 <= 48 * 1024
+    }
 }
 
 /// Compiled latent attention kernels for one [`LatentAttentionSpec`].
 #[derive(Clone, Debug)]
 pub struct LatentAttention {
     prepare: TypedKernel<LatentPrepareKernel>,
-    split: TypedKernel<LatentSplitKernel>,
+    split: LatentSplit,
     merge: TypedKernel<LatentMergeKernel>,
     spec: LatentAttentionSpec,
 }
@@ -134,7 +158,11 @@ impl LatentAttention {
         let module = compiler.compile(source, &options)?;
         Ok(Self {
             prepare: module.kernel()?,
-            split: module.kernel()?,
+            split: if spec.tensor_cores() {
+                LatentSplit::TensorCore(module.kernel()?)
+            } else {
+                LatentSplit::Warp(module.kernel()?)
+            },
             merge: module.kernel()?,
             spec,
         })
@@ -161,6 +189,15 @@ impl LatentAttention {
             statistics: pool.allocate(stream, product(partials, 2)?)?,
         })
     }
+}
+
+/// The kernel that attends every query row over its split of the cache.
+#[derive(Clone, Debug)]
+enum LatentSplit {
+    /// A warp per head, eight heads per block.
+    Warp(TypedKernel<LatentSplitKernel>),
+    /// Sixteen heads per block on tensor cores.
+    TensorCore(TypedKernel<LatentMmaKernel>),
 }
 
 /// Scratch the latent attention pipeline writes between its stages.
