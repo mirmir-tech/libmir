@@ -31,12 +31,17 @@ impl LoadedModel {
         // One token makes every sliding window look unbounded; a long-prompt
         // average charges windows once (Gemma: 225 KB/token at 1, 33 KB at 16k).
         let kv_bytes_per_token = self.kv_rate_bytes_per_token()?;
-        let budgets = prefill_token_budgets(memory, kv_bytes_per_token);
+        // Arenas keep their high-water capacity inside `active`: their free
+        // pages take new K/V without allocating.
+        let page_size = self.stream.config().kv_cache.block_size.max(1);
+        let reusable_tokens = self.allocated_page_headroom()?.saturating_mul(page_size);
+        let budgets = prefill_token_budgets(memory, kv_bytes_per_token, reusable_tokens);
         tracing::debug!(
             active_bytes = memory.active,
             cached_bytes = memory.cached,
             usable_bytes = usable_memory(memory),
             kv_bytes_per_token,
+            reusable_tokens,
             max_wave_tokens = budgets.0,
             max_cohort_tokens = budgets.1,
             "updated memory-bounded Metal prefill limits"
@@ -105,6 +110,7 @@ fn prefill_reserve(usable: usize) -> usize {
 fn prefill_token_budgets(
     memory: crate::engine::MemoryStats,
     kv_bytes_per_token: usize,
+    reusable_tokens: usize,
 ) -> (usize, usize) {
     let usable = usable_memory(memory);
     if usable == 0 {
@@ -115,8 +121,14 @@ fn prefill_token_budgets(
     let kv_bytes = kv_bytes_per_token.max(1);
     // Workspace scales with a chunk, not with the whole prompt: sizing waves by
     // sixteen prompt-length copies admitted one 32k row at a time.
-    let cohort_tokens = headroom.checked_div(kv_bytes).unwrap_or(0).max(1);
-    let wave_tokens = (cohort_tokens / PREFILL_WAVE_HEADROOM_DIVISOR).max(1);
+    let fresh_tokens = headroom.checked_div(kv_bytes).unwrap_or(0);
+    // Free arena pages are already allocated (they count in `active`), so they
+    // take whole-prompt K/V without the wave's headroom share: Qwen3-30B Q8_0
+    // at depth 4096 C10 otherwise prefilled four of ten rows one at a time.
+    let cohort_tokens = fresh_tokens.saturating_add(reusable_tokens).max(1);
+    let wave_tokens = (fresh_tokens / PREFILL_WAVE_HEADROOM_DIVISOR)
+        .saturating_add(reusable_tokens)
+        .max(1);
     (wave_tokens, cohort_tokens)
 }
 
@@ -173,16 +185,21 @@ mod tests {
             recommended: Some(56 * GIB),
         };
         let pressured = crate::engine::MemoryStats { active: 38 * GIB, ..roomy };
-        let roomy_budget = prefill_token_budgets(roomy, 20 * 1024);
-        let pressured_budget = prefill_token_budgets(pressured, 20 * 1024);
+        let roomy_budget = prefill_token_budgets(roomy, 20 * 1024, 0);
+        let pressured_budget = prefill_token_budgets(pressured, 20 * 1024, 0);
         let cached_budget = prefill_token_budgets(
             crate::engine::MemoryStats { cached: 8 * GIB, ..roomy },
             20 * 1024,
+            0,
         );
         assert!(roomy_budget.0 > pressured_budget.0);
         assert!(roomy_budget.1 > pressured_budget.1);
         assert!(roomy_budget.1 >= roomy_budget.0 * PREFILL_WAVE_HEADROOM_DIVISOR);
         assert_eq!(cached_budget, roomy_budget);
+        // Free arena pages extend both budgets even without fresh headroom.
+        let full = crate::engine::MemoryStats { active: 56 * GIB, ..roomy };
+        assert_eq!(prefill_token_budgets(full, 20 * 1024, 0), (1, 1));
+        assert_eq!(prefill_token_budgets(full, 20 * 1024, 8192), (8192, 8192));
     }
 
     #[test]
