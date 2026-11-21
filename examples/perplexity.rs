@@ -6,9 +6,10 @@
 //! the tokens before it.
 //!
 //! Usage: `perplexity <model> <text> [chunks=N] [context=N] [prefill=N]
-//! [bos=ID]`, where `prefill` sets the CUDA or Metal prefill chunk in tokens
-//! and `bos` starts the text and replaces each chunk's first token, as
-//! `llama-perplexity` does for models whose vocabulary adds a BOS token.
+//! [reserve=PERCENT] [bos=ID]`, where `prefill` sets the CUDA or Metal prefill
+//! chunk in tokens and `bos` starts the text and replaces each chunk's first
+//! token, as `llama-perplexity` does for models whose vocabulary adds a BOS
+//! token.
 #![allow(clippy::print_stdout)]
 
 use std::{env, fs, io::Write, path::PathBuf};
@@ -30,6 +31,10 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             chunks = value.parse()?;
         } else if let Some(value) = option.strip_prefix("bos=") {
             bos = Some(value.parse::<u32>()?);
+        } else if let Some(value) = option.strip_prefix("reserve=") {
+            // Platform reserve as a percentage of memory (mirmir defaults to
+            // 1).
+            config.memory.reserve_percent = Some(value.parse()?);
         } else if let Some(value) = option.strip_prefix("context=") {
             context = value.parse()?;
         } else if let Some(value) = option.strip_prefix("prefill=") {

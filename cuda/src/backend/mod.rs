@@ -167,6 +167,7 @@ struct CudaRuntime {
     >,
     latent_moe_scratch:
         scratch_pool::ScratchPool<latent_moe::LatentMoeScratchKey, latent_moe::LatentMoeScratch>,
+    latent_attention_scratch: scratch_pool::ScratchPool<mla::LatentScratchKey, mla::LatentScratch>,
     mamba2_scratch: scratch_pool::ScratchPool<
         state_space_hybrid::MixerScratchKey,
         state_space_hybrid::MixerScratch,

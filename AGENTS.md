@@ -1489,6 +1489,10 @@ The target shape is:
   6.1 ms per 512 tokens and decode at 4K context from 66–72 to 35 µs per
   layer (16 heads); BF16 parity with transformers is unchanged. Kernel tests
   need a split longer than one 32-row tile, or rescaling bugs pass.
+- Latent layers of one shape share their attention workspace and query,
+  latent and output buffers through the runtime's `ScratchPool`, as other
+  mixers do. Per-layer copies took about 1.3 GB per layer for a 2,048-token
+  chunk at 128 heads, so DeepSeek-V2.5 (60 layers) ran out of memory.
 - `clear_prefix_cache` drops sessions and prefix checkpoints but keeps the
   shared-routed prefill shapes, as graph execution keeps its plans; dropping
   them made `prefill-profile` rebuild every layer (~95 ms per 512 tokens).

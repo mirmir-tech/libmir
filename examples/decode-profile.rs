@@ -27,6 +27,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     runtime.scheduler.max_batch_requests = 1;
     runtime.scheduler.decode_batch_wait_us = 0;
     config.configure(&mut runtime);
+    // The platform reserve, as a percentage of memory; mirmir defaults to 1.
+    if let Ok(percent) = std::env::var("MIRMIR_MEMORY_RESERVE_PERCENT") {
+        runtime.memory.reserve_percent = Some(percent.parse()?);
+    }
     let model =
         Library::new(runtime).load(&config.model, GenerationOverrides::default(), &mut |_| {})?;
     let vocab_size = model

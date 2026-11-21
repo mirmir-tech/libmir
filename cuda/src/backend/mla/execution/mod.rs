@@ -3,16 +3,19 @@ mod session;
 
 use mircuda::{DeviceBuffer, bf16};
 
-use super::{CudaLatentAttentionLayer, LatentGeometry, weights::QueryWeights};
+use super::{
+    CudaLatentAttentionLayer, LatentGeometry, LatentScratch, LatentScratchKey,
+    weights::QueryWeights,
+};
 use crate::{
     CudaBackend, DenseRole, Error, ExecutionPhase, PagedKvCache, Result,
     backend::{
         layer_scratch::SharedLayerScratch, linear::CheckpointProjection,
-        state_space_hybrid::TailExecution,
+        scratch_pool::SharedScratch, state_space_hybrid::TailExecution,
     },
     kernels::{
         LatentAbsorption, LatentAttention, LatentAttentionInputs, LatentAttentionLayer,
-        LatentAttentionWorkspace, LatentCacheView, ShiftedRmsNorm,
+        LatentCacheView, ShiftedRmsNorm,
     },
 };
 
@@ -29,8 +32,8 @@ pub struct CudaLatentAttentionExecution {
     output: CheckpointProjection,
     attention: LatentAttention,
     absorption: LatentAbsorption,
-    workspace: LatentAttentionWorkspace,
-    buffers: Buffers,
+    /// Buffers shared by every latent layer of this shape.
+    latent_scratch: SharedScratch<LatentScratch>,
     tail: TailExecution,
     scratch: SharedLayerScratch,
     /// The sessions' shared pages, bound by the host-side packed preparation.
@@ -50,18 +53,6 @@ struct LatentQuery {
     down: CheckpointProjection,
     norm: ShiftedRmsNorm,
     up: CheckpointProjection,
-    /// `[tokens, query_rank]` before and after its norm.
-    latent: [DeviceBuffer<bf16>; 2],
-}
-
-#[derive(Debug)]
-struct Buffers {
-    /// `[tokens, heads, nope + rope]`.
-    query: DeviceBuffer<bf16>,
-    /// `[tokens, latent + rope]`.
-    latent: DeviceBuffer<bf16>,
-    /// `[tokens, heads · value]`.
-    attended: DeviceBuffer<bf16>,
 }
 
 /// Where the rows of one execution live in the cache.
@@ -107,13 +98,17 @@ impl CudaLatentAttentionExecution {
                         0.0,
                     )?,
                     up: projection(rank, geometry.query_width(), DenseRole::AttentionQkv, up)?,
-                    latent: [allocate(backend, tokens * rank)?, allocate(backend, tokens * rank)?],
                 }))
             },
         };
         let spec = geometry.kernel_spec(tokens, layer.block_size);
         let attention = LatentAttention::compile(&backend.inner.compiler, spec)?;
         let attended = geometry.heads * geometry.value_dim;
+        let key = LatentScratchKey::new(&geometry, &attention, tokens);
+        let latent_scratch = backend
+            .inner
+            .latent_attention_scratch
+            .acquire(key.clone(), || LatentScratch::new(backend, &key, &attention))?;
         Ok(Self {
             backend: backend.clone(),
             geometry,
@@ -138,7 +133,7 @@ impl CudaLatentAttentionExecution {
                 DenseRole::AttentionOutput,
                 &layer.weights.output,
             )?,
-            workspace: attention.workspace(&backend.inner.pool, &backend.inner.stream)?,
+            latent_scratch,
             absorption: LatentAbsorption::new(
                 &backend.inner.context,
                 &backend.inner.stream,
@@ -147,11 +142,6 @@ impl CudaLatentAttentionExecution {
                 tokens,
             )?,
             attention,
-            buffers: Buffers {
-                query: allocate(backend, tokens * geometry.query_width())?,
-                latent: allocate(backend, tokens * geometry.row_width())?,
-                attended: allocate(backend, tokens * attended)?,
-            },
             tail: TailExecution::new(
                 backend,
                 layer.norm,
@@ -177,6 +167,15 @@ impl CudaLatentAttentionExecution {
         let stream = self.backend.inner.stream.clone();
         let mut guard = self.scratch.lock()?;
         let scratch = &mut *guard;
+        let latent_handle = self.latent_scratch.clone_handle();
+        let mut latent_guard = latent_handle.lock()?;
+        let LatentScratch {
+            workspace,
+            query: query_rows,
+            latent,
+            attended,
+            query_latent,
+        } = &mut *latent_guard;
         let weights = &self.layer.weights;
         self.input_norm.execute(
             &stream,
@@ -186,20 +185,21 @@ impl CudaLatentAttentionExecution {
         )?;
         match &mut self.query {
             Query::Direct(projection) => {
-                projection.execute(&scratch.normalized, &mut self.buffers.query)?;
+                projection.execute(&scratch.normalized, query_rows)?;
             },
             Query::Latent(query) => {
-                let LatentQuery { down, norm, up, latent } = &mut **query;
-                let QueryWeights::Latent(query_weights) = &weights.query else {
+                let LatentQuery { down, norm, up } = &mut **query;
+                let (QueryWeights::Latent(query_weights), Some([raw, normalized])) =
+                    (&weights.query, query_latent)
+                else {
                     return Err(Error::InvalidDecoderKernel("query latent weights are missing"));
                 };
-                let [raw, normalized] = latent;
                 down.execute(&scratch.normalized, raw)?;
                 norm.execute(&stream, raw, bf16_buffer(&query_weights.norm)?, normalized)?;
-                up.execute(normalized, &mut self.buffers.query)?;
+                up.execute(normalized, query_rows)?;
             },
         }
-        self.key_value_down.execute(&scratch.normalized, &mut self.buffers.latent)?;
+        self.key_value_down.execute(&scratch.normalized, latent)?;
         self.attention.execute(
             &stream,
             &mut self.absorption,
@@ -217,22 +217,18 @@ impl CudaLatentAttentionExecution {
                 table_stride: placement.table_stride,
             },
             LatentAttentionInputs {
-                query: &self.buffers.query,
-                latent: &self.buffers.latent,
+                query: query_rows,
+                latent,
                 positions: placement.positions,
                 slot_mapping: placement.slot_mapping,
                 query_sequences: placement.sequences,
             },
-            &mut self.workspace,
-            &mut self.buffers.attended,
+            workspace,
+            attended,
         )?;
-        self.output.execute(&self.buffers.attended, &mut scratch.attention)?;
+        self.output.execute(attended, &mut scratch.attention)?;
         self.tail.execute(input, scratch, output)
     }
-}
-
-fn allocate(backend: &CudaBackend, elements: usize) -> Result<DeviceBuffer<bf16>> {
-    Ok(backend.inner.pool.allocate(&backend.inner.stream, elements)?)
 }
 
 fn bf16_buffer(tensor: &crate::CudaTensor) -> Result<&DeviceBuffer<bf16>> {

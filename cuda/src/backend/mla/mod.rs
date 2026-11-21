@@ -6,9 +6,11 @@
 mod execution;
 mod feed_forward;
 mod rotary;
+mod scratch;
 mod weights;
 
 pub use execution::CudaLatentAttentionExecution;
+pub(in crate::backend) use scratch::{LatentScratch, LatentScratchKey};
 use mircuda::DeviceBuffer;
 use models::{
     layout::{DecoderConfig, RotaryPairing},
