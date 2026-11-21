@@ -1,5 +1,5 @@
-//! Tiktoken families: split pattern and special-token block, which their
-//! Python tokenizers define rather than a data file.
+//! Tiktoken schemes: the split pattern and special-token block a Python
+//! tokenizer defines in code rather than in a data file.
 
 use std::{collections::HashMap, fs, path::Path};
 
@@ -7,17 +7,18 @@ use serde_json::Value;
 
 use crate::error::{ModelsError, Result};
 
-/// A tiktoken tokenizer libmir rebuilds.
+/// A tiktoken split and special-token scheme libmir rebuilds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TikTokenFamily {
-    /// Moonshot's `TikTokenTokenizer` (`Moonlight`, `Kimi`): Han runs,
-    /// cased words with contractions, up to three digits, punctuation,
-    /// newlines and spaces; 256 special tokens after the ranks.
-    Moonshot,
+pub enum TikTokenScheme {
+    /// [`HAN_RUNS_CASED_WORDS`] with 256 special tokens after the ranks.
+    HanRunsCasedWords,
 }
 
-/// `tokenization_moonshot.py`'s `pat_str`.
-const MOONSHOT_PATTERN: &str = concat!(
+/// Han runs split off first, then the o200k word classes with Han
+/// excluded: cased words with contractions, up to three digits,
+/// punctuation, newlines and spaces. Source: `pat_str` of
+/// `tokenization_moonshot.py`.
+pub const HAN_RUNS_CASED_WORDS: &str = concat!(
     r"[\p{Han}]+",
     r"|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]*[\p{Ll}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?",
     r"|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]+[\p{Ll}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?",
@@ -28,30 +29,30 @@ const MOONSHOT_PATTERN: &str = concat!(
     r"|\s+",
 );
 
-impl TikTokenFamily {
-    /// The family the checkpoint's `tokenizer_config.json` names.
+impl TikTokenScheme {
+    /// The scheme the checkpoint's `tokenizer_config.json` class defines.
     pub fn from_config(path: Option<&Path>) -> Result<Self> {
         let config = config(path)?;
         match config.get("tokenizer_class").and_then(Value::as_str) {
-            Some("TikTokenTokenizer") => Ok(Self::Moonshot),
+            Some("TikTokenTokenizer") => Ok(Self::HanRunsCasedWords),
             other => Err(ModelsError::InvalidConfig(format!(
-                "no supported tiktoken family for tokenizer class {other:?}"
+                "no supported tiktoken scheme for tokenizer class {other:?}"
             ))),
         }
     }
 
     pub const fn pattern(self) -> &'static str {
         match self {
-            Self::Moonshot => MOONSHOT_PATTERN,
+            Self::HanRunsCasedWords => HAN_RUNS_CASED_WORDS,
         }
     }
 
-    /// Special tokens that follow the ranks. Moonshot's Python tokenizer
-    /// reserves two more past them, which its checkpoints' embeddings do not
-    /// cover, so no model can take them.
+    /// Special tokens that follow the ranks. The defining Python tokenizer
+    /// reserves two more past them, which the embeddings do not cover, so
+    /// no model can take them.
     pub const fn special_count(self) -> u32 {
         match self {
-            Self::Moonshot => 256,
+            Self::HanRunsCasedWords => 256,
         }
     }
 }

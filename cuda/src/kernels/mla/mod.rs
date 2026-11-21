@@ -12,7 +12,7 @@ mod execute;
 #[cfg(test)]
 mod tests;
 
-pub use absorb::LatentAbsorption;
+pub use absorb::{LatentAbsorption, LatentUpLayout, LatentUpWeights};
 pub use execute::{LatentAttentionInputs, LatentAttentionLayer, LatentCacheView};
 use mircuda::{
     CompileOptions, Compiler, DeviceBuffer, MemoryPool, Stream, TypedKernel, bf16, cuda_export,
@@ -94,6 +94,8 @@ impl LatentAttentionSpec {
             && self.block_size > 0
             && self.max_queries > 0
             && self.splits > 0
+            // The merge kernel weighs at most 64 splits.
+            && self.splits <= 64
             // The kernel stages eight query rows and a 32-row tile in 48 KiB
             // of static shared memory.
             && (HEADS_PER_BLOCK + 32) * (self.row_width() + 2) * 2 <= 48 * 1024;

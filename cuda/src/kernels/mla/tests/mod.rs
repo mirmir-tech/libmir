@@ -13,7 +13,7 @@ use self::{
 };
 use super::{
     LatentAbsorption, LatentAttention, LatentAttentionInputs, LatentAttentionLayer,
-    LatentAttentionSpec, LatentCacheView,
+    LatentAttentionSpec, LatentCacheView, LatentUpLayout, LatentUpWeights,
 };
 use crate::Result;
 
@@ -46,6 +46,7 @@ struct Scenario {
     lengths: Vec<usize>,
     launches: Vec<Vec<(usize, Range<usize>)>>,
     rope_scale: f32,
+    layout: LatentUpLayout,
 }
 
 #[test]
@@ -55,6 +56,7 @@ fn prefill_then_decode_matches_expanded_attention() -> Result<()> {
         lengths: vec![77],
         launches: vec![vec![(0, 0..76)], vec![(0, 76..77)]],
         rope_scale: 1.0,
+        layout: LatentUpLayout::Fused,
     })
 }
 
@@ -65,6 +67,7 @@ fn chunked_batch_matches_expanded_attention() -> Result<()> {
         lengths: vec![25, 9],
         launches: vec![vec![(0, 0..20)], vec![(0, 20..25), (1, 0..9)]],
         rope_scale: 0.8,
+        layout: LatentUpLayout::Split,
     })
 }
 
@@ -73,18 +76,7 @@ fn run(scenario: &Scenario) -> Result<()> {
     let spec = scenario.spec;
     let mut values = Values::new(0x5eed);
     let model = model(spec, &mut values, scenario.rope_scale);
-    let sequences = scenario
-        .lengths
-        .iter()
-        .map(|length| {
-            (0..*length)
-                .map(|_| Token {
-                    query: values.take(spec.heads * (spec.nope_dim + spec.rope_dim), 1.0),
-                    latent: values.take(spec.row_width(), 1.0),
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
+    let sequences = tokens(spec, &scenario.lengths, &mut values);
     let expected = sequences.iter().map(|sequence| model.attend(sequence)).collect::<Vec<_>>();
     let blocks = scenario.lengths.len() * MAX_BLOCKS;
     // Scatter logical blocks over the pool in reverse so table lookups matter.
@@ -97,11 +89,19 @@ fn run(scenario: &Scenario) -> Result<()> {
     let mut pages = runtime.pool.allocate_zeroed(&runtime.stream, spec.page_bytes(blocks)?)?;
     let block_tables = runtime.copy(&table)?;
     let latent_norm = runtime.copy_f32(&model.latent_norm)?;
-    let key_value_up = runtime.copy_f32(&model.key_value_up)?;
+    let (key_up, value_up) = split_up(spec, &model.key_value_up);
+    let (key_value_up, key_up, value_up) = (
+        runtime.copy_f32(&model.key_value_up)?,
+        runtime.copy_f32(&key_up)?,
+        runtime.copy_f32(&value_up)?,
+    );
     let inverse_frequencies = runtime.copy(&model.inverse_frequencies)?;
     let layer = LatentAttentionLayer {
         latent_norm: &latent_norm,
-        key_value_up: &key_value_up,
+        up: match scenario.layout {
+            LatentUpLayout::Fused => LatentUpWeights::Fused(&key_value_up),
+            LatentUpLayout::Split => LatentUpWeights::Split { key: &key_up, value: &value_up },
+        },
         inverse_frequencies: &inverse_frequencies,
         epsilon: model.epsilon,
         rope_scale: model.rope_scale,
@@ -128,8 +128,13 @@ fn run(scenario: &Scenario) -> Result<()> {
         let [positions, slot_mapping, query_sequences] =
             [runtime.copy(&host[0])?, runtime.copy(&host[1])?, runtime.copy(&host[2])?];
         let (query, latent) = (runtime.copy_f32(&query)?, runtime.copy_f32(&latent)?);
-        let mut absorption =
-            LatentAbsorption::new(&runtime.context, &runtime.stream, spec, tokens.len())?;
+        let mut absorption = LatentAbsorption::new(
+            &runtime.context,
+            &runtime.stream,
+            spec,
+            scenario.layout,
+            tokens.len(),
+        )?;
         let width = spec.heads * spec.value_dim;
         let mut output = runtime.pool.allocate::<bf16>(&runtime.stream, tokens.len() * width)?;
         attention.execute(
@@ -163,6 +168,21 @@ fn run(scenario: &Scenario) -> Result<()> {
     Ok(())
 }
 
+/// Random query and latent rows of every token of sequences of `lengths`.
+fn tokens(spec: LatentAttentionSpec, lengths: &[usize], values: &mut Values) -> Vec<Vec<Token>> {
+    lengths
+        .iter()
+        .map(|length| {
+            (0..*length)
+                .map(|_| Token {
+                    query: values.take(spec.heads * (spec.nope_dim + spec.rope_dim), 1.0),
+                    latent: values.take(spec.row_width(), 1.0),
+                })
+                .collect()
+        })
+        .collect()
+}
+
 fn model(spec: LatentAttentionSpec, values: &mut Values, rope_scale: f32) -> Model {
     let latent_norm = values
         .take(spec.latent_rank, 0.2)
@@ -184,6 +204,20 @@ fn model(spec: LatentAttentionSpec, values: &mut Values, rope_scale: f32) -> Mod
         softmax_scale: 3.0
             / f32::from(u16::try_from(spec.nope_dim + spec.rope_dim).unwrap_or(1)).sqrt(),
     }
+}
+
+/// GGUF's split layout of `kv_b_proj`: per head, the key rows transposed to
+/// `[latent, nope]` and the value rows `[value, latent]`.
+fn split_up(spec: LatentAttentionSpec, fused: &[f32]) -> (Vec<f32>, Vec<f32>) {
+    let (rank, nope, value) = (spec.latent_rank, spec.nope_dim, spec.value_dim);
+    let row = |head: usize, index: usize| &fused[(head * (nope + value) + index) * rank..][..rank];
+    let mut key = Vec::with_capacity(spec.heads * rank * nope);
+    let mut values = Vec::with_capacity(spec.heads * value * rank);
+    for head in 0..spec.heads {
+        key.extend((0..rank).flat_map(|c| (0..nope).map(move |d| row(head, d)[c])));
+        values.extend((0..value).flat_map(|e| row(head, nope + e).iter().copied()));
+    }
+    (key, values)
 }
 
 /// BF16 latent, query and output rounding stay far below a 3 % error of the

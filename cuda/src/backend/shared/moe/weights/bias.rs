@@ -6,7 +6,7 @@ use models::weights::TensorBinding;
 
 use crate::{CudaBackend, CudaTensorSet, Error, Result};
 
-/// The bias as FP32; a BF16 one (`Moonlight`) is widened once at load.
+/// The bias as FP32; a BF16 one is widened once at load.
 pub(super) fn correction_bias(
     backend: &CudaBackend,
     tensors: &CudaTensorSet,

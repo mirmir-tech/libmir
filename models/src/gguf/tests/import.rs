@@ -69,8 +69,11 @@ fn import_config_and_template_match_the_source() -> TestResult {
     ] {
         let number =
             |value: &serde_json::Value| value.as_f64().or_else(|| value.as_bool().map(f64::from));
-        let (Some(derived), Some(expected)) = (number(&import.config[key]), number(&original[key]))
-        else {
+        // Only fields the source declares (latent attention has no head_dim).
+        let Some(expected) = number(&original[key]) else {
+            continue;
+        };
+        let Some(derived) = number(&import.config[key]) else {
             return Err(format!("{key} is missing").into());
         };
         assert!(

@@ -1,4 +1,4 @@
-//! A Moonshot tiktoken checkpoint (Moonlight, Kimi) tokenizes a multilingual
+//! A Han-run tiktoken checkpoint (Moonlight) tokenizes a multilingual
 //! corpus to the ids the `tiktoken` package produces, written by Workmir's
 //! `benchmarks/tools/mla/tiktoken_oracle.py`, and decodes them back.
 
@@ -10,7 +10,7 @@ use libmir_models::{
 use serde_json::Value;
 
 #[test]
-#[ignore = "requires a Moonshot tiktoken checkpoint and its reference; set LIBMIR_TIKTOKEN_MODEL and LIBMIR_TIKTOKEN_REFERENCE"]
+#[ignore = "requires a Han-run tiktoken checkpoint (Moonlight) and its reference; set LIBMIR_TIKTOKEN_MODEL and LIBMIR_TIKTOKEN_REFERENCE"]
 fn tokenizes_like_tiktoken() -> Result<()> {
     let variable = |name: &str| {
         std::env::var_os(name).ok_or_else(|| ModelsError::InvalidConfig(format!("missing {name}")))
@@ -49,7 +49,7 @@ fn tokenizes_like_tiktoken() -> Result<()> {
 /// The chat template and tokenizer give the prompt ids the greedy oracle
 /// (`benchmarks/tools/mla/greedy_oracle.py --tiktoken`) generated from.
 #[test]
-#[ignore = "requires a Moonshot tiktoken checkpoint and its greedy reference; set LIBMIR_TIKTOKEN_MODEL and LIBMIR_TIKTOKEN_GREEDY"]
+#[ignore = "requires a Han-run tiktoken checkpoint (Moonlight) and its greedy reference; set LIBMIR_TIKTOKEN_MODEL and LIBMIR_TIKTOKEN_GREEDY"]
 fn renders_the_greedy_oracle_prompts() -> Result<()> {
     let variable = |name: &str| {
         std::env::var_os(name).ok_or_else(|| ModelsError::InvalidConfig(format!("missing {name}")))

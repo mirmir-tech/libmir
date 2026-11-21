@@ -1,8 +1,8 @@
 use mircuda::{DeviceBuffer, bf16};
 
 use crate::{
-    AffineQuantizedEmbedding, Bf16Embedding, CudaBackend, DenseRole, Error, MxFp4EmbeddingLookup,
-    Result,
+    AffineQuantizedEmbedding, Bf16Embedding, CudaBackend, DenseRole, Error, GgmlEmbeddingLookup,
+    MxFp4EmbeddingLookup, Result,
     backend::linear::{
         CheckpointProjection, CheckpointProjectionWeight, CompressedInt8Embedding,
         packed_integer_embedding,
@@ -22,6 +22,7 @@ pub(super) enum SharedRoutedEmbedding {
         vocab: usize,
     },
     MxFp4(MxFp4EmbeddingLookup),
+    Ggml(GgmlEmbeddingLookup),
     PackedInteger {
         operation: CompressedInt8Embedding,
         vocab: usize,
@@ -67,8 +68,8 @@ impl SharedRoutedEmbedding {
             CheckpointProjectionWeight::MxFp8(_) => {
                 Err(Error::InvalidExecutionPlan("shared routed embedding does not support MXFP8"))
             },
-            CheckpointProjectionWeight::Ggml(_) => {
-                Err(Error::InvalidExecutionPlan("shared routed embedding does not support GGML"))
+            CheckpointProjectionWeight::Ggml(weight) => {
+                weight.prepare_embedding(backend, 1.0).map(Self::Ggml)
             },
             CheckpointProjectionWeight::NvFp4(_)
             | CheckpointProjectionWeight::NvFp4WeightOnly(_) => {
@@ -98,18 +99,17 @@ impl SharedRoutedEmbedding {
                 operation.execute_batch(selected, 0, tokens, output)
             },
             Self::MxFp4(operation) => operation.execute_batch(selected, 0, tokens, output),
+            Self::Ggml(operation) => operation.execute_batch(selected, 0, tokens, output),
         }
     }
 
     pub(super) fn validate_token(&self, token: u32) -> Result<()> {
-        if let Self::MxFp4(operation) = self {
-            return operation.validate_token(token);
-        }
         let vocab = match self {
+            Self::MxFp4(operation) => return operation.validate_token(token),
+            Self::Ggml(operation) => return operation.validate_token(token),
             Self::Affine { vocab, .. }
             | Self::Dense { vocab, .. }
             | Self::PackedInteger { vocab, .. } => *vocab,
-            Self::MxFp4(_) => unreachable!(),
         };
         if usize::try_from(token)? < vocab {
             Ok(())

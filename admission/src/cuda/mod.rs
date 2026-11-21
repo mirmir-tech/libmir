@@ -155,8 +155,7 @@ pub enum CudaDecoderRuntime {
     ClampedRouted,
     /// Mamba-2 and attention mixers with latent routed experts (Nemotron-H).
     StateSpaceHybrid,
-    /// Multi-head latent attention with dense or shared-routed feed-forwards
-    /// (`DeepSeek` V2/V3).
+    /// Multi-head latent attention with dense or shared-routed feed-forwards.
     LatentAttention,
 }
 

@@ -10,7 +10,7 @@ const GLOBAL: [(&str, &str); 3] = [
 ];
 
 /// Per-block tensors: `blk.N.<role>` → `model.layers.N.<name>`.
-const BLOCK: [(&str, &str); 18] = [
+const BLOCK: [(&str, &str); 30] = [
     ("attn_norm", "input_layernorm"),
     ("attn_q", "self_attn.q_proj"),
     ("attn_k", "self_attn.k_proj"),
@@ -29,6 +29,20 @@ const BLOCK: [(&str, &str); 18] = [
     ("ffn_up_exps", "mlp.experts.up_proj"),
     ("ffn_down_exps", "mlp.experts.down_proj"),
     ("ffn_gate_up_exps", "mlp.experts.gate_up_proj"),
+    // Multi-head latent attention. Recent converters split
+    // `attn_kv_b` per head into the absorbed key and value up-projections.
+    ("attn_q_a", "self_attn.q_a_proj"),
+    ("attn_q_a_norm", "self_attn.q_a_layernorm"),
+    ("attn_q_b", "self_attn.q_b_proj"),
+    ("attn_kv_a_mqa", "self_attn.kv_a_proj_with_mqa"),
+    ("attn_kv_a_norm", "self_attn.kv_a_layernorm"),
+    ("attn_kv_b", "self_attn.kv_b_proj"),
+    ("attn_k_b", "self_attn.k_b_proj"),
+    ("attn_v_b", "self_attn.v_b_proj"),
+    ("ffn_gate_shexp", "mlp.shared_experts.gate_proj"),
+    ("ffn_up_shexp", "mlp.shared_experts.up_proj"),
+    ("ffn_down_shexp", "mlp.shared_experts.down_proj"),
+    ("ffn_gate_inp_shexp", "mlp.shared_expert_gate"),
 ];
 
 /// In a block with both output norms (Gemma's sandwich), `ffn_norm` is the
@@ -36,7 +50,10 @@ const BLOCK: [(&str, &str); 18] = [
 pub const SANDWICH_FEED_FORWARD_NORM: (&str, &str) = ("ffn_norm", "pre_feedforward_layernorm");
 
 /// Roles whose `SafeTensors` name carries no `.weight` suffix.
-const BARE: [(&str, &str); 1] = [("attn_sinks.weight", "self_attn.sinks")];
+const BARE: [(&str, &str); 2] = [
+    ("attn_sinks.weight", "self_attn.sinks"),
+    ("exp_probs_b.bias", "mlp.gate.e_score_correction_bias"),
+];
 
 /// The `SafeTensors` name of a GGUF tensor; `None` for a role this table does
 /// not map yet, which admission reports instead of guessing.

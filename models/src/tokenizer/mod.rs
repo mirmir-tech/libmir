@@ -11,6 +11,8 @@ pub(crate) mod protocol;
 mod reasoning;
 mod sentencepiece;
 mod tiktoken;
+
+pub(crate) use tiktoken::HAN_RUNS_CASED_WORDS;
 mod validation;
 
 pub use assets::TokenizerAssets;

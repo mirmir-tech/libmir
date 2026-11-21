@@ -9,6 +9,7 @@ use serde_json::{Map, Value, json};
 
 mod attention;
 mod defaults;
+mod latent;
 mod llama3;
 
 use super::{GgufModel, MetadataValue};
@@ -54,8 +55,14 @@ pub fn config(model: &GgufModel) -> Result<Value> {
             config.insert(field.into(), json!(value));
         }
     }
+    // Latent attention declares absorbed key/value widths and a partial
+    // rotary key; the latent mapping replaces the per-head checks below.
+    let latent = latent::latent(header, architecture, &mut config);
     let value_length = header.unsigned(&key("attention.value_length"));
-    if value_length.is_some() && value_length != header.unsigned(&key("attention.key_length")) {
+    if !latent
+        && value_length.is_some()
+        && value_length != header.unsigned(&key("attention.key_length"))
+    {
         return Err(ModelsError::InvalidGguf(format!(
             "{architecture}: attention.value_length differs from key_length; not yet supported"
         )));
@@ -65,7 +72,7 @@ pub fn config(model: &GgufModel) -> Result<Value> {
         let heads = header.unsigned(&key("attention.head_count")).filter(|&heads| heads > 0)?;
         Some(header.unsigned(&key("embedding_length"))? / heads)
     });
-    if rotary.is_some() && rotary != head_dim {
+    if !latent && rotary.is_some() && rotary != head_dim {
         return Err(ModelsError::InvalidGguf(format!(
             "{architecture}: rope.dimension_count covers part of each head; not yet supported"
         )));
@@ -88,6 +95,9 @@ pub fn config(model: &GgufModel) -> Result<Value> {
     defaults::fixed(architecture, &mut config);
     llama3::rope_scaling(model, &mut config)?;
     attention::rope_scaling(header, architecture, &mut config);
+    if latent {
+        latent::yarn_mscale(header, architecture, &mut config);
+    }
     attention::layer_types(header, architecture, &mut config);
     let bias = model.tensors().any(|tensor| tensor.name.ends_with(".attn_q.bias"));
     config.insert("attention_bias".into(), json!(bias));

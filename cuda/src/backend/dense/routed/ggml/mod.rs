@@ -3,18 +3,28 @@ mod grouped;
 
 use mircuda::{DeviceBuffer, Stream, bf16};
 
-use super::{super::DenseSwiGluConfig, weights::GgmlExpertWeights};
+use super::{super::RoutedExpertsConfig, weights::GgmlExpertWeights};
 use crate::{
-    CudaBackend, Error, Result,
+    CudaBackend, Error, GatedActivation, Result,
     kernels::{GGML_GEMV_MAX_TOKENS, GgmlKernelType},
 };
+
+/// Shape of a layer's GGML expert banks.
+#[derive(Clone, Copy, Debug)]
+pub(in crate::backend) struct GgmlExpertGeometry {
+    pub(in crate::backend) hidden: usize,
+    /// Width of one expert.
+    pub(in crate::backend) intermediate: usize,
+    pub(in crate::backend) experts: RoutedExpertsConfig,
+    pub(in crate::backend) activation: GatedActivation,
+}
 
 /// GGML expert banks for a fixed number of rows. Decode batches take one
 /// int8 GEMV per (token, expert) selection; prefill chunks sort selections
 /// by expert and run grouped int8 GEMMs over the banks. As with dense
 /// projections, the bank's type picks the kernel, since a `Q4_K_M`
 /// checkpoint mixes types across layers.
-pub(super) struct GgmlRoutedExperts {
+pub(in crate::backend) struct GgmlRoutedExperts {
     path: Path,
     stream: Stream,
     top_k: usize,
@@ -33,27 +43,24 @@ pub(super) struct Routing<'a> {
 }
 
 impl GgmlRoutedExperts {
-    pub(super) fn new(
+    pub(in crate::backend) fn new(
         backend: &CudaBackend,
-        config: DenseSwiGluConfig,
+        geometry: GgmlExpertGeometry,
         rows: usize,
     ) -> Result<Self> {
-        let experts = config
-            .experts
-            .ok_or(Error::InvalidExecutionPlan("dense layer config declares no routed experts"))?;
         let path = if rows <= GGML_GEMV_MAX_TOKENS {
-            Path::Gathered(Box::new(gathered::Gathered::new(backend, config, experts, rows)?))
+            Path::Gathered(Box::new(gathered::Gathered::new(backend, geometry, rows)?))
         } else {
-            Path::Grouped(Box::new(grouped::Grouped::new(backend, config, experts, rows)?))
+            Path::Grouped(Box::new(grouped::Grouped::new(backend, geometry, rows)?))
         };
         Ok(Self {
             path,
             stream: backend.stream().clone(),
-            top_k: experts.top_k,
+            top_k: geometry.experts.top_k,
         })
     }
 
-    pub(super) fn execute(
+    pub(in crate::backend) fn execute(
         &mut self,
         input: &DeviceBuffer<bf16>,
         selected: &DeviceBuffer<u32>,

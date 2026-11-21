@@ -48,7 +48,7 @@ pub use gptq::{
 pub use hybrid::{
     DenseFeedForwardBindings, GatedSoftmaxBindings, HybridDecoderLayerBindings,
     HybridMixerBindings, LatentAttentionBindings, LatentDecoderLayerBindings, LatentQueryBindings,
-    LinearAttentionBindings, MixedDecoderLayerBindings, MixedFeedForwardBindings,
+    LatentUpBindings, LinearAttentionBindings, MixedDecoderLayerBindings, MixedFeedForwardBindings,
     SharedRoutedFeedForwardBindings,
     moe::{
         HybridMoeAttentionBindings, HybridMoeDenseBindings, HybridMoeExpertBindings,

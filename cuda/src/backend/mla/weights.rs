@@ -1,8 +1,11 @@
-use models::weights::{LatentAttentionBindings, LatentQueryBindings, TensorBinding};
+use mircuda::{DeviceBuffer, bf16};
+use models::weights::{
+    LatentAttentionBindings, LatentQueryBindings, LatentUpBindings, TensorBinding, TensorStorage,
+};
 
 use crate::{
-    CudaBackend, CudaTensor, CudaTensorDType, CudaTensorSet, Error, Result,
-    backend::linear::CheckpointProjectionWeight,
+    CudaBackend, CudaTensor, CudaTensorDType, CudaTensorSet, Error, GgmlCheckpointWeight, Result,
+    backend::linear::CheckpointProjectionWeight, kernels::LatentUpWeights,
 };
 
 /// Projections and norms of one latent attention layer.
@@ -12,10 +15,28 @@ pub(super) struct LatentWeights {
     pub(super) query: QueryWeights,
     pub(super) key_value_down: CheckpointProjectionWeight,
     pub(super) key_value_norm: CudaTensor,
-    /// BF16 `[heads · (nope + value), latent]`, read in place by the
+    /// BF16 up-projections in their checkpoint layout, read in place by the
     /// absorption GEMMs.
-    pub(super) key_value_up: CudaTensor,
+    pub(super) up: LatentUp,
     pub(super) output: CheckpointProjectionWeight,
+}
+
+#[derive(Clone, Debug)]
+pub(super) enum LatentUp {
+    Fused(DeviceBuffer<bf16>),
+    Split {
+        key: DeviceBuffer<bf16>,
+        value: DeviceBuffer<bf16>,
+    },
+}
+
+impl LatentUp {
+    pub(super) const fn weights(&self) -> LatentUpWeights<'_> {
+        match self {
+            Self::Fused(weights) => LatentUpWeights::Fused(weights),
+            Self::Split { key, value } => LatentUpWeights::Split { key, value },
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -58,10 +79,31 @@ impl LatentWeights {
             query,
             key_value_down: projection(bindings.key_value_down)?,
             key_value_norm: bf16(tensors, bindings.key_value_norm)?,
-            key_value_up: bf16(tensors, bindings.key_value_up)?,
+            up: match bindings.key_value_up {
+                LatentUpBindings::Fused(fused) => LatentUp::Fused(up(backend, tensors, fused)?),
+                LatentUpBindings::Split { key, value } => LatentUp::Split {
+                    key: up(backend, tensors, key)?,
+                    value: up(backend, tensors, value)?,
+                },
+            },
             output: projection(bindings.output)?,
         })
     }
+}
+
+/// An up-projection in BF16: as stored, or dequantized once from GGUF.
+fn up(
+    backend: &CudaBackend,
+    tensors: &CudaTensorSet,
+    binding: &TensorBinding,
+) -> Result<DeviceBuffer<bf16>> {
+    if matches!(binding.storage, TensorStorage::Ggml { .. }) {
+        return GgmlCheckpointWeight::load_binding(tensors, binding)?.dequantize_bf16(backend);
+    }
+    bf16(tensors, binding)?.as_bf16().cloned().ok_or_else(|| Error::DTypeMismatch {
+        name: binding.source.clone(),
+        expected: "BF16",
+    })
 }
 
 /// A BF16 tensor the kernels read directly.

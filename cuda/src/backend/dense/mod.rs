@@ -21,6 +21,7 @@ use feed_forward::DenseFeedForward;
 pub use prefill::PrefillDenseSwiGlu;
 use projection::{DownProjection, GateUpBuffers, GateUpProjection};
 pub use routed::RoutedExpertWeights;
+pub(in crate::backend) use routed::{GgmlExpertGeometry, GgmlExpertWeights, GgmlRoutedExperts};
 use scratch::DenseScratch;
 pub use template::{
     DenseDownSource, DenseFeedForwardSource, DenseGateUpSource, DenseOutputSource, DenseQkvSource,

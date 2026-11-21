@@ -2,9 +2,9 @@ use std::sync::{Arc, Mutex};
 
 use mircuda::{DeviceBuffer, Stream, bf16};
 
-use super::{super::super::DenseSwiGluConfig, Routing, checked, tiling};
+use super::{GgmlExpertGeometry, Routing, checked, tiling};
 use crate::{
-    CudaBackend, Error, GgmlCheckpointWeight, Result, RoutedExpertsConfig,
+    CudaBackend, Error, GgmlCheckpointWeight, Result,
     backend::dense::routed::weights::GgmlExpertWeights,
     kernels::{
         DenseGateUpLayout, GgmlActivations, GgmlGroupedMmq, GgmlMmqGroups, GgmlMmqInput,
@@ -46,11 +46,11 @@ struct Dispatch {
 impl Grouped {
     pub(super) fn new(
         backend: &CudaBackend,
-        config: DenseSwiGluConfig,
-        experts: RoutedExpertsConfig,
+        geometry: GgmlExpertGeometry,
         rows: usize,
     ) -> Result<Self> {
-        let (hidden, intermediate) = (config.attention.hidden_size, config.intermediate_size);
+        let (hidden, intermediate, experts) =
+            (geometry.hidden, geometry.intermediate, geometry.experts);
         let routes = checked(rows, experts.top_k)?;
         let operation = SelectedDenseMoe::compile(
             backend.compiler(),
@@ -67,7 +67,7 @@ impl Grouped {
                 gate_bias: false,
                 up_bias: false,
                 down_bias: false,
-                activation: config.activation.into(),
+                activation: geometry.activation.into(),
             },
         )?;
         let (pool, stream) = (backend.pool(), backend.stream());

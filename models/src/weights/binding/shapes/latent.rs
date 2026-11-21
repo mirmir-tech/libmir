@@ -45,5 +45,11 @@ pub(super) fn tensor(
         LatentAttentionTensorRole::KeyValueDown => vec![latent.cached_width(), hidden],
         LatentAttentionTensorRole::KeyValueLatentNorm => vec![latent.key_value_rank],
         LatentAttentionTensorRole::KeyValueUp => vec![key_value, latent.key_value_rank],
+        LatentAttentionTensorRole::KeyUp => {
+            vec![latent.query_heads, latent.key_value_rank, latent.nope_head_dim]
+        },
+        LatentAttentionTensorRole::ValueUp => {
+            vec![latent.query_heads, latent.value_head_dim, latent.key_value_rank]
+        },
     })
 }

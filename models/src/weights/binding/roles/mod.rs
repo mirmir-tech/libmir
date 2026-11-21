@@ -169,6 +169,12 @@ pub enum LatentAttentionTensorRole {
     /// Key/value latent to every head's position-free key and value
     /// (`kv_b_proj`).
     KeyValueUp,
+    /// The key part of `kv_b_proj`, transposed per head for absorption:
+    /// `[heads, latent, nope]` (GGUF `attn_k_b`).
+    KeyUp,
+    /// The value part of `kv_b_proj` per head: `[heads, value, latent]`
+    /// (GGUF `attn_v_b`).
+    ValueUp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

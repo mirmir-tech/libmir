@@ -1,4 +1,4 @@
-//! `DeepSeek` feed-forwards: dense in the first layers, then routed experts
+//! Leading-dense feed-forwards: dense in the first layers, then routed experts
 //! plus always-active shared experts, weighted as the semantic router says.
 
 use models::{

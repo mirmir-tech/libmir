@@ -1,4 +1,4 @@
-//! Multi-head latent attention decoder layer (`DeepSeek` V2/V3, `Moonlight`):
+//! Multi-head latent attention decoder layer:
 //! input `RMSNorm`, query and key/value latent projections, absorbed
 //! attention over the layer's latent cache, output projection, then the
 //! residual and the feed-forward.

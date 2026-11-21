@@ -1,4 +1,4 @@
-//! Multi-head latent attention stacks (`DeepSeek` V2/V3, `Moonlight`): every
+//! Multi-head latent attention stacks: every
 //! layer is latent attention followed by a dense or shared-routed
 //! feed-forward.
 

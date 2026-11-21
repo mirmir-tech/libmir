@@ -108,7 +108,8 @@ pub use mamba2::{
     Mamba2Parameters,
 };
 pub use mla::{
-    LatentAbsorption, LatentAttention, LatentAttentionInputs, LatentAttentionLayer,
+    LatentAbsorption, LatentAttention, LatentAttentionInputs, LatentAttentionLayer, LatentUpLayout,
+    LatentUpWeights,
     LatentAttentionSpec, LatentAttentionWorkspace, LatentCacheView,
 };
 pub use mrope::{Mrope, MropeSpec};

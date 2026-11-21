@@ -3,7 +3,7 @@
 //! merges that form it, and a pre-token that is itself a token stays whole.
 //!
 //! The split pattern and special tokens live in the checkpoint's Python
-//! tokenizer, so each supported family names them explicitly.
+//! tokenizer, so each supported scheme names them explicitly.
 
 mod pattern;
 #[cfg(test)]
@@ -22,16 +22,17 @@ use tokenizers::{
     },
 };
 
-pub(super) use self::pattern::TikTokenFamily;
+pub use self::pattern::HAN_RUNS_CASED_WORDS;
+pub(super) use self::pattern::TikTokenScheme;
 use crate::error::{ModelsError, Result};
 
-/// The byte-level BPE of `ranks_path` with `family`'s split pattern and
+/// The byte-level BPE of `ranks_path` with `scheme`'s split pattern and
 /// special tokens; `config_path` names the special tokens it declares.
 pub(super) fn tokenizer_from_files(
     ranks_path: &Path,
     config_path: Option<&Path>,
 ) -> Result<Tokenizer> {
-    let family = TikTokenFamily::from_config(config_path)?;
+    let scheme = TikTokenScheme::from_config(config_path)?;
     let ranks = ranks(&fs::read_to_string(ranks_path)?)?;
     let alphabet = byte_alphabet();
     let text =
@@ -47,7 +48,7 @@ pub(super) fn tokenizer_from_files(
     let model = BPE::builder().vocab_and_merges(vocab, merges).ignore_merges(true).build()?;
     let mut tokenizer = Tokenizer::new(model);
     let split = Split::new(
-        SplitPattern::Regex(family.pattern().into()),
+        SplitPattern::Regex(scheme.pattern().into()),
         tokenizers::SplitDelimiterBehavior::Isolated,
         false,
     )?;
@@ -58,7 +59,7 @@ pub(super) fn tokenizer_from_files(
     tokenizer.with_decoder(Some(ByteLevelDecoder::default()));
     let base = u32::try_from(ranks.len())?;
     let names = pattern::declared_special_tokens(config_path)?;
-    let specials = (0..family.special_count())
+    let specials = (0..scheme.special_count())
         .map(|offset| {
             let id = base + offset;
             names.get(&id).cloned().unwrap_or_else(|| format!("<|reserved_token_{id}|>"))

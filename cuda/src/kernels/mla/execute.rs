@@ -1,6 +1,8 @@
 use mircuda::{DeviceBuffer, LaunchConfig, Stream, bf16};
 
-use super::{HEADS_PER_BLOCK, LatentAbsorption, LatentAttention, LatentAttentionWorkspace};
+use super::{
+    HEADS_PER_BLOCK, LatentAbsorption, LatentAttention, LatentAttentionWorkspace, LatentUpWeights,
+};
 use crate::{
     Error, Result,
     kernels::geometry::{narrow, product, require},
@@ -11,8 +13,9 @@ use crate::{
 pub struct LatentAttentionLayer<'a> {
     /// `[latent_rank]` `RMSNorm` weight of the cached latent.
     pub latent_norm: &'a DeviceBuffer<bf16>,
-    /// `[heads · (nope + value), latent_rank]` key/value up-projection.
-    pub key_value_up: &'a DeviceBuffer<bf16>,
+    /// Per-head key and value up-projections in the absorption plan's
+    /// layout.
+    pub up: LatentUpWeights<'a>,
     /// `[rope_dim / 2]` rotary inverse frequencies, already `YaRN`-scaled.
     pub inverse_frequencies: &'a DeviceBuffer<f32>,
     pub epsilon: f32,
@@ -63,7 +66,7 @@ impl LatentAttention {
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
         let tokens = absorption.tokens();
-        self.validate(tokens, layer, &cache, &inputs, output)?;
+        self.validate(tokens, absorption, layer, &cache, &inputs, output)?;
         let LatentCacheView { pages, block_tables, table_stride } = cache;
         let spec = self.spec;
         self.prepare.launch(
@@ -89,7 +92,7 @@ impl LatentAttention {
                 layer.rope_scale,
             ),
         )?;
-        absorption.absorb_query(stream, inputs.query, layer.key_value_up, workspace)?;
+        absorption.absorb_query(stream, inputs.query, &layer.up, workspace)?;
         self.split.launch(
             stream,
             LaunchConfig {
@@ -121,7 +124,7 @@ impl LatentAttention {
             stream,
             LaunchConfig {
                 grid: (narrow(rows)?, 1, 1),
-                block: (128, 1, 1),
+                block: (narrow(spec.latent_rank.min(512))?, 1, 1),
                 shared_memory_bytes: 0,
             },
             (
@@ -132,12 +135,13 @@ impl LatentAttention {
                 narrow(spec.splits)?,
             ),
         )?;
-        absorption.expand_output(stream, layer.key_value_up, workspace, output)
+        absorption.expand_output(stream, &layer.up, workspace, output)
     }
 
     fn validate(
         &self,
         tokens: usize,
+        absorption: &LatentAbsorption,
         layer: &LatentAttentionLayer<'_>,
         cache: &LatentCacheView<'_>,
         inputs: &LatentAttentionInputs<'_>,
@@ -158,12 +162,10 @@ impl LatentAttention {
         require("latent slot mapping", tokens, inputs.slot_mapping.len())?;
         require("latent query sequences", tokens, inputs.query_sequences.len())?;
         require("latent norm", spec.latent_rank, layer.latent_norm.len())?;
-        let projected = product(spec.heads, spec.nope_dim + spec.value_dim)?;
-        require(
-            "latent up-projection",
-            product(projected, spec.latent_rank)?,
-            layer.key_value_up.len(),
-        )?;
+        absorption.check(&layer.up)?;
+        let (key, value) = absorption.weight_lengths()?;
+        require("latent key up-projection", key, layer.up.key().len())?;
+        require("latent value up-projection", value, layer.up.value().len())?;
         require("latent rotary frequencies", spec.rope_dim / 2, layer.inverse_frequencies.len())?;
         if cache.table_stride == 0 {
             return Err(Error::InvalidPagedKv("latent block tables have no columns"));

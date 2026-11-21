@@ -266,35 +266,40 @@ libmir_cuda_latent_attention_split_bf16(
 }
 
 // One block per (query token, head) row combines the splits into the latent
-// attention output that the value up-projection expands.
+// attention output that the value up-projection expands. The first thread
+// weighs the splits once; every thread then sums one latent column.
+#define MAX_SPLITS 64
 extern "C" __global__ void libmir_cuda_latent_attention_merge_bf16(
     const float* partial_values, const float* partial_statistics,
     __nv_bfloat16* output, unsigned int rows, unsigned int splits) {
+  __shared__ float weights[MAX_SPLITS];
+  __shared__ float inverse_denominator;
   const unsigned int row = blockIdx.x;
   if (row >= rows) return;
-  float maximum = NEGATIVE_INFINITY;
-  for (unsigned int split = 0; split < splits; ++split) {
-    const size_t index = size_t(split) * rows + row;
-    if (partial_statistics[2u * index + 1u] > 0.0f) {
-      maximum = fmaxf(maximum, partial_statistics[2u * index]);
-    }
-  }
-  float denominator = 0.0f;
-  for (unsigned int split = 0; split < splits; ++split) {
-    const size_t index = size_t(split) * rows + row;
-    const float sum = partial_statistics[2u * index + 1u];
-    if (sum > 0.0f) denominator = fmaf(sum, expf(partial_statistics[2u * index] - maximum), denominator);
-  }
-  for (unsigned int d = threadIdx.x; d < LIBMIR_LATENT_RANK; d += blockDim.x) {
-    float value = 0.0f;
+  if (threadIdx.x == 0u) {
+    float maximum = NEGATIVE_INFINITY;
     for (unsigned int split = 0; split < splits; ++split) {
       const size_t index = size_t(split) * rows + row;
       if (partial_statistics[2u * index + 1u] > 0.0f) {
-        value = fmaf(expf(partial_statistics[2u * index] - maximum),
-                     partial_values[index * LIBMIR_LATENT_RANK + d], value);
+        maximum = fmaxf(maximum, partial_statistics[2u * index]);
       }
     }
-    output[size_t(row) * LIBMIR_LATENT_RANK + d] =
-        __float2bfloat16_rn(denominator > 0.0f ? value / denominator : 0.0f);
+    float denominator = 0.0f;
+    for (unsigned int split = 0; split < splits; ++split) {
+      const size_t index = size_t(split) * rows + row;
+      const float sum = partial_statistics[2u * index + 1u];
+      weights[split] = sum > 0.0f ? expf(partial_statistics[2u * index] - maximum) : 0.0f;
+      denominator = fmaf(sum, weights[split], denominator);
+    }
+    inverse_denominator = denominator > 0.0f ? 1.0f / denominator : 0.0f;
+  }
+  __syncthreads();
+  for (unsigned int d = threadIdx.x; d < LIBMIR_LATENT_RANK; d += blockDim.x) {
+    float value = 0.0f;
+    for (unsigned int split = 0; split < splits; ++split) {
+      value = fmaf(weights[split],
+                   partial_values[(size_t(split) * rows + row) * LIBMIR_LATENT_RANK + d], value);
+    }
+    output[size_t(row) * LIBMIR_LATENT_RANK + d] = __float2bfloat16_rn(value * inverse_denominator);
   }
 }

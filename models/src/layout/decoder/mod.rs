@@ -71,7 +71,7 @@ pub struct DecoderConfig {
     pub query_key_rows_interleaved: bool,
     pub initial_context_length: Option<usize>,
     pub state_space: Option<StateSpaceHybridConfig>,
-    /// Multi-head latent attention and its `DeepSeek` expert layout.
+    /// Multi-head latent attention and its leading-dense expert layout.
     pub latent: Option<LatentDecoderConfig>,
 }
 

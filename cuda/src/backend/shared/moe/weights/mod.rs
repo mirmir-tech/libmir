@@ -1,23 +1,22 @@
 use mircuda::DeviceBuffer;
-use models::weights::{
-    RoutedExpertBindings, SharedRoutedFeedForwardBindings, TensorCatalog, TensorStorage,
-};
+use models::weights::{SharedRoutedFeedForwardBindings, TensorCatalog};
 
-use self::{
-    format::{merge_format, mixed_storage},
-    storage::{routed_is_dense, routed_is_mxfp4, routed_is_mxfp8},
-};
+use self::format::{merge_format, mixed_storage};
 use super::AffineSharedExpertMoeConfig;
 use crate::{
-    AffineQuantizedWeight, CudaBackend, CudaTensorSet, Error, Result,
-    backend::linear::{
-        CheckpointProjectionWeight, DenseExpertWeights, MxFp4ExpertWeights, MxFp8ExpertWeights,
+    AffineQuantizedWeight, CudaBackend, CudaTensorSet, Result,
+    backend::{
+        dense::GgmlExpertWeights,
+        linear::{
+            CheckpointProjectionWeight, DenseExpertWeights, MxFp4ExpertWeights, MxFp8ExpertWeights,
+        },
     },
 };
 
 mod bias;
 mod format;
 mod nvfp4;
+mod routed;
 mod storage;
 
 #[derive(Clone, Debug)]
@@ -27,6 +26,7 @@ pub(super) enum RoutedSharedMoeWeights {
     MxFp4(Box<MxFp4ExpertWeights>),
     MxFp8(Box<MxFp8ExpertWeights>),
     NvFp4(Box<crate::backend::block::experts::ExpertWeights>),
+    Ggml(Box<GgmlExpertWeights>),
 }
 
 #[derive(Clone, Debug)]
@@ -45,7 +45,7 @@ pub struct AffineSharedExpertMoeWeights {
     pub(super) shared_gate: CheckpointProjectionWeight,
     pub(super) shared_up: CheckpointProjectionWeight,
     pub(super) shared_down: CheckpointProjectionWeight,
-    /// Sigmoid gate on the shared expert output; `DeepSeek` adds it ungated.
+    /// Sigmoid gate on the shared expert output; absent when it adds ungated.
     pub(super) shared_output_gate: Option<CheckpointProjectionWeight>,
 }
 
@@ -78,36 +78,13 @@ impl AffineSharedExpertMoeWeights {
         hidden: usize,
         intermediate: usize,
     ) -> Result<Self> {
-        let routed = match bindings.routed {
-            RoutedExpertBindings::SeparateGateUp { gate, up, down }
-                if matches!(gate.storage, TensorStorage::AffineQuantized { .. })
-                    && matches!(up.storage, TensorStorage::AffineQuantized { .. })
-                    && matches!(down.storage, TensorStorage::AffineQuantized { .. }) =>
-            {
-                RoutedSharedMoeWeights::Affine(Box::new(AffineRoutedMoeWeights {
-                    gate: AffineQuantizedWeight::load_binding(tensors, gate)?,
-                    up: AffineQuantizedWeight::load_binding(tensors, up)?,
-                    down: AffineQuantizedWeight::load_binding(tensors, down)?,
-                }))
-            },
-            routed if routed_is_dense(routed) => RoutedSharedMoeWeights::Dense(Box::new(
-                DenseExpertWeights::load(backend, tensors, routed, experts, hidden, intermediate)?,
-            )),
-            routed if routed_is_mxfp4(routed) => RoutedSharedMoeWeights::MxFp4(Box::new(
-                MxFp4ExpertWeights::load(tensors, routed, experts, hidden, intermediate)?,
-            )),
-            routed if routed_is_mxfp8(routed) => RoutedSharedMoeWeights::MxFp8(Box::new(
-                MxFp8ExpertWeights::load(tensors, routed, experts, hidden, intermediate)?,
-            )),
-            RoutedExpertBindings::Individual { .. } => RoutedSharedMoeWeights::NvFp4(Box::new(
-                nvfp4::load(backend, catalog, bindings.routed, experts, hidden, intermediate)?,
-            )),
-            _ => {
-                return Err(Error::UnsupportedDecoderLayer(
-                    "CUDA shared-routed experts mix incompatible checkpoint storage".into(),
-                ));
-            },
-        };
+        let routed = routed::load(
+            backend,
+            tensors,
+            catalog,
+            bindings.routed,
+            (experts, hidden, intermediate),
+        )?;
         let router_correction_bias = bindings
             .router_correction_bias
             .map(|binding| bias::correction_bias(backend, tensors, binding))
@@ -174,7 +151,8 @@ impl AffineSharedExpertMoeWeights {
             },
             RoutedSharedMoeWeights::MxFp4(_)
             | RoutedSharedMoeWeights::MxFp8(_)
-            | RoutedSharedMoeWeights::NvFp4(_) => {},
+            | RoutedSharedMoeWeights::NvFp4(_)
+            | RoutedSharedMoeWeights::Ggml(_) => {},
         }
         for weight in [&self.shared_gate, &self.shared_up] {
             weight.validate(
@@ -212,7 +190,8 @@ impl AffineSharedExpertMoeWeights {
             RoutedSharedMoeWeights::Dense(_)
             | RoutedSharedMoeWeights::MxFp4(_)
             | RoutedSharedMoeWeights::MxFp8(_)
-            | RoutedSharedMoeWeights::NvFp4(_) => None,
+            | RoutedSharedMoeWeights::NvFp4(_)
+            | RoutedSharedMoeWeights::Ggml(_) => None,
         };
         for format in [
             self.shared_gate.affine_format(1, hidden, shared)?,

@@ -23,10 +23,38 @@ pub(super) enum RoutedExperts {
 /// Stacked GGML banks `[experts, out, in]`, each bound as one matrix of
 /// `experts * out` rows.
 #[derive(Clone, Debug)]
-pub(super) struct GgmlExpertWeights {
-    pub(super) gate: GgmlCheckpointWeight,
-    pub(super) up: GgmlCheckpointWeight,
-    pub(super) down: GgmlCheckpointWeight,
+pub(in crate::backend) struct GgmlExpertWeights {
+    pub(in crate::backend) gate: GgmlCheckpointWeight,
+    pub(in crate::backend) up: GgmlCheckpointWeight,
+    pub(in crate::backend) down: GgmlCheckpointWeight,
+}
+
+impl GgmlExpertWeights {
+    /// Separate GGML gate, up and down banks, when all three are GGML.
+    pub(in crate::backend) fn load(
+        tensors: &CudaTensorSet,
+        bindings: RoutedExpertBindings<'_>,
+        (experts, hidden, intermediate): (usize, usize, usize),
+    ) -> Result<Option<Self>> {
+        let RoutedExpertBindings::SeparateGateUp { gate, up, down } = bindings else {
+            return Ok(None);
+        };
+        if ![gate, up, down]
+            .iter()
+            .all(|binding| matches!(binding.storage, TensorStorage::Ggml { .. }))
+        {
+            return Ok(None);
+        }
+        let weights = Self {
+            gate: GgmlCheckpointWeight::load_binding(tensors, gate)?,
+            up: GgmlCheckpointWeight::load_binding(tensors, up)?,
+            down: GgmlCheckpointWeight::load_binding(tensors, down)?,
+        };
+        weights.gate.validate(hidden, experts * intermediate)?;
+        weights.up.validate(hidden, experts * intermediate)?;
+        weights.down.validate(intermediate, experts * hidden)?;
+        Ok(Some(weights))
+    }
 }
 
 impl RoutedExpertWeights {
@@ -50,27 +78,13 @@ impl RoutedExpertWeights {
                 experts.count, bindings.router.source
             )));
         }
-        let banks = match bindings.experts {
-            RoutedExpertBindings::SeparateGateUp { gate, up, down }
-                if [gate, up, down]
-                    .iter()
-                    .all(|binding| matches!(binding.storage, TensorStorage::Ggml { .. })) =>
-            {
-                let weights = GgmlExpertWeights {
-                    gate: GgmlCheckpointWeight::load_binding(tensors, gate)?,
-                    up: GgmlCheckpointWeight::load_binding(tensors, up)?,
-                    down: GgmlCheckpointWeight::load_binding(tensors, down)?,
-                };
-                let intermediate = config.intermediate_size;
-                weights.gate.validate(hidden, experts.count * intermediate)?;
-                weights.up.validate(hidden, experts.count * intermediate)?;
-                weights.down.validate(intermediate, experts.count * hidden)?;
-                RoutedExperts::Ggml(Box::new(weights))
-            },
-            other => RoutedExperts::Dense(Box::new(DenseExpertWeights::load(
+        let shape = (experts.count, hidden, config.intermediate_size);
+        let banks = match GgmlExpertWeights::load(tensors, bindings.experts, shape)? {
+            Some(weights) => RoutedExperts::Ggml(Box::new(weights)),
+            None => RoutedExperts::Dense(Box::new(DenseExpertWeights::load(
                 backend,
                 tensors,
-                other,
+                bindings.experts,
                 experts.count,
                 hidden,
                 config.intermediate_size,

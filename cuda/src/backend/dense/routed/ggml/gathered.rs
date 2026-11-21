@@ -1,8 +1,8 @@
 use mircuda::{DeviceBuffer, Stream, bf16};
 
-use super::{super::super::DenseSwiGluConfig, Routing, checked, tiling};
+use super::{GgmlExpertGeometry, Routing, checked, tiling};
 use crate::{
-    CudaBackend, Error, GatedActivation, Result, RoutedExpertsConfig,
+    CudaBackend, Error, GatedActivation, Result,
     backend::dense::routed::weights::GgmlExpertWeights,
     kernels::{
         GgmlActivations, GgmlExpertSpec, GgmlGatheredLinear, GgmlKernelType, GgmlSelections,
@@ -29,11 +29,11 @@ pub(super) struct Gathered {
 impl Gathered {
     pub(super) fn new(
         backend: &CudaBackend,
-        config: DenseSwiGluConfig,
-        experts: RoutedExpertsConfig,
+        geometry: GgmlExpertGeometry,
         rows: usize,
     ) -> Result<Self> {
-        let (hidden, intermediate) = (config.attention.hidden_size, config.intermediate_size);
+        let (hidden, intermediate, experts) =
+            (geometry.hidden, geometry.intermediate, geometry.experts);
         let selections = checked(rows, experts.top_k)?;
         let compiler = backend.compiler();
         let kinds = |rows, columns| {
@@ -65,7 +65,7 @@ impl Gathered {
             activated: allocate(checked(selections, intermediate)?)?,
             partial: allocate(checked(selections, hidden)?)?,
             activation: PackedGatedBf16::compile(compiler, selections, intermediate)?,
-            kind: config.activation,
+            kind: geometry.activation,
             rows,
         })
     }

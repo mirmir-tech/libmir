@@ -1,5 +1,5 @@
-//! Multi-head latent attention (`DeepSeek` V2/V3, `Moonlight`, Mistral 4) and
-//! the `DeepSeek` mixture-of-experts layout its checkpoints pair with it.
+//! Multi-head latent attention and the mixture-of-experts layout paired with
+//! it: leading dense layers, then routed plus shared experts.
 
 mod parse;
 
@@ -58,8 +58,9 @@ pub enum RotaryPairing {
     Halves,
 }
 
-/// `DeepSeek`'s routed feed-forward: the first layers stay dense, the others
-/// combine routed experts with optional always-active shared experts.
+/// Routed feed-forward with leading dense layers: the first layers stay
+/// dense, the others combine routed experts with optional always-active
+/// shared experts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LatentExpertsConfig {
     pub first_dense_layers: usize,

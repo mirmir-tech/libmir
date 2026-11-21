@@ -21,7 +21,7 @@ extern "C" __global__ void libmir_cuda_router_topk_unit_bf16(
   }
 #ifdef LIBMIR_ROUTER_PROBABILITY
   // Weights are softmax probabilities over every expert, not renormalized
-  // over the selected ones (`DeepSeek-V2`).
+  // over the selected ones (`norm_topk_prob` false).
   float all_maximum = local_values[0];
 #pragma unroll
   for (unsigned int item = 1; item < 8; ++item) all_maximum = fmaxf(all_maximum, local_values[item]);
@@ -88,9 +88,9 @@ extern "C" __global__ void libmir_cuda_router_topk_unit_bf16(
   }
 }
 
-// Sigmoid routing with a selection-only correction bias (`DeepSeek-V3`
-// `noaux_tc`, `Moonlight`): experts are chosen by `sigmoid(logit) + bias` and
-// weighted by their `sigmoid(logit)` renormalized over the chosen ones.
+// Sigmoid routing with a selection-only correction bias (`noaux_tc`):
+// experts are chosen by `sigmoid(logit) + bias` and weighted by their
+// `sigmoid(logit)` renormalized over the chosen ones.
 extern "C" __global__ void libmir_cuda_router_topk_sigmoid_bf16(
     const __nv_bfloat16* scores, const float* bias, unsigned int* selected,
     __nv_bfloat16* weights, unsigned int experts, unsigned int top_k,

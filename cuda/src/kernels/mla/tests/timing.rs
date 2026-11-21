@@ -7,7 +7,7 @@ use models::layout::RotaryPairing;
 use super::{
     super::{
         LatentAbsorption, LatentAttention, LatentAttentionInputs, LatentAttentionLayer,
-        LatentAttentionSpec, LatentCacheView,
+        LatentAttentionSpec, LatentCacheView, LatentUpLayout, LatentUpWeights,
     },
     fixture::{Runtime, Values},
 };
@@ -56,7 +56,7 @@ fn decode(runtime: &Runtime, heads: usize, context: usize, splits: usize) -> Res
     let inverse_frequencies = runtime.copy(&vec![0.01_f32; spec.rope_dim / 2])?;
     let layer = LatentAttentionLayer {
         latent_norm: &latent_norm,
-        key_value_up: &key_value_up,
+        up: LatentUpWeights::Fused(&key_value_up),
         inverse_frequencies: &inverse_frequencies,
         epsilon: 1e-6,
         rope_scale: 1.0,
@@ -68,7 +68,8 @@ fn decode(runtime: &Runtime, heads: usize, context: usize, splits: usize) -> Res
     let positions = runtime.copy(&[last])?;
     let query_sequences = runtime.copy(&[0_u32])?;
     let slot_mapping = runtime.copy(&[last])?;
-    let mut absorption = LatentAbsorption::new(&runtime.context, &runtime.stream, spec, 1)?;
+    let mut absorption =
+        LatentAbsorption::new(&runtime.context, &runtime.stream, spec, LatentUpLayout::Fused, 1)?;
     let mut output = runtime.pool.allocate::<bf16>(&runtime.stream, heads * spec.value_dim)?;
     runtime.measure(64, || {
         attention.execute(

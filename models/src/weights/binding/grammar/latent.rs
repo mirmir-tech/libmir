@@ -44,13 +44,18 @@ pub(super) fn complete(mixer: &MixerSpec, tensors: &[TensorBinding], index: usiz
         return false;
     };
     let has = |tensor| has_layer(tensors, index, LayerTensorRole::LatentAttention { tensor });
-    let key_value = [
-        LatentAttentionTensorRole::KeyValueDown,
-        LatentAttentionTensorRole::KeyValueLatentNorm,
-        LatentAttentionTensorRole::KeyValueUp,
-    ]
-    .into_iter()
-    .all(has);
+    // The up-projection is `kv_b_proj` or its per-head key and value halves.
+    let fused = has(LatentAttentionTensorRole::KeyValueUp);
+    let split = [LatentAttentionTensorRole::KeyUp, LatentAttentionTensorRole::ValueUp];
+    let up = if fused {
+        !split.into_iter().any(has)
+    } else {
+        split.into_iter().all(has)
+    };
+    let key_value = up
+        && [LatentAttentionTensorRole::KeyValueDown, LatentAttentionTensorRole::KeyValueLatentNorm]
+            .into_iter()
+            .all(has);
     let direct = has_attention(tensors, index, AttentionProjectionRole::Query);
     let latent_query = [
         LatentAttentionTensorRole::QueryDown,

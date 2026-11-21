@@ -6,8 +6,8 @@ use models::semantic::{PositionEncodingSpec, RopeScalingSpec};
 use crate::{Error, Result};
 
 /// Inverse frequencies of the `rope_dim / 2` pairs and the factor on their
-/// cosine and sine (`YaRN`'s attention factor, `mscale / mscale_all_dim` in
-/// `DeepSeek` checkpoints).
+/// cosine and sine (`YaRN`'s attention factor, `mscale / mscale_all_dim`
+/// when the config declares both).
 // Rotary widths and context lengths are far below `f64`'s exact integers.
 #[allow(clippy::cast_precision_loss)]
 pub(super) fn frequencies(

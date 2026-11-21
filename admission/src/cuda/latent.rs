@@ -1,4 +1,4 @@
-//! Admission of multi-head latent attention decoders (`DeepSeek` V2/V3).
+//! Admission of multi-head latent attention decoders.
 
 use models::semantic::{
     FeedForwardSpec, MixerSpec, PositionEncodingSpec, RopeScalingSpec, RouterNormalization,

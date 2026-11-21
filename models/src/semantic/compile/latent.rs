@@ -1,4 +1,4 @@
-//! Semantic compilation of latent-attention decoders (`DeepSeek` V2/V3 family).
+//! Semantic compilation of latent-attention decoders.
 
 use super::{CURRENT_SCHEMA_VERSION, activation, invalid, rotary};
 use crate::{

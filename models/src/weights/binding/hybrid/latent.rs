@@ -25,9 +25,21 @@ pub struct LatentAttentionBindings<'a> {
     /// `kv_a_proj_with_mqa`: hidden state to the latent and the rotary key.
     pub key_value_down: &'a TensorBinding,
     pub key_value_norm: &'a TensorBinding,
-    /// `kv_b_proj`: latent to every head's position-free key and value.
-    pub key_value_up: &'a TensorBinding,
+    pub key_value_up: LatentUpBindings<'a>,
     pub output: &'a TensorBinding,
+}
+
+/// How a layer stores the latent's per-head key and value up-projections.
+#[derive(Debug, Clone, Copy)]
+pub enum LatentUpBindings<'a> {
+    /// `kv_b_proj`: `[heads · (nope + value), latent]`.
+    Fused(&'a TensorBinding),
+    /// GGUF `attn_k_b` (`[heads, latent, nope]`) and `attn_v_b`
+    /// (`[heads, value, latent]`).
+    Split {
+        key: &'a TensorBinding,
+        value: &'a TensorBinding,
+    },
 }
 
 /// How a layer projects its queries.
@@ -75,7 +87,19 @@ impl WeightBindingPlan {
                 query,
                 key_value_down: get(LatentAttentionTensorRole::KeyValueDown)?,
                 key_value_norm: get(LatentAttentionTensorRole::KeyValueLatentNorm)?,
-                key_value_up: get(LatentAttentionTensorRole::KeyValueUp)?,
+                key_value_up: match optional(
+                    self,
+                    index,
+                    LayerTensorRole::LatentAttention {
+                        tensor: LatentAttentionTensorRole::KeyValueUp,
+                    },
+                ) {
+                    Some(fused) => LatentUpBindings::Fused(fused),
+                    None => LatentUpBindings::Split {
+                        key: get(LatentAttentionTensorRole::KeyUp)?,
+                        value: get(LatentAttentionTensorRole::ValueUp)?,
+                    },
+                },
                 output: attention(self, index, AttentionProjectionRole::Output)?,
             },
             post_attention_norm: layer(self, index, LayerTensorRole::PostAttentionNorm)?,
@@ -93,9 +117,12 @@ impl<'a> LatentDecoderLayerBindings<'a> {
             self.post_attention_norm,
             attention.key_value_down,
             attention.key_value_norm,
-            attention.key_value_up,
             attention.output,
         ];
+        match attention.key_value_up {
+            LatentUpBindings::Fused(up) => bindings.push(up),
+            LatentUpBindings::Split { key, value } => bindings.extend([key, value]),
+        }
         match attention.query {
             LatentQueryBindings::Direct(query) => bindings.push(query),
             LatentQueryBindings::Latent { down, norm, up } => bindings.extend([down, norm, up]),

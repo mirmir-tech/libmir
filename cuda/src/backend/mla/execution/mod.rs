@@ -143,6 +143,7 @@ impl CudaLatentAttentionExecution {
                 &backend.inner.context,
                 &backend.inner.stream,
                 spec,
+                layer.weights.up.weights().layout(),
                 tokens,
             )?,
             attention,
@@ -204,7 +205,7 @@ impl CudaLatentAttentionExecution {
             &mut self.absorption,
             &LatentAttentionLayer {
                 latent_norm: bf16_buffer(&weights.key_value_norm)?,
-                key_value_up: bf16_buffer(&weights.key_value_up)?,
+                up: weights.up.weights(),
                 inverse_frequencies: &self.layer.inverse_frequencies,
                 epsilon: self.geometry.latent_epsilon,
                 rope_scale: self.geometry.rope_scale,

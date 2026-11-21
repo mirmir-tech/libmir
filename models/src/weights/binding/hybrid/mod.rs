@@ -10,7 +10,9 @@ use feed_forward::feed_forward;
 mod latent;
 mod mixed;
 pub(super) mod moe;
-pub use latent::{LatentAttentionBindings, LatentDecoderLayerBindings, LatentQueryBindings};
+pub use latent::{
+    LatentAttentionBindings, LatentDecoderLayerBindings, LatentQueryBindings, LatentUpBindings,
+};
 pub use mixed::{DenseFeedForwardBindings, MixedDecoderLayerBindings, MixedFeedForwardBindings};
 
 #[derive(Debug, Clone, Copy)]
@@ -59,7 +61,8 @@ pub struct SharedRoutedFeedForwardBindings<'a> {
     pub shared_gate: &'a TensorBinding,
     pub shared_up: &'a TensorBinding,
     pub shared_down: &'a TensorBinding,
-    /// Sigmoid gate on the shared experts' output; `DeepSeek` has none.
+    /// Sigmoid gate on the shared experts' output; absent when they add
+    /// ungated.
     pub shared_output_gate: Option<&'a TensorBinding>,
 }
 

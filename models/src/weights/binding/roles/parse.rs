@@ -88,6 +88,8 @@ pub(super) fn layer(suffix: &str) -> LayerTensorRole {
         "self_attn.kv_a_proj_with_mqa.weight" => mla(LatentAttentionTensorRole::KeyValueDown),
         "self_attn.kv_a_layernorm.weight" => mla(LatentAttentionTensorRole::KeyValueLatentNorm),
         "self_attn.kv_b_proj.weight" => mla(LatentAttentionTensorRole::KeyValueUp),
+        "self_attn.k_b_proj.weight" => mla(LatentAttentionTensorRole::KeyUp),
+        "self_attn.v_b_proj.weight" => mla(LatentAttentionTensorRole::ValueUp),
         "self_attn.q_norm.weight" => LayerTensorRole::QueryNorm,
         "self_attn.k_norm.weight" => LayerTensorRole::KeyNorm,
         "self_attn.sinks" => LayerTensorRole::AttentionSinks,

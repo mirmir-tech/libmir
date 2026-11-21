@@ -6,6 +6,9 @@
 mod ggml;
 pub(super) mod weights;
 
+pub(in crate::backend) use ggml::{GgmlExpertGeometry, GgmlRoutedExperts};
+pub(in crate::backend) use weights::GgmlExpertWeights;
+
 use mircuda::{DeviceBuffer, Stream, bf16};
 pub use weights::RoutedExpertWeights;
 use weights::RoutedExperts;
@@ -33,7 +36,7 @@ enum Execution {
         operation: Box<SelectedDenseMoeBf16>,
         intermediate: DeviceBuffer<bf16>,
     },
-    Ggml(Box<ggml::GgmlRoutedExperts>),
+    Ggml(Box<GgmlRoutedExperts>),
 }
 
 impl RoutedFeedForward {
@@ -64,7 +67,13 @@ impl RoutedFeedForward {
                 )?,
             },
             RoutedExperts::Ggml(_) => {
-                Execution::Ggml(Box::new(ggml::GgmlRoutedExperts::new(backend, config, rows)?))
+                let geometry = GgmlExpertGeometry {
+                    hidden: config.attention.hidden_size,
+                    intermediate: config.intermediate_size,
+                    experts,
+                    activation: config.activation,
+                };
+                Execution::Ggml(Box::new(GgmlRoutedExperts::new(backend, geometry, rows)?))
             },
         };
         Ok(Self {

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use super::*;
 
-/// A four-byte alphabet with two merges and Moonshot's special block.
+/// A four-byte alphabet with two merges and a 256-token special block.
 fn fixture() -> Result<(PathBuf, Tokenizer)> {
     let directory = std::env::temp_dir().join(format!("libmir-tiktoken-{}", std::process::id()));
     fs::create_dir_all(&directory)?;

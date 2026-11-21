@@ -99,6 +99,21 @@ impl GgmlCheckpointWeight {
         GgmlBf16Linear::new(backend, tokens, role, self.input_features, self.output_features)
     }
 
+    /// The whole matrix in BF16, `[output, input]` row-major, for consumers
+    /// that read weights directly (latent attention's absorption GEMMs).
+    pub(crate) fn dequantize_bf16(&self, backend: &CudaBackend) -> Result<DeviceBuffer<bf16>> {
+        let operation = crate::kernels::GgmlDequantize::compile(
+            &backend.inner.compiler,
+            self.kind,
+            self.output_features,
+            self.input_features,
+        )?;
+        let mut output =
+            backend.inner.pool.allocate(&backend.inner.stream, operation.elements()?)?;
+        operation.execute(&backend.inner.stream, &self.blocks, &mut output)?;
+        Ok(output)
+    }
+
     pub(crate) fn validate(&self, input: usize, output: usize) -> Result<()> {
         if self.input_features == input && self.output_features == output {
             Ok(())

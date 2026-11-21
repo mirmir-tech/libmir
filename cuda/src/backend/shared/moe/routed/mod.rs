@@ -13,6 +13,7 @@ use crate::{
 };
 
 mod affine;
+mod ggml;
 mod mxfp;
 mod nvfp4;
 mod parallel;
@@ -50,6 +51,7 @@ pub(super) enum SharedRoutedExecution {
         experts: Box<crate::backend::linear::MxFp8GatheredMoeBf16>,
     },
     NvFp4(Box<nvfp4::NvFp4RoutedExecution>),
+    Ggml(Box<ggml::GgmlRoutedExecution>),
 }
 
 impl SharedRoutedExecution {
@@ -121,6 +123,11 @@ impl SharedRoutedExecution {
             },
             RoutedSharedMoeWeights::MxFp8(experts) => {
                 mxfp::mxfp8(backend, config, weights, experts, tokens)
+            },
+            RoutedSharedMoeWeights::Ggml(_) => {
+                ggml::GgmlRoutedExecution::new(backend, config, weights, tokens)
+                    .map(Box::new)
+                    .map(Self::Ggml)
             },
             RoutedSharedMoeWeights::NvFp4(expert_weights) => nvfp4::NvFp4RoutedExecution::new(
                 backend, config, weights, expert_weights, tokens, phase,
@@ -225,6 +232,9 @@ impl SharedRoutedExecution {
                 )
             },
             (Self::NvFp4(experts), RoutedSharedMoeWeights::NvFp4(expert_weights)) => {
+                experts.execute(backend, input, expert_weights, &mut scratch.routed_output)
+            },
+            (Self::Ggml(experts), RoutedSharedMoeWeights::Ggml(expert_weights)) => {
                 experts.execute(backend, input, expert_weights, &mut scratch.routed_output)
             },
             _ => Err(crate::Error::InvalidExecutionPlan(
