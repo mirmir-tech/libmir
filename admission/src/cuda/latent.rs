@@ -69,6 +69,15 @@ pub(super) fn admit(
                 routed.router_normalization
             )));
         }
+        // The router warp holds 256 experts and ranks one group per lane.
+        if let FeedForwardSpec::Routed { routed, .. } = &layer.feed_forward
+            && (routed.expert_count > 256
+                || routed.group_limit.is_some_and(|limit| limit.groups > 32))
+        {
+            return Err(ArchitectureError::invalid(
+                "CUDA expert routers select from at most 256 experts in at most 32 groups",
+            ));
+        }
     }
     Ok(CudaDecoderRuntime::LatentAttention)
 }

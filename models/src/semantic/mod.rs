@@ -11,7 +11,8 @@ pub use attention::{
     RotaryPairingSpec, RotarySpec, StateSpaceSpec, StateSpaceStateDTypeSpec,
 };
 pub use feed_forward::{
-    ActivationSpec, FeedForwardSpec, RoutedExpertsSpec, RouterNormalization, SharedExpertSpec,
+    ActivationSpec, ExpertGroupLimit, FeedForwardSpec, RoutedExpertsSpec, RouterNormalization,
+    SharedExpertSpec,
 };
 pub use model::{
     BlockLayoutSpec, DecoderLayerSpec, DecoderSpec, LayerBlockPosition, NormalizationKind,

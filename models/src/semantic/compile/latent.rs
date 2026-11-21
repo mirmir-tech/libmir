@@ -130,6 +130,7 @@ fn feed_forward(
                 },
                 ExpertRouting::SigmoidWithCorrectionBias => RouterNormalization::SigmoidBiasedTopK,
             },
+            group_limit: experts.group_limit,
             output_scale: experts.output_scale,
         },
         shared,

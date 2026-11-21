@@ -147,6 +147,7 @@ fn latent_routed(hybrid: &StateSpaceHybridConfig) -> FeedForwardSpec {
             intermediate_size: routed.expert_intermediate_size,
             activation: ActivationSpec::ReluSquared,
             router_normalization: RouterNormalization::SigmoidBiasedTopK,
+            group_limit: None,
             output_scale: 1.0,
         },
         shared: routed.shared_intermediate_size.map(|intermediate_size| SharedExpertSpec {

@@ -163,6 +163,7 @@ fn supports_dense_selected_experts(contract: &DecoderExecutionContract) -> bool 
             routed:
                 models::semantic::RoutedExpertsSpec {
                     activation: models::semantic::ActivationSpec::SwiGlu { clamp: Some(_), .. },
+                    group_limit: None,
                     ..
                 },
             shared: None,
@@ -173,6 +174,7 @@ fn supports_dense_selected_experts(contract: &DecoderExecutionContract) -> bool 
                 models::semantic::RoutedExpertsSpec {
                     activation: models::semantic::ActivationSpec::GeluTanh,
                     router_normalization: models::semantic::RouterNormalization::SoftmaxTopK,
+                    group_limit: None,
                     ..
                 },
             ..
@@ -187,6 +189,7 @@ fn supports_dense_selected_experts(contract: &DecoderExecutionContract) -> bool 
                 models::semantic::RoutedExpertsSpec {
                     activation: models::semantic::ActivationSpec::SwiGlu { clamp: None, .. },
                     router_normalization: models::semantic::RouterNormalization::SoftmaxTopK,
+                    group_limit: None,
                     ..
                 },
             shared: Some(shared),

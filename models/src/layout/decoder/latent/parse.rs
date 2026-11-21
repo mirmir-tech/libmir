@@ -3,10 +3,11 @@ use std::num::NonZeroUsize;
 use serde_json::Value;
 
 use super::{
-    ExpertRouting, LatentAttentionConfig, LatentDecoderConfig, LatentExpertsConfig, RotaryPairing,
+    ExpertGroupLimit, ExpertRouting, LatentAttentionConfig, LatentDecoderConfig,
+    LatentExpertsConfig, RotaryPairing,
 };
 use crate::{
-    error::Result,
+    error::{ModelsError, Result},
     layout::decoder::{
         parse::{
             invalid, optional_bool, optional_f64, optional_string, optional_usize, require_usize,
@@ -68,11 +69,24 @@ fn experts(decoder: &Value) -> Result<Option<LatentExpertsConfig>> {
     if optional_usize(decoder, &["moe_layer_freq"])?.unwrap_or(1) != 1 {
         return Err(invalid("routed layers interleaved by moe_layer_freq are not supported"));
     }
+    let routing = routing(decoder)?;
+    // `noaux_tc` always ranks groups; softmax routers rank them only under
+    // `group_limited_greedy`.
+    let grouped = match routing {
+        ExpertRouting::SigmoidWithCorrectionBias => true,
+        ExpertRouting::Softmax { .. } => {
+            optional_string(decoder, "topk_method")?.as_deref() == Some("group_limited_greedy")
+        },
+    };
     let groups = optional_usize(decoder, &["n_group", "num_expert_group"])?.unwrap_or(1);
-    let selected_groups = optional_usize(decoder, &["topk_group"])?.unwrap_or(1);
-    if groups > 1 || selected_groups > 1 {
-        return Err(invalid("grouped expert selection (n_group > 1) is not supported"));
-    }
+    let group_limit = (grouped && groups > 1)
+        .then(|| {
+            Ok::<_, ModelsError>(ExpertGroupLimit {
+                groups,
+                selected: optional_usize(decoder, &["topk_group"])?.unwrap_or(1),
+            })
+        })
+        .transpose()?;
     let output_scale = optional_f64(decoder, &["routed_scaling_factor"])?.unwrap_or(1.0);
     if !output_scale.is_finite() || output_scale <= 0.0 {
         return Err(invalid("routed_scaling_factor must be finite and greater than zero"));
@@ -81,7 +95,8 @@ fn experts(decoder: &Value) -> Result<Option<LatentExpertsConfig>> {
         first_dense_layers: optional_usize(decoder, &["first_k_dense_replace"])?.unwrap_or(0),
         shared_experts: optional_usize(decoder, &["n_shared_experts", "num_shared_experts"])?
             .and_then(NonZeroUsize::new),
-        routing: routing(decoder)?,
+        routing,
+        group_limit,
         output_scale,
     }))
 }
@@ -96,7 +111,13 @@ fn routing(decoder: &Value) -> Result<ExpertRouting> {
         None => optional_bool(decoder, "moe_renormalize")?.unwrap_or(false),
     };
     match scoring.as_deref() {
-        None | Some("softmax") => Ok(ExpertRouting::Softmax { renormalize }),
+        None | Some("softmax") => {
+            let method = optional_string(decoder, "topk_method")?;
+            if !matches!(method.as_deref(), None | Some("greedy" | "group_limited_greedy")) {
+                return Err(invalid("softmax routing requires topk_method greedy"));
+            }
+            Ok(ExpertRouting::Softmax { renormalize })
+        },
         Some("sigmoid") => {
             let method = optional_string(decoder, "topk_method")?;
             if !matches!(method.as_deref(), None | Some("noaux_tc")) {

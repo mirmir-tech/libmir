@@ -129,6 +129,7 @@ fn routed(activation: ActivationSpec) -> RoutedExpertsSpec {
         intermediate_size: 16,
         activation,
         router_normalization: RouterNormalization::SoftmaxTopK,
+        group_limit: None,
         output_scale: 1.0,
     }
 }

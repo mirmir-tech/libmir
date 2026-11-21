@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use mircuda::{Compiler, Context, DeviceBuffer, DeviceElement, Driver, MemoryPool, Stream, bf16};
+use models::semantic::ExpertGroupLimit;
 
 use super::{RouterUnitScoring, RouterUnitSpec, RouterUnitTopK, RouterUnitWeighting};
 use crate::Result;
@@ -13,6 +14,7 @@ const TOP_K: usize = 6;
 fn renormalizes_the_selected_experts_and_scales_them() -> Result<()> {
     check(RouterUnitScoring {
         weighting: RouterUnitWeighting::Renormalized,
+        group_limit: None,
         scale: 2.5,
     })
 }
@@ -21,6 +23,7 @@ fn renormalizes_the_selected_experts_and_scales_them() -> Result<()> {
 fn weighs_by_the_probability_over_every_expert() -> Result<()> {
     check(RouterUnitScoring {
         weighting: RouterUnitWeighting::Probability,
+        group_limit: None,
         scale: 1.0,
     })
 }
@@ -30,6 +33,7 @@ fn weighs_by_the_probability_over_every_expert() -> Result<()> {
 fn selects_by_biased_sigmoid_and_weighs_by_sigmoid() -> Result<()> {
     check(RouterUnitScoring {
         weighting: RouterUnitWeighting::SigmoidBiased,
+        group_limit: None,
         scale: 2.5,
     })
 }
@@ -38,7 +42,29 @@ fn selects_by_biased_sigmoid_and_weighs_by_sigmoid() -> Result<()> {
 fn scales_probability_weights() -> Result<()> {
     check(RouterUnitScoring {
         weighting: RouterUnitWeighting::Probability,
+        group_limit: None,
         scale: 16.0,
+    })
+}
+
+/// `group_limited_greedy`: the best expert ranks each group, the weights stay
+/// probabilities over every expert.
+#[test]
+fn limits_probability_selection_to_the_best_groups() -> Result<()> {
+    check(RouterUnitScoring {
+        weighting: RouterUnitWeighting::Probability,
+        group_limit: Some(ExpertGroupLimit { groups: 8, selected: 3 }),
+        scale: 1.0,
+    })
+}
+
+/// `noaux_tc`: the two best biased scores rank each group.
+#[test]
+fn limits_sigmoid_selection_to_the_best_groups() -> Result<()> {
+    check(RouterUnitScoring {
+        weighting: RouterUnitWeighting::SigmoidBiased,
+        group_limit: Some(ExpertGroupLimit { groups: 8, selected: 4 }),
+        scale: 2.5,
     })
 }
 
@@ -72,12 +98,14 @@ fn check(scoring: RouterUnitScoring) -> Result<()> {
     let mut weights = runtime.pool.allocate::<bf16>(&runtime.stream, TOKENS * TOP_K)?;
     router.execute(&runtime.stream, &device_scores, &mut selected, &mut weights)?;
     let (selected, weights) = (runtime.read(&selected)?, runtime.read(&weights)?);
+    let mut limited = false;
     for token in 0..TOKENS {
         let logits = scores[token * EXPERTS..(token + 1) * EXPERTS]
             .iter()
             .map(|value| value.to_f32())
             .collect::<Vec<_>>();
         let (indices, expected) = reference(&logits, &bias, scoring);
+        limited |= indices != reference(&logits, &bias, scoring.ungrouped()).0;
         let rows = token * TOP_K..(token + 1) * TOP_K;
         let actual = selected[rows.clone()].iter().map(|&index| index as usize).collect::<Vec<_>>();
         assert_eq!(actual, indices, "token {token}");
@@ -90,7 +118,15 @@ fn check(scoring: RouterUnitScoring) -> Result<()> {
             );
         }
     }
+    // Otherwise the groups would not be tested at all.
+    assert_eq!(limited, scoring.group_limit.is_some(), "groups change no selection");
     Ok(())
+}
+
+impl RouterUnitScoring {
+    const fn ungrouped(self) -> Self {
+        Self { group_limit: None, ..self }
+    }
 }
 
 /// Experts in descending logit order (lower index first on ties) and their
@@ -102,6 +138,23 @@ fn reference(logits: &[f32], bias: &[f32], scoring: RouterUnitScoring) -> (Vec<u
         RouterUnitWeighting::Renormalized | RouterUnitWeighting::Probability => logits[index],
     };
     let mut order = (0..logits.len()).collect::<Vec<_>>();
+    if let Some(limit) = scoring.group_limit {
+        let size = limit.group_size(logits.len());
+        let top_two = scoring.weighting == RouterUnitWeighting::SigmoidBiased;
+        let score = |group: usize| {
+            let mut values = (group * size..(group + 1) * size).map(choice).collect::<Vec<_>>();
+            values.sort_by(|a, b| b.total_cmp(a));
+            if top_two {
+                values[0] + values[1]
+            } else {
+                values[0]
+            }
+        };
+        let mut groups = (0..limit.groups).collect::<Vec<_>>();
+        groups.sort_by(|&a, &b| score(b).total_cmp(&score(a)).then(a.cmp(&b)));
+        groups.truncate(limit.selected);
+        order.retain(|expert| groups.contains(&(expert / size)));
+    }
     order.sort_by(|&a, &b| choice(b).total_cmp(&choice(a)).then(a.cmp(&b)));
     order.truncate(TOP_K);
     if scoring.weighting == RouterUnitWeighting::SigmoidBiased {

@@ -1,5 +1,65 @@
 #include <cuda_bf16.h>
 
+#define ROUTER_NEGATIVE -3.402823466e+38F
+
+#ifdef LIBMIR_ROUTER_GROUPS
+// Group-limited selection: the experts form LIBMIR_ROUTER_GROUPS contiguous
+// groups, and only those of the LIBMIR_ROUTER_GROUP_LIMIT best-scoring
+// groups stay selectable. A group scores its best value, or with `top_two`
+// the sum of its two best. One warp serves the token; lane `l` holds experts
+// `l + 32 * item`.
+__device__ __forceinline__ void limit_groups(
+    float (&values)[8], unsigned int experts, bool top_two) {
+  __shared__ float staged[256];
+  const unsigned int lane = threadIdx.x;
+#pragma unroll
+  for (unsigned int item = 0; item < 8; ++item) {
+    const unsigned int expert = lane + item * 32;
+    if (expert < experts) staged[expert] = values[item];
+  }
+  __syncwarp();
+  const unsigned int size = experts / LIBMIR_ROUTER_GROUPS;
+  float score = ROUTER_NEGATIVE;
+  if (lane < LIBMIR_ROUTER_GROUPS) {
+    float first = ROUTER_NEGATIVE;
+    float second = ROUTER_NEGATIVE;
+    for (unsigned int expert = lane * size; expert < (lane + 1u) * size; ++expert) {
+      const float value = staged[expert];
+      if (value > first) {
+        second = first;
+        first = value;
+      } else if (value > second) {
+        second = value;
+      }
+    }
+    score = top_two ? first + second : first;
+  }
+  unsigned int kept = 0u;
+  for (unsigned int rank = 0; rank < LIBMIR_ROUTER_GROUP_LIMIT; ++rank) {
+    float best = score;
+    unsigned int group = lane;
+    for (int offset = 16; offset > 0; offset >>= 1) {
+      const float candidate = __shfl_xor_sync(0xffffffffu, best, offset);
+      const unsigned int index = __shfl_xor_sync(0xffffffffu, group, offset);
+      if (candidate > best || (candidate == best && index < group)) {
+        best = candidate;
+        group = index;
+      }
+    }
+    kept |= 1u << group;
+    // Below every remaining score, including the idle lanes'.
+    if (lane == group) score = __int_as_float(0xff800000);
+  }
+#pragma unroll
+  for (unsigned int item = 0; item < 8; ++item) {
+    const unsigned int expert = lane + item * 32;
+    if (expert < experts && ((kept >> (expert / size)) & 1u) == 0u) {
+      values[item] = ROUTER_NEGATIVE;
+    }
+  }
+}
+#endif
+
 extern "C" __global__ void libmir_cuda_router_topk_unit_bf16(
     const __nv_bfloat16* scores, unsigned int* selected,
     __nv_bfloat16* weights, unsigned int experts, unsigned int top_k,
@@ -16,7 +76,7 @@ extern "C" __global__ void libmir_cuda_router_topk_unit_bf16(
   for (unsigned int item = 0; item < 8; ++item) {
     const unsigned int expert = lane + item * 32;
     local_values[item] = expert < experts
-        ? __bfloat162float(scores[expert]) : -3.402823466e+38F;
+        ? __bfloat162float(scores[expert]) : ROUTER_NEGATIVE;
     local_indices[item] = expert;
   }
 #ifdef LIBMIR_ROUTER_PROBABILITY
@@ -36,6 +96,11 @@ extern "C" __global__ void libmir_cuda_router_topk_unit_bf16(
   for (int offset = 16; offset > 0; offset >>= 1) {
     all_sum += __shfl_xor_sync(0xffffffffu, all_sum, offset);
   }
+#endif
+#ifdef LIBMIR_ROUTER_GROUPS
+  // The softmax above spans every expert; groups only limit the choice, and
+  // a group's best logit ranks it as its best probability would.
+  limit_groups(local_values, experts, false);
 #endif
   for (unsigned int rank = 0; rank < top_k; ++rank) {
     float best_score = local_values[0];
@@ -69,7 +134,7 @@ extern "C" __global__ void libmir_cuda_router_topk_unit_bf16(
     }
 #pragma unroll
     for (unsigned int item = 0; item < 8; ++item) {
-      if (local_indices[item] == best) local_values[item] = -3.402823466e+38F;
+      if (local_indices[item] == best) local_values[item] = ROUTER_NEGATIVE;
     }
   }
 #ifdef LIBMIR_ROUTER_PROBABILITY
@@ -108,9 +173,12 @@ extern "C" __global__ void libmir_cuda_router_topk_sigmoid_bf16(
     const unsigned int expert = lane + item * 32;
     choices[item] = expert < experts
         ? 1.0f / (1.0f + expf(-__bfloat162float(scores[expert]))) + bias[expert]
-        : -3.402823466e+38F;
+        : ROUTER_NEGATIVE;
     indices[item] = expert;
   }
+#ifdef LIBMIR_ROUTER_GROUPS
+  limit_groups(choices, experts, true);
+#endif
   for (unsigned int rank = 0; rank < top_k; ++rank) {
     float best_choice = choices[0];
     unsigned int best = indices[0];
@@ -134,7 +202,7 @@ extern "C" __global__ void libmir_cuda_router_topk_sigmoid_bf16(
     if (lane == 0) selected[rank] = best;
 #pragma unroll
     for (unsigned int item = 0; item < 8; ++item) {
-      if (indices[item] == best) choices[item] = -3.402823466e+38F;
+      if (indices[item] == best) choices[item] = ROUTER_NEGATIVE;
     }
   }
   if (lane != 0) return;

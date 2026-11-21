@@ -3,7 +3,7 @@
 
 use models::{
     layout::DecoderConfig,
-    semantic::{FeedForwardSpec, RouterNormalization},
+    semantic::{FeedForwardSpec, RoutedExpertsSpec, RouterNormalization},
     weights::{MixedFeedForwardBindings, TensorCatalog},
 };
 
@@ -57,7 +57,7 @@ pub(super) fn load(
                 expert_bits,
                 router_bits,
                 activation: GatedActivation::try_from(decoder)?,
-                routing: scoring(routed.router_normalization, routed.output_scale)?,
+                routing: scoring(routed)?,
             };
             CudaAffineSharedExpertMoe::new(backend, config, weights)
                 .map(Box::new)
@@ -69,7 +69,8 @@ pub(super) fn load(
     }
 }
 
-fn scoring(normalization: RouterNormalization, output_scale: f64) -> Result<RouterUnitScoring> {
+fn scoring(routed: &RoutedExpertsSpec) -> Result<RouterUnitScoring> {
+    let normalization = routed.router_normalization;
     let weighting = match normalization {
         RouterNormalization::SoftmaxTopK => RouterUnitWeighting::Renormalized,
         RouterNormalization::SoftmaxProbabilityTopK => RouterUnitWeighting::Probability,
@@ -81,6 +82,10 @@ fn scoring(normalization: RouterNormalization, output_scale: f64) -> Result<Rout
         },
     };
     #[allow(clippy::cast_possible_truncation)]
-    let scale = output_scale as f32;
-    Ok(RouterUnitScoring { weighting, scale })
+    let scale = routed.output_scale as f32;
+    Ok(RouterUnitScoring {
+        weighting,
+        group_limit: routed.group_limit,
+        scale,
+    })
 }

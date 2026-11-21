@@ -7,6 +7,8 @@ use std::num::NonZeroUsize;
 
 pub(super) use parse::latent_decoder;
 
+use crate::semantic::ExpertGroupLimit;
+
 /// A decoder whose attention layers all use multi-head latent attention.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LatentDecoderConfig {
@@ -68,6 +70,8 @@ pub struct LatentExpertsConfig {
     /// width.
     pub shared_experts: Option<NonZeroUsize>,
     pub routing: ExpertRouting,
+    /// Groups the router selects experts from, when more than one.
+    pub group_limit: Option<ExpertGroupLimit>,
     /// Factor on the combined routed-expert output (`routed_scaling_factor`).
     pub output_scale: f64,
 }

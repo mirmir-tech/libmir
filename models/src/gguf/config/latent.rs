@@ -80,14 +80,16 @@ pub(super) fn latent(
             "softmax"
         }),
     );
-    config.insert(
-        "topk_method".into(),
-        json!(if sigmoid {
-            "noaux_tc"
-        } else {
-            "greedy"
-        }),
-    );
+    // Softmax routers over several expert groups are DeepSeek-V2's
+    // `group_limited_greedy`, which ranks a group by its best expert;
+    // llama.cpp ranks every router's groups by their two best experts.
+    let grouped = header.unsigned(&key("expert_group_count")).is_some_and(|groups| groups > 1);
+    let method = match (sigmoid, grouped) {
+        (true, _) => "noaux_tc",
+        (false, true) => "group_limited_greedy",
+        (false, false) => "greedy",
+    };
+    config.insert("topk_method".into(), json!(method));
     true
 }
 

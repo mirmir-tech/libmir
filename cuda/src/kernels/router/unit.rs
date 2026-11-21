@@ -75,6 +75,29 @@ impl RouterUnitTopK {
         if scoring.weighting == RouterUnitWeighting::Probability {
             options.extra_options.push("-DLIBMIR_ROUTER_PROBABILITY=1".into());
         }
+        if let Some(limit) = scoring.group_limit {
+            // A lane scores each group; the sigmoid router sums two experts.
+            let minimum = if scoring.weighting == RouterUnitWeighting::SigmoidBiased {
+                2
+            } else {
+                1
+            };
+            let size = spec.experts.checked_div(limit.groups).unwrap_or(0);
+            if limit.groups < 2
+                || limit.groups > 32
+                || !spec.experts.is_multiple_of(limit.groups)
+                || size < minimum
+                || limit.selected == 0
+                || limit.selected > limit.groups
+                || spec.top_k > limit.selected * size
+            {
+                return Err(Error::InvalidRouter("invalid unit router expert groups"));
+            }
+            options.extra_options.push(format!("-DLIBMIR_ROUTER_GROUPS={}", limit.groups));
+            options
+                .extra_options
+                .push(format!("-DLIBMIR_ROUTER_GROUP_LIMIT={}", limit.selected));
+        }
         let module = compiler.compile(source, &options)?;
         let kernel = match (scoring.weighting, correction_bias) {
             (RouterUnitWeighting::SigmoidBiased, Some(bias)) if bias.len() >= spec.experts => {

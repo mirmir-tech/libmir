@@ -1,4 +1,5 @@
 mod defaults;
+mod routing;
 use std::{fs, path::PathBuf};
 
 use serde_json::json;

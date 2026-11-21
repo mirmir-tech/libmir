@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+use super::validation::{activation_spec, invalid, nonzero};
+use crate::error::Result;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum FeedForwardSpec {
@@ -37,9 +40,74 @@ pub struct RoutedExpertsSpec {
     pub intermediate_size: usize,
     pub activation: ActivationSpec,
     pub router_normalization: RouterNormalization,
+    /// Experts the router may select only from its best-scoring groups.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_limit: Option<ExpertGroupLimit>,
     /// Factor on the weighted sum of the selected experts' outputs.
     #[serde(default = "unit_scale")]
     pub output_scale: f64,
+}
+
+/// Group-limited expert selection: top-k experts from the best groups.
+///
+/// The experts form `groups` contiguous groups, and the top-k come only from
+/// the `selected` best-scoring ones. A softmax router scores a group by its
+/// best expert's probability, the sigmoid router by the sum of its two best
+/// biased scores.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExpertGroupLimit {
+    pub groups: usize,
+    pub selected: usize,
+}
+
+impl ExpertGroupLimit {
+    /// Experts in each group.
+    #[must_use]
+    pub const fn group_size(&self, expert_count: usize) -> usize {
+        expert_count / self.groups
+    }
+}
+
+impl RoutedExpertsSpec {
+    pub(super) fn validate(&self) -> Result<()> {
+        nonzero(self.expert_count)?;
+        nonzero(self.top_k)?;
+        nonzero(self.intermediate_size)?;
+        if self.top_k > self.expert_count
+            || !self.output_scale.is_finite()
+            || self.output_scale <= 0.0
+        {
+            return Err(invalid("routed top-k exceeds expert count or output scale is invalid"));
+        }
+        activation_spec(&self.activation)?;
+        let Some(limit) = self.group_limit else {
+            return Ok(());
+        };
+        let size = if limit.groups > 1 && self.expert_count.is_multiple_of(limit.groups) {
+            limit.group_size(self.expert_count)
+        } else {
+            0
+        };
+        let minimum_size = match self.router_normalization {
+            RouterNormalization::SoftmaxTopK | RouterNormalization::SoftmaxProbabilityTopK => 1,
+            // The two best biased scores rank a sigmoid router's groups.
+            RouterNormalization::SigmoidBiasedTopK => 2,
+            RouterNormalization::UnitTopK => {
+                return Err(invalid("a unit top-k router does not limit expert groups"));
+            },
+        };
+        if size < minimum_size
+            || limit.selected == 0
+            || limit.selected > limit.groups
+            || self.top_k > limit.selected * size
+        {
+            return Err(invalid(
+                "expert groups must split the experts evenly and hold the selected experts",
+            ));
+        }
+        Ok(())
+    }
 }
 
 const fn unit_scale() -> f64 {

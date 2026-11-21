@@ -87,6 +87,7 @@ fn spec(
                             up_shift: 1.0,
                         },
                         router_normalization: RouterNormalization::UnitTopK,
+                        group_limit: None,
                         output_scale: 1.0,
                     },
                     shared: None,

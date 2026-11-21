@@ -2,8 +2,9 @@ use super::*;
 use crate::error::ModelsError;
 
 mod import;
+mod latent;
 
-pub type TestResult = std::result::Result<(), Box<dyn std::error::Error + Send + Sync>>;
+pub type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 /// Writes a minimal GGUF v3 file in memory, the way llama.cpp lays it out.
 struct Writer {

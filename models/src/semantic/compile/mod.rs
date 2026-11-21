@@ -178,6 +178,7 @@ fn feed_forward(decoder: &DecoderConfig) -> Result<FeedForwardSpec> {
         intermediate_size: decoder.moe_intermediate_size.unwrap_or(decoder.intermediate_size),
         activation: activation.clone(),
         router_normalization: RouterNormalization::SoftmaxTopK,
+        group_limit: None,
         output_scale: 1.0,
     };
     if decoder.attention_k_eq_v && decoder.hidden_activation.as_deref() == Some("gelu_pytorch_tanh")

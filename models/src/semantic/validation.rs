@@ -173,7 +173,7 @@ fn feed_forward(feed_forward: &FeedForwardSpec) -> Result<()> {
             activation_spec(activation)
         },
         FeedForwardSpec::Routed { routed, shared } => {
-            routed_spec(routed)?;
+            routed.validate()?;
             if let Some(shared) = shared {
                 nonzero(shared.intermediate_size)?;
                 activation_spec(&shared.activation)?;
@@ -187,7 +187,7 @@ fn feed_forward(feed_forward: &FeedForwardSpec) -> Result<()> {
         } => {
             nonzero(*dense_intermediate_size)?;
             activation_spec(dense_activation)?;
-            routed_spec(routed)
+            routed.validate()
         },
         FeedForwardSpec::LatentRouted {
             latent_size,
@@ -198,7 +198,7 @@ fn feed_forward(feed_forward: &FeedForwardSpec) -> Result<()> {
             if let Some(latent_size) = latent_size {
                 nonzero(*latent_size)?;
             }
-            routed_spec(routed)?;
+            routed.validate()?;
             if let Some(shared) = shared {
                 nonzero(shared.intermediate_size)?;
                 activation_spec(&shared.activation)?;
@@ -212,20 +212,7 @@ fn feed_forward(feed_forward: &FeedForwardSpec) -> Result<()> {
     }
 }
 
-fn routed_spec(routed: &super::RoutedExpertsSpec) -> Result<()> {
-    nonzero(routed.expert_count)?;
-    nonzero(routed.top_k)?;
-    nonzero(routed.intermediate_size)?;
-    if routed.top_k > routed.expert_count
-        || !routed.output_scale.is_finite()
-        || routed.output_scale <= 0.0
-    {
-        return Err(invalid("routed top-k exceeds expert count or output scale is invalid"));
-    }
-    activation_spec(&routed.activation)
-}
-
-fn activation_spec(activation: &ActivationSpec) -> Result<()> {
+pub(super) fn activation_spec(activation: &ActivationSpec) -> Result<()> {
     if let ActivationSpec::SwiGlu { alpha, clamp, up_shift } = activation
         && (!alpha.is_finite()
             || *alpha <= 0.0
@@ -237,7 +224,7 @@ fn activation_spec(activation: &ActivationSpec) -> Result<()> {
     Ok(())
 }
 
-fn nonzero(value: usize) -> Result<()> {
+pub(super) fn nonzero(value: usize) -> Result<()> {
     if value == 0 {
         Err(invalid("feed-forward dimensions must be non-zero"))
     } else {
@@ -245,6 +232,6 @@ fn nonzero(value: usize) -> Result<()> {
     }
 }
 
-fn invalid(message: impl Into<String>) -> ModelsError {
+pub(super) fn invalid(message: impl Into<String>) -> ModelsError {
     ModelsError::InvalidConfig(message.into())
 }

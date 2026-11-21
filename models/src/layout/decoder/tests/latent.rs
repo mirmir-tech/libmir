@@ -4,7 +4,10 @@
 use serde_json::{Value, json};
 
 use super::*;
-use crate::layout::{AttentionLayerType, ExpertRouting, RopeScaling, RotaryPairing};
+use crate::{
+    layout::{AttentionLayerType, ExpertRouting, RopeScaling, RotaryPairing},
+    semantic::ExpertGroupLimit,
+};
 
 fn deepseek_v2_lite() -> Value {
     json!({
@@ -134,10 +137,27 @@ fn reads_mistral_small_4_from_its_text_config_and_rope_parameters() -> Result<()
 }
 
 #[test]
-fn refuses_grouped_expert_selection() {
-    let mut config = moonlight();
-    config["n_group"] = json!(8);
-    config["topk_group"] = json!(4);
-    let error = DecoderConfig::from_value(&config).map(|_| ()).err();
-    assert!(error.is_some_and(|error| error.to_string().contains("grouped expert selection")));
+fn reads_group_limited_expert_selection() -> Result<()> {
+    let group_limit = |config: &Value| {
+        let decoder = DecoderConfig::from_value(config)?;
+        let latent = decoder.latent.ok_or_else(|| invalid("missing latent decoder"))?;
+        let experts = latent.experts.ok_or_else(|| invalid("missing experts"))?;
+        Ok::<_, crate::error::ModelsError>(experts.group_limit)
+    };
+    // `noaux_tc` ranks groups whenever there are several.
+    let mut sigmoid = moonlight();
+    sigmoid["n_group"] = json!(8);
+    sigmoid["topk_group"] = json!(4);
+    assert_eq!(group_limit(&sigmoid)?, Some(ExpertGroupLimit { groups: 8, selected: 4 }));
+    // Softmax routers rank them only under `group_limited_greedy`.
+    let mut softmax = deepseek_v2_lite();
+    softmax["n_group"] = json!(8);
+    softmax["topk_group"] = json!(3);
+    assert_eq!(group_limit(&softmax)?, None);
+    softmax["topk_method"] = json!("group_limited_greedy");
+    assert_eq!(group_limit(&softmax)?, Some(ExpertGroupLimit { groups: 8, selected: 3 }));
+    assert_eq!(group_limit(&deepseek_v2_lite())?, None);
+    softmax["topk_method"] = json!("noaux_tc");
+    assert!(group_limit(&softmax).is_err());
+    Ok(())
 }
