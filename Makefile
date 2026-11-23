@@ -14,6 +14,11 @@ DENSE_FIXTURE_FAMILY ?=
 DENSE_MODEL ?=
 DENSE_REFERENCE ?=
 DENSE_CUDA_POLICY ?= stable
+# Every CUDA backend in a process allocates from the device's default pool, so
+# tests asserting its usage are ignored in the parallel run and run alone by
+# check-cuda.
+CUDA_POOL_TESTS := $(shell grep -rh -A1 'measures the shared driver memory pool' cuda/src \
+	| grep -o '^fn [a-z0-9_]*' | cut -c4-)
 HOST_OS := $(shell uname -s)
 ifeq ($(HOST_OS),Darwin)
 DOC_PACKAGES := --workspace --all-features
@@ -63,6 +68,7 @@ check-cuda: ## Validate the CUDA facade without building Metal.
 	@cargo clippy -p libmir-cuda -p libmir --all-targets --no-default-features \
 		--features libmir/cuda -- -D warnings
 	@cargo test -p libmir-cuda -p libmir --no-default-features --features libmir/cuda
+	@cargo test -p libmir-cuda --lib -- --ignored --test-threads=1 $(CUDA_POOL_TESTS)
 
 cuda-checkpoint: ## Validate native NVFP4 against the local NVIDIA checkpoint.
 	@test -d "$(CUDA_NVFP4_MODEL)" || { printf 'NVFP4 checkpoint not found.\n' >&2; exit 2; }

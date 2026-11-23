@@ -1,4 +1,6 @@
 mod admission;
+mod dense;
+mod latent;
 pub use admission::admit;
 use models::semantic::{
     ActivationSpec, FeedForwardSpec, KeyValueRelation, MixerSpec, QkNormalization,
@@ -16,6 +18,8 @@ pub enum CudaMixerLowering {
     },
     Linear,
     StateSpace,
+    /// Multi-head latent attention; no CUDA runtime executes it yet.
+    Latent,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -63,6 +67,22 @@ impl CudaDecoderPlan {
         self.all_feed_forward(CudaFeedForwardLowering::Dense)
     }
 
+    /// Softmax attention in every layer with a gated MLP or, without sinks,
+    /// routed experts that have no shared expert and no clamp: the two
+    /// feed-forwards of the dense runtime.
+    #[must_use]
+    pub fn all_dense_or_routed(&self) -> bool {
+        !self.layers.is_empty()
+            && self.layers.iter().all(|layer| match (layer.mixer, layer.feed_forward) {
+                (CudaMixerLowering::Softmax { .. }, CudaFeedForwardLowering::Dense) => true,
+                (
+                    CudaMixerLowering::Softmax { sinks, .. },
+                    CudaFeedForwardLowering::Routed { clamped: false, .. },
+                ) => !sinks,
+                _ => false,
+            })
+    }
+
     #[must_use]
     pub fn all_dense_and_routed(&self) -> bool {
         self.all_feed_forward(CudaFeedForwardLowering::DenseAndRouted)
@@ -94,6 +114,11 @@ impl CudaDecoderPlan {
     }
 
     #[must_use]
+    pub fn has_latent_mixer(&self) -> bool {
+        self.layers.iter().any(|layer| layer.mixer == CudaMixerLowering::Latent)
+    }
+
+    #[must_use]
     pub fn has_state_space_mixer(&self) -> bool {
         self.layers.iter().any(|layer| layer.mixer == CudaMixerLowering::StateSpace)
     }
@@ -116,13 +141,6 @@ impl CudaDecoderPlan {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CudaQkvNormalization {
-    None,
-    All,
-    QueryKey,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CudaDecoderRuntime {
     Dense,
     DenseAndRouted,
@@ -131,6 +149,8 @@ pub enum CudaDecoderRuntime {
     ClampedRouted,
     /// Mamba-2 and attention mixers with latent routed experts (Nemotron-H).
     StateSpaceHybrid,
+    /// Multi-head latent attention with dense or shared-routed feed-forwards.
+    LatentAttention,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -140,35 +160,26 @@ pub enum CudaArchitecture {
     SequenceScoring,
 }
 
-/// The one Q/K/V normalization of every graph-decoder layer. Layers whose
-/// keys double as values bind the key projection twice, so the K/V relation
-/// may differ between layers.
-pub fn graph_normalization(plan: &CudaDecoderPlan) -> Result<CudaQkvNormalization> {
-    let normalizations = plan
+/// Softmax attention in every layer of the graph decoder.
+///
+/// Each layer keeps its own Q/K/V normalization (Llama 4 normalizes its
+/// rotary layers only), and layers whose keys double as values bind the key
+/// projection twice.
+pub fn require_graph_attention(plan: &CudaDecoderPlan) -> Result<()> {
+    if plan.layers.is_empty() {
+        return Err(ArchitectureError::invalid("CUDA graph decoder has no layers"));
+    }
+    if plan
         .layers
         .iter()
-        .map(|layer| match layer.mixer {
-            CudaMixerLowering::Softmax { normalization, .. } => Ok(normalization),
-            CudaMixerLowering::Linear | CudaMixerLowering::StateSpace => {
-                Err(ArchitectureError::invalid(
-                    "CUDA graph decoder requires softmax attention in every layer",
-                ))
-            },
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let Some(&first) = normalizations.first() else {
-        return Err(ArchitectureError::invalid("CUDA graph decoder has no layers"));
-    };
-    if normalizations.iter().any(|normalization| *normalization != first) {
-        return Err(ArchitectureError::invalid(
-            "CUDA graph decoder requires uniform Q/K/V normalization",
-        ));
+        .all(|layer| matches!(layer.mixer, CudaMixerLowering::Softmax { .. }))
+    {
+        Ok(())
+    } else {
+        Err(ArchitectureError::invalid(
+            "CUDA graph decoder requires softmax attention in every layer",
+        ))
     }
-    Ok(match first {
-        QkNormalization::None => CudaQkvNormalization::None,
-        QkNormalization::QueryKeyRms => CudaQkvNormalization::QueryKey,
-        QkNormalization::QueryKeyValueRms => CudaQkvNormalization::All,
-    })
 }
 
 fn lower_mixer(spec: &MixerSpec) -> CudaMixerLowering {
@@ -180,6 +191,7 @@ fn lower_mixer(spec: &MixerSpec) -> CudaMixerLowering {
         },
         MixerSpec::LinearAttention(_) => CudaMixerLowering::Linear,
         MixerSpec::StateSpace(_) => CudaMixerLowering::StateSpace,
+        MixerSpec::LatentAttention(_) => CudaMixerLowering::Latent,
     }
 }
 

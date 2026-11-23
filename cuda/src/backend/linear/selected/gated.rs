@@ -1,5 +1,5 @@
 use mircuda::{DeviceBuffer, Stream, bf16};
-use models::layout::DecoderConfig;
+use models::semantic::ActivationSpec;
 
 use super::{AffineQuantizedPairTensors, u32_tensor, validate_bank};
 use crate::{
@@ -10,7 +10,7 @@ use crate::{
     },
 };
 
-/// Gated MLP activation derived from model metadata.
+/// Gated MLP activation of the semantic spec.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum GatedActivation {
     GeluTanh,
@@ -26,27 +26,17 @@ impl GatedActivation {
     }
 }
 
-impl TryFrom<&str> for GatedActivation {
+impl TryFrom<&ActivationSpec> for GatedActivation {
     type Error = Error;
 
-    fn try_from(value: &str) -> Result<Self> {
-        match value {
-            "gelu_pytorch_tanh" | "gelu_new" => Ok(Self::GeluTanh),
-            "silu" | "swish" => Ok(Self::Silu),
-            value => Err(Error::UnsupportedGatedActivation(value.into())),
+    /// The gated kernels run plain `SwiGLU` and tanh GELU; the semantic spec
+    /// resolved the configuration's activation names.
+    fn try_from(activation: &ActivationSpec) -> Result<Self> {
+        match activation {
+            ActivationSpec::GeluTanh => Ok(Self::GeluTanh),
+            ActivationSpec::SwiGlu { clamp: None, .. } => Ok(Self::Silu),
+            other => Err(Error::UnsupportedGatedActivation(format!("{other:?}"))),
         }
-    }
-}
-
-impl TryFrom<&DecoderConfig> for GatedActivation {
-    type Error = Error;
-
-    fn try_from(config: &DecoderConfig) -> Result<Self> {
-        config
-            .hidden_activation
-            .as_deref()
-            .ok_or_else(|| Error::UnsupportedGatedActivation("<missing>".into()))?
-            .try_into()
     }
 }
 

@@ -112,6 +112,7 @@ pub(super) fn start(
                 session,
                 token: greedy_token(&output.output)?,
                 sampling: SamplingLogits::None,
+                speculation: None,
             },
         )]);
     }
@@ -159,6 +160,7 @@ pub(super) fn start(
                             session: finished.request.session_id,
                             token: greedy_token(&finished.native.output)?,
                             sampling: SamplingLogits::None,
+                            speculation: None,
                         },
                     ))
                 })

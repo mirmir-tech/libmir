@@ -1,6 +1,6 @@
 use super::{
     Kernels, Result, awq, bitsandbytes, direct_fp8, expert, gated_delta, gated_delta_decode,
-    gated_delta_recurrence, gptq, mxfp4, mxfp4_down, mxfp4_gate_up, mxfp4_split_gate_up,
+    gated_delta_recurrence, ggml, gptq, mxfp4, mxfp4_down, mxfp4_gate_up, mxfp4_split_gate_up,
     mxfp4_u32_down, nvfp4, paged_attention, paged_attention_partial_library,
     paged_attention_reduce, paged_kv_library, quantized_kv, state_space,
 };
@@ -28,6 +28,7 @@ impl Kernels {
             expert_reduce: expert::reduce::ExpertReduceKernel::new()?,
             gated_delta_recurrence: gated_delta_recurrence()?,
             gated_delta_decode: gated_delta_decode()?,
+            ggml: ggml::GgmlKernels::new()?,
             state_space_decode: state_space::new_state_space_decode_kernel()?,
             gptq: gptq::GptqKernels::new()?,
             paged_attention: paged_attention()?,

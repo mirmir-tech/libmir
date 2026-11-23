@@ -102,6 +102,7 @@ fn attention_layout(
             "linear recurrence plus gated RMS-normalized grouped-query attention"
         },
         DecoderRuntime::StateSpaceHybrid => "Mamba-2 recurrence plus plain grouped-query attention",
+        DecoderRuntime::LatentAttention => "absorbed multi-head latent attention",
         DecoderRuntime::Dense => dense_attention_layout(spec),
     }
 }
@@ -109,7 +110,9 @@ fn attention_layout(
 fn dense_attention_layout(spec: &models::semantic::SemanticModelSpec) -> &'static str {
     let attentions = spec.decoder.layers.iter().filter_map(|layer| match &layer.mixer {
         MixerSpec::SoftmaxAttention(attention) => Some(attention),
-        MixerSpec::LinearAttention(_) | MixerSpec::StateSpace(_) => None,
+        MixerSpec::LinearAttention(_)
+        | MixerSpec::StateSpace(_)
+        | MixerSpec::LatentAttention(_) => None,
     });
     if attentions.clone().all(|attention| attention.sinks) {
         "grouped-query attention with learned sinks"
@@ -132,6 +135,7 @@ fn mlp_layout(lowering: &DecoderLowering) -> &'static str {
         DecoderRuntime::DenseMixed => "dense gated SwiGLU",
         DecoderRuntime::ClampedRouted => "clamped routed SwiGLU experts",
         DecoderRuntime::StateSpaceHybrid => "sigmoid-routed relu² experts plus shared expert",
+        DecoderRuntime::LatentAttention => "dense layers, then routed experts plus shared experts",
     }
 }
 
@@ -139,10 +143,10 @@ fn has_bias(binding: &models::weights::TensorBinding) -> bool {
     match &binding.storage {
         TensorStorage::Dense { bias, .. }
         | TensorStorage::Float8 { bias, .. }
-        | TensorStorage::BlockQuantized { bias, .. } => bias.is_some(),
+        | TensorStorage::BlockQuantized { bias, .. }
+        | TensorStorage::Ggml { bias, .. } => bias.is_some(),
         TensorStorage::AffineQuantized { output_bias, .. } => output_bias.is_some(),
-        TensorStorage::PackedInt8 { .. }
-        | TensorStorage::PackedInt4 { .. }
+        TensorStorage::PackedInteger { .. }
         | TensorStorage::Awq { .. }
         | TensorStorage::Gptq { .. }
         | TensorStorage::BitsAndBytes4Bit { .. }

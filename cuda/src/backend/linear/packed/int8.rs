@@ -26,20 +26,13 @@ impl CompressedInt8Weight {
         input: usize,
         output: usize,
     ) -> Result<Self> {
-        let (TensorStorage::PackedInt8 {
+        let TensorStorage::PackedInteger {
             format,
             scales,
             zero_points,
             group_indices,
             ..
-        }
-        | TensorStorage::PackedInt4 {
-            format,
-            scales,
-            zero_points,
-            group_indices,
-            ..
-        }) = &binding.storage
+        } = &binding.storage
         else {
             return Err(Error::InvalidQuantizedGemv(
                 "binding is not a compressed-tensors packed integer weight",

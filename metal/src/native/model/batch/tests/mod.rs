@@ -113,6 +113,7 @@ fn pair(model: &mut LoadedModel, seed: u32) -> Result<(DecodeInput, Uuid)> {
             session,
             token,
             sampling: SamplingLogits::None,
+            speculation: None,
         },
         reference,
     ))
@@ -134,7 +135,7 @@ fn policy(row: usize, step: usize) -> SamplingLogits {
 
 fn choose(model: &LoadedModel, output: NativeOutput, sampling: &SamplingLogits) -> Result<u32> {
     match output {
-        NativeOutput::Greedy(token) => Ok(token),
+        NativeOutput::Greedy(token) | NativeOutput::Verified { next: token, .. } => Ok(token),
         NativeOutput::Logits(logits) => {
             match step::device_token(&logits, sampling, model.stream())? {
                 Some(token) => Ok(token.item_u32(model.stream())?),

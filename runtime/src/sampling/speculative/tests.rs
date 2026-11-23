@@ -1,4 +1,5 @@
 use super::*;
+use crate::backend::SamplingLogits;
 
 const SAMPLING: DraftSampling = DraftSampling { temperature: 1.0, top_p: 1.0, top_k: 0 };
 
@@ -44,5 +45,31 @@ fn certain_drafts_are_all_kept() -> Result<()> {
     let certain = [-100.0, 100.0, -100.0];
     let rows: [&[f32]; 3] = [&certain, &certain, &[0.0, 0.0, 100.0]];
     assert_eq!(verify_drafts(&rows, &[1, 1], SAMPLING, 7)?, (2, 2));
+    Ok(())
+}
+
+#[test]
+fn sampled_steps_are_the_device_sampled_kinds() {
+    let step = SampledStep::of(&SamplingLogits::SampleTopK {
+        k: 20,
+        vocab_size: 100,
+        temperature: 0.7,
+        draw: 0.25,
+    });
+    assert_eq!(
+        step,
+        Some(SampledStep {
+            sampling: DraftSampling { temperature: 0.7, top_p: 1.0, top_k: 20 },
+            draw: 0.25,
+            vocab_size: 100,
+        })
+    );
+    assert_eq!(SampledStep::of(&SamplingLogits::None), None);
+    assert_eq!(SampledStep::of(&SamplingLogits::Full), None);
+}
+
+#[test]
+fn seeds_put_the_position_above_the_draw() -> Result<()> {
+    assert_eq!(speculative_seed(0.5, 3)?, u64::from(0.5_f32.to_bits()) | (3 << 32));
     Ok(())
 }

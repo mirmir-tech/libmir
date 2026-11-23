@@ -3,14 +3,6 @@ use mircuda::DeviceBuffer;
 use super::{CudaTensor, TensorStorage};
 
 impl CudaTensor {
-    pub(crate) fn from_u8(name: String, shape: Vec<usize>, buffer: DeviceBuffer<u8>) -> Self {
-        Self {
-            name,
-            shape,
-            storage: TensorStorage::U8(buffer),
-        }
-    }
-
     pub(crate) fn from_u32(name: String, shape: Vec<usize>, buffer: DeviceBuffer<u32>) -> Self {
         Self {
             name,

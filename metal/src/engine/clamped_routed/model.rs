@@ -62,8 +62,10 @@ impl ClampedRoutedModel {
         let windows = lowering
             .iter()
             .map(|layer| match layer.mixer {
-                MixerLowering::Softmax { window, .. } => window,
-                MixerLowering::Linear | MixerLowering::StateSpace => {
+                MixerLowering::Softmax { window, .. } => {
+                    window.and_then(models::semantic::AttentionWindow::sliding)
+                },
+                MixerLowering::Linear | MixerLowering::StateSpace | MixerLowering::Latent => {
                     unreachable!("validated sink-attention mixer")
                 },
             })

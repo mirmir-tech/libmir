@@ -7,8 +7,17 @@ use uuid::Uuid;
 use super::super::{CudaSharedRoutedLayerState, SharedRoutedLayerTemplate};
 use crate::{
     CudaAffineGatedDeltaMoeExecution, CudaAffineGatedFullAttentionMoeExecution,
-    CudaAttentionHybridExecution, CudaMamba2HybridExecution, Error, Result,
+    CudaAttentionHybridExecution, CudaLatentAttentionExecution, CudaMamba2HybridExecution, Error,
+    ExecutionPhase, Result,
 };
+
+const fn phase(tokens: usize) -> ExecutionPhase {
+    if tokens == 1 {
+        ExecutionPhase::Decode
+    } else {
+        ExecutionPhase::Prefill
+    }
+}
 
 #[derive(Debug)]
 pub(super) enum SharedRoutedLayerExecution {
@@ -16,6 +25,7 @@ pub(super) enum SharedRoutedLayerExecution {
     Full(Box<CudaAffineGatedFullAttentionMoeExecution>),
     Mamba2(Box<CudaMamba2HybridExecution>),
     Attention(Box<CudaAttentionHybridExecution>),
+    Latent(Box<CudaLatentAttentionExecution>),
 }
 
 /// The sequence-level context of one plan pass.
@@ -40,6 +50,9 @@ impl SharedRoutedLayerExecution {
             },
             SharedRoutedLayerTemplate::Attention(layer) => {
                 Self::Attention(Box::new(layer.prepare(tokens)?))
+            },
+            SharedRoutedLayerTemplate::Latent(layer) => {
+                Self::Latent(Box::new(layer.prepare_phase(tokens, phase(tokens))?))
             },
         })
     }
@@ -91,6 +104,13 @@ impl SharedRoutedLayerExecution {
             (Self::Attention(layer), CudaSharedRoutedLayerState::Attention(state)) => {
                 layer.execute(input, state, &write()?, step.table, step.start_position, output)
             },
+            (Self::Latent(layer), CudaSharedRoutedLayerState::Latent(state)) => layer.execute(
+                input,
+                state,
+                step.table,
+                (step.start_position, step.positions),
+                output,
+            ),
             _ => Err(Error::InvalidDecoderKernel("shared-routed execution and state kinds differ")),
         }
     }

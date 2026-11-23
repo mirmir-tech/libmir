@@ -1,3 +1,4 @@
+mod latent;
 mod metal;
 use std::collections::BTreeSet;
 
@@ -100,7 +101,9 @@ fn cuda(
     actual: &str,
 ) -> (AdmissionStatus, String) {
     if execution.is_some_and(|contract| {
-        has_dense_routed_experts(contract) && !supports_dense_selected_experts(contract)
+        has_dense_routed_experts(contract)
+            && !supports_dense_selected_experts(contract)
+            && !latent::supported(contract)
     }) {
         return (
             AdmissionStatus::Unsupported,
@@ -160,6 +163,7 @@ fn supports_dense_selected_experts(contract: &DecoderExecutionContract) -> bool 
             routed:
                 models::semantic::RoutedExpertsSpec {
                     activation: models::semantic::ActivationSpec::SwiGlu { clamp: Some(_), .. },
+                    group_limit: None,
                     ..
                 },
             shared: None,
@@ -170,6 +174,7 @@ fn supports_dense_selected_experts(contract: &DecoderExecutionContract) -> bool 
                 models::semantic::RoutedExpertsSpec {
                     activation: models::semantic::ActivationSpec::GeluTanh,
                     router_normalization: models::semantic::RouterNormalization::SoftmaxTopK,
+                    group_limit: None,
                     ..
                 },
             ..
@@ -184,6 +189,7 @@ fn supports_dense_selected_experts(contract: &DecoderExecutionContract) -> bool 
                 models::semantic::RoutedExpertsSpec {
                     activation: models::semantic::ActivationSpec::SwiGlu { clamp: None, .. },
                     router_normalization: models::semantic::RouterNormalization::SoftmaxTopK,
+                    group_limit: None,
                     ..
                 },
             shared: Some(shared),

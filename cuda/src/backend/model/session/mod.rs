@@ -46,8 +46,8 @@ pub struct CudaMoeModelSession {
     prefill_first: DeviceBuffer<bf16>,
     prefill_second: DeviceBuffer<bf16>,
     logits: DeviceBuffer<bf16>,
-    logit_softcap: Option<crate::kernels::LogitSoftcap>,
-    logit_softcap_cap: Option<f32>,
+    logit_shaper: Option<crate::kernels::LogitShapingBf16>,
+    logit_shaping: Option<crate::kernels::LogitShaping>,
 }
 
 impl CudaMoeModelSession {
@@ -72,14 +72,18 @@ impl CudaMoeModelSession {
         prefill_first: DeviceBuffer<bf16>,
         prefill_second: DeviceBuffer<bf16>,
         logits: DeviceBuffer<bf16>,
-        logit_softcap_cap: Option<f32>,
+        logit_shaping: Option<crate::kernels::LogitShaping>,
     ) -> Result<Self> {
         if layers.is_empty() {
             return Err(Error::InvalidDecoderKernel("CUDA model session requires layers"));
         }
-        let logit_softcap = logit_softcap_cap
-            .map(|cap| {
-                crate::kernels::LogitSoftcap::compile(&backend.inner.compiler, logits.len(), cap)
+        let logit_shaper = logit_shaping
+            .map(|shaping| {
+                crate::kernels::LogitShapingBf16::compile(
+                    &backend.inner.compiler,
+                    logits.len(),
+                    shaping,
+                )
             })
             .transpose()?;
         Ok(Self {
@@ -106,8 +110,8 @@ impl CudaMoeModelSession {
             prefill_first,
             prefill_second,
             logits,
-            logit_softcap,
-            logit_softcap_cap,
+            logit_shaper,
+            logit_shaping,
         })
     }
 
@@ -180,9 +184,9 @@ impl CudaMoeModelSession {
             self.output_projection.execute(&self.first, &mut self.logits, sampling)?;
         }
         if !matches!(*sampling, SamplingLogits::None)
-            && let Some(softcap) = &self.logit_softcap
+            && let Some(shaper) = &self.logit_shaper
         {
-            softcap.execute(&self.stream, &mut self.logits)?;
+            shaper.execute(&self.stream, &mut self.logits)?;
         }
         Ok(&self.logits)
     }

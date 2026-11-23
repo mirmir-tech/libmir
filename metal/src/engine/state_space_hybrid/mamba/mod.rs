@@ -5,7 +5,7 @@ mod recurrence;
 mod state;
 
 use models::{
-    layout::{Mamba2Config, StateSpaceStateDType, TimeStepBound},
+    layout::{Mamba2Config, StateSpaceLayout, StateSpaceStateDType, TimeStepBound},
     weights::{StateSpaceMixerBindings, TensorBinding, TensorStorage},
 };
 use recurrence::RecurrenceWeights;
@@ -82,7 +82,7 @@ impl Mamba2Mixer {
                 stream,
             )?,
             recurrence: RecurrenceWeights {
-                decay_log: tensors.get(&bindings.decay_log.source)?,
+                decay_log: decay_log(tensors.get(&bindings.decay_log.source)?, config, stream)?,
                 skip_scale: tensors.get(&bindings.skip_scale.source)?,
                 time_bias: tensors.get(&bindings.time_bias.source)?,
             },
@@ -165,5 +165,14 @@ pub(super) fn dense_bias(binding: &TensorBinding) -> Result<Option<&str>> {
     match &binding.storage {
         TensorStorage::Dense { bias, .. } => Ok(bias.as_deref()),
         _ => Err(Error::InvalidModel("Mamba-2 convolution must have dense storage".into())),
+    }
+}
+
+/// `A_log`, taken back from llama.cpp's `-exp(A_log)` when the checkpoint
+/// stores that.
+fn decay_log(stored: Array, config: &Mamba2Config, stream: &Stream) -> Result<Array> {
+    match config.layout {
+        StateSpaceLayout::Checkpoint => Ok(stored),
+        StateSpaceLayout::LlamaCpp => crate::engine::gated_delta::decay_log(&stored, stream),
     }
 }

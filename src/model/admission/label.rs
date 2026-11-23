@@ -13,7 +13,7 @@ impl WeightEncoding {
                 format.scale_dtype,
                 format.zero_point
             ),
-            Self::PackedInt8 { format } | Self::PackedInt4 { format } => format!(
+            Self::PackedInteger { format } => format!(
                 "Compressed INT{} {:?}/{:?}",
                 format.bits.get(),
                 format.scale_strategy,
@@ -47,6 +47,7 @@ impl WeightEncoding {
             Self::MxFp4 { format } => format!("MXFP4 B{}", format.block_size),
             Self::MxFp8 { format } => format!("MXFP8 B{}", format.block_size),
             Self::NvFp4 { format } => format!("NVFP4 B{}", format.block_size),
+            Self::Ggml { format } => format!("GGML {}", format.ggml_type),
         }
     }
 }

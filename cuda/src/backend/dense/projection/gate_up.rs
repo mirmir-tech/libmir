@@ -3,7 +3,7 @@ use mircuda::{DeviceBuffer, Stream, bf16};
 use super::super::{CudaBackend, DenseGateUpWeights, DenseSwiGluConfig};
 use crate::{
     Bf16LinearPair, CudaTensor, DenseExecution, DensePlanRequest, DenseRole, DirectFp8Bf16Linear,
-    Error, ExecutionPhase, MxFp4Bf16Linear, MxFp8Bf16Linear, NvFp4Bf16Pack,
+    Error, ExecutionPhase, GgmlBf16Linear, MxFp4Bf16Linear, MxFp8Bf16Linear, NvFp4Bf16Pack,
     PackedIntegerBf16Linear, ProjectionFormat, Result, RmsNormBf16,
     backend::linear::AffineProjection,
 };
@@ -12,6 +12,7 @@ pub(in crate::backend::dense) enum GateUpProjection {
     Bf16(Bf16LinearPair),
     DirectFp8(Box<[DirectFp8Bf16Linear; 2]>),
     MxFp4(Box<[MxFp4Bf16Linear; 2]>),
+    Ggml(Box<[GgmlBf16Linear; 2]>),
     MxFp8(Box<[MxFp8Bf16Linear; 2]>),
     PackedInteger(Box<[PackedIntegerBf16Linear; 2]>),
     NvFp4(Box<NvFp4Bf16Pack<2>>),
@@ -103,33 +104,12 @@ impl GateUpProjection {
             ProjectionFormat::MxFp4 => {
                 Ok(Self::MxFp4(super::mxfp4::prepare_gate_up(backend, tokens, weights)?))
             },
-            ProjectionFormat::PackedInteger => {
-                let DenseGateUpWeights::PackedInteger { gate, up } =
-                    weights.ok_or(Error::InvalidExecutionPlan(
-                        "packed integer MLP requires prepared gate/up weights",
-                    ))?
-                else {
-                    return Err(Error::InvalidExecutionPlan(
-                        "packed integer MLP received other gate/up weights",
-                    ));
-                };
-                Ok(Self::PackedInteger(Box::new([
-                    PackedIntegerBf16Linear::new(
-                        backend,
-                        tokens,
-                        config.attention.hidden_size,
-                        config.intermediate_size,
-                        gate,
-                    )?,
-                    PackedIntegerBf16Linear::new(
-                        backend,
-                        tokens,
-                        config.attention.hidden_size,
-                        config.intermediate_size,
-                        up,
-                    )?,
-                ])))
+            ProjectionFormat::Ggml => {
+                Ok(Self::Ggml(super::ggml::prepare_gate_up(backend, tokens, weights)?))
             },
+            ProjectionFormat::PackedInteger => Ok(Self::PackedInteger(
+                super::packed::prepare_gate_up(backend, config, tokens, weights)?,
+            )),
             ProjectionFormat::NvFp4 => {
                 let DenseGateUpWeights::NvFp4 { gate, up } = weights.ok_or(
                     Error::InvalidExecutionPlan("NVFP4 MLP requires prepared gate/up weights"),
@@ -151,7 +131,7 @@ impl GateUpProjection {
         stream: &Stream,
         input: &DeviceBuffer<bf16>,
         input_norm: &RmsNormBf16,
-        norm_weight: &CudaTensor,
+        norm_weight: Option<&CudaTensor>,
         weights: DenseGateUpWeights<'_>,
         buffers: &mut GateUpBuffers<'_>,
     ) -> Result<bool> {
@@ -162,7 +142,7 @@ impl GateUpProjection {
                         "affine gate/up operation received non-affine weights",
                     ));
                 };
-                input_norm.execute(input, norm_weight, buffers.normalized)?;
+                input_norm.apply(input, norm_weight, buffers.normalized)?;
                 for ((operation, weight), output) in
                     operations.iter().zip([gate, up]).zip(buffers.separate.iter_mut())
                 {
@@ -171,7 +151,7 @@ impl GateUpProjection {
                 Ok(true)
             },
             Self::Bf16(operation) => {
-                input_norm.execute(input, norm_weight, buffers.normalized)?;
+                input_norm.apply(input, norm_weight, buffers.normalized)?;
                 operation.execute(buffers.normalized, weights.require_bf16()?, buffers.packed)?;
                 Ok(false)
             },
@@ -181,7 +161,7 @@ impl GateUpProjection {
                         "direct FP8 gate/up operation received other weights",
                     ));
                 };
-                input_norm.execute(input, norm_weight, buffers.normalized)?;
+                input_norm.apply(input, norm_weight, buffers.normalized)?;
                 for ((operation, weight), output) in
                     operations.iter().zip([gate, up]).zip(buffers.separate.iter_mut())
                 {
@@ -195,20 +175,12 @@ impl GateUpProjection {
             Self::MxFp4(operations) => super::mxfp4::execute_gate_up(
                 operations, input, input_norm, norm_weight, weights, buffers,
             ),
-            Self::PackedInteger(operations) => {
-                let DenseGateUpWeights::PackedInteger { gate, up } = weights else {
-                    return Err(Error::InvalidExecutionPlan(
-                        "packed integer MLP operation received other weights",
-                    ));
-                };
-                input_norm.execute(input, norm_weight, buffers.normalized)?;
-                for ((operation, weight), output) in
-                    operations.iter().zip([gate, up]).zip(buffers.separate.iter_mut())
-                {
-                    operation.execute(buffers.normalized, weight, output)?;
-                }
-                Ok(true)
-            },
+            Self::Ggml(operations) => super::ggml::execute_gate_up(
+                operations, input, input_norm, norm_weight, weights, buffers,
+            ),
+            Self::PackedInteger(operations) => super::packed::execute_gate_up(
+                operations, input, input_norm, norm_weight, weights, buffers,
+            ),
             Self::NvFp4(operation) => {
                 let DenseGateUpWeights::NvFp4 { gate, up } = weights else {
                     return Err(Error::InvalidExecutionPlan(
@@ -218,7 +190,7 @@ impl GateUpProjection {
                 operation.execute_rms_norm_with(
                     [gate, up],
                     input,
-                    input_norm.weight(norm_weight)?,
+                    input_norm.fused_weight(norm_weight)?,
                     input_norm.epsilon(),
                     buffers.separate,
                 )?;
@@ -230,7 +202,7 @@ impl GateUpProjection {
                         "block FP8 gate/up plan lacks quantized weight",
                     ));
                 };
-                input_norm.execute(input, norm_weight, buffers.normalized)?;
+                input_norm.apply(input, norm_weight, buffers.normalized)?;
                 quantized.execute(stream, buffers.normalized, buffers.packed)?;
                 Ok(false)
             },
@@ -240,7 +212,7 @@ impl GateUpProjection {
                         "FP8 plus INT4 gate/up plan lacks quantized weight",
                     ));
                 };
-                input_norm.execute(input, norm_weight, buffers.normalized)?;
+                input_norm.apply(input, norm_weight, buffers.normalized)?;
                 quantized.execute(stream, buffers.normalized, buffers.packed)?;
                 Ok(false)
             },

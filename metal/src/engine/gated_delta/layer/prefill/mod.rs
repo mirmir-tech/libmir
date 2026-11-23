@@ -44,7 +44,7 @@ impl GatedDeltaLayer {
         } else {
             return Ok(None);
         };
-        let mut packed = GatedDeltaState { value, convolution, offset };
+        let mut packed = GatedDeltaState { value, convolution, offset, trail: None };
         let gates = self.row_gates(input, stream)?;
         let output =
             self.forward_with_gates(input, &mut packed, Some(gates), stream, |output| {
@@ -78,7 +78,7 @@ impl GatedDeltaLayer {
         let mut rows = Vec::new();
         for row in 0..shape[0] {
             let input = input.slice(&[row, 0, 0], &[row + 1, shape[1], shape[2]], stream)?;
-            rows.push(self.out_proj.forward(&input, stream)?);
+            rows.push(self.project_output(&input, stream)?);
         }
         Array::concatenate(&rows.iter().collect::<Vec<_>>(), 0, stream)
     }

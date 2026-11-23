@@ -39,6 +39,6 @@ fn binds_official_mistral_dense_checkpoint_names() -> Result<()> {
     assert_eq!(boundary.output.source, "lm_head.weight");
     assert_eq!(layer.attention.query.shape, [32, 32]);
     assert_eq!(layer.attention.key.shape, [16, 32]);
-    assert_eq!(layer.down.shape, [32, 64]);
+    assert_eq!(layer.feed_forward.gated()?.down.shape, [32, 64]);
     Ok(())
 }

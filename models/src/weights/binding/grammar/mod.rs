@@ -4,10 +4,14 @@ use super::{
 };
 use crate::{
     error::{ModelsError, Result},
-    semantic::{ActivationSpec, FeedForwardSpec, MixerSpec, RoutedExpertsSpec, SemanticModelSpec},
+    semantic::{
+        ActivationSpec, FeedForwardSpec, MixerSpec, QkNormalization, RoutedExpertsSpec,
+        SemanticModelSpec,
+    },
 };
 
 mod dense;
+mod latent;
 mod prediction;
 mod state_space;
 
@@ -16,6 +20,7 @@ pub(super) fn validate(spec: &SemanticModelSpec, tensors: &[TensorBinding]) -> R
     clamped_routed(spec, tensors)?;
     shared_routed(spec, tensors)?;
     state_space::validate(spec, tensors)?;
+    latent::validate(spec, tensors)?;
     prediction::validate(spec, tensors)?;
     dense::validate(spec, tensors)
 }
@@ -90,7 +95,8 @@ fn has_expert(tensors: &[TensorBinding], index: usize, projection: ExpertProject
 
 fn shared_routed(spec: &SemanticModelSpec, tensors: &[TensorBinding]) -> Result<()> {
     for layer in &spec.decoder.layers {
-        let FeedForwardSpec::Routed { routed, shared: Some(_) } = &layer.feed_forward else {
+        let FeedForwardSpec::Routed { routed, shared: Some(shared_spec) } = &layer.feed_forward
+        else {
             continue;
         };
         let separate =
@@ -112,7 +118,8 @@ fn shared_routed(spec: &SemanticModelSpec, tensors: &[TensorBinding]) -> Result<
         let complete = usize::from(separate) + usize::from(fused) + usize::from(individual) == 1
             && shared
             && has_layer(tensors, layer.index, LayerTensorRole::Router)
-            && has_layer(tensors, layer.index, LayerTensorRole::SharedExpertOutputGate)
+            && (!shared_spec.gated_output
+                || has_layer(tensors, layer.index, LayerTensorRole::SharedExpertOutputGate))
             && mixer_complete(&layer.mixer, tensors, layer.index);
         if !complete {
             return Err(invalid(format!(
@@ -154,7 +161,13 @@ fn mixer_complete(mixer: &MixerSpec, tensors: &[TensorBinding], index: usize) ->
         .into_iter()
         .all(|tensor| has_layer(tensors, index, LayerTensorRole::LinearAttention { tensor })),
         MixerSpec::StateSpace(_) => false,
-        MixerSpec::SoftmaxAttention(_) => {
+        MixerSpec::LatentAttention(_) => latent::complete(mixer, tensors, index),
+        // Q/K norm tensors exactly when the layer's Q/K norms are learned.
+        MixerSpec::SoftmaxAttention(attention) => {
+            let normalized = !matches!(
+                attention.qk_normalization,
+                QkNormalization::None | QkNormalization::QueryKeyUnitRms
+            );
             [
                 AttentionProjectionRole::Query,
                 AttentionProjectionRole::Key,
@@ -163,8 +176,8 @@ fn mixer_complete(mixer: &MixerSpec, tensors: &[TensorBinding], index: usize) ->
             ]
             .into_iter()
             .all(|projection| has_attention(tensors, index, projection))
-                && has_layer(tensors, index, LayerTensorRole::QueryNorm)
-                && has_layer(tensors, index, LayerTensorRole::KeyNorm)
+                && has_layer(tensors, index, LayerTensorRole::QueryNorm) == normalized
+                && has_layer(tensors, index, LayerTensorRole::KeyNorm) == normalized
         },
     }
 }

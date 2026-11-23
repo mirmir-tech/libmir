@@ -137,7 +137,13 @@ impl SharedExpertMoe {
         let up = self.shared_up.forward(input, stream)?;
         let activation = gate.silu_mul(&up, stream)?;
         let down = self.shared_down.forward(&activation, stream)?;
-        let output_gate = self.shared_output_gate.forward(input, stream)?;
+        let output_gate = self
+            .shared_output_gate
+            .as_ref()
+            .ok_or_else(|| {
+                crate::engine::Error::InvalidModel("probe needs a gated shared expert".into())
+            })?
+            .forward(input, stream)?;
         let composed = output_gate.sigmoid_mul(&down, stream)?;
         assert_eq!(
             composed.to_vec_f32(stream)?,

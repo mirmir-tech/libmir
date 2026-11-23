@@ -1,6 +1,14 @@
 #include <cuda_bf16.h>
 #include <cuda_fp8.h>
 
+// Gemma 2 caps attention scores as `cap * tanh(score / cap)` when the module
+// is compiled with `LIBMIR_SCORE_SOFTCAP`; otherwise scores pass unchanged.
+#ifdef LIBMIR_SCORE_SOFTCAP
+#define SCORE_CAP(score) (LIBMIR_SCORE_SOFTCAP * tanhf((score) / LIBMIR_SCORE_SOFTCAP))
+#else
+#define SCORE_CAP(score) (score)
+#endif
+
 __device__ float load_page(const unsigned char* pages, unsigned int index) {
 #ifdef LIBMIR_KV_FP8
   __nv_fp8_e4m3 value;
@@ -29,8 +37,7 @@ extern "C" __global__ void libmir_cuda_paged_prefill_attention_bf16(
   const bool image_query = query_position >= image_start && query_position < image_end;
   const unsigned int context = image_query ? image_end : query_position + 1;
   const unsigned int causal_context = query_position + 1;
-  const unsigned int first = window > 0 && causal_context > window
-      ? causal_context - window : 0;
+  const unsigned int first = libmir_window_first(causal_context, window);
   constexpr unsigned int token_tile = 8u;
   float accumulators[2] = {0.0f, 0.0f};
   const unsigned int warp = lane / 32u;
@@ -69,7 +76,7 @@ extern "C" __global__ void libmir_cuda_paged_prefill_attention_bf16(
       dot += __shfl_down_sync(0xffffffffu, dot, offset);
     }
     if (warp_lane == 0u) {
-      scores[warp] = token < context ? dot * scale : -3.402823466e+38F;
+      scores[warp] = token < context ? SCORE_CAP(dot * scale) : -3.402823466e+38F;
     }
     __syncthreads();
     if (lane == 0u) {

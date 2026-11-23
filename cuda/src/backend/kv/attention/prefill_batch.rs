@@ -1,4 +1,5 @@
 use mircuda::{DeviceBuffer, Stream, bf16};
+use models::semantic::AttentionWindow;
 
 use super::super::{PagedKvCache, PagedPrefillBatch};
 use crate::{
@@ -31,6 +32,7 @@ impl BatchedPrefillPagedAttentionBf16 {
             head_dim: storage.key_head_dim,
             value_head_dim: storage.value_head_dim,
             dtype: storage.cache.dtype,
+            score_softcap: None,
         };
         Ok(Self {
             operation: BatchedPagedPrefillAttention::compile(
@@ -49,7 +51,7 @@ impl BatchedPrefillPagedAttentionBf16 {
         cache: &PagedKvCache,
         batch: &PagedPrefillBatch,
         output: &mut DeviceBuffer<bf16>,
-        window: Option<usize>,
+        window: Option<AttentionWindow>,
         scale: f32,
     ) -> Result<()> {
         if cache.storage_spec() != self.storage

@@ -134,7 +134,7 @@ pub(super) fn capture_block(
     table: &BlockTable,
     output: DeviceBuffer<bf16>,
 ) -> Result<CapturedDecodeMoeBlockBf16> {
-    let kernels = Kernels::new(&block.attention);
+    let kernels = Kernels::new(&block.attention)?;
     let configs = Configs::new(&block.attention)?;
     let stream = block.stream.clone();
     let resources = Resources {

@@ -17,19 +17,29 @@ use crate::engine::{
 pub struct HybridLinearMoeModel {
     pub(super) layers: Vec<HybridLinearMoeLayer>,
     mixers: Vec<MixerLowering>,
-    cache_step: usize,
+    pub(super) cache_step: usize,
     pub(super) embedding: BoundEmbedding,
-    pub(super) output: BoundLinear,
+    /// `None`: logits project through the tied embedding (Qwen3.5-4B).
+    pub(super) output: Option<BoundLinear>,
     pub(super) final_norm: NormWeight,
     pub(super) rms_norm_eps: f32,
     pub(super) hidden_size: usize,
     expert_fusion: ExpertFusionDecision,
+    /// The multi-token prediction module, loaded for speculative decoding.
+    pub(crate) prediction: Option<super::prediction::PredictionModule>,
 }
 
 impl HybridLinearMoeModel {
     #[cfg(test)]
     pub(crate) fn project_prefill_output(&self, hidden: &Array, stream: &Stream) -> Result<Array> {
-        self.output.forward(hidden, stream)
+        self.project_logits(hidden, stream)
+    }
+
+    pub(crate) fn project_logits(&self, hidden: &Array, stream: &Stream) -> Result<Array> {
+        self.output.as_ref().map_or_else(
+            || self.embedding.project(hidden, stream),
+            |output| output.forward(hidden, stream),
+        )
     }
 
     pub(crate) fn has_decode_plan_candidates(&self) -> bool {
@@ -44,22 +54,31 @@ impl HybridLinearMoeModel {
         cache_step: usize,
         stream: &Stream,
     ) -> Result<Self> {
-        let compatible = lowering.len() == decoder.num_hidden_layers
-            && lowering.iter().all(|layer| layer.feed_forward == lowering[0].feed_forward)
-            && matches!(
-                lowering.first().map(|layer| layer.feed_forward),
-                Some(FeedForwardLowering::SharedRouted | FeedForwardLowering::Dense)
-            )
-            && lowering.iter().any(|layer| layer.mixer == MixerLowering::Linear);
-        if !compatible || decoder.tie_word_embeddings {
-            return Err(Error::InvalidModel(
-                "hybrid linear runtime requires untied dense or shared-expert decoder weights"
-                    .into(),
-            ));
-        }
-        let norm_shift = norm_shift(tensors, bindings, lowering)?;
+        let latent = super::compatibility::check(decoder, lowering)?;
+        // llama.cpp's GGUF conversion folds the unit offset into the norms.
+        let folded = decoder
+            .linear_attention
+            .as_ref()
+            .is_some_and(|linear| linear.layout == models::layout::LinearAttentionLayout::LlamaCpp);
+        // Latent decoders keep plain RMS norm weights.
+        let norm_shift = if folded || latent {
+            0.0
+        } else {
+            norm_shift(tensors, bindings, lowering)?
+        };
         let mut layers = Vec::with_capacity(decoder.num_hidden_layers);
         for (index, lowered) in lowering.iter().enumerate() {
+            if lowered.mixer == MixerLowering::Latent {
+                layers.push(HybridLinearMoeLayer::load_latent(
+                    tensors,
+                    decoder,
+                    index,
+                    bindings.latent_decoder_layer(index)?,
+                    *lowered,
+                    stream,
+                )?);
+                continue;
+            }
             layers.push(HybridLinearMoeLayer::load(
                 tensors,
                 decoder,
@@ -70,19 +89,31 @@ impl HybridLinearMoeModel {
                 stream,
             )?);
         }
-        let boundary = bindings.decoder_boundary()?;
+        let boundary = bindings.decoder_boundary_with_tied_output(decoder.tie_word_embeddings)?;
         let expert_fusion = configure_expert_fusion(
             &mut layers,
             stream,
-            FusionPlanner::new(stream).expert_mode(lowering[0].feed_forward),
+            FusionPlanner::new(stream).expert_mode(
+                lowering
+                    .iter()
+                    .map(|layer| layer.feed_forward)
+                    .find(|feed_forward| *feed_forward == FeedForwardLowering::SharedRouted)
+                    .unwrap_or(lowering[0].feed_forward),
+            ),
         )?;
         super::decode_plan::prepare(&mut layers, stream)?;
+        let prediction = super::prediction::PredictionModule::load(
+            tensors, decoder, bindings, lowering, norm_shift, stream,
+        )?;
         Ok(Self {
+            prediction,
             layers,
             mixers: lowering.iter().map(|layer| layer.mixer).collect(),
             cache_step,
             embedding: BoundEmbedding::load(tensors, boundary.embedding, stream)?,
-            output: BoundLinear::load(tensors, boundary.output, stream)?,
+            output: (!decoder.tie_word_embeddings)
+                .then(|| BoundLinear::load(tensors, boundary.output, stream))
+                .transpose()?,
             final_norm: adjusted_norm(tensors, boundary.final_norm, norm_shift, stream)?,
             rms_norm_eps: decoder.rms_norm_eps.to_string().parse()?,
             hidden_size: decoder.hidden_size,
@@ -109,7 +140,7 @@ impl HybridLinearMoeModel {
         stream: &Stream,
     ) -> Result<Array> {
         let hidden = self.forward_hidden(token_ids, cache, position, false, stream)?;
-        let logits = self.output.forward(&hidden, stream)?;
+        let logits = self.project_logits(&hidden, stream)?;
         decode::graph::export_once(&logits, stream)?;
         Ok(logits)
     }

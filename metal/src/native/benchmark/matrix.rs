@@ -116,6 +116,9 @@ fn expected_digest(runtime: crate::engine::lowering::DecoderRuntime) -> Result<&
         crate::engine::lowering::DecoderRuntime::StateSpaceHybrid => {
             Err(Error::Benchmark("context matrix has no state-space reference digest".into()))
         },
+        crate::engine::lowering::DecoderRuntime::LatentAttention => Err(Error::Benchmark(
+            "context matrix has no latent-attention reference digest".into(),
+        )),
     }
 }
 

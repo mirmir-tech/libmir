@@ -1,4 +1,5 @@
 use mircuda::{DeviceBuffer, Stream, bf16};
+use models::semantic::AttentionWindow;
 
 use super::{SplitAttentionWorkspace, SplitPagedAttention};
 use crate::Result;
@@ -16,7 +17,7 @@ impl SplitPagedAttention {
         output: &DeviceBuffer<bf16>,
         token_count: usize,
         block_count: usize,
-        window: Option<usize>,
+        window: Option<AttentionWindow>,
         scale: f32,
     ) -> Result<usize> {
         let active = self.validate(

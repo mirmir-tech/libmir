@@ -1,20 +1,20 @@
 use std::collections::HashSet;
 
 use models::weights::{
-    DenseDecoderLayerBindings, TensorBinding, TensorCatalog, TensorInfo, TensorStorage,
+    DenseLayerFeedForwardBindings, TensorBinding, TensorCatalog, TensorInfo, TensorStorage,
 };
 
-use crate::{CudaBackend, CudaTensorSet, Error, ProjectionFormat, Result};
+use crate::{
+    CudaBackend, CudaTensorSet, Error, ProjectionFormat, Result,
+    checkpoint::dense::DenseLayerBindings,
+};
 
 pub(super) struct DenseLayerSource<'a> {
     pub tensors: Vec<&'a TensorInfo>,
 }
 
 impl<'a> DenseLayerSource<'a> {
-    pub fn discover(
-        catalog: &'a TensorCatalog,
-        bindings: DenseDecoderLayerBindings<'_>,
-    ) -> Result<Self> {
+    pub fn discover(catalog: &'a TensorCatalog, bindings: DenseLayerBindings<'_>) -> Result<Self> {
         let mut seen = HashSet::new();
         let tensors = bindings
             .physical_sources()
@@ -28,7 +28,7 @@ impl<'a> DenseLayerSource<'a> {
     pub(super) fn upload(
         &self,
         backend: &CudaBackend,
-        bindings: DenseDecoderLayerBindings<'_>,
+        bindings: DenseLayerBindings<'_>,
         format: ProjectionFormat,
     ) -> Result<CudaTensorSet> {
         let mut upload = backend.begin_tensor_upload();
@@ -36,6 +36,22 @@ impl<'a> DenseLayerSource<'a> {
             let cast = backend.prepare_dense_cast()?;
             for tensor in &self.tensors {
                 upload.enqueue_as_bf16(tensor, &cast)?;
+            }
+        } else if format == ProjectionFormat::Ggml {
+            // GGUF keeps norms in F32 beside the GGML blocks; projection
+            // scales and a sigmoid router's correction bias stay F32.
+            let raw = bindings
+                .bindings()
+                .into_iter()
+                .flat_map(TensorBinding::full_precision_sources)
+                .collect::<HashSet<_>>();
+            let cast = backend.prepare_dense_cast()?;
+            for tensor in &self.tensors {
+                if raw.contains(tensor.name.as_str()) {
+                    upload.enqueue(tensor)?;
+                } else {
+                    upload.enqueue_float_as_bf16(tensor, &cast)?;
+                }
             }
         } else if format == ProjectionFormat::PackedInteger {
             let metadata = packed_shape_sources(bindings);
@@ -60,7 +76,7 @@ impl<'a> DenseLayerSource<'a> {
     }
 }
 
-fn dense_sources(bindings: DenseDecoderLayerBindings<'_>) -> HashSet<&str> {
+fn dense_sources(bindings: DenseLayerBindings<'_>) -> HashSet<&str> {
     layer_bindings(bindings)
         .into_iter()
         .filter(|binding| matches!(binding.storage, TensorStorage::Dense { .. }))
@@ -68,45 +84,48 @@ fn dense_sources(bindings: DenseDecoderLayerBindings<'_>) -> HashSet<&str> {
         .collect()
 }
 
-fn layer_bindings(bindings: DenseDecoderLayerBindings<'_>) -> Vec<&TensorBinding> {
+fn layer_bindings(bindings: DenseLayerBindings<'_>) -> Vec<&TensorBinding> {
     let mut values = vec![
-        bindings.input_norm,
         bindings.attention.query,
         bindings.attention.key,
         bindings.attention.value,
         bindings.attention.output,
-        bindings.post_attention_norm,
-        bindings.gate,
-        bindings.up,
-        bindings.down,
     ];
+    values.extend(bindings.input_norm.into_iter().chain(bindings.post_attention_norm));
+    values.extend(gated(bindings));
     values.extend(bindings.attention.query_norm);
     values.extend(bindings.attention.key_norm);
-    values.extend(bindings.sandwich.into_iter().flat_map(|sandwich| {
-        [sandwich.attention_output_norm, sandwich.feed_forward_output_norm, sandwich.layer_scale]
-    }));
+    if let Some(sandwich) = bindings.sandwich {
+        values.extend([sandwich.attention_output_norm, sandwich.feed_forward_output_norm]);
+        values.extend(sandwich.layer_scale);
+    }
     values
 }
 
-fn packed_shape_sources(bindings: DenseDecoderLayerBindings<'_>) -> HashSet<&str> {
+fn packed_shape_sources(bindings: DenseLayerBindings<'_>) -> HashSet<&str> {
     [
         bindings.attention.query,
         bindings.attention.key,
         bindings.attention.value,
         bindings.attention.output,
-        bindings.gate,
-        bindings.up,
-        bindings.down,
     ]
     .into_iter()
+    .chain(gated(bindings))
     .filter_map(|binding| match &binding.storage {
-        TensorStorage::PackedInt8 { shape, .. } | TensorStorage::PackedInt4 { shape, .. } => {
-            Some(shape.as_str())
-        },
+        TensorStorage::PackedInteger { shape, .. } => Some(shape.as_str()),
         TensorStorage::BitsAndBytes4Bit { quant_state, .. } => Some(quant_state.as_str()),
         _ => None,
     })
     .collect()
+}
+
+/// The gated MLP projections; routed layers have none.
+fn gated(bindings: DenseLayerBindings<'_>) -> Vec<&TensorBinding> {
+    match bindings.feed_forward {
+        DenseLayerFeedForwardBindings::Gated(value) => vec![value.gate, value.up, value.down],
+        DenseLayerFeedForwardBindings::Routed(_)
+        | DenseLayerFeedForwardBindings::SharedRouted(_) => Vec::new(),
+    }
 }
 
 fn required_tensor<'a>(catalog: &'a TensorCatalog, name: &str) -> Result<&'a TensorInfo> {

@@ -37,7 +37,8 @@ impl SharedRoutedCheckpoint {
                         Some(RecurrentCheckpoint::Mamba2(state.checkpoint()?))
                     },
                     CudaSharedRoutedLayerState::Full(_)
-                    | CudaSharedRoutedLayerState::Attention(_) => None,
+                    | CudaSharedRoutedLayerState::Attention(_)
+                    | CudaSharedRoutedLayerState::Latent(_) => None,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -73,9 +74,9 @@ impl SharedRoutedCheckpoint {
                     state.take_staged_checkpoint().map(RecurrentCheckpoint::Mamba2),
                     state.checkpoint_bytes(),
                 ),
-                CudaSharedRoutedLayerState::Full(_) | CudaSharedRoutedLayerState::Attention(_) => {
-                    None
-                },
+                CudaSharedRoutedLayerState::Full(_)
+                | CudaSharedRoutedLayerState::Attention(_)
+                | CudaSharedRoutedLayerState::Latent(_) => None,
             })
             .collect::<Vec<_>>();
         if staged == 0 {
@@ -107,7 +108,9 @@ impl SharedRoutedCheckpoint {
                 ) => state.restore(checkpoint)?,
                 (
                     None,
-                    CudaSharedRoutedLayerState::Full(_) | CudaSharedRoutedLayerState::Attention(_),
+                    CudaSharedRoutedLayerState::Full(_)
+                    | CudaSharedRoutedLayerState::Attention(_)
+                    | CudaSharedRoutedLayerState::Latent(_),
                 ) => {},
                 _ => {
                     return Err(Error::InvalidDecoderKernel(
@@ -132,8 +135,9 @@ impl CudaSharedRoutedModelSession {
             match state {
                 CudaSharedRoutedLayerState::Linear(state) => state.arm_checkpoint(tokens),
                 CudaSharedRoutedLayerState::Mamba2(state) => state.arm_checkpoint(tokens),
-                CudaSharedRoutedLayerState::Full(_) | CudaSharedRoutedLayerState::Attention(_) => {
-                },
+                CudaSharedRoutedLayerState::Full(_)
+                | CudaSharedRoutedLayerState::Attention(_)
+                | CudaSharedRoutedLayerState::Latent(_) => {},
             }
         }
     }

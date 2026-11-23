@@ -40,7 +40,10 @@ impl SharedExpertMoe {
             self.separate_shared(input, stream)?
         };
         let output = self.shared_down.forward(&gate.silu_mul(&up, stream)?, stream)?;
-        self.shared_output_gate.forward(input, stream)?.sigmoid_mul(&output, stream)
+        match &self.shared_output_gate {
+            Some(gate) => gate.forward(input, stream)?.sigmoid_mul(&output, stream),
+            None => Ok(output),
+        }
     }
 
     pub(crate) fn has_decode_plan_candidates(&self) -> bool {

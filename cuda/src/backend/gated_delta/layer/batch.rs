@@ -83,6 +83,7 @@ impl CudaAffineGatedDeltaExecution {
             backend,
             output: projection,
             transforms,
+            tiled_output,
             weights,
             batch_state,
             config,
@@ -154,7 +155,8 @@ impl CudaAffineGatedDeltaExecution {
                 &mut scratch.gated,
             )?;
         }
-        projection.execute(&scratch.gated, output)
+        let values = (&scratch.gated, &mut scratch.recurrent);
+        super::llama_cpp::project(tiled_output.as_ref(), stream, projection, values, output)
     }
 
     pub(crate) fn commit_packed(&self, states: &mut [&mut CudaGatedDeltaState]) -> Result<()> {

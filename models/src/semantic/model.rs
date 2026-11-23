@@ -21,6 +21,12 @@ pub struct DecoderSpec {
     /// Factor applied to token embeddings before the first layer.
     #[serde(default = "unit_multiplier", skip_serializing_if = "is_unit_multiplier")]
     pub embedding_multiplier: f64,
+    /// Factor on each residual branch before it joins the residual stream.
+    #[serde(default = "unit_multiplier", skip_serializing_if = "is_unit_multiplier")]
+    pub residual_multiplier: f64,
+    /// Divisor of the output logits.
+    #[serde(default = "unit_multiplier", skip_serializing_if = "is_unit_multiplier")]
+    pub logit_divisor: f64,
     pub layers: Vec<DecoderLayerSpec>,
     #[serde(default, skip_serializing_if = "BlockLayoutSpec::is_unified")]
     pub block_layout: BlockLayoutSpec,
@@ -96,8 +102,33 @@ pub struct DecoderLayerSpec {
     pub index: usize,
     pub input_norm: NormalizationSpec,
     pub post_attention_norm: NormalizationSpec,
+    /// Where the block normalizes: before each sub-block, or only on each
+    /// sub-block's output (`OLMo` 2).
+    #[serde(default, skip_serializing_if = "NormPlacement::is_pre")]
+    pub norm_placement: NormPlacement,
     pub mixer: MixerSpec,
     pub feed_forward: FeedForwardSpec,
+}
+
+/// Where a decoder block applies its norms.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NormPlacement {
+    /// `x + f(norm(x))`, optionally with a norm on `f`'s output (Gemma).
+    #[default]
+    Pre,
+    /// `x + norm(f(x))`: the sub-blocks see the raw residual stream.
+    Post,
+    /// `x + attention(norm(x)) + feed_forward(norm(x))`: one norm feeds both
+    /// sub-blocks, which read the same stream (Cohere).
+    Parallel,
+}
+
+impl NormPlacement {
+    #[must_use]
+    pub const fn is_pre(&self) -> bool {
+        matches!(self, Self::Pre)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -105,6 +136,18 @@ pub struct DecoderLayerSpec {
 pub struct NormalizationSpec {
     pub kind: NormalizationKind,
     pub epsilon: f64,
+    /// Added to the learned weight before scaling: 1 for norms that scale by
+    /// `1 + weight` (Gemma's), which no configuration declares.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub weight_offset: f64,
+}
+
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde `skip_serializing_if` passes a reference"
+)]
+fn is_zero(value: &f64) -> bool {
+    *value == 0.0
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

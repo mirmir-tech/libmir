@@ -3,8 +3,8 @@ use mircuda::{DeviceBuffer, Stream, bf16};
 use super::super::{ClampedRoutedConfig, ClampedRoutedQkvLowering, scratch::ClampedRoutedScratch};
 use crate::{
     AffineQuantizedWeight, Bf16LinearPack, Bf16LinearPackWeights, Bf16Projection, CudaBackend,
-    CudaTensor, DensePlanRequest, DenseRole, ExecutionPhase, Result,
-    backend::linear::AffineProjection, kernels::ClampedRoutedKernels,
+    CudaTensor, DensePlanRequest, DenseRole, ExecutionPhase, GgmlBf16Linear, GgmlCheckpointWeight,
+    Result, backend::linear::AffineProjection, kernels::ClampedRoutedKernels,
 };
 
 #[derive(Clone)]
@@ -17,6 +17,7 @@ pub(in crate::backend::clamped_routed) struct ClampedRoutedQkvWeight {
 pub(in crate::backend::clamped_routed) enum ClampedRoutedQkvProjections {
     Native(Bf16LinearPackWeights<3>),
     Mlx(Box<[AffineQuantizedWeight; 3]>),
+    Ggml(Box<[GgmlCheckpointWeight; 3]>),
 }
 
 pub(in crate::backend::clamped_routed) enum ClampedRoutedQkv {
@@ -30,12 +31,18 @@ pub(in crate::backend::clamped_routed) enum ClampedRoutedQkv {
         weights: Box<[AffineQuantizedWeight; 3]>,
         biases: [CudaTensor; 3],
     },
+    Ggml {
+        operations: Box<[GgmlBf16Linear; 3]>,
+        weights: Box<[GgmlCheckpointWeight; 3]>,
+        biases: [CudaTensor; 3],
+    },
 }
 
 #[derive(Clone)]
 pub(in crate::backend::clamped_routed) enum ClampedRoutedLinearWeight {
     Native(CudaTensor),
     Mlx(AffineQuantizedWeight),
+    Ggml(GgmlCheckpointWeight),
 }
 
 pub(in crate::backend::clamped_routed) enum ClampedRoutedLinear {
@@ -46,6 +53,10 @@ pub(in crate::backend::clamped_routed) enum ClampedRoutedLinear {
     Mlx {
         operation: AffineProjection,
         weight: AffineQuantizedWeight,
+    },
+    Ggml {
+        operation: Box<GgmlBf16Linear>,
+        weight: GgmlCheckpointWeight,
     },
 }
 
@@ -89,6 +100,21 @@ impl ClampedRoutedQkv {
                 weights: weights.clone(),
                 biases: weight.biases.clone(),
             }),
+            (
+                ClampedRoutedQkvLowering::SeparateComposed,
+                ClampedRoutedQkvProjections::Ggml(weights),
+            ) => {
+                let role = DenseRole::AttentionQkv;
+                Ok(Self::Ggml {
+                    operations: Box::new([
+                        weights[0].prepare(backend, tokens, role)?,
+                        weights[1].prepare(backend, tokens, role)?,
+                        weights[2].prepare(backend, tokens, role)?,
+                    ]),
+                    weights: weights.clone(),
+                    biases: weight.biases.clone(),
+                })
+            },
             _ => Err(crate::Error::InvalidExecutionPlan(
                 "clamped-routed QKV lowering differs from bound storage",
             )),
@@ -107,6 +133,24 @@ impl ClampedRoutedQkv {
                 kernels.qkv_native(
                     stream,
                     &scratch.packed_qkv,
+                    biases,
+                    &mut scratch.query,
+                    &mut scratch.key,
+                    &mut scratch.value,
+                    &scratch.rope_sines,
+                    &scratch.rope_cosines,
+                    scratch.rope_concentration,
+                )
+            },
+            Self::Ggml { operations, weights, biases } => {
+                // One input: Q quantizes it, K and V reuse that.
+                let input = &scratch.normalized;
+                operations[0].execute_shared(input, &weights[0], &mut scratch.raw_query, false)?;
+                operations[1].execute_shared(input, &weights[1], &mut scratch.raw_key, true)?;
+                operations[2].execute_shared(input, &weights[2], &mut scratch.raw_value, true)?;
+                kernels.qkv_mlx(
+                    stream,
+                    [&scratch.raw_query, &scratch.raw_key, &scratch.raw_value],
                     biases,
                     &mut scratch.query,
                     &mut scratch.key,
@@ -160,6 +204,10 @@ impl ClampedRoutedLinear {
                 operation: affine(backend, tokens, input, output, weight)?,
                 weight: weight.clone(),
             }),
+            ClampedRoutedLinearWeight::Ggml(weight) => Ok(Self::Ggml {
+                operation: Box::new(weight.prepare(backend, tokens, role)?),
+                weight: weight.clone(),
+            }),
         }
     }
 
@@ -171,6 +219,7 @@ impl ClampedRoutedLinear {
         match self {
             Self::Native { operation, weight } => operation.execute(input, weight, output),
             Self::Mlx { operation, weight } => operation.execute(input, weight, output),
+            Self::Ggml { operation, weight } => operation.execute(input, weight, output),
         }
     }
 }

@@ -75,11 +75,11 @@ impl GenerationExecution for MixedMixerExecution {
     }
 
     fn prefix_replay_tokens(&self) -> Option<usize> {
-        Some(usize::MAX)
+        Some(self.replay_tokens())
     }
 
     fn prefix_admission(&self) -> Option<(usize, usize, usize)> {
-        Some((usize::MAX, 0, 0))
+        self.prefix_replay_tokens().map(|replay| (replay, 0, 0))
     }
 
     fn restore_prefix(
@@ -121,10 +121,7 @@ impl GenerationExecution for MixedMixerExecution {
         table: &runtime::kv::BlockTable,
         final_chunk: bool,
     ) -> Result<Option<Output>> {
-        if offset == 0 {
-            let session = self.template.instantiate_with_caches(&self.caches)?;
-            self.sessions.insert(request.session_id, session);
-        }
+        self.open_session(request.session_id, offset)?;
         self.arm_terminal_checkpoint(request, offset, tokens.len())?;
         if self.drafting.is_some() {
             return self
@@ -196,10 +193,11 @@ impl GenerationExecution for MixedMixerExecution {
     }
 
     fn clear_sessions(&mut self) {
-        self.combined.clear();
+        // Session state and its prefix checkpoints go; prefill shapes are
+        // session-free scratch and stay, as graph execution keeps its plans,
+        // so the next prefill does not rebuild every layer's kernels.
         self.sessions.clear();
         self.decode_batches.clear();
-        self.prefill_batches.clear();
         self.checkpoints.clear();
     }
 

@@ -1,7 +1,7 @@
 use models::{
     layout::DecoderConfig,
     semantic::SemanticModelSpec,
-    weights::{TensorBinding, TensorCatalog, TensorInfo, TensorStorage, WeightBindingPlan},
+    weights::{TensorCatalog, TensorInfo, TensorStorage, WeightBindingPlan},
 };
 
 use super::DenseSwiGluLayerLoadConfig;
@@ -11,8 +11,11 @@ use crate::{
 };
 
 mod nvfp4_moe;
+mod source;
 #[cfg(test)]
 mod tests;
+
+pub(in crate::checkpoint) use source::ModelSource;
 
 impl CudaBackend {
     /// Loads a complete BF16 dense `SwiGLU` decoder without host conversion.
@@ -40,13 +43,30 @@ impl CudaBackend {
         load: DenseSwiGluLayerLoadConfig,
         progress: &mut dyn FnMut(u64, String),
     ) -> Result<CudaMoeModelTemplate> {
-        let source = ModelSource::discover(decoder, bindings, catalog)?;
-        let tensors = source.upload(self)?;
+        let source =
+            ModelSource::discover_biased(semantic.decoder.tie_word_embeddings, bindings, catalog)?;
+        let mut tensors = source.upload(self)?;
         let mut completed = source.payload_bytes()?;
         progress(completed, "model boundary tensors".into());
         let embedding = ProjectionWeight::load_binding_prepared(self, &tensors, source.embedding)?;
+        let offset = semantic.decoder.final_norm.weight_offset;
+        if offset != 0.0 {
+            tensors.add_bf16(source.final_norm, offset)?;
+        }
+        let final_norm_biased = source.final_norm_bias.is_some();
+        if final_norm_biased {
+            let binding = bindings
+                .decoder_boundary_with_tied_output(semantic.decoder.tie_word_embeddings)?
+                .final_norm;
+            crate::checkpoint::dense::append_norm_bias(self, &mut tensors, binding)?;
+        }
         let final_norm = tensor(&tensors, source.final_norm)?.clone();
-        let output = ProjectionWeight::load_binding_prepared(self, &tensors, source.output)?;
+        let output = match &source.output.storage {
+            TensorStorage::Ggml { bias: Some(_), .. } => ProjectionWeight::Ggml(
+                crate::GgmlCheckpointWeight::load_binding_with_bias(&tensors, source.output)?,
+            ),
+            _ => ProjectionWeight::load_binding_prepared(self, &tensors, source.output)?,
+        };
         let mut layers = Vec::with_capacity(decoder.num_hidden_layers);
         for layer in 0..decoder.num_hidden_layers {
             let (template, bytes) = self.load_dense_swiglu_layer_tracked(
@@ -54,7 +74,7 @@ impl CudaBackend {
                 semantic,
                 catalog,
                 layer,
-                bindings.dense_decoder_layer(layer)?,
+                crate::checkpoint::dense::DenseLayerBindings::of_layer(bindings, semantic, layer)?,
                 load,
             )?;
             completed = completed
@@ -62,6 +82,15 @@ impl CudaBackend {
                 .ok_or(Error::InvalidDecoderKernel("checkpoint progress byte overflow"))?;
             progress(completed, format!("layer {}/{}", layer + 1, decoder.num_hidden_layers));
             layers.push(template);
+        }
+        // The final norm follows the first layer's formula.
+        let layers_biased = layers.first().is_some_and(|layer| {
+            layer.config().attention.stream_norm == crate::kernels::NormFormula::MeanCentredBiased
+        });
+        if layers_biased != final_norm_biased {
+            return Err(Error::UnsupportedDecoderLayer(
+                "CUDA biases the final norm exactly when it biases the layer norms".into(),
+            ));
         }
         tracing::debug!(
             backend = "cuda",
@@ -80,92 +109,6 @@ impl CudaBackend {
             output,
             layers,
         )
-    }
-}
-
-pub(super) struct ModelSource<'a> {
-    pub(super) embedding: &'a TensorBinding,
-    pub(super) final_norm: &'a str,
-    pub(super) output: &'a TensorBinding,
-    tensors: Vec<&'a TensorInfo>,
-}
-
-impl<'a> ModelSource<'a> {
-    pub(super) fn discover(
-        decoder: &DecoderConfig,
-        bindings: &'a WeightBindingPlan,
-        catalog: &'a TensorCatalog,
-    ) -> Result<Self> {
-        let boundary = bindings.decoder_boundary_with_tied_output(decoder.tie_word_embeddings)?;
-        let final_norm = required(catalog, &boundary.final_norm.source)?;
-        let mut seen = std::collections::HashSet::new();
-        let mut tensors = Vec::new();
-        for name in boundary
-            .embedding
-            .physical_sources()
-            .into_iter()
-            .chain(boundary.output.physical_sources())
-            .chain(std::iter::once(boundary.final_norm.source.as_str()))
-        {
-            if seen.insert(name) {
-                tensors.push(required(catalog, name)?);
-            }
-        }
-        Ok(Self {
-            embedding: boundary.embedding,
-            final_norm: &final_norm.name,
-            output: boundary.output,
-            tensors,
-        })
-    }
-
-    pub(super) fn upload(&self, backend: &CudaBackend) -> Result<CudaTensorSet> {
-        let cast = backend.prepare_dense_cast()?;
-        let mut upload = backend.begin_tensor_upload();
-        let bindings = [self.embedding, self.output];
-        let raw = bindings
-            .iter()
-            .flat_map(|binding| runtime_raw_sources(binding))
-            .collect::<std::collections::HashSet<_>>();
-        let metadata = bindings
-            .iter()
-            .filter_map(|binding| packed_shape_source(binding))
-            .collect::<std::collections::HashSet<_>>();
-        for tensor in &self.tensors {
-            if metadata.contains(tensor.name.as_str()) {
-                continue;
-            }
-            if raw.contains(tensor.name.as_str()) {
-                upload.enqueue(tensor)?;
-            } else {
-                upload.enqueue_as_bf16(tensor, &cast)?;
-            }
-        }
-        upload.finish()
-    }
-
-    pub(super) fn payload_bytes(&self) -> Result<u64> {
-        payload_bytes(self.tensors.iter().copied())
-    }
-}
-fn runtime_raw_sources(binding: &TensorBinding) -> Vec<&str> {
-    match &binding.storage {
-        TensorStorage::AffineQuantized { .. }
-        | TensorStorage::BlockQuantized { .. }
-        | TensorStorage::Float8 { .. } => binding.physical_sources(),
-        TensorStorage::PackedInt8 { scales, .. } | TensorStorage::PackedInt4 { scales, .. } => {
-            vec![binding.source.as_str(), scales.as_str()]
-        },
-        _ => Vec::new(),
-    }
-}
-
-fn packed_shape_source(binding: &TensorBinding) -> Option<&str> {
-    match &binding.storage {
-        TensorStorage::PackedInt8 { shape, .. } | TensorStorage::PackedInt4 { shape, .. } => {
-            Some(shape)
-        },
-        _ => None,
     }
 }
 
@@ -189,14 +132,6 @@ pub(super) fn payload_bytes<'a>(tensors: impl IntoIterator<Item = &'a TensorInfo
             .checked_add(u64::try_from(tensor.payload_bytes()?)?)
             .ok_or(Error::InvalidDecoderKernel("checkpoint progress byte overflow"))
     })
-}
-
-fn required<'a>(catalog: &'a TensorCatalog, name: &str) -> Result<&'a TensorInfo> {
-    catalog
-        .tensors
-        .iter()
-        .find(|tensor| tensor.name == name)
-        .ok_or_else(|| Error::MissingTensor(name.into()))
 }
 
 pub(super) fn tensor<'a>(tensors: &'a CudaTensorSet, name: &str) -> Result<&'a CudaTensor> {

@@ -64,8 +64,19 @@ impl TensorCatalog {
 
     pub fn from_weight_files(weights: &[WeightFile]) -> Result<Self> {
         let mut tensors = Vec::new();
+        // A split GGUF model maps its names once over every shard.
+        let mut shards = std::collections::HashSet::new();
         for weight in weights {
-            tensors.extend(read_weight_header(weight)?);
+            if crate::gguf::is_gguf(&weight.path) {
+                if shards.contains(&weight.path) {
+                    continue;
+                }
+                let model = crate::gguf::GgufModel::open(&weight.path)?;
+                shards.extend(model.shards.iter().map(|(path, _)| path.clone()));
+                tensors.extend(model.mapped_catalog()?.tensors);
+            } else {
+                tensors.extend(read_weight_header(weight)?);
+            }
         }
         Ok(Self::new(tensors))
     }

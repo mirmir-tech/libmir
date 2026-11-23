@@ -49,6 +49,7 @@ fn execute_model(
         &decoder,
         &contract.bindings,
         lowering.layers(),
+        lowering.final_norm(),
         16,
         &stream,
     )?;

@@ -38,14 +38,14 @@ pub(super) fn affine_geometry(
 pub(super) fn uniform_affine_group_size(bindings: &[TensorBinding]) -> Option<usize> {
     let mut sizes = bindings.iter().filter_map(|binding| match binding.storage {
         super::TensorStorage::AffineQuantized { format, .. } => Some(format.group_size),
-        super::TensorStorage::PackedInt8 { .. }
-        | super::TensorStorage::PackedInt4 { .. }
+        super::TensorStorage::PackedInteger { .. }
         | super::TensorStorage::Awq { .. }
         | super::TensorStorage::Gptq { .. }
         | super::TensorStorage::BitsAndBytes4Bit { .. }
         | super::TensorStorage::Float8 { .. }
         | super::TensorStorage::Dense { .. }
         | super::TensorStorage::BlockQuantized { .. }
+        | super::TensorStorage::Ggml { .. }
         | super::TensorStorage::Auxiliary { .. } => None,
     });
     let first = sizes.next()?;

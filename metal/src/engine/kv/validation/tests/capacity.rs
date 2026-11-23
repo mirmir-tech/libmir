@@ -71,7 +71,7 @@ fn rejected_promotion_preserves_contiguous_tokens_and_can_retry() -> Result<()> 
 }
 
 #[test]
-fn rejected_cow_preserves_shared_page_and_retries_after_release() -> Result<()> {
+fn owner_appends_in_place_while_rejected_cow_preserves_shared_page() -> Result<()> {
     let stream = Stream::new_gpu()?;
     let token = Array::from_f32(&[1.0, 0.5, -0.5, 0.25], &[1, 1, 1, 4])?;
     for format in [KvPageFormat::Native, KvPageFormat::Int8PerTokenHead] {
@@ -79,18 +79,21 @@ fn rejected_cow_preserves_shared_page_and_retries_after_release() -> Result<()> 
         let mut owner = cache(format, &pool)?;
         drop(owner.update(&token, &token, &stream)?);
         pool.eval_with_graph_roots(&[], &stream)?;
-        let snapshot = owner.snapshot_at(1)?;
+        let mut snapshot = owner.snapshot_at(1)?;
         let page = owner.first_physical_page();
-        assert!(owner.update(&token, &token, &stream).is_err());
-        assert_eq!(owner.offset()?, 1);
-        assert_eq!(owner.first_physical_page(), page);
-        assert_eq!(snapshot.first_physical_page(), page);
-        drop(snapshot);
         drop(owner.update(&token, &token, &stream)?);
         pool.eval_with_graph_roots(&[], &stream)?;
         assert_eq!(owner.offset()?, 2);
         assert_eq!(owner.first_physical_page(), page);
+        assert!(snapshot.update(&token, &token, &stream).is_err());
+        assert_eq!(snapshot.offset()?, 1);
+        assert_eq!(snapshot.first_physical_page(), page);
         owner.reset()?;
+        drop(snapshot.update(&token, &token, &stream)?);
+        pool.eval_with_graph_roots(&[], &stream)?;
+        assert_eq!(snapshot.offset()?, 2);
+        assert_eq!(snapshot.first_physical_page(), page);
+        snapshot.reset()?;
         assert_eq!(pool.resident_arenas()?, 0);
     }
     Ok(())

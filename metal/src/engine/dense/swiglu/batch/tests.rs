@@ -58,6 +58,7 @@ fn decode(root: &Path, dense_history: DenseHistoryMode, lead: u32) -> Result<Vec
         &decoder,
         &contract.bindings,
         lowering.layers(),
+        lowering.final_norm(),
         16,
         &stream,
     )?;

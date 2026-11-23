@@ -3,7 +3,7 @@ use models::{
     weights::{StateSpaceHybridLayerBindings, StateSpaceHybridMixerBindings},
 };
 
-use super::{attention::PlainAttention, feed_forward::RoutedFeedForward, mamba::Mamba2Mixer};
+use super::{attention::PlainAttention, feed_forward::FeedForward, mamba::Mamba2Mixer};
 use crate::engine::{
     Array, DecoderCache, Error, ModelTensors, NormWeight, Result, Stream,
     decoder::{LayerContext, LoweredLayer, MixerKind},
@@ -20,7 +20,7 @@ pub(super) struct StateSpaceHybridLayer {
     pub(super) index: usize,
     pub(super) input_norm: NormWeight,
     pub(super) mixer: Mixer,
-    pub(super) feed_forward: Option<RoutedFeedForward>,
+    pub(super) feed_forward: Option<FeedForward>,
     pub(super) epsilon: f32,
 }
 
@@ -46,7 +46,7 @@ impl StateSpaceHybridLayer {
         };
         let feed_forward = bindings
             .feed_forward
-            .map(|routed| RoutedFeedForward::load(tensors, routed, &hybrid.routed, epsilon, stream))
+            .map(|bindings| FeedForward::load(tensors, bindings, hybrid, epsilon, stream))
             .transpose()?;
         Ok(Self {
             index,
@@ -61,7 +61,8 @@ impl StateSpaceHybridLayer {
         let Some(feed_forward) = &self.feed_forward else {
             return Array::from_native(input.native().clone());
         };
-        let normalized = feed_forward.norm.apply(input, feed_forward.epsilon(), stream)?;
+        let (norm, epsilon) = feed_forward.norm();
+        let normalized = norm.apply(input, epsilon, stream)?;
         input.add(&feed_forward.forward(&normalized, stream)?, stream)
     }
 

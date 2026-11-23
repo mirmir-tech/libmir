@@ -56,6 +56,10 @@ impl LayerWeights {
                 Error::InvalidModel("dense GELU attention needs query and key norms".into())
             })
         };
+        let layer_scale = sandwich
+            .layer_scale
+            .ok_or_else(|| Error::InvalidModel("dense GELU layer needs a layer scale".into()))?;
+        let mlp = bindings.feed_forward.gated()?;
         let query_norm = attention_norm(bindings.attention.query_norm)?;
         let key_norm = attention_norm(bindings.attention.key_norm)?;
         Ok(Self {
@@ -63,7 +67,7 @@ impl LayerWeights {
             post_attention_norm: norm(tensors, sandwich.attention_output_norm)?,
             pre_dense_norm: norm(tensors, bindings.post_attention_norm)?,
             post_feed_forward_norm: norm(tensors, sandwich.feed_forward_output_norm)?,
-            layer_scalar: tensors.get(&sandwich.layer_scale.source)?,
+            layer_scalar: tensors.get(&layer_scale.source)?,
             attention: attention(
                 tensors,
                 HybridMoeAttentionBindings {
@@ -80,9 +84,9 @@ impl LayerWeights {
             dense: dense(
                 tensors,
                 HybridMoeDenseBindings {
-                    gate: bindings.gate,
-                    up: bindings.up,
-                    down: bindings.down,
+                    gate: mlp.gate,
+                    up: mlp.up,
+                    down: mlp.down,
                 },
                 stream,
             )?,
@@ -204,10 +208,10 @@ fn experts(
         },
         HybridMoeExpertBindings::Individual { gate, up, down } => Ok(ExpertWeights {
             gate_up: ExpertGateUpWeights::Separate {
-                gate: BoundLinear::load_nvfp4_bank(tensors, gate, stream)?,
-                up: BoundLinear::load_nvfp4_bank(tensors, up, stream)?,
+                gate: BoundLinear::load_individual_bank(tensors, gate, stream)?,
+                up: BoundLinear::load_individual_bank(tensors, up, stream)?,
             },
-            down: BoundLinear::load_nvfp4_bank(tensors, down, stream)?,
+            down: BoundLinear::load_individual_bank(tensors, down, stream)?,
         }),
     }
 }

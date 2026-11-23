@@ -1,6 +1,7 @@
 mod batch;
 mod chunked;
 mod fused;
+mod llama_cpp;
 mod transform;
 
 use mircuda::{DeviceBuffer, DeviceElement, bf16};

@@ -1,7 +1,11 @@
 use mircuda::{DeviceBuffer, Stream, bf16};
 
 mod affine;
+mod bound;
+mod layer;
 pub use affine::AffineRouterBf16;
+pub(in crate::backend) use bound::{BoundRouter, RouterWeights};
+pub(in crate::backend) use layer::LayerRouterTopK;
 
 use super::{CudaBackend, linear::Bf16Fp32Linear};
 use crate::{

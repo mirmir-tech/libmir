@@ -138,7 +138,7 @@ fn int8_binding(prefix: &str) -> TensorBinding {
         shape: vec![OUTPUT, INPUT / 4],
         logical_shape: Some(vec![OUTPUT, INPUT]),
         transforms: Vec::new(),
-        storage: TensorStorage::PackedInt8 {
+        storage: TensorStorage::PackedInteger {
             format: CompressedIntegerQuantization {
                 bits: CompressedIntegerBits::Eight,
                 scale_strategy: CompressedIntegerScaleStrategy::Channel,

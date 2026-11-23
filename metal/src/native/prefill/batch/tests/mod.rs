@@ -86,7 +86,9 @@ fn finish(batch: &MetalPrefillBatch, model: &mut LoadedModel, budget: usize) -> 
             .into_iter()
             .map(|row| {
                 let token = match row.native.output {
-                    NativeOutput::Greedy(token) => token,
+                    NativeOutput::Greedy(token) | NativeOutput::Verified { next: token, .. } => {
+                        token
+                    },
                     NativeOutput::Logits(logits) => logits.argmax_u32(model.stream())?,
                 };
                 model.release_session(row.request.session_id)?;

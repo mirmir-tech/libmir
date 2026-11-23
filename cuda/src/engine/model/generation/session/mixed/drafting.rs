@@ -34,10 +34,7 @@ pub(super) fn execute(
         return Ok(None);
     }
     for row in chunks {
-        if row.offset == 0 {
-            let session = execution.template.instantiate_with_caches(&execution.caches)?;
-            execution.sessions.insert(row.request.session_id, session);
-        }
+        execution.open_session(row.request.session_id, row.offset)?;
         execution.arm_terminal_checkpoint(row.request, row.offset, row.tokens.len())?;
     }
     let speculate = !chunks.is_empty();

@@ -64,6 +64,7 @@ fn config() -> AffineSharedExpertMoeConfig {
         expert_bits: 4,
         router_bits: 8,
         activation: GatedActivation::Silu,
+        routing: crate::kernels::RouterUnitScoring::RENORMALIZED,
     }
 }
 

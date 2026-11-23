@@ -7,7 +7,8 @@ use crate::{
     AttentionExecution, AttentionPlanRequest, CudaBackend, Error, PagedPrefillBatch, PlanSource,
     Result,
     kernels::{
-        BatchedSplitAttentionWorkspace, BatchedSplitPagedAttention, PagedAttentionSpec, paged,
+        BatchedSplitAttentionWorkspace, BatchedSplitPagedAttention, ClampedRoutedFmhaWorkspace,
+        PagedAttentionSpec, paged,
     },
 };
 
@@ -25,6 +26,9 @@ pub struct ClampedRoutedBatchSplitDecode {
     workspace: BatchedSplitAttentionWorkspace,
     merge: TypedKernel<BatchSinkMergeKernel>,
     threshold: usize,
+    /// Decode `FlashAttention` partials, used before this kernel when a
+    /// layer has a `FlashAttention` plan.
+    pub(crate) fmha: ClampedRoutedFmhaWorkspace,
 }
 
 impl ClampedRoutedBatchSplitDecode {
@@ -65,6 +69,7 @@ impl ClampedRoutedBatchSplitDecode {
             head_dim: storage.key_head_dim,
             value_head_dim: storage.value_head_dim,
             dtype: storage.cache.dtype,
+            score_softcap: None,
         };
         let operation = BatchedSplitPagedAttention::compile(
             backend.compiler(),
@@ -87,6 +92,12 @@ impl ClampedRoutedBatchSplitDecode {
             workspace,
             merge: module.kernel()?,
             threshold,
+            fmha: ClampedRoutedFmhaWorkspace::new(
+                backend,
+                max_batch,
+                query_heads,
+                storage.value_head_dim,
+            )?,
         }))
     }
 

@@ -22,8 +22,10 @@ impl Engine {
                 .into_outputs()),
             #[cfg(feature = "metal")]
             EngineInner::Metal(metal) => {
-                if sequences.len() == 1 {
-                    let sequence = &sequences[0];
+                // Speculative steps verify drafts on the batch path.
+                if let [sequence] = sequences.as_slice()
+                    && sequence.speculation.is_none()
+                {
                     return Ok(vec![metal.decode_token(
                         model,
                         sequence.session_id,

@@ -8,7 +8,10 @@ use super::super::super::{
     NvFp4MoeLayerLoadConfig,
     model::{ModelSource, tensor},
 };
-use crate::{CudaBackend, CudaMoeModelTemplate, Error, Result};
+use crate::{
+    CudaBackend, CudaMoeModelTemplate, Error, Result,
+    backend::CheckpointProjectionWeight as ProjectionWeight,
+};
 
 impl CudaBackend {
     pub(crate) fn load_dense_moe_model_template_with_bindings(
@@ -20,13 +23,15 @@ impl CudaBackend {
         load: NvFp4MoeLayerLoadConfig,
         progress: &mut dyn FnMut(u64, String),
     ) -> Result<CudaMoeModelTemplate> {
-        let source = ModelSource::discover(decoder, bindings, catalog)?;
+        let source =
+            ModelSource::discover(semantic.decoder.tie_word_embeddings, bindings, catalog)?;
         let tensors = source.upload(self)?;
         let mut completed = source.payload_bytes()?;
         progress(completed, "model boundary tensors".into());
-        let embedding = tensor(&tensors, &source.embedding.source)?.clone();
+        // GGUF embeddings and output heads stay GGML blocks.
+        let embedding = ProjectionWeight::load_binding_prepared(self, &tensors, source.embedding)?;
         let final_norm = tensor(&tensors, source.final_norm)?.clone();
-        let output = tensor(&tensors, &source.output.source)?.clone();
+        let output = ProjectionWeight::load_binding_prepared(self, &tensors, source.output)?;
         let mut layers = Vec::with_capacity(decoder.num_hidden_layers);
         for layer in 0..decoder.num_hidden_layers {
             let layer_bindings = bindings.hybrid_moe_layer(layer)?;

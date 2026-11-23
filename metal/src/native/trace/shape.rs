@@ -88,7 +88,7 @@ fn encoder_shape(encoder: &EncoderConfig) -> TraceDecoder {
 
 fn attention_counts(decoder: &DecoderConfig) -> (usize, usize) {
     decoder.layer_types.iter().fold((0, 0), |(full, sliding), layer| match layer {
-        AttentionLayerType::Full => (full + 1, sliding),
+        AttentionLayerType::Full | AttentionLayerType::Latent => (full + 1, sliding),
         AttentionLayerType::Linear | AttentionLayerType::StateSpace => (full, sliding),
         AttentionLayerType::Sliding => (full, sliding + 1),
     })

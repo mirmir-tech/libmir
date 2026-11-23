@@ -9,6 +9,7 @@ use crate::engine::{
 mod capacity;
 mod hybrid;
 mod lifecycle;
+mod rows;
 #[cfg(test)]
 mod tests;
 
@@ -224,13 +225,6 @@ impl DecoderCache {
                     storage: CacheStorage::HybridLinear(layers),
                 })
             },
-        }
-    }
-
-    pub(crate) fn supports_prefix_offsets(&self) -> bool {
-        match &self.storage {
-            CacheStorage::Attention(caches) => caches.iter().all(KvCache::supports_prefix_offsets),
-            CacheStorage::HybridLinear(_) => false,
         }
     }
 }

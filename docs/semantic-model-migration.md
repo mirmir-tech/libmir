@@ -24,8 +24,8 @@ The checkpoint importer supplies Gemma 4 defaults for `gemma4`, `gemma4_text`, a
 | Embedding multiplier | `sqrt(hidden_size)` |
 
 These preserve the computation used in our existing Gemma 4 26B Metal reference
-and benchmark runs (`validation/references/dense-and-routed-gemma4-26b-a4b.toml`,
-`benchmarks/gemma4-26b-a4b-it-8bit.md`). The CUDA 12B BF16 review reproduction
+and benchmark runs (`validation/references/dense-and-routed-gemma4-26b-a4b.toml`).
+The CUDA 12B BF16 review reproduction
 [confirmed the missing defaults](https://github.com/mirmir-tech/libmir/pull/12#discussion_r4468480847):
 with hidden size 3840 the multiplier is 61.96773353931867, and the corrected
 contract produces a normal greeting instead of repeated digits. This is provenance,

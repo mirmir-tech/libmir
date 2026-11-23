@@ -51,5 +51,6 @@ const fn feed_forward_role(tensor: &LayerTensorRole) -> bool {
             | LayerTensorRole::LatentProjection { .. }
             | LayerTensorRole::ExpertProjection { .. }
             | LayerTensorRole::SharedExpertProjection { .. }
+            | LayerTensorRole::FeedForwardProjection { .. }
     )
 }

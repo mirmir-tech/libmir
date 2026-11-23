@@ -98,6 +98,11 @@ pub(super) enum LoadedVisionModel {
 pub(super) enum NativeOutput {
     Greedy(u32),
     Logits(Array),
+    /// A speculative step's token after the drafts it kept.
+    Verified {
+        next: u32,
+        accepted: Vec<u32>,
+    },
 }
 
 impl LoadedModel {
@@ -106,6 +111,7 @@ impl LoadedModel {
         session: Uuid,
         token: u32,
         sampling: &SamplingLogits,
+        bounds: Option<&runtime::speculation::DraftBounds>,
     ) -> Result<NativeOutput> {
         let model = self.execution.decoder()?;
         let stream = &self.stream;
@@ -113,6 +119,9 @@ impl LoadedModel {
             model: self.info.manifest.id.clone(),
             session,
         })?;
+        if state.pending.is_none() && state.speculation.is_some() {
+            return super::speculation::step::decode(model, stream, state, token, sampling, bounds);
+        }
         if state.pending.is_some() {
             if *sampling == SamplingLogits::None && model.has_decode_plan_candidates() {
                 let key = crate::engine::DecodePlanKey {

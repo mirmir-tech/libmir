@@ -5,7 +5,8 @@ use models::weights::{
 use super::{CheckpointProjectionWeight, nvfp4};
 use crate::{
     AffineQuantizedWeight, CudaBackend, CudaTensorSet, DirectFp8CheckpointWeight, Error,
-    MxFp4CheckpointWeight, MxFp8CheckpointWeight, PackedIntegerWeight, Result,
+    GgmlCheckpointWeight, MxFp4CheckpointWeight, MxFp8CheckpointWeight, PackedIntegerWeight,
+    Result,
 };
 
 impl CheckpointProjectionWeight {
@@ -63,8 +64,10 @@ impl CheckpointProjectionWeight {
                 "CUDA block projection requires prepared loading: {}",
                 binding.source
             ))),
-            TensorStorage::PackedInt8 { .. }
-            | TensorStorage::PackedInt4 { .. }
+            TensorStorage::Ggml { .. } => {
+                GgmlCheckpointWeight::load_binding(tensors, binding).map(Self::Ggml)
+            },
+            TensorStorage::PackedInteger { .. }
             | TensorStorage::Awq { .. }
             | TensorStorage::Gptq { .. }
             | TensorStorage::BitsAndBytes4Bit { .. } => packed(tensors, binding),

@@ -65,7 +65,7 @@ fn generate(
 
 fn output_token(model: &LoadedModel, output: NativeOutput) -> Result<u32> {
     match output {
-        NativeOutput::Greedy(token) => Ok(token),
+        NativeOutput::Greedy(token) | NativeOutput::Verified { next: token, .. } => Ok(token),
         NativeOutput::Logits(logits) => Ok(logits.argmax_u32(model.stream())?),
     }
 }

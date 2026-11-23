@@ -149,6 +149,31 @@ impl DecoderCache {
             .collect()
     }
 
+    /// Logical bytes of the distinct recurrent buffers: a row view counts
+    /// its whole cohort parent. Allocator capacities would add the buffer
+    /// cache's rounding, which depends on what else the process freed.
+    #[cfg(test)]
+    pub(crate) fn recurrent_logical_bytes(&self) -> Result<usize> {
+        let mut roots = Vec::new();
+        self.extend_graph_roots(&mut roots);
+        let mut seen = std::collections::HashSet::new();
+        roots.into_iter().try_fold(0, |total, root| {
+            let native = root.native();
+            let allocation = native.allocation()?.ok_or_else(|| {
+                Error::InvalidModel("recurrent state must be materialized".into())
+            })?;
+            if !seen.insert(allocation) {
+                return Ok(total);
+            }
+            let width = match native.dtype()? {
+                mirtal::DType::Bool | mirtal::DType::Uint8 => 1,
+                mirtal::DType::Float16 | mirtal::DType::Bfloat16 => 2,
+                mirtal::DType::Uint32 | mirtal::DType::Int32 | mirtal::DType::Float32 => 4,
+            };
+            Ok(total + native.shape()?.elements()? * width)
+        })
+    }
+
     pub(crate) fn detach_evaluated_graphs(&self, stream: &Stream) -> Result<()> {
         match &self.storage {
             CacheStorage::Attention(caches) => {

@@ -43,6 +43,10 @@ pub(super) enum Error {
     Session { model: String, session: uuid::Uuid },
     #[error("native MLX has no scheduled greedy decode")]
     NoPendingDecode,
+    #[error("the session has no speculative decoding state")]
+    NoSpeculation,
+    #[error("speculative verification failed: {0}")]
+    Verification(#[from] runtime::RuntimeError),
     #[error("Metal execution recovery must complete before the model can run again")]
     ExecutionRecoveryRequired,
     #[error("execution failed: {execution}; draining failed state also failed: {drain}")]
@@ -89,6 +93,7 @@ impl From<Error> for runtime::RuntimeError {
             Error::Engine(error) => Self::Backend(error.to_string()),
             Error::Lock(error) => Self::Backend(error),
             Error::Integer(error) => Self::Integer(error),
+            Error::Verification(error) => error,
             #[cfg(test)]
             Error::ParseInteger(error) => Self::Backend(error.to_string()),
             #[cfg(test)]
@@ -100,6 +105,7 @@ impl From<Error> for runtime::RuntimeError {
             | Error::ExecutionRecoveryFailed { .. }
             | Error::Session { .. }
             | Error::NoPendingDecode
+            | Error::NoSpeculation
             | Error::NoPrefixLogits
             | Error::PendingToken { .. }
             | Error::InvalidDecodeBatch(_)

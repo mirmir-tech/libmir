@@ -9,10 +9,22 @@ pub(super) enum ClampedRoutedLayout {
     Native,
     Mlx,
     Dense,
+    Ggml,
 }
 
 impl ClampedRoutedLayout {
     pub(super) fn discover(bindings: &WeightBindingPlan) -> Result<Self> {
+        if bindings.tensors.iter().any(|binding| {
+            matches!(
+                binding.role,
+                LogicalTensorRole::Layer {
+                    tensor: LayerTensorRole::ExpertProjection { .. },
+                    ..
+                }
+            ) && matches!(binding.storage, TensorStorage::Ggml { scale: None, .. })
+        }) {
+            return Ok(Self::Ggml);
+        }
         if bindings.tensors.iter().any(|binding| {
             matches!(
                 binding.role,
@@ -38,6 +50,7 @@ impl ClampedRoutedLayout {
             Self::Native => "interleaved MXFP4 gate/up blocks",
             Self::Mlx => "separate MLX affine MXFP4 gate/up blocks",
             Self::Dense => "dense BF16 selected-expert matrices",
+            Self::Ggml => "GGML MXFP4 expert banks repacked to interleaved OCP blocks",
         }
     }
 }

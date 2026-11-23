@@ -1,8 +1,9 @@
 use mircuda::{
-    Compiler, DeviceBuffer, LaunchConfig, Stream, TypedKernel, bf16, cuda_export, cuda_kernel_file,
+    Compiler, DeviceBuffer, LaunchConfig, Stream, TypedKernel, bf16, cuda_export, cuda_kernel_files,
 };
+use models::semantic::AttentionWindow;
 
-use super::super::{PagedAttentionSpec, compile_options, validate_attention};
+use super::super::{PagedAttentionSpec, validate_attention};
 use crate::{
     Error, Result,
     kernels::geometry::{narrow, product, require},
@@ -58,9 +59,12 @@ impl BatchedSplitPagedAttention {
             return Err(Error::InvalidPagedKv("invalid batched split attention geometry"));
         }
         let max_tokens = product(spec.max_blocks, spec.block_size)?;
-        let source =
-            cuda_kernel_file!("../../../../../kernels/paged_attention_batch_split_bf16.cu");
-        let mut options = compile_options(spec.dtype)?;
+        let source = cuda_kernel_files!(
+            "paged_attention_batch_split_bf16.cu";
+            "../../../../../kernels/attention_window_bf16.cu",
+            "../../../../../kernels/paged_attention_batch_split_bf16.cu",
+        );
+        let mut options = super::super::attention_compile_options(spec)?;
         options
             .extra_options
             .push(format!("-DLIBMIR_QUERY_GROUP={}", spec.query_heads / spec.kv_heads));
@@ -102,7 +106,7 @@ impl BatchedSplitPagedAttention {
         workspace: &mut BatchedSplitAttentionWorkspace,
         output: &mut DeviceBuffer<bf16>,
         batch_size: usize,
-        window: Option<usize>,
+        window: Option<AttentionWindow>,
         scale: f32,
         minimum_tokens: usize,
         maximum_tokens: usize,
@@ -130,7 +134,7 @@ impl BatchedSplitPagedAttention {
                 narrow(batch_size)?,
                 narrow(self.spec.query_heads)?,
                 narrow(self.spec.value_head_dim)?,
-                narrow(window.unwrap_or(0))?,
+                crate::kernels::paged::window::argument(window)?,
                 narrow(self.partition_tokens)?,
                 narrow(self.max_partitions)?,
                 narrow(minimum_tokens)?,

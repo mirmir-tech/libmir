@@ -38,7 +38,7 @@ fn derives_deduplicated_requirements_from_semantics_and_task() -> crate::Result<
     let layer = &mut semantic.decoder.layers[0];
     if let MixerSpec::SoftmaxAttention(attention) = &mut layer.mixer {
         attention.sinks = true;
-        attention.window = Some(128);
+        attention.window = Some(crate::semantic::AttentionWindow::Sliding(128));
         attention.qk_normalization = QkNormalization::QueryKeyRms;
         attention.output = AttentionOutputSpec::Gated;
         if let PositionEncodingSpec::Rotary(rotary) = &mut attention.position {
@@ -66,6 +66,8 @@ fn derives_deduplicated_requirements_from_semantics_and_task() -> crate::Result<
                 up_shift: 1.0,
             },
             router_normalization: RouterNormalization::UnitTopK,
+            group_limit: None,
+            output_scale: 1.0,
         },
     };
     semantic.decoder.final_norm.kind = NormalizationKind::Layer;

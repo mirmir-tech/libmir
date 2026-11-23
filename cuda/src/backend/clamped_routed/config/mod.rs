@@ -2,7 +2,8 @@
 
 use models::semantic::{
     ActivationSpec, AttentionSpec, FeedForwardSpec, KeyValueRelation, MixerSpec, NormalizationKind,
-    PositionEncodingSpec, QkNormalization, RopeScalingSpec, RotaryLayoutSpec, SemanticModelSpec,
+    PositionEncodingSpec, QkNormalization, RopeScalingSpec, RotaryLayoutSpec, RouterNormalization,
+    SemanticModelSpec,
 };
 use runtime::kv::{CacheConfig, KvStorageSpec};
 
@@ -42,9 +43,9 @@ impl ClampedRoutedConfig {
             validate_uniform(layer_contract(layer)?, attention, intermediate, experts, top_k)?;
             let position = rotary(match &layer.mixer {
                 MixerSpec::SoftmaxAttention(attention) => attention,
-                MixerSpec::LinearAttention(_) | MixerSpec::StateSpace(_) => {
-                    unreachable!("validated clamped-routed mixer")
-                },
+                MixerSpec::LinearAttention(_)
+                | MixerSpec::StateSpace(_)
+                | MixerSpec::LatentAttention(_) => unreachable!("validated clamped-routed mixer"),
             })?;
             if position != (theta, factor, initial_context, beta_fast, beta_slow, rope_truncate) {
                 return Err(Error::UnsupportedDecoderLayer(format!(
@@ -141,9 +142,14 @@ fn layer_contract(
         || attention.qk_normalization != QkNormalization::None
         || !approx(alpha, 1.702)
         || !approx(up_shift, 1.0)
+        // The runtime's router renormalizes a softmax over the selected
+        // experts, without groups or an output factor.
+        || routed.router_normalization != RouterNormalization::SoftmaxTopK
+        || routed.group_limit.is_some()
+        || !approx(routed.output_scale, 1.0)
     {
         return Err(Error::UnsupportedDecoderLayer(format!(
-            "clamped-routed layer {} lacks the sink, bias, separate-K/V, or clamped-SwiGLU capability contract",
+            "clamped-routed layer {} lacks the sink, bias, separate-K/V, clamped-SwiGLU or softmax router capability contract",
             layer.index
         )));
     }

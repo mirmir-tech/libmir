@@ -1,3 +1,4 @@
+mod llama_cpp;
 mod prefill;
 
 use super::*;
@@ -44,6 +45,7 @@ fn layer(stream: &Stream) -> Result<GatedDeltaLayer> {
             value_heads: 1,
             key_head_dim: 64,
             value_head_dim: 64,
+            layout: LinearAttentionLayout::Checkpoint,
         },
         1.0e-6,
     )?;
@@ -54,6 +56,7 @@ fn layer(stream: &Stream) -> Result<GatedDeltaLayer> {
         in_proj_b: linear(1, stream)?,
         in_proj_a: linear(1, stream)?,
         out_proj: linear(64, stream)?,
+        tiled_output: None,
         conv_weight: Array::from_f32(&vec![0.0; 384], &[192, 2, 1])?,
         norm_weight: NormWeight::from_weight(Array::from_f32(&vec![1.0; 64], &[64])?),
         a_log: Array::from_f32(&[0.0], &[1])?,

@@ -9,7 +9,7 @@ impl SessionLayer {
         match self {
             Self::Moe(layer) => {
                 let mut config = layer.template.config();
-                if layer.template.experts_are_dense() {
+                if layer.template.experts_bind_at_execution() {
                     config.attention.layer = 0;
                 }
                 PrefillSignature::Moe(config)

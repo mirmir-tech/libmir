@@ -34,9 +34,13 @@ fn binds_one_prediction_module_with_decoder_layer_roles() -> Result<()> {
     assert_eq!(bindings.fusion.source, "language_model.mtp.layers.0.eh_proj.weight");
     assert_eq!(bindings.layer.input_norm.source, "language_model.mtp.layers.0.norm.weight");
     assert!(matches!(bindings.layer.mixer, StateSpaceHybridMixerBindings::Attention(_)));
-    let routed = bindings.layer.feed_forward.ok_or_else(|| {
-        crate::ModelsError::InvalidConfig("prediction module needs its routed block".into())
-    })?;
+    let routed = bindings
+        .layer
+        .feed_forward
+        .and_then(crate::weights::StateSpaceHybridFeedForwardBindings::routed)
+        .ok_or_else(|| {
+            crate::ModelsError::InvalidConfig("prediction module needs its routed block".into())
+        })?;
     assert_eq!(routed.norm.source, "language_model.mtp.layers.1.norm.weight");
     assert_eq!(
         routed.routed.individual(crate::weights::ExpertProjectionRole::Up).len(),

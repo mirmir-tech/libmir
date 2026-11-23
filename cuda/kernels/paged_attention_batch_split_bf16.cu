@@ -2,6 +2,14 @@
 #include <cuda_fp8.h>
 #include <mma.h>
 
+// Gemma 2 caps attention scores as `cap * tanh(score / cap)` when the module
+// is compiled with `LIBMIR_SCORE_SOFTCAP`; otherwise scores pass unchanged.
+#ifdef LIBMIR_SCORE_SOFTCAP
+#define SCORE_CAP(score) (LIBMIR_SCORE_SOFTCAP * tanhf((score) / LIBMIR_SCORE_SOFTCAP))
+#else
+#define SCORE_CAP(score) (score)
+#endif
+
 #define LIBMIR_NEGATIVE_FLOAT_MAX -3.402823466e+38F
 #ifndef LIBMIR_QUERY_GROUP
 #define LIBMIR_QUERY_GROUP 1
@@ -38,11 +46,11 @@ extern "C" __global__ void libmir_cuda_paged_attention_batch_split_bf16(
   if (sequence >= batch_size || kv_head >= kv_heads) return;
   const unsigned int token_count = token_counts[sequence];
   const unsigned int block_count = block_counts[sequence];
-  const unsigned int visible = window > 0 ? min(token_count, window) : token_count;
+  const unsigned int visible = token_count - libmir_window_first(token_count, window);
   const unsigned int active = (visible + partition_tokens - 1) / partition_tokens;
   if (visible < minimum_tokens || partition >= active || block_count > max_blocks) return;
   const unsigned int first =
-      window > 0 && token_count > window ? token_count - window : 0;
+      libmir_window_first(token_count, window);
   const unsigned int begin = first + partition * partition_tokens;
   const unsigned int end = min(begin + partition_tokens, token_count);
   const unsigned int lane = threadIdx.x;
@@ -152,7 +160,7 @@ extern "C" __global__ void libmir_cuda_paged_attention_batch_split_bf16(
       float tile_maximum = LIBMIR_NEGATIVE_FLOAT_MAX;
       for (unsigned int token = 0; token < token_tile; ++token) {
         if (page_tokens[token] != 0xffffffffu) {
-          tile_maximum = fmaxf(tile_maximum, scores[head][token] * scale);
+          tile_maximum = fmaxf(tile_maximum, SCORE_CAP(scores[head][token] * scale));
         }
       }
       const float next_maximum = fmaxf(maxima[head], tile_maximum);
@@ -161,7 +169,7 @@ extern "C" __global__ void libmir_cuda_paged_attention_batch_split_bf16(
       for (unsigned int token = 0; token < token_tile; ++token) {
         const float weight = page_tokens[token] == 0xffffffffu
             ? 0.0f
-            : __expf(scores[head][token] * scale - next_maximum);
+            : __expf(SCORE_CAP(scores[head][token] * scale) - next_maximum);
         weights[head][token] = __float2bfloat16_rn(weight);
         denominator += weight;
       }
@@ -297,7 +305,7 @@ extern "C" __global__ void libmir_cuda_paged_attention_batch_split_bf16(
 #pragma unroll
         for (unsigned int head = 0; head < LIBMIR_QUERY_GROUP; ++head) {
           scores[head][warp + item * warp_count] = valid[item]
-              ? dots[item][head] * scale
+              ? SCORE_CAP(dots[item][head] * scale)
               : LIBMIR_NEGATIVE_FLOAT_MAX;
         }
       }
@@ -388,7 +396,7 @@ extern "C" __global__ void libmir_cuda_paged_attention_batch_merge_bf16(
   const unsigned int query_head = blockIdx.x;
   if (sequence >= batch_size || query_head >= query_heads) return;
   const unsigned int token_count = token_counts[sequence];
-  const unsigned int visible = window > 0 ? min(token_count, window) : token_count;
+  const unsigned int visible = token_count - libmir_window_first(token_count, window);
   if (visible < minimum_tokens) return;
   const unsigned int active = (visible + partition_tokens - 1) / partition_tokens;
   const unsigned int base =

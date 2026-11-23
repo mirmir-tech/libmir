@@ -4,7 +4,10 @@ use models::weights::BlockActivationMode;
 use self::nvfp4::AutoNvFp4Experts;
 use crate::{
     CudaBackend, Error, ExecutionPhase, GatedActivation, NvFp4ExpertBank, Result,
-    backend::linear::{DenseExpertWeights, SelectedDenseMoeBf16},
+    backend::{
+        dense::{GgmlExpertWeights, GgmlRoutedExperts, RoutedExpertsConfig},
+        linear::{DenseExpertWeights, SelectedDenseMoeBf16},
+    },
 };
 
 mod nvfp4;
@@ -18,6 +21,8 @@ pub(in crate::backend) enum ExpertWeights {
         activation_mode: BlockActivationMode,
     },
     Dense(DenseExpertWeights),
+    /// GGML banks read in place from a GGUF file.
+    Ggml(Box<GgmlExpertWeights>),
 }
 
 #[derive(Debug)]
@@ -27,6 +32,7 @@ pub(in crate::backend) enum Experts {
         operation: Box<SelectedDenseMoeBf16>,
         intermediate: DeviceBuffer<bf16>,
     },
+    Ggml(Box<GgmlRoutedExperts>),
 }
 
 impl Experts {
@@ -52,6 +58,14 @@ impl Experts {
                     .pool()
                     .allocate(backend.stream(), weights.intermediate_elements(tokens, selected)?)?,
             }),
+            ExpertWeights::Ggml(weights) => {
+                let experts = RoutedExpertsConfig {
+                    count: weights.experts(),
+                    top_k: selected,
+                };
+                let geometry = weights.geometry(experts, activation);
+                Ok(Self::Ggml(Box::new(GgmlRoutedExperts::new(backend, geometry, tokens)?)))
+            },
             ExpertWeights::NvFp4 { gate, up, down, activation_mode } => AutoNvFp4Experts::new(
                 backend,
                 phase,
@@ -83,6 +97,9 @@ impl Experts {
             (Self::Dense { operation, intermediate }, ExpertWeights::Dense(weights)) => {
                 operation.execute(input, selected, routing, weights, intermediate, output)
             },
+            (Self::Ggml(experts), ExpertWeights::Ggml(weights)) => {
+                experts.execute(input, selected, routing, weights, output)
+            },
             _ => Err(Error::InvalidExecutionPlan(
                 "routed-expert plan differs from layer weight storage",
             )),
@@ -92,7 +109,7 @@ impl Experts {
     pub(in crate::backend) fn nvfp4_prequant_scale(&self) -> Option<DeviceBuffer<f32>> {
         match self {
             Self::NvFp4(experts) => experts.prequant_scale(),
-            Self::Dense { .. } => None,
+            Self::Dense { .. } | Self::Ggml(_) => None,
         }
     }
 

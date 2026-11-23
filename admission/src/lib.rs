@@ -1,6 +1,8 @@
 //! Hardware-free model architecture admission shared by libmir backends.
 
+mod activation;
 mod error;
+pub mod ggml;
 
 pub mod cuda;
 pub mod metal;

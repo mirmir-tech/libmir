@@ -57,7 +57,8 @@ impl CudaEngine {
         match runtime {
             CudaDecoderRuntime::SharedRouted
             | CudaDecoderRuntime::DenseMixed
-            | CudaDecoderRuntime::StateSpaceHybrid => {
+            | CudaDecoderRuntime::StateSpaceHybrid
+            | CudaDecoderRuntime::LatentAttention => {
                 let template = self.backend.load_shared_routed_model_template_with_progress(
                     decoder,
                     &contract.semantic,

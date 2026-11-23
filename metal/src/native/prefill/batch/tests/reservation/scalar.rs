@@ -18,7 +18,7 @@ fn exercise(family: Family) -> Result<()> {
     let first = model.prefill(session, &prompt, &[], &SamplingLogits::Full, None, &mut |_| {})?;
     let expected = match first.output {
         NativeOutput::Logits(logits) => logits.to_vec_f32(model.stream())?,
-        NativeOutput::Greedy(_) => {
+        NativeOutput::Greedy(_) | NativeOutput::Verified { .. } => {
             return Err(Error::InvalidPrefillBatch("missing reference logits".into()));
         },
     };
@@ -45,7 +45,7 @@ fn exercise(family: Family) -> Result<()> {
     assert_eq!(restored.prefix_cache_tokens, prompt.len());
     let actual = match restored.output {
         NativeOutput::Logits(logits) => logits.to_vec_f32(model.stream())?,
-        NativeOutput::Greedy(_) => {
+        NativeOutput::Greedy(_) | NativeOutput::Verified { .. } => {
             return Err(Error::InvalidPrefillBatch("missing restored logits".into()));
         },
     };

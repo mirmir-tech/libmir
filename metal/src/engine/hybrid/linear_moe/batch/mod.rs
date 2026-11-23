@@ -26,7 +26,7 @@ impl HybridLinearMoeModel {
         let hidden = self.embedding.lookup(token_ids, stream)?;
         let hidden = forward_packed_layers(&self.layers, hidden, caches, positions, stream)?;
         let hidden = self.final_norm.apply(&hidden, self.rms_norm_eps, stream)?;
-        let logits = self.output.forward(&hidden, stream)?;
+        let logits = self.project_logits(&hidden, stream)?;
         decode::graph::export_once(&logits, stream)?;
         Ok(logits)
     }
@@ -204,6 +204,13 @@ impl HybridLinearMoeLayer {
                         &input,
                         cache.full_attention_cache(self.index)?,
                         paged_attention_min_context(stream),
+                        position,
+                        causal,
+                        stream,
+                    ),
+                    Attention::Latent(layer) => layer.forward(
+                        &input,
+                        cache.full_attention_cache(self.index)?,
                         position,
                         causal,
                         stream,

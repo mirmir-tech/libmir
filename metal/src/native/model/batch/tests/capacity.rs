@@ -49,6 +49,7 @@ fn exercise(case: Case) -> Result<()> {
             session,
             token,
             sampling: SamplingLogits::None,
+            speculation: None,
         });
     }
     model.flush_decode_graphs()?;

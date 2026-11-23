@@ -12,6 +12,7 @@ use crate::{
 
 mod batch;
 mod config;
+mod ggml;
 pub(in crate::backend) mod graph;
 mod mxfp4;
 mod mxfp8;
@@ -94,10 +95,12 @@ impl DecodeAttentionBf16 {
         if cache.layer() != config.layer || cache.storage_spec() != config.cache {
             return Err(Error::InvalidPagedKv("shared cache differs from attention layer"));
         }
-        let attention = backend.prepare_paged_attention_bf16(
+        let attention = PagedAttentionBf16::new(
+            backend,
             &cache,
             config.query_heads,
             config.max_sequence_blocks,
+            config.score_softcap,
         )?;
         let qkv_postprocess = QkvPostprocessSpec {
             tokens: 1,
@@ -108,11 +111,12 @@ impl DecodeAttentionBf16 {
             rotary: config.rotary,
             epsilon: config.rms_norm_epsilon,
             normalization: config.qkv_normalization,
+            temperature: config.query_temperature,
         };
         let output_projection =
             AttentionOutputProjection::new(backend, config, 1, weights.map(|value| value.output))?;
         Ok(Self {
-            input_norm: RmsNormBf16::new(backend, 1, config.hidden_size, config.rms_norm_epsilon)?,
+            input_norm: RmsNormBf16::for_stream(backend, 1, &config)?,
             qkv: AttentionQkvProjection::new(backend, config, 1, weights.map(|value| value.qkv))?,
             qkv_postprocess: QkvPostprocess::compile(&backend.inner.compiler, qkv_postprocess)?,
             output_projection,
@@ -182,7 +186,7 @@ impl DecodeAttentionBf16 {
             &self.cache,
             table,
             &mut self.scratch.attention,
-            self.config.sliding_window,
+            self.config.window,
             self.config.attention_scale,
         )?;
         self.output_projection.execute(

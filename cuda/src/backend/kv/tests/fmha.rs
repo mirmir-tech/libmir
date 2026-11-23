@@ -131,7 +131,7 @@ fn contiguous_fmha_matches_scattered_paged_prefill() -> Result<()> {
         &mut reference,
         QUERY_TOKENS,
         CONTEXT - QUERY_TOKENS,
-        Some(CONTEXT),
+        Some(models::semantic::AttentionWindow::Sliding(CONTEXT)),
         1.0 / 128.0_f32.sqrt(),
     )?;
     let fmha = read(&backend, &fmha)?;

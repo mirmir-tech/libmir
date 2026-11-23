@@ -29,6 +29,11 @@ impl Weights {
         let Some(alpha) = GraphLinear::new(&layer.in_proj_a)? else {
             return Ok(None);
         };
+        // The compiled graph projects grouped values; llama.cpp's tiled output
+        // columns take the uncompiled path, which reorders them first.
+        if layer.tiled_output.is_some() {
+            return Ok(None);
+        }
         let Some(output) = GraphLinear::new(&layer.out_proj)? else {
             return Ok(None);
         };

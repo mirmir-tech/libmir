@@ -19,7 +19,7 @@ pub(in crate::backend::model::session) struct PackedPrefillOutput {
     selected: DeviceBuffer<bf16>,
     normalized: DeviceBuffer<bf16>,
     logits: DeviceBuffer<bf16>,
-    logit_softcap: Option<crate::kernels::LogitSoftcap>,
+    logit_shaper: Option<crate::kernels::LogitShapingBf16>,
 }
 
 impl PackedPrefillOutput {
@@ -29,8 +29,8 @@ impl PackedPrefillOutput {
         rows: usize,
         hidden: usize,
         vocab: usize,
-        epsilon: f32,
-        logit_softcap: Option<f32>,
+        final_norm: &RmsNormBf16,
+        logit_shaping: Option<crate::kernels::LogitShaping>,
     ) -> Result<Self> {
         let activation_elements = elements(rows, hidden, "prefill output activation overflow")?;
         let logits_elements = elements(rows, vocab, "prefill output logits overflow")?;
@@ -39,18 +39,18 @@ impl PackedPrefillOutput {
             indices: backend.inner.pool.allocate(&backend.inner.stream, rows)?,
             index_staging: backend.inner.context.allocate_pinned(rows)?,
             token_staging: backend.inner.context.allocate_pinned(rows)?,
-            final_norm: backend.prepare_rms_norm_bf16(rows, hidden, epsilon)?,
+            final_norm: final_norm.resized(backend, rows)?,
             output_head: template.instantiate_batch(backend, rows)?,
             sampler: backend.prepare_device_batch_sampler_bf16(vocab, rows)?,
             selected: backend.inner.pool.allocate(&backend.inner.stream, activation_elements)?,
             normalized: backend.inner.pool.allocate(&backend.inner.stream, activation_elements)?,
             logits: backend.inner.pool.allocate(&backend.inner.stream, logits_elements)?,
-            logit_softcap: logit_softcap
-                .map(|cap| {
-                    crate::kernels::LogitSoftcap::compile(
+            logit_shaper: logit_shaping
+                .map(|shaping| {
+                    crate::kernels::LogitShapingBf16::compile(
                         &backend.inner.compiler,
                         logits_elements,
-                        cap,
+                        shaping,
                     )
                 })
                 .transpose()?,
@@ -76,8 +76,8 @@ impl PackedPrefillOutput {
         self.final_norm
             .execute(&self.selected, final_norm_weight, &mut self.normalized)?;
         self.output_head.execute(&self.normalized, &mut self.logits)?;
-        if let Some(softcap) = &self.logit_softcap {
-            softcap.execute(stream, &mut self.logits)?;
+        if let Some(shaper) = &self.logit_shaper {
+            shaper.execute(stream, &mut self.logits)?;
         }
         self.sampler.sample(&self.logits, policies)?;
         Ok(())
@@ -101,8 +101,8 @@ impl CudaMoeModelSession {
                 rows,
                 self.hidden_size,
                 self.logits.len(),
-                self.final_norm.epsilon(),
-                self.logit_softcap_cap,
+                &self.final_norm,
+                self.logit_shaping,
             )?;
             self.packed_outputs.insert(rows, output);
         }
@@ -142,8 +142,8 @@ impl CudaMoeModelSession {
                 bucket,
                 self.hidden_size,
                 self.logits.len(),
-                self.final_norm.epsilon(),
-                self.logit_softcap_cap,
+                &self.final_norm,
+                self.logit_shaping,
             )?
         };
         let mut padded_rows = rows;

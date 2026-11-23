@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use crate::engine::{Array, KvCache, KvPageFormat, PagedArenaPool, Result, Stream};
+use crate::engine::{
+    Array, KvCache, KvPageFormat, PagedArenaPool, PagedContextMode, Result, Stream,
+};
 
 #[test]
 fn isolates_sessions_while_sharing_a_physical_arena() -> Result<()> {
@@ -64,6 +66,29 @@ fn gathers_multiple_physical_runs_in_logical_order() -> Result<()> {
     stream.synchronize()?;
 
     assert_eq!(context.keys.to_vec_f32(&stream)?, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    Ok(())
+}
+
+#[test]
+fn reads_an_offset_page_run_as_a_view_and_split_runs_natively() -> Result<()> {
+    let pool = Arc::new(PagedArenaPool::default());
+    let stream = stream(&pool)?;
+    let mut split = cache(&pool, 0)?;
+    let mut offset = cache(&pool, 0)?;
+    let initial = values(&[1.0, 2.0])?;
+    drop(split.update(&initial, &initial, &stream)?);
+    drop(offset.update(&initial, &initial, &stream)?);
+    let mode = PagedContextMode::NativeIfFragmented;
+
+    let token = values(&[3.0, 4.0])?;
+    let view = offset.update_for_attention_mode(&token, &token, &stream, 1, mode)?;
+    let extension = Array::from_f32(&[3.0, 4.0, 5.0, 6.0], &[1, 1, 2, 2])?;
+    let native = split.update_for_attention_mode(&extension, &extension, &stream, 1, mode)?;
+
+    assert_ne!(offset.first_physical_page(), Some(0));
+    assert!(view.paged.is_none());
+    assert_eq!(view.keys.to_vec_f32(&stream)?, vec![1.0, 2.0, 3.0, 4.0]);
+    assert!(native.paged.as_ref().is_some_and(|paged| paged.fragmented));
     Ok(())
 }
 

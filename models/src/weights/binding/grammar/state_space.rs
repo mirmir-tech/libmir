@@ -1,10 +1,13 @@
 //! Binding grammar of state-space hybrid layers: Mamba-2 or attention mixers
-//! paired with an optional latent routed-expert block.
+//! paired with an optional latent routed-expert or dense MLP block.
 
 use super::{has_layer, invalid};
 use crate::{
     error::Result,
-    semantic::{BlockLayoutSpec, DecoderLayerSpec, FeedForwardSpec, MixerSpec, SemanticModelSpec},
+    semantic::{
+        ActivationSpec, BlockLayoutSpec, DecoderLayerSpec, FeedForwardSpec, MixerSpec,
+        SemanticModelSpec,
+    },
     weights::binding::{
         AttentionProjectionRole, ExpertProjectionRole, FeedForwardProjectionRole,
         LatentProjectionRole, LayerTensorRole, LogicalTensorRole, StateSpaceTensorRole,
@@ -80,7 +83,7 @@ pub(super) fn mixer(
         .all(|projection| has(LayerTensorRole::AttentionProjection { projection }))
             && !has(LayerTensorRole::QueryNorm)
             && !has(LayerTensorRole::KeyNorm)),
-        MixerSpec::LinearAttention(_) => Ok(false),
+        MixerSpec::LinearAttention(_) | MixerSpec::LatentAttention(_) => Ok(false),
     }
 }
 
@@ -126,6 +129,18 @@ pub(super) fn feed_forward(
                 && has(LayerTensorRole::PostAttentionNorm)
                 && has(LayerTensorRole::Router)
                 && has(LayerTensorRole::RouterCorrectionBias)
+        },
+        // Dense Nemotron-H's ungated `relu²` MLP block.
+        FeedForwardSpec::Dense {
+            activation: ActivationSpec::ReluSquared, ..
+        } => {
+            let projection =
+                |projection| has(LayerTensorRole::FeedForwardProjection { projection });
+            has(LayerTensorRole::PostAttentionNorm)
+                && projection(FeedForwardProjectionRole::Up)
+                && projection(FeedForwardProjectionRole::Down)
+                && !projection(FeedForwardProjectionRole::Gate)
+                && !has(LayerTensorRole::Router)
         },
         FeedForwardSpec::Dense { .. }
         | FeedForwardSpec::Routed { .. }

@@ -1,4 +1,5 @@
 use mircuda::{DeviceBuffer, KernelNode, LaunchConfig, Stream, bf16};
+use models::semantic::AttentionWindow;
 
 use super::{AttentionKernel, KvStoreKernel, PagedAttention, PagedKvStore};
 use crate::{
@@ -128,7 +129,7 @@ impl PagedAttention {
         output: &mut DeviceBuffer<bf16>,
         token_count: usize,
         block_count: usize,
-        window: Option<usize>,
+        window: Option<AttentionWindow>,
         scale: f32,
         split_threshold: usize,
     ) -> Result<KernelNode<AttentionKernel>> {
@@ -149,7 +150,7 @@ impl PagedAttention {
         output: &'a mut DeviceBuffer<bf16>,
         token_count: usize,
         block_count: usize,
-        window: Option<usize>,
+        window: Option<AttentionWindow>,
         scale: f32,
         split_threshold: usize,
     ) -> Result<(LaunchConfig, AttentionArguments<'a>)> {
@@ -191,7 +192,7 @@ impl PagedAttention {
                 narrow(self.spec.kv_heads)?,
                 narrow(self.spec.head_dim)?,
                 narrow(self.spec.value_head_dim)?,
-                narrow(window.unwrap_or(0))?,
+                crate::kernels::paged::window::argument(window)?,
                 scale,
                 narrow(split_threshold)?,
             ),

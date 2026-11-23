@@ -3,8 +3,9 @@ use models::{
     execution::ArchitectureRequirements,
     weights::{
         AwqQuantization, BitsAndBytes4BitQuantization, BlockFormat, BlockQuantization,
-        CompressedIntegerQuantization, EncoderBindingPlan, Float8Quantization, GptqQuantization,
-        GroupedAffineQuantization, TensorStorage, WeightBindingPlan,
+        CompressedIntegerQuantization, EncoderBindingPlan, Float8Quantization,
+        GgmlBlockQuantization, GptqQuantization, GroupedAffineQuantization, TensorStorage,
+        WeightBindingPlan,
     },
 };
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -39,10 +40,8 @@ pub enum AdmissionCheckKind {
     Dense,
     /// Grouped affine integer weights.
     Affine,
-    /// Packed compressed-tensors INT8 weights.
-    PackedInt8,
-    /// Packed compressed-tensors INT4 weights.
-    PackedInt4,
+    /// Packed compressed-tensors integer weights of any admitted width.
+    PackedInteger,
     /// `AutoAWQ` GEMM packed weights.
     Awq,
     /// GPTQ input-packed weights.
@@ -57,6 +56,8 @@ pub enum AdmissionCheckKind {
     MxFp8,
     /// NVIDIA NVFP4 block weights.
     NvFp4,
+    /// GGML block weights from GGUF files.
+    Ggml,
     /// Semantic model composition and backend lowering.
     Architecture,
     /// Vision tensors and image preprocessing contract.
@@ -87,13 +88,8 @@ pub enum WeightEncoding {
         /// Complete physical quantization contract.
         format: GroupedAffineQuantization,
     },
-    /// Compressed-tensors packed INT8 storage.
-    PackedInt8 {
-        /// Complete physical integer packing and quantization contract.
-        format: CompressedIntegerQuantization,
-    },
-    /// Compressed-tensors grouped INT4 storage.
-    PackedInt4 {
+    /// Compressed-tensors packed integer storage; `format.bits` is the width.
+    PackedInteger {
         /// Complete physical integer packing and quantization contract.
         format: CompressedIntegerQuantization,
     },
@@ -131,6 +127,11 @@ pub enum WeightEncoding {
     NvFp4 {
         /// Complete block and scale hierarchy.
         format: BlockQuantization,
+    },
+    /// GGML blocks read in place from GGUF files.
+    Ggml {
+        /// The GGML type, which fixes block layout and scales.
+        format: GgmlBlockQuantization,
     },
 }
 
@@ -170,11 +171,8 @@ impl CheckpointEncoding {
                 TensorStorage::AffineQuantized { format, .. } => {
                     Some(WeightEncoding::Affine { format: *format })
                 },
-                TensorStorage::PackedInt8 { format, .. } => {
-                    Some(WeightEncoding::PackedInt8 { format: *format })
-                },
-                TensorStorage::PackedInt4 { format, .. } => {
-                    Some(WeightEncoding::PackedInt4 { format: *format })
+                TensorStorage::PackedInteger { format, .. } => {
+                    Some(WeightEncoding::PackedInteger { format: *format })
                 },
                 TensorStorage::Awq { format, .. } => Some(WeightEncoding::Awq { format: *format }),
                 TensorStorage::Gptq { format, .. } => {
@@ -191,6 +189,9 @@ impl CheckpointEncoding {
                     BlockFormat::MxFp8 => WeightEncoding::MxFp8 { format: *format },
                     BlockFormat::NvFp4 => WeightEncoding::NvFp4 { format: *format },
                 }),
+                TensorStorage::Ggml { format, .. } => {
+                    Some(WeightEncoding::Ggml { format: *format })
+                },
                 TensorStorage::Auxiliary { .. } => None,
             })
             .collect::<Vec<_>>();

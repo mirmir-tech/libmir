@@ -141,7 +141,7 @@ fn check_batch(model: &mut LoadedModel) -> Result<()> {
 
 pub(super) fn token(model: &LoadedModel, output: NativeOutput) -> Result<u32> {
     Ok(match output {
-        NativeOutput::Greedy(token) => token,
+        NativeOutput::Greedy(token) | NativeOutput::Verified { next: token, .. } => token,
         NativeOutput::Logits(logits) => logits.argmax_u32(model.stream())?,
     })
 }

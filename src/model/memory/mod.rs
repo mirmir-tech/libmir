@@ -13,7 +13,8 @@ use runtime::kv::{CacheConfig, KvStorageSpec};
 use super::ModelDescriptor;
 use crate::{ModelMemoryEstimate, RuntimeConfig};
 
-mod prediction;
+mod conversion;
+pub(super) mod prediction;
 mod resident;
 mod session;
 
@@ -39,9 +40,16 @@ impl ModelDescriptor {
         config: &RuntimeConfig,
         target: &BackendTarget,
     ) -> ModelMemoryEstimate {
-        let speculation = *target == BackendTarget::Cuda && config.scheduler.speculation.is_some();
+        let speculation = config.scheduler.speculation.is_some_and(|speculation| {
+            prediction::backend_drafts(target, speculation.draft_tokens.get()).is_some()
+        });
         let weight_bytes =
-            resident::weight_bytes(&self.layout, self.unloaded.as_ref(), speculation);
+            resident::weight_bytes(&self.layout, self.unloaded.as_ref(), speculation)
+                .saturating_add(if *target == BackendTarget::Metal {
+                    conversion::metal_affine_growth(self.execution.as_ref(), speculation)
+                } else {
+                    0
+                });
         let generation_decoder = match &self.task_plan {
             TaskExecutionPlan::Generation { decoder }
             | TaskExecutionPlan::CausalScoring { decoder, .. } => Some(decoder),
@@ -93,29 +101,23 @@ fn kv_budget(
         .iter()
         .enumerate()
         .filter(|(_, layer)| {
-            matches!(layer, AttentionLayerType::Full | AttentionLayerType::Sliding)
-        })
-        .fold((0_u64, 0_u64), |(per_token, total), (index, layer)| {
-            let cache = if *layer == AttentionLayerType::Sliding && bounded_sliding(decoder, target)
-            {
-                sliding_cache(decoder, config, target)
-            } else {
-                config.kv_cache
-            };
-            let budget = KvStorageSpec::new(
-                cache,
-                decoder.layer_key_value_heads(index),
-                decoder.layer_head_dim(index),
+            matches!(
+                layer,
+                AttentionLayerType::Full | AttentionLayerType::Sliding | AttentionLayerType::Latent
             )
-            .memory_budget();
+        })
+        .fold((0_u64, 0_u64), |(per_token, total), (index, _)| {
+            let span =
+                decoder.layer_attention_span(index).filter(|_| bounded_sliding(decoder, target));
+            let cache = span.map_or(config.kv_cache, |span| sliding_cache(span, config, target));
+            let budget = layer_storage(decoder, index, cache).memory_budget();
             let data = u64::try_from(budget.data_bytes_per_token).unwrap_or(u64::MAX);
             let scales = u64::try_from(budget.scale_bytes_per_token).unwrap_or(u64::MAX);
-            let growing =
-                if *layer != AttentionLayerType::Sliding || !bounded_sliding(decoder, target) {
-                    data.saturating_add(scales)
-                } else {
-                    0
-                };
+            let growing = if span.is_none() {
+                data.saturating_add(scales)
+            } else {
+                0
+            };
             (
                 per_token.saturating_add(growing),
                 total.saturating_add(u64::try_from(budget.total_bytes).unwrap_or(u64::MAX)),
@@ -123,12 +125,24 @@ fn kv_budget(
         })
 }
 
-fn sliding_cache(
-    decoder: &DecoderConfig,
-    config: &RuntimeConfig,
-    target: &BackendTarget,
-) -> CacheConfig {
-    let window = decoder.sliding_window.unwrap_or(config.kv_cache.block_size);
+/// A latent-attention layer caches one latent and one shared rotary key per
+/// token, with no per-head keys or values.
+fn layer_storage(decoder: &DecoderConfig, index: usize, cache: CacheConfig) -> KvStorageSpec {
+    match (&decoder.latent, decoder.layer_type(index)) {
+        (Some(latent), AttentionLayerType::Latent) => KvStorageSpec {
+            value_head_dim: 0,
+            ..KvStorageSpec::new(cache, 1, latent.attention.cached_width())
+        },
+        _ => KvStorageSpec::new(
+            cache,
+            decoder.layer_key_value_heads(index),
+            decoder.layer_head_dim(index),
+        ),
+    }
+}
+
+/// The ring a bounded layer of `window` recent tokens keeps per session.
+fn sliding_cache(window: usize, config: &RuntimeConfig, target: &BackendTarget) -> CacheConfig {
     let ring_blocks = window
         .saturating_add(config.kv_cache.block_size.saturating_sub(1))
         .div_ceil(config.kv_cache.block_size);
@@ -145,8 +159,8 @@ fn sliding_cache(
     }
 }
 
-/// Metal keeps every sliding layer in a bounded ring outside the block pool;
-/// CUDA bounds only the clamped-routed sliding layers.
+/// Metal keeps every sliding or chunked layer in a bounded ring outside the
+/// block pool; CUDA bounds only the clamped-routed sliding layers.
 fn bounded_sliding(decoder: &DecoderConfig, target: &BackendTarget) -> bool {
     *target == BackendTarget::Metal
         || (decoder.swiglu_limit.is_some() && decoder.num_experts.is_some())

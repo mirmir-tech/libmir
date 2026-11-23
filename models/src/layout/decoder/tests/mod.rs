@@ -3,8 +3,12 @@ use serde_json::json;
 use super::*;
 use crate::error::Result;
 
+mod glm;
 mod gpt_oss;
+mod latent;
+mod llama4;
 mod mistral;
+mod phimoe;
 mod rope;
 
 #[test]
@@ -214,6 +218,7 @@ fn reads_hybrid_linear_moe_features() -> Result<()> {
             value_heads: 8,
             key_head_dim: 4,
             value_head_dim: 4,
+            layout: LinearAttentionLayout::Checkpoint,
         })
     );
     Ok(())

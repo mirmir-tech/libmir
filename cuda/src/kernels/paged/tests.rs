@@ -74,6 +74,7 @@ fn graph_rebinds_paged_store_and_attention() -> Result<()> {
         head_dim: 2,
         value_head_dim: 2,
         dtype: KvCacheDType::BFloat16,
+        score_softcap: None,
     };
     let kv = PagedKvStore::compile(&runtime.compiler, kv_spec)?;
     let attention = PagedAttention::compile(&runtime.compiler, attention_spec)?;

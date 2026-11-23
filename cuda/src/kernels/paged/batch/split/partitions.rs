@@ -1,4 +1,5 @@
 use mircuda::{DeviceBuffer, LaunchConfig, Stream, bf16};
+use models::semantic::AttentionWindow;
 
 use super::{BatchedSplitAttentionWorkspace, BatchedSplitPagedAttention};
 use crate::{
@@ -20,7 +21,7 @@ impl BatchedSplitPagedAttention {
         workspace: &mut BatchedSplitAttentionWorkspace,
         output: &DeviceBuffer<bf16>,
         batch_size: usize,
-        window: Option<usize>,
+        window: Option<AttentionWindow>,
         scale: f32,
         minimum_tokens: usize,
         maximum_tokens: usize,
@@ -28,7 +29,7 @@ impl BatchedSplitPagedAttention {
         self.validate(
             query, block_tables, token_counts, block_counts, workspace, output, batch_size,
         )?;
-        let visible = window.map_or(maximum_tokens, |tokens| maximum_tokens.min(tokens));
+        let visible = crate::kernels::paged::window::visible_bound(maximum_tokens, window);
         let launch_partitions = visible.div_ceil(self.partition_tokens).min(self.max_partitions);
         if launch_partitions == 0 {
             return Err(Error::InvalidPagedKv("batched split attention has no visible tokens"));
@@ -61,7 +62,7 @@ impl BatchedSplitPagedAttention {
                 narrow(self.spec.kv_heads)?,
                 narrow(self.spec.head_dim)?,
                 narrow(self.spec.value_head_dim)?,
-                narrow(window.unwrap_or(0))?,
+                crate::kernels::paged::window::argument(window)?,
                 scale,
                 narrow(self.partition_tokens)?,
                 narrow(launch_partitions)?,

@@ -67,7 +67,7 @@ impl HybridMoeModel {
             let MixerLowering::Softmax { window, .. } = lowered.mixer else {
                 unreachable!("validated hybrid MoE mixer");
             };
-            cache_windows.push(window);
+            cache_windows.push(window.and_then(models::semantic::AttentionWindow::sliding));
         }
         let boundary = bindings.decoder_boundary_with_tied_output(true)?;
         Self::finish_load(

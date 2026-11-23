@@ -192,7 +192,7 @@ fn capture(stream: Stream, layers: Vec<CapturedModelLayer>) -> Result<CapturedMo
         .map(|(layer, nodes)| {
             Ok(Binding {
                 nodes: *nodes,
-                kernels: layer.kernels(),
+                kernels: layer.kernels()?,
                 configs: layer.configs()?,
             })
         })

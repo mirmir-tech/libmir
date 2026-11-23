@@ -1,4 +1,5 @@
 use mircuda::{DeviceBuffer, bf16};
+use models::semantic::AttentionWindow;
 use runtime::kv::BlockTable;
 
 use super::{CapturedPagedAttentionNodes, PagedAttentionBf16};
@@ -15,7 +16,7 @@ impl PagedAttentionBf16 {
         cache: &PagedKvCache,
         table: &BlockTable,
         output: &mut DeviceBuffer<bf16>,
-        window: Option<usize>,
+        window: Option<AttentionWindow>,
         scale: f32,
     ) -> Result<CapturedPagedAttentionNodes> {
         self.validate(cache, table)?;
@@ -69,7 +70,7 @@ impl PagedAttentionBf16 {
             &mut self.split_workspace,
             usize::try_from(token_count)?,
             usize::try_from(block_count)?,
-            window_option(window)?,
+            crate::kernels::attention_window::from_argument(window)?,
             scale,
             usize::try_from(active)?,
             usize::try_from(self.split_threshold)?,
@@ -83,11 +84,8 @@ impl PagedAttentionBf16 {
         window: u32,
     ) -> Result<MergeAttentionArguments<'a>> {
         let active = self.split.active_partitions(token_count, window)?;
-        let visible_tokens = token_count.min(if window == 0 {
-            token_count
-        } else {
-            window
-        });
+        let visible_tokens =
+            crate::kernels::attention_window::visible_argument(token_count, window);
         self.split.merge_arguments(
             &self.split_workspace,
             output,
@@ -96,8 +94,4 @@ impl PagedAttentionBf16 {
             usize::try_from(self.split_threshold)?,
         )
     }
-}
-
-fn window_option(window: u32) -> Result<Option<usize>> {
-    Ok((window > 0).then(|| usize::try_from(window)).transpose()?)
 }

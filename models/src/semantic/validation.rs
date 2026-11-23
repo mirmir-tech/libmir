@@ -1,6 +1,6 @@
 use super::{
-    ActivationSpec, FeedForwardSpec, MixerSpec, PositionEncodingSpec, SemanticModelSpec,
-    model::CURRENT_SCHEMA_VERSION,
+    ActivationSpec, AttentionWindow, FeedForwardSpec, MixerSpec, PositionEncodingSpec,
+    SemanticModelSpec, model::CURRENT_SCHEMA_VERSION,
 };
 use crate::error::{ModelsError, Result};
 
@@ -15,8 +15,11 @@ pub(super) fn validate(spec: &SemanticModelSpec) -> Result<()> {
     if decoder.hidden_size == 0 || decoder.vocab_size == 0 || decoder.layers.is_empty() {
         return Err(invalid("decoder dimensions and layer list must be non-empty"));
     }
-    if !decoder.embedding_multiplier.is_finite() || decoder.embedding_multiplier <= 0.0 {
-        return Err(invalid("embedding multiplier must be finite and positive"));
+    if [decoder.embedding_multiplier, decoder.residual_multiplier, decoder.logit_divisor]
+        .iter()
+        .any(|scale| !scale.is_finite() || *scale <= 0.0)
+    {
+        return Err(invalid("embedding, residual and logit scales must be finite and positive"));
     }
     norm(decoder.final_norm.epsilon)?;
     layers(&decoder.layers, "decoder")?;
@@ -88,18 +91,15 @@ fn mixer(mixer: &MixerSpec) -> Result<()> {
                 || !attention.query_heads.is_multiple_of(attention.key_value_heads)
                 || !attention.scale.is_finite()
                 || attention.scale <= 0.0
-                || attention.window == Some(0)
+                || matches!(
+                    attention.window,
+                    Some(AttentionWindow::Sliding(0) | AttentionWindow::Chunked { chunk: 0 })
+                )
+                || attention.query_temperature.is_some_and(|temperature| !temperature.is_valid())
             {
                 return Err(invalid("invalid softmax attention specification"));
             }
-            if let PositionEncodingSpec::Rotary(rotary) = &attention.position
-                && (!rotary.theta.is_finite()
-                    || rotary.theta <= 0.0
-                    || !rotary.partial_factor.is_finite()
-                    || rotary.partial_factor <= 0.0)
-            {
-                return Err(invalid("invalid rotary position specification"));
-            }
+            rotary(&attention.position)?;
         },
         MixerSpec::LinearAttention(linear) => {
             let dimensions = [
@@ -114,6 +114,38 @@ fn mixer(mixer: &MixerSpec) -> Result<()> {
             }
         },
         MixerSpec::StateSpace(state) => state_space(state)?,
+        MixerSpec::LatentAttention(latent) => {
+            let dimensions = [
+                latent.query_heads,
+                latent.query_rank.unwrap_or(1),
+                latent.key_value_rank,
+                latent.nope_head_dim,
+                latent.value_head_dim,
+            ];
+            if dimensions.contains(&0)
+                || latent.rope_head_dim == 0
+                || !latent.rope_head_dim.is_multiple_of(2)
+                || !latent.scale.is_finite()
+                || latent.scale <= 0.0
+                || latent.query_temperature.is_some_and(|temperature| !temperature.is_valid())
+            {
+                return Err(invalid("invalid latent attention specification"));
+            }
+            norm(latent.latent_normalization.epsilon)?;
+            rotary(&latent.position)?;
+        },
+    }
+    Ok(())
+}
+
+fn rotary(position: &PositionEncodingSpec) -> Result<()> {
+    if let PositionEncodingSpec::Rotary(rotary) = position
+        && (!rotary.theta.is_finite()
+            || rotary.theta <= 0.0
+            || !rotary.partial_factor.is_finite()
+            || rotary.partial_factor <= 0.0)
+    {
+        return Err(invalid("invalid rotary position specification"));
     }
     Ok(())
 }
@@ -149,7 +181,7 @@ fn feed_forward(feed_forward: &FeedForwardSpec) -> Result<()> {
             activation_spec(activation)
         },
         FeedForwardSpec::Routed { routed, shared } => {
-            routed_spec(routed)?;
+            routed.validate()?;
             if let Some(shared) = shared {
                 nonzero(shared.intermediate_size)?;
                 activation_spec(&shared.activation)?;
@@ -163,7 +195,7 @@ fn feed_forward(feed_forward: &FeedForwardSpec) -> Result<()> {
         } => {
             nonzero(*dense_intermediate_size)?;
             activation_spec(dense_activation)?;
-            routed_spec(routed)
+            routed.validate()
         },
         FeedForwardSpec::LatentRouted {
             latent_size,
@@ -174,7 +206,7 @@ fn feed_forward(feed_forward: &FeedForwardSpec) -> Result<()> {
             if let Some(latent_size) = latent_size {
                 nonzero(*latent_size)?;
             }
-            routed_spec(routed)?;
+            routed.validate()?;
             if let Some(shared) = shared {
                 nonzero(shared.intermediate_size)?;
                 activation_spec(&shared.activation)?;
@@ -188,29 +220,24 @@ fn feed_forward(feed_forward: &FeedForwardSpec) -> Result<()> {
     }
 }
 
-fn routed_spec(routed: &super::RoutedExpertsSpec) -> Result<()> {
-    nonzero(routed.expert_count)?;
-    nonzero(routed.top_k)?;
-    nonzero(routed.intermediate_size)?;
-    if routed.top_k > routed.expert_count {
-        return Err(invalid("routed top-k exceeds expert count"));
-    }
-    activation_spec(&routed.activation)
-}
-
-fn activation_spec(activation: &ActivationSpec) -> Result<()> {
+/// A `SwiGLU` is plain (`alpha` 1, no clamp or shift) or gpt-oss's clamped
+/// form with a shifted `up`; runtimes tell the two apart by the clamp.
+pub(super) fn activation_spec(activation: &ActivationSpec) -> Result<()> {
+    #[allow(clippy::float_cmp, reason = "plain SwiGLU's constants are exact")]
     if let ActivationSpec::SwiGlu { alpha, clamp, up_shift } = activation
         && (!alpha.is_finite()
             || *alpha <= 0.0
             || clamp.is_some_and(|limit| !limit.is_finite() || limit <= 0.0)
-            || !up_shift.is_finite())
+            || !up_shift.is_finite()
+            || clamp.is_some() == (*up_shift == 0.0)
+            || (clamp.is_none() && *alpha != 1.0))
     {
-        return Err(invalid("invalid SwiGLU activation specification"));
+        return Err(invalid("SwiGLU is plain, or clamped with a shifted up projection"));
     }
     Ok(())
 }
 
-fn nonzero(value: usize) -> Result<()> {
+pub(super) fn nonzero(value: usize) -> Result<()> {
     if value == 0 {
         Err(invalid("feed-forward dimensions must be non-zero"))
     } else {
@@ -218,6 +245,6 @@ fn nonzero(value: usize) -> Result<()> {
     }
 }
 
-fn invalid(message: impl Into<String>) -> ModelsError {
+pub(super) fn invalid(message: impl Into<String>) -> ModelsError {
     ModelsError::InvalidConfig(message.into())
 }

@@ -4,7 +4,7 @@ use models::{
     weights::{TensorCatalog, WeightBindingPlan},
 };
 
-use super::{ModelSource, embedding_multiplier, tensor};
+use super::{ModelSource, ProjectionWeight, embedding_multiplier, tensor};
 use crate::{CudaBackend, CudaMoeModelTemplate, Error, NvFp4MoeLayerLoadConfig, Result};
 
 impl CudaBackend {
@@ -43,7 +43,8 @@ impl CudaBackend {
         load: NvFp4MoeLayerLoadConfig,
         progress: &mut dyn FnMut(u64, String),
     ) -> Result<CudaMoeModelTemplate> {
-        let source = ModelSource::discover(decoder, bindings, catalog)?;
+        let source =
+            ModelSource::discover(semantic.decoder.tie_word_embeddings, bindings, catalog)?;
         let tensors = source.upload(self)?;
         let mut completed = source.payload_bytes()?;
         progress(completed, "model boundary tensors".into());
@@ -74,9 +75,9 @@ impl CudaBackend {
             self,
             decoder.clone(),
             embedding_multiplier(semantic)?,
-            embedding,
+            ProjectionWeight::Dense(embedding),
             final_norm,
-            output,
+            ProjectionWeight::Dense(output),
             layers,
         )
     }

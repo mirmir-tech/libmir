@@ -66,6 +66,15 @@ The target shape is:
   Rust or synchronize the Metal stream.
 - Preserve the explicit rotating write index across updates and snapshots;
   physical storage order must never be mistaken for temporal attention order.
+- Updates shorter than `SLIDING_REWIND_TOKENS` (64; a prompt's tail and last
+  token) keep that many extra masked keys, so a terminal prefix snapshot can
+  rewind (`KvCache::prefix_floor`) past the template tokens a following request
+  does not share. `snapshot_at` rewinds by shrinking the chronological view; the
+  in-place token write needs an exact window-sized ring. Prefix entries index
+  block boundaries down to the floor. Without this a Gemma 3 request that
+  shared a 4096-token system context with the previous one (llama-benchy depth,
+  a chat's next turn) re-prefilled it: 272 instead of 697 tok/s (llama.cpp 703).
+  Full 512-token chunks keep only the window, so plain prefill is unchanged.
 - Paged-attention dependency arrays are rank-one `[1]` buffers. A scalar `[]`
   changes the generated Metal argument into a value and makes kernels that
   index the dependency fail to compile.
@@ -171,7 +180,12 @@ The target shape is:
   completion-balanced waves before streaming, while dense models retain
   completion-first interleaving. Derive routed wave width from the scheduler
   token budget and resident cache capacity; do not impose a model-name rule or
-  a fixed row limit.
+  a fixed row limit. The memory-bounded cohort charges two K/V copies per
+  prompt token (its pages plus the snapshot tail); per-wave workspace stays in
+  `packed_prefill_fits`. Sixteen copies held Qwen3-30B Q8_0 and Gemma-4-26B at
+  1–2 rows per cohort: C10 TG 14.3→58.7 and 39.9→128.4 tok/s at depth 4096,
+  Qwen3.6 neutral in ABBA. Routed decode interleaving on top added little and
+  was not adopted (`2026-11-18-metal-serving-pages`).
 - Decode cohort admission uses exactly `decode_batch_wait_us`. Never multiply
   that window after a multi-row step or retain a hidden refill horizon; a
   latency/occupancy tradeoff must be explicit or backend-measured.
@@ -207,8 +221,19 @@ The target shape is:
   either variant or another chunk policy from these unstable timing means.
   See Workmir's `2026-09-07-uniform-prefill` and `2026-09-07-checkpoint-retention`.
 - `MIRMIR_METAL_PREFIX_CACHE_ENTRIES=<usize>` bounds device prefix snapshots;
-  the default is `16`, while `0` disables the cache. Entries are keyed by model
+  the default is `10`, while `0` disables the cache. Entries are keyed by model
   identity and the full token prefix, never by recyclable runtime block IDs.
+  32 entries made Qwen3-30B Q8_0 depth-4096 C10 context loads take 67-75 s
+  instead of 20 s: retained snapshots raise memory pressure. Moving a leased
+  prefix's lookup entry to the continuation's terminal and evicting the source
+  first was reverted: it did not move that cell (1093 to 1127) and halved
+  Mistral-7B depth-4096 C10 prefill (1149 to 516 tok/s).
+- Unleased prefixes are cleared before prefill only when the cohort's prompt
+  tokens fit neither the headroom nor the arenas' free pages; their pages stay
+  in arena capacity, so clearing for the high weight share alone freed 1.8 MB
+  of 2 GB snapshots and dropped contexts queued requests were about to restore.
+  Qwen3-30B Q8_0 depth-4096 C10 prefill: 1093 to 1208 tok/s, worst TTFT 31.7
+  to 22.1 s (llama.cpp 876).
 - `MIRMIR_METAL_KV_RESERVE_TOKENS=<positive integer>` sets the minimum physical
   page arena reserved before prefill. The default is one 256-token allocation
   step; prompts larger than that reserve their complete token count. This keeps
@@ -219,16 +244,23 @@ The target shape is:
   primitives: their K/V page buffers are graph outputs, so the MLX page-backed
   view consumes them directly. Append and attention remain ordered on one
   explicit Metal stream without a scalar dependency or Rust-side synchronization.
-  Prefix snapshots share physical pages through reference counts. Diverging
-  sessions copy only a shared page, while an arena grows lazily only after its
-  reserved physical pages are exhausted. Sliding layers retain their bounded
+  Prefix snapshots share physical pages through reference counts. A page's
+  last sole writer (`Arena::writers`) keeps appending to it in place while
+  shared: caches only append, so those writes land past every other holder's
+  length. Any other holder copies the page before writing, while an arena
+  grows lazily only after its reserved physical pages are exhausted. Without
+  the writer rule each server session copied its partial terminal page after
+  the prefix snapshot and decoded through the native paged reader: Llama-3.1-8B
+  C1 40.9→50.2 tok/s (3 alternating rounds, Workmir's
+  `2026-11-18-metal-serving-pages`). Sliding layers retain their bounded
   ring and recurrent linear-attention layers retain their state.
 - `MIRMIR_METAL_PAGED_ATTENTION_MIN_CONTEXT=<positive integer>` selects the
   physical-page activation threshold; the default is `128`. Below it Mirmir
   uses a temporary contiguous MLX cache before promoting it to physical pages.
   On the first update at the threshold, the Rust cache backfills head-major pages
-  from live device K/V and releases the persistent contiguous cache. Identity
-  page tables expose a zero-copy device view to MLX fast SDPA. Quantized K/V is
+  from live device K/V and releases the persistent contiguous cache. A page
+  table that is one physical run, at any arena offset, exposes a zero-copy
+  device view to MLX fast SDPA; only multi-run tables count as fragmented. Quantized K/V is
   not production-ready.
 - Native paged SDPA is selected automatically from 8,192 cached tokens only for
   benchmarked shapes: head dimensions up to 256 and divisible by 32, with a GQA
@@ -268,8 +300,10 @@ The target shape is:
   long-context digest regression.
 - `MIRMIR_METAL_PREFILL_STEP=<positive integer>` limits the number of prompt
   tokens in a causal MLX prefill graph. The default is 2048 for hybrid linear
-  or routed-expert decoders and 512 for dense softmax-only decoders; set it to
-  `1` only when comparing against scalar-prefill behavior.
+  or routed-expert decoders and for GGML (GGUF block) projections, which every
+  chunk dequantizes for MLX's matmul (Qwen3-8B Q8_0 1254 to 1440, Llama-3.1-8B
+  Q4_K_M 1457 to 1671 tok/s over 512), and 512 for other dense softmax-only
+  decoders; set it to `1` only when comparing against scalar-prefill behavior.
 - `MIRMIR_METAL_PREFILL_EVAL_LAYERS=<positive integer>` materializes a causal
   prefill graph after each specified number of layers, without moving tensors
   out of MLX. It is an experimental graph-size control for benchmark tuning;
@@ -573,10 +607,11 @@ The target shape is:
   what overlaps MLX execution with host graph construction; moving it after the
   model call serializes decode even though the token remains on the device.
 - Paged KV allocation is always available. Native paged SDPA is a shape-based
-  execution choice, not the definition of paged caching: identity page tables
+  execution choice, not the definition of paged caching: single-run page tables
   use MLX SDPA over a zero-copy page view when that kernel is faster. Supported
-  fragmented/COW page tables must use native paged SDPA instead of gathering a
-  contiguous K/V tensor. Keep this policy model-agnostic in `engine/kv/policy.rs`.
+  multi-run (fragmented) page tables must use native paged SDPA instead of
+  gathering a contiguous K/V tensor. Keep this policy model-agnostic in
+  `engine/kv/policy.rs`.
 - `mirmir chat --bench` measures the production `libmir::Engine` chat prefill and
   decode path, not `LoadedModel` directly. It keeps model weights and Metal
   kernels warm but clears the device prefix cache before each run, preventing
@@ -585,6 +620,12 @@ The target shape is:
   `--bench-samples` (or their `MIRMIR_BENCH_*` environment variables). The
   report names the sampling path. Full-logit sampling is expected to be slower
   because it copies vocabulary logits to Rust every decode step.
+- MLX defaults `MLX_ENABLE_TF32=1`: on NAX GPUs (M5) float32 matmul, SDPA and
+  QMM run as TF32. The Workmir, libmir and mirmir `.cargo/config.toml` set it
+  to 0 for cargo-run tests, which compare float32 against exact references
+  (ten Metal tests failed by up to 5.5e-3 otherwise); binaries started directly
+  keep MLX's default. The test-only MXFP4 tile projection still differs from
+  MLX's NAX `gather_mxfp4` in one element of its bitwise gate.
 ## Mirtal Boundary
 
 - The model-agnostic execution layer is provided by the public `mirtal` crate.
@@ -722,8 +763,10 @@ The target shape is:
   actual per-step replay cap. Preserve FIFO and existing cohort/handoff ownership.
 - Workmir's `2026-09-09-cached-refill-admission` passes Qwen semantics and
   cancellation but fails default promotion: refill TTFT ~1 s→47 ms costs +22%
-  survivor decode in ABBA (limit 15%). Keep this explicit opt-in tradeoff;
-  do not globally enable routed interleaving. GPT-OSS new-mode execution is open.
+  survivor decode in ABBA (limit 15%). Keep this cached-refill exception an
+  explicit opt-in tradeoff. The result concerns one short cached refill during
+  hybrid Qwen3.5 C3 decode; it does not by itself decide the routed prefill
+  schedule's `interleave_decode`. GPT-OSS new-mode execution is open.
 
 ## Decode timing attribution
 
@@ -926,7 +969,8 @@ The target shape is:
   from generation's existing logical reservation limit. Preserve the request through
   scalar facade dispatch. The count includes the first prediction; raw prefill has
   no declared limit. CUDA keeps its existing policy; vision is unchanged.
-- `MetalCacheConfig::decode_reservation` offers OnePage (default) and GenerationBudget;
+- `MetalCacheConfig::decode_reservation` offers GenerationBudget (default since
+  2026-11-19, see below) and OnePage;
   the facade exports `MetalDecodeReservation`. Tokens64 remains test-only. Admit
   baseline pages before using spare capacity; optional tails must not trigger extra
   prefix eviction. Recheck pending plans and allow them to shrink before execution.
@@ -944,7 +988,7 @@ The target shape is:
 - Whole Qwen timing aborts after6 runs on28.2322% control prefill spread. All576
   completed IDs match, but no aggregate performance result qualifies. This run had
   no concurrent assistant-launched build/test/clippy; the drift cause remains unknown.
-  Keep OnePage default. Do not retry unchanged, average the partial series or claim
+  OnePage stayed default then. Do not retry unchanged, average the partial series or claim
   an MLX-LM win. Diagnose prefill instability before another timing series.
 
 ## Prefill drift hardware diagnosis
@@ -994,7 +1038,7 @@ The target shape is:
   OnePage cohort has30 copied full K/V views, each GenerationBudget cohort30 aliases.
   Keep the615.070 ms baseline sample; no filtering or frequency normalization.
 - This does not rescue the earlier budget32 whole-request trials or qualify prefill,
-  memory deltas, chat quality, GPT-OSS, C2/C5, or an MLX-LM win. OnePage stays default.
+  memory deltas, chat quality, GPT-OSS, C2/C5, or an MLX-LM win. OnePage stayed default.
   Next assess budget256 preparation/memory and pressure/cache reuse, then protect
   prefill in a whole-request qualification. No unchanged retry or MLX-LM rerun.
 
@@ -1016,7 +1060,7 @@ The target shape is:
  180→200 MiB. Reclaim returns450 pages to the pool but does not shrink buffers;
   full session/prefix release drops all arenas. All30 recorded continuation IDs match.
   Cold/warm prefill timings are diagnostic only; preparation/whole-request latency
-  remains unqualified. Keep OnePage default and archived MLX-LM/decode references.
+  remained unqualified then; OnePage stayed default. Keep archived MLX-LM/decode references.
 
 
 ## Complete native budget256 qualification
@@ -1026,7 +1070,7 @@ The target shape is:
   and final benchmark drain. It measures native fixed-length work, not HTTP/EOS.
 - The single baseline-only attempt fails readiness within90s. Final four-sample
   spreads: prefill5.7324%, frequency6.3082% exceed3%; decode9.8916% is below15%.
-  All7680 recorded IDs match. No validation/candidate/A/B ran. Keep OnePage default,
+  All7680 recorded IDs match. No validation/candidate/A/B ran. OnePage stayed default;
   no incomplete means, shifted window, relaxed gate, unchanged retry or MLX-LM rerun.
 - The isolated resident decode gain does not qualify complete native generation.
   A separate application gap remains: mirmir configuration does not map public
@@ -1041,7 +1085,7 @@ The target shape is:
   from configuration deserialization. Its owning module is config/cache/mod.rs.
 - Workmir's `2026-09-09-reservation-config` adds the macOS application setting
   runtime.metal_decode_reservation using this same public type. No parallel app
-  enum or private backend dependency. OnePage remains the library default;
+  enum or private backend dependency. GenerationBudget is the library default;
   application auto removes its override. This is plumbing, not a timing promotion.
 
 
@@ -1056,6 +1100,30 @@ The target shape is:
   Physical arena pressure, full-budget output and whole-request timing remain
   separate evidence domains; do not infer them from HTTP logical cache counts.
 
+
+## GenerationBudget default
+
+- GenerationBudget is the default decode reservation since 2026-11-19. With
+  OnePage every concurrent session grows a page at a time, so sessions take
+  interleaved pages, their histories fragment and packed decode reads them per
+  row through native paged SDPA or a gather. A contiguous reservation keeps the
+  ordinary MLX view. One session is unaffected; shared prefix restorations still
+  start fragmented (shared prefix run plus a private tail).
+- Workmir's `2026-11-18-metal-serving-pages` A/B, one binary with and without the
+  setting, llama-benchy PP2048/TG128, depth 0/4096, C1/C2/C10, zero swap: TG
+  changes C2 +12–71% and C10 +15–82% across Llama-3.1-8B and Qwen3-30B-A3B GGUF,
+  gpt-oss-20b GGUF, Qwen3-4B BF16 and Qwen3.6-35B MXFP4; C1 within ±3% (one
+  first-cell Llama outlier). Qwen3-8B Q4_K_M C2/C5/C10 depth 0: 55.2/77.9/78.6 →
+  74.3/113.6/95.9 tok/s, against llama.cpp Metal 70.5/93.7/64.9.
+- After merging develop's persistent batched K/V history (2026-11-20) the two
+  reservations measure the same: Qwen3-8B Q4_K_M, Qwen3-30B-A3B Q4_K_M and
+  gpt-oss-20b GGUF, depth 0/4096, C1–C10, within ±2% in a BA rerun
+  (`20261120T083009Z-gguf-metal-merged-reservation-ab`, `…-reservation-ba`).
+  GenerationBudget stays default; do not credit it with the earlier gains.
+- The first server of a new binary tunes Metal profiles cold (profiles are
+  keyed by executable hash) inside its first measured cells: one such
+  Qwen3-8B C1 cell read 41.3 instead of 49.1 tok/s. Warm a new binary before
+  any timed matrix.
 
 ## Queue-aged prefill collection
 
@@ -1290,6 +1358,12 @@ The target shape is:
   then rotates common-position rows together, appends one `[B, H, T, D]` tensor
   per layer and runs one SDPA call, the shape MLX-LM's batched K/V cache uses.
   Workmir's Qwen3-4B native ABBA measures 1.35–1.71x on B=2/5/10 with 0–5% spread.
+- Layers with supplied RoPE frequencies (Llama 3 scaling) rotate through
+  `rope_with_frequencies_batched`; ragged rows honour the layer's traditional
+  layout and position scale. Excluding frequency layers had sent every
+  Llama-3.1 batch to per-row attention: GGUF Q4_K_M C2 at depth 4096 decoded
+  51.8 instead of 68.1 tok/s (llama.cpp 62.1). YaRN's attention factor still
+  takes the per-row path.
 - The path needs one shared position and a stable row order. Ready rows arrive in
   request-completion order, so `stable_packed_order` sorts them by session only
   when positions match. Do not split rows into per-position cohorts: staggered
@@ -1339,6 +1413,34 @@ The target shape is:
   MLX-LM); unsorted `gather` was the cost. The 2048-token chunk cap lifts Qwen3.6
   C1 prefill from 0.81x to 1.13x. Scalar prefill pressure counts live allocations
   only: the reclaimable allocator cache halved Gemma 26B's C1 prefill.
+- Sorted GGUF expert prefill dequantizes the whole bank to the activation type
+  for MLX's sorted `gather_mm` from 48 assignments per expert
+  (`DENSE_MIN_ASSIGNMENTS_PER_EXPERT`); sparser batches keep the grouped
+  simdgroup kernel. That kernel sits at the FP32 simdgroup-MMA rate (5–6 TFLOPS
+  on M5 Pro): a GEMM-style rewrite with staged activations and 32x16 simdgroup
+  tiles measured the same, and removing every global load saved under 10%.
+  2048-token `prefill-profile`: Qwen3-30B Q4_K_M 1249→2035 tok/s (llama-bench
+  1828), Q8_0 1202→1921, Mixtral Q4_K_M 208→589, gpt-oss-20b 2590→2866. Beating
+  the bank path needs the M5 tensor units, not another simdgroup layout.
+- Compressed-tensors `pack-quantized` weights are one `TensorStorage::PackedInteger`
+  whose `format.bits` is 2, 3, 4 or 8. Its dense little-endian bitstream is MLX's
+  affine layout for every width, so Metal reinterprets the words (offset
+  `2^(bits-1)` as biases) and casts F16/F32 scales to BF16; groups must be 32,
+  64 or 128. Per-expert tensors stack into `gather_qmm` banks
+  (`BoundLinear::load_individual_bank`). CUDA still admits per-channel INT8 and
+  grouped INT4 with BF16 scales only. GSQ checkpoints (ISTA-DASLab) use exactly
+  these formats; their GGUF releases are ordinary ggml types.
+- Hugging Face Qwen3.5/3.6/3.8 checkpoints store zero-centred `(1 + w)` layer,
+  Q/K and final norms; MLX conversions fold the 1. `linear_moe` detects the raw
+  layout from the `[channels, 1, kernel]` convolution, as `mlx_lm`'s
+  `qwen3_5.sanitize` does, and shifts only those norms: the gated GDN output
+  norm multiplies by its weight in both layouts. Shifting it too gave Qwen3.6
+  GSQ 2-bit wikitext perplexity 16.93 instead of 6.83 (MLX 4-bit 6.08) and
+  Qwen3.8 GSQ 3-bit 10.46 instead of 6.35 (6.10).
+- `mirtal::Stream::eval_many` (and libmir's `Stream::eval_many`) is
+  `async_eval`: time a kernel only after `synchronize()`, or read GPU intervals
+  from Metal System Trace with `MLX_MAX_OPS_PER_BUFFER=1`. Host timings around
+  `eval_many` alone attributed Qwen3-30B's MoE cost to the weighted sum.
 
 ## Memory admission at deep concurrency
 
@@ -1387,3 +1489,121 @@ The target shape is:
   the plain prefill. `records_a_real_pixel_shuffle_tower_output` writes a real
   checkpoint's soft tokens for comparison with the CUDA recorder once a checkpoint
   that fits 64 GiB is available.
+
+## Latent attention on CUDA
+
+- Absorbed MLA attends on tensor cores (`libmir_cuda_latent_attention_mma_bf16`)
+  when heads come in groups of sixteen and the cache row splits into four
+  16-column quarters within 48 KiB of shared memory; other geometries keep
+  the warp-per-head kernel. Both write the same split partials for `merge`.
+  The tensor-core kernel cut V2-Lite GGUF prefill attention from 29.9 to
+  6.1 ms per 512 tokens and decode at 4K context from 66–72 to 35 µs per
+  layer (16 heads); BF16 parity with transformers is unchanged. Kernel tests
+  need a split longer than one 32-row tile, or rescaling bugs pass.
+- Latent layers of one shape share their attention workspace and query,
+  latent and output buffers through the runtime's `ScratchPool`, as other
+  mixers do. Per-layer copies took about 1.3 GB per layer for a 2,048-token
+  chunk at 128 heads, so DeepSeek-V2.5 (60 layers) ran out of memory.
+- `clear_prefix_cache` drops sessions and prefix checkpoints but keeps the
+  shared-routed prefill shapes, as graph execution keeps its plans; dropping
+  them made `prefill-profile` rebuild every layer (~95 ms per 512 tokens).
+- On GB10, nsys hardware CUDA tracing drops kernels without GPU timestamps
+  (only load kernels remain). Profile with `-t cuda-sw
+  --capture-range=cudaProfilerApi --capture-range-end=stop`.
+- Mistral 4's `llama_4_scaling_beta` is `QueryTemperature`: queries at
+  position `p` scale by `1 + beta * ln(1 + floor(p / window))` (one below
+  `original_max_position_embeddings`), applied to the softmax scale inside
+  both attention kernels. GGUF maps llama.cpp's `attention.temperature_scale`
+  only when its length is the `YaRN` window. unsloth's Mistral Small 4 GGUF
+  records neither, so it (and llama.cpp) runs without it past 8192 tokens.
+- GGML expert banks may fuse gate and up as halves of each expert's matrix
+  (GGUF `ffn_gate_up_exps`, binding `FusedGateUp { interleaved: false }`);
+  `GgmlBankRows` tells the MMQ and gathered kernels each projection's rows
+  per expert and first row, so the bank is read in place.
+- GGUF control and user-defined tokens inside the model's id range (Tekken's
+  first thousand) are model vocabulary entries too, as the source
+  `tokenizer.json` lists them; otherwise `tokenizers` renumbers them.
+- Mixed (shared-routed) execution replays a cached prefix unless a state
+  checkpoint restores it, as recurrent mixers need; templates whose layers
+  keep all sequence state in the shared pages (`Full`/`Latent`, no
+  prediction module, `pages_hold_state`) continue the prefix from the pages
+  instead, like graph execution. Without it MLA models recomputed every
+  prefix: Mistral Small 4 pp at depth 4096 534 → 952 tok/s (c1). The
+  continuation is exact: `prefill-determinism` with 8-token chunks gives a
+  zero logit difference.
+- With one split (prefill), a tensor-core block attends two row groups
+  (sixteen heads of one token each, token-major) over one shared key tile;
+  groups of different sequences take separate passes. Mistral Small 4
+  prefill attention over a 4096-token prefix: 484 → 372 ms (36 layers), with
+  `__expf`. Four groups measured the same as two; double-buffering the key
+  tile was slower (520 ms), as its shared memory halves the resident blocks.
+  The kernel then spends ~30 % loading tiles and most of the rest in Q·Kᵀ,
+  softmax and barriers (~37 TFLOP/s); the next lever is the expanded
+  (per-head K/V) form for prefill, which needs 2.25× fewer FLOPs at Mistral
+  4's widths.
+- MLA GGUF models shift single-position next-token distributions more than
+  Qwen3 GGUF between kernel paths (GEMV q8 / MMQ / BF16; up to 0.85 nat at
+  one Mistral 4 position, near ties), but wikitext perplexity is the same
+  through every path (Mistral 4: 4.556 / 4.542 / 4.551 for 16 / 64 / default
+  prefill chunks; V2-Lite 8.160 / 8.197 / 8.162), so no path is less exact.
+- Single-sequence MLA prefill (16+ tokens, context within the expansion
+  capacity) runs in the expanded form: cache rows are gathered, expanded per
+  head with strided-batched cuBLAS GEMMs into K/V `[ctx, H, D]` (rope and
+  zero padding filled after), and the fixed bottom-right causal CUTLASS
+  attention attends them; heads wider than the value are compacted after.
+  Native FMHA instances cover 64/128/512, so heads up to 128 qualify (Mistral
+  4); DeepSeek's 192-wide keys stay absorbed. Mistral Small 4 pp at a 4096
+  prefix 1578 → 1910 tok/s; perplexity 4.532 (llama.cpp 4.537).
+- The expanded form attends with paged `FlashAttention` 2 over the expanded
+  keys and values laid out in 64-row pages (one table row per sequence), so
+  one pass covers packed sequences of a batch and 256-wide heads: DeepSeek's
+  192-wide keys pad to 256. FA2 attends Mistral 4's 4096-prefix prefill in
+  91 ms against 157 ms through the fixed CUTLASS plan (1910 → 2015 tok/s).
+  DeepSeek-V2-Lite prefill 2048/8192 5922/3898 → 7141/6159 tok/s, Moonlight
+  5818/3882 → 7057/6042, perplexity unchanged within noise. Expansion pays
+  once per context row, absorbed attention per query and row: a pass expands
+  when its context rows are at most 24 per query (`EXPANDED_QUERY_RATIO`;
+  over a 4096 prefix the break-even chunk is ~200 tokens on Mistral 4, ~128
+  on V2-Lite). Through mirmir (llama-benchy pp 2048) expanded beats absorbed
+  in every cell, e.g. d0 c10 2533 → 2804 and d4096 c1 1045 → 1563 tok/s.
+- The fixed FMHA's GQA hook once zeroed the key/value head strides, which
+  enabled CUTLASS's one-query shortcut and attended every head of a lone-query
+  block (a decode step, or a prefill one row past a whole 32-query tile) over
+  the first key head. Mistral 4 perplexity read 4.750 through it; the hook in
+  mircuda now keeps the strides except for multi-query attention.
+- CUDA GGML output scales (llama.cpp `.scale`, F32, one per matrix or per
+  expert of a bank) multiply the products after the matmul: dense GEMV, MMQ
+  and dequantized prefill through `GgmlBf16Linear`, routed gathered and
+  grouped banks per selection row (gate and up before the activation, down
+  before the routing sum). Loaders keep scales F32; a bias with a scale and
+  scaled embeddings are refused.
+- CUDA runs llama.cpp's Qwen3.5 DeltaNet layout (`LinearAttentionLayout::
+  LlamaCpp`) as Metal does: load reorders tiled value-head rows to grouped
+  order (QKV `v` rows, `z`, `a`, `b`, convolution, `A`, `dt_bias`) and takes
+  `A_log = ln(-ssm_a)`, the output is tiled back before `out_proj`, norms
+  carry no extra shift and tied embeddings bind as the output head. Wikitext
+  20×512 against llama.cpp b1b770d on GB10: Qwen3.5-4B UD-Q2_K_XL 12.020 vs
+  12.023, Qwen3.6-35B-A3B UD-Q4_K_M 6.622 vs 6.625, Qwen3.8-27B UD-Q4_K_M
+  6.909 vs 6.917 (Metal's references 11.53 / 6.611 / 6.912 come from another
+  llama.cpp build; per-chunk values match the local one).
+- Qwen3-30B GGUF perplexity moves by ~0.035 between runs of one build
+  (8×512: 8.936–8.972): autotuned GEMM choices, not a regression signal.
+- Granite on CUDA (dense graph decoder only; admission refuses it elsewhere):
+  `residual_multiplier` folds into the projections that end each residual
+  branch at load (`x + m (W a) = x + (m W) a`: BF16 weights scaled, GGML
+  weights through their F32 output scale, routed GGML down banks too), and
+  `logits_scaling` divides the logits with the final softcap
+  (`LogitShaping`). Routed experts take their width from the semantic spec,
+  so Granite MoE and Mixtral need no `moe_intermediate_size`. Wikitext 20×512
+  against llama.cpp b1b770d: granite-3.3-2b Q4_K_M 10.182 at prefill chunks
+  up to 256 (10.253 through the 512-token dequantize-to-BF16 path) vs 10.179;
+  granite-3.1-3b-a800m 8.963 vs 8.910 (Metal 8.956). Phi-4 Q4_K_M 6.688 vs
+  6.676 with no CUDA change.
+- Gemma 4 GGUF (26B-A4B UD-Q4_K_M) runs the dense-and-routed decoder with
+  its expert banks as GGML blocks (`GgmlRoutedExperts`) and the attention,
+  dense MLP and router dequantized to BF16 at load; embeddings and the tied
+  head stay GGML. Next-token top-5 match llama-server at 25, 64, 257 and 512
+  tokens. Raw-wikitext perplexity of the instruct model needs `bos=2` to
+  compare: 18598 vs llama.cpp 17910 (Metal 18256); without BOS it reads 262.
+- mmproj vision towers (Qwen3.5-4B, Gemma 4) describe a test image correctly
+  through `mirmir serve` on CUDA with no CUDA change.

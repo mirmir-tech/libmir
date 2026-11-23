@@ -1,6 +1,7 @@
 use super::{
-    AttentionProjectionRole, ExpertProjectionRole, FeedForwardProjectionRole, LatentProjectionRole,
-    LayerTensorRole, LinearAttentionTensorRole, LogicalTensorRole, StateSpaceTensorRole,
+    AttentionProjectionRole, ExpertProjectionRole, FeedForwardProjectionRole,
+    LatentAttentionTensorRole, LatentProjectionRole, LayerTensorRole, LinearAttentionTensorRole,
+    LogicalTensorRole, StateSpaceTensorRole,
 };
 use crate::semantic::DecoderSpec;
 
@@ -50,6 +51,10 @@ fn canonical_path(name: &str) -> String {
         .or_else(|| name.strip_prefix("language_model."))
         .or_else(|| name.strip_prefix("model."))
         .unwrap_or(name);
+    // Mixtral-style checkpoints (Phi-3.5-MoE) name the routed block
+    // `block_sparse_moe`; its router and expert banks read as `mlp`'s.
+    let path = path.replace(".block_sparse_moe.", ".mlp.");
+    let path = path.as_str();
     path.strip_suffix("_blocks")
         .or_else(|| path.strip_suffix(".weight_packed"))
         .or_else(|| path.strip_suffix(".qweight"))
@@ -81,6 +86,14 @@ pub(super) fn layer(suffix: &str) -> LayerTensorRole {
         "self_attn.o_proj.weight" | "mixer.o_proj.weight" => {
             attention(AttentionProjectionRole::Output)
         },
+        "self_attn.q_a_proj.weight" => mla(LatentAttentionTensorRole::QueryDown),
+        "self_attn.q_a_layernorm.weight" => mla(LatentAttentionTensorRole::QueryLatentNorm),
+        "self_attn.q_b_proj.weight" => mla(LatentAttentionTensorRole::QueryUp),
+        "self_attn.kv_a_proj_with_mqa.weight" => mla(LatentAttentionTensorRole::KeyValueDown),
+        "self_attn.kv_a_layernorm.weight" => mla(LatentAttentionTensorRole::KeyValueLatentNorm),
+        "self_attn.kv_b_proj.weight" => mla(LatentAttentionTensorRole::KeyValueUp),
+        "self_attn.k_b_proj.weight" => mla(LatentAttentionTensorRole::KeyUp),
+        "self_attn.v_b_proj.weight" => mla(LatentAttentionTensorRole::ValueUp),
         "self_attn.q_norm.weight" => LayerTensorRole::QueryNorm,
         "self_attn.k_norm.weight" => LayerTensorRole::KeyNorm,
         "self_attn.sinks" => LayerTensorRole::AttentionSinks,
@@ -99,8 +112,13 @@ pub(super) fn layer(suffix: &str) -> LayerTensorRole {
         "router.scale" => LayerTensorRole::RouterNormScale,
         "router.per_expert_scale" => LayerTensorRole::RouterExpertScale,
         "mlp.gate_proj.weight" => feed_forward(FeedForwardProjectionRole::Gate),
-        "mlp.up_proj.weight" => feed_forward(FeedForwardProjectionRole::Up),
-        "mlp.down_proj.weight" => feed_forward(FeedForwardProjectionRole::Down),
+        // Nemotron-H's MLP blocks name their projections under `mixer.`.
+        "mlp.up_proj.weight" | "mixer.up_proj.weight" => {
+            feed_forward(FeedForwardProjectionRole::Up)
+        },
+        "mlp.down_proj.weight" | "mixer.down_proj.weight" => {
+            feed_forward(FeedForwardProjectionRole::Down)
+        },
         "mlp.experts.gate_proj.weight" | "mlp.switch_mlp.gate_proj.weight" => {
             expert(None, ExpertProjectionRole::Gate)
         },
@@ -119,13 +137,15 @@ pub(super) fn layer(suffix: &str) -> LayerTensorRole {
         | "experts.switch_glu.down_proj.weight"
         | "mixer.switch_mlp.fc2.weight" => expert(None, ExpertProjectionRole::Down),
         "experts.switch_glu.gate_proj.weight" => expert(None, ExpertProjectionRole::Gate),
-        "mlp.shared_expert.gate_proj.weight" => shared(FeedForwardProjectionRole::Gate),
-        "mlp.shared_expert.up_proj.weight" | "mixer.shared_experts.up_proj.weight" => {
-            shared(FeedForwardProjectionRole::Up)
+        "mlp.shared_expert.gate_proj.weight" | "mlp.shared_experts.gate_proj.weight" => {
+            shared(FeedForwardProjectionRole::Gate)
         },
-        "mlp.shared_expert.down_proj.weight" | "mixer.shared_experts.down_proj.weight" => {
-            shared(FeedForwardProjectionRole::Down)
-        },
+        "mlp.shared_expert.up_proj.weight"
+        | "mlp.shared_experts.up_proj.weight"
+        | "mixer.shared_experts.up_proj.weight" => shared(FeedForwardProjectionRole::Up),
+        "mlp.shared_expert.down_proj.weight"
+        | "mlp.shared_experts.down_proj.weight"
+        | "mixer.shared_experts.down_proj.weight" => shared(FeedForwardProjectionRole::Down),
         "mlp.shared_expert_gate.weight" => LayerTensorRole::SharedExpertOutputGate,
         "mixer.A_log" => state_space(StateSpaceTensorRole::DecayLog),
         "mixer.D" => state_space(StateSpaceTensorRole::SkipScale),
@@ -134,7 +154,9 @@ pub(super) fn layer(suffix: &str) -> LayerTensorRole {
         "mixer.in_proj.weight" => state_space(StateSpaceTensorRole::InputProjection),
         "mixer.norm.weight" => state_space(StateSpaceTensorRole::GatedNorm),
         "mixer.out_proj.weight" => state_space(StateSpaceTensorRole::OutputProjection),
-        "mixer.gate.e_score_correction_bias" => LayerTensorRole::RouterCorrectionBias,
+        "mixer.gate.e_score_correction_bias" | "mlp.gate.e_score_correction_bias" => {
+            LayerTensorRole::RouterCorrectionBias
+        },
         "mixer.fc1_latent_proj.weight" => latent(LatentProjectionRole::Input),
         "mixer.fc2_latent_proj.weight" => latent(LatentProjectionRole::Output),
         _ => individual_expert(suffix)
@@ -148,6 +170,10 @@ const fn attention(projection: AttentionProjectionRole) -> LayerTensorRole {
 
 const fn feed_forward(projection: FeedForwardProjectionRole) -> LayerTensorRole {
     LayerTensorRole::FeedForwardProjection { projection }
+}
+
+const fn mla(tensor: LatentAttentionTensorRole) -> LayerTensorRole {
+    LayerTensorRole::LatentAttention { tensor }
 }
 
 const fn linear(tensor: LinearAttentionTensorRole) -> LayerTensorRole {

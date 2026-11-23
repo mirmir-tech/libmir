@@ -67,7 +67,7 @@ impl CudaBackend {
                 config,
                 capabilities.qkv,
                 weights::layer(self, layout, config, &tensors, layer_bindings)?,
-                attention.window,
+                attention.window.and_then(models::semantic::AttentionWindow::sliding),
             ));
             progress(
                 completed,

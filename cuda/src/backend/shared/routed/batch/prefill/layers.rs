@@ -4,7 +4,7 @@ use mircuda::{DeviceBuffer, bf16};
 
 use super::super::{
     layer::SharedRoutedBatchLayer,
-    states::{attention_states, full_states, linear_states, mamba_states},
+    states::{attention_states, full_states, latent_states, linear_states, mamba_states},
 };
 use crate::{CudaSharedRoutedModelSession, Error, PagedPrefillBatch, Result};
 
@@ -56,6 +56,13 @@ impl SharedRoutedBatchLayer {
             ),
             Self::Attention(layer) => {
                 let mut states = attention_states(sessions, index)?;
+                let state = states
+                    .first_mut()
+                    .ok_or(Error::InvalidDecoderKernel("packed prefill has no sessions"))?;
+                layer.execute_packed_prefill(input, state, rows.paging, output)
+            },
+            Self::Latent(layer) => {
+                let mut states = latent_states(sessions, index)?;
                 let state = states
                     .first_mut()
                     .ok_or(Error::InvalidDecoderKernel("packed prefill has no sessions"))?;

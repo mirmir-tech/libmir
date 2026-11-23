@@ -1,6 +1,7 @@
 mod controls;
 mod reasoning;
 mod rerank;
+mod system;
 
 use foundation::conversation::Message;
 
@@ -19,6 +20,22 @@ fn model_template_uses_configured_bos_without_tokenizer_duplication() -> Result<
     let prompt = template.render(&request("Hello"))?;
     assert_eq!(prompt.text, "<s>user: Hello");
     assert!(!prompt.add_special_tokens);
+    Ok(())
+}
+
+/// Hugging Face's `trim_blocks` and `lstrip_blocks`: Command R's template
+/// ends its generation prompt with a block tag on its own line.
+#[test]
+fn model_template_trims_block_lines_as_hugging_face_does() -> Result<()> {
+    let template = ChatTemplate {
+        kind: TemplateKind::ModelJinja,
+        source: TemplateSource::ChatTemplateFile,
+        tokens: TemplateTokens::new("<s>", "</s>"),
+        template: Some(
+            "{% if true %}\n  {% for message in messages %}\n{{ message.content }}\n  {% endfor %}\n{%- if add_generation_prompt -%}\n<turn>\n{%- endif %}\n{% endif %}".into(),
+        ),
+    };
+    assert_eq!(template.render(&request("Hello"))?.text, "Hello\n<turn>");
     Ok(())
 }
 

@@ -9,7 +9,7 @@ use candidate::{
     Candidate, WeightedCandidate, candidates, compact_candidates, penalized_score, top_k_limit,
     truncate_top_p,
 };
-pub use speculative::{DraftSampling, verify_drafts};
+pub use speculative::{DraftSampling, SampledStep, speculative_seed, verify_drafts};
 
 #[derive(Debug, Clone, Copy)]
 pub struct SamplerConfig {

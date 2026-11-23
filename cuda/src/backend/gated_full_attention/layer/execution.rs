@@ -1,4 +1,5 @@
 use mircuda::{DeviceBuffer, bf16};
+use models::semantic::AttentionWindow;
 use runtime::kv::{BlockTable, KvWritePlan};
 
 use crate::{
@@ -72,7 +73,7 @@ impl CudaAffineGatedFullAttentionMoeExecution {
         write_plan: &KvWritePlan,
         table: &BlockTable,
         start_position: usize,
-        window: Option<usize>,
+        window: Option<AttentionWindow>,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
         self.execute_with_image_span(
@@ -129,7 +130,7 @@ impl CudaAffineGatedFullAttentionMoeExecution {
         write_plan: &KvWritePlan,
         table: &BlockTable,
         start_position: usize,
-        window: Option<usize>,
+        window: Option<AttentionWindow>,
         image_span: Option<(usize, usize)>,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {

@@ -68,11 +68,23 @@ fn stop_ids(tokenizer: &Tokenizer, configured: &[u32], eos: &[u32]) -> Vec<u32> 
             "<end_of_turn>",
             "<turn|>",
             "<|eot_id|>",
+            // Llama 4's turn and message ends (its `generation_config.json`).
+            "<|eot|>",
+            "<|eom|>",
+            "<|end_of_text|>",
             "<|tool_response>",
         ]
         .into_iter()
         .filter_map(|token| tokenizer.token_to_id(token)),
     );
+    // Phi-3 ends its turns with `<|end|>`; Harmony (gpt-oss) ends only a
+    // message with it and stops at `<|return|>` or `<|call|>`, as llama.cpp
+    // `llama_vocab::impl::load` distinguishes.
+    if tokenizer.token_to_id("<|return|>").is_none()
+        && let Some(end) = tokenizer.token_to_id("<|end|>")
+    {
+        extend_unique(&mut ids, [end]);
+    }
     ids
 }
 

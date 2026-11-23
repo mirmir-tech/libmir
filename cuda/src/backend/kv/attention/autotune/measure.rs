@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use ::runtime::kv::BlockTable;
 use mircuda::{Context, DeviceBuffer, Stream, bf16};
+use models::semantic::AttentionWindow;
 
 use super::super::{PagedAttentionBf16, PagedKvCache};
 use crate::{
@@ -16,7 +17,7 @@ pub(super) fn measure_direct(
     cache: &PagedKvCache,
     table: &BlockTable,
     output: &mut DeviceBuffer<bf16>,
-    window: Option<usize>,
+    window: Option<AttentionWindow>,
     scale: f32,
     contexts: &[usize],
 ) -> Result<(Vec<Duration>, Duration)> {
@@ -45,7 +46,7 @@ pub(super) fn measure_split(
     cache: &PagedKvCache,
     table: &BlockTable,
     output: &mut DeviceBuffer<bf16>,
-    window: Option<usize>,
+    window: Option<AttentionWindow>,
     scale: f32,
     contexts: &[usize],
 ) -> Result<(Vec<Duration>, Duration)> {
@@ -111,7 +112,7 @@ fn execute_direct(
     table: &BlockTable,
     output: &mut DeviceBuffer<bf16>,
     tokens: usize,
-    window: Option<usize>,
+    window: Option<AttentionWindow>,
     scale: f32,
 ) -> Result<()> {
     attention.operation.execute(
@@ -138,7 +139,7 @@ fn execute_split(
     table: &BlockTable,
     output: &mut DeviceBuffer<bf16>,
     tokens: usize,
-    window: Option<usize>,
+    window: Option<AttentionWindow>,
     scale: f32,
 ) -> Result<()> {
     split.execute(

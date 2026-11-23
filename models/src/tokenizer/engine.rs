@@ -45,6 +45,8 @@ pub enum TokenizerKind {
     SentencePieceModel,
     TokenizerJson,
     BpeVocab,
+    /// `tiktoken.model` ranks rebuilt as byte-level BPE.
+    TikToken,
 }
 
 pub struct TextTokenizer {
@@ -75,6 +77,9 @@ impl TextTokenizer {
                 bpe::tokenizer_from_files(&path, &merges_path, add_prefix_space)?,
                 TokenizerKind::BpeVocab,
             )
+        } else if assets.kind == TokenizerKind::TikToken {
+            let config = layout.tokenizer_config_path.as_deref();
+            (super::tiktoken::tokenizer_from_files(&path, config)?, TokenizerKind::TikToken)
         } else if assets.kind == TokenizerKind::SentencePieceModel {
             (
                 super::sentencepiece::tokenizer_from_file(&path)?,

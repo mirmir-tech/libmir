@@ -35,7 +35,7 @@ struct BatchResources {
     second: DeviceBuffer<bf16>,
     normalized: DeviceBuffer<bf16>,
     logits: DeviceBuffer<bf16>,
-    logit_softcap: Option<crate::kernels::LogitSoftcap>,
+    logit_shaper: Option<crate::kernels::LogitShapingBf16>,
 }
 
 pub(super) struct DecodeBatchSource<'a> {
@@ -47,7 +47,7 @@ pub(super) struct DecodeBatchSource<'a> {
     pub(super) attention: DecodeAttentionConfig,
     pub(super) vocab: usize,
     pub(super) hidden: usize,
-    pub(super) logit_softcap: Option<f32>,
+    pub(super) logit_shaping: Option<crate::kernels::LogitShaping>,
 }
 
 impl CudaDecodeBatch {
@@ -68,7 +68,7 @@ impl CudaDecodeBatch {
             attention,
             vocab,
             hidden,
-            logit_softcap,
+            logit_shaping,
         } = source;
         if layers.len() != caches.len() {
             return Err(Error::InvalidDecoderKernel("CUDA batch cache count differs from layers"));
@@ -97,11 +97,7 @@ impl CudaDecodeBatch {
                     layer.instantiate_batch(batch_size, cache.clone(), attention_workspace.clone())
                 })
                 .collect::<Result<Vec<_>>>()?,
-            final_norm: backend.prepare_rms_norm_bf16(
-                batch_size,
-                hidden,
-                attention.rms_norm_epsilon,
-            )?,
+            final_norm: RmsNormBf16::for_stream(backend, batch_size, &attention)?,
             final_norm_weight: final_norm,
             output_head: output_head.instantiate_batch(backend, batch_size)?,
             sampler: backend.prepare_device_batch_sampler_bf16(vocab, batch_size)?,
@@ -109,12 +105,12 @@ impl CudaDecodeBatch {
             second: backend.inner.pool.allocate(&backend.inner.stream, elements)?,
             normalized: backend.inner.pool.allocate(&backend.inner.stream, elements)?,
             logits: backend.inner.pool.allocate(&backend.inner.stream, logit_elements)?,
-            logit_softcap: logit_softcap
-                .map(|cap| {
-                    crate::kernels::LogitSoftcap::compile(
+            logit_shaper: logit_shaping
+                .map(|shaping| {
+                    crate::kernels::LogitShapingBf16::compile(
                         &backend.inner.compiler,
                         logit_elements,
-                        cap,
+                        shaping,
                     )
                 })
                 .transpose()?,
@@ -219,8 +215,8 @@ fn execute(resources: &mut BatchResources) -> Result<()> {
         &mut resources.normalized,
     )?;
     resources.output_head.execute(&resources.normalized, &mut resources.logits)?;
-    if let Some(softcap) = &resources.logit_softcap {
-        softcap.execute(resources.output_head.stream(), &mut resources.logits)?;
+    if let Some(shaper) = &resources.logit_shaper {
+        shaper.execute(resources.output_head.stream(), &mut resources.logits)?;
     }
     Ok(())
 }

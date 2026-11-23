@@ -114,7 +114,7 @@ pub(super) fn weights<'a>(
     let get = |index: usize| tensor(tensors, &names[index]);
     Ok(DecodeMoeBlockWeights {
         attention: DecodeAttentionWeights {
-            input_norm: get(0)?,
+            input_norm: Some(get(0)?),
             qkv: DecodeQkvWeights::Bf16(qkv),
             query_norm: bf16_tensor(get(4)?)?,
             key_norm: bf16_tensor(get(5)?)?,

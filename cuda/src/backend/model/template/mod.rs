@@ -20,7 +20,7 @@ pub struct CudaMoeModelTemplate {
     final_norm: CudaTensor,
     output_head: ModelOutputHeadTemplate,
     layers: Vec<DecoderLayerTemplate>,
-    logit_softcap: Option<f32>,
+    logit_shaping: Option<crate::kernels::LogitShaping>,
 }
 
 impl CudaMoeModelTemplate {
@@ -28,9 +28,9 @@ impl CudaMoeModelTemplate {
         backend: &CudaBackend,
         decoder: DecoderConfig,
         embedding_scale: f32,
-        embedding: CudaTensor,
+        embedding: CheckpointProjectionWeight,
         final_norm: CudaTensor,
-        output_head: CudaTensor,
+        output_head: CheckpointProjectionWeight,
         layers: Vec<DecodeMoeLayerTemplate>,
     ) -> Result<Self> {
         let layers = layers
@@ -38,13 +38,7 @@ impl CudaMoeModelTemplate {
             .map(|layer| DecoderLayerTemplate::Moe(Box::new(layer)))
             .collect();
         Self::new_layers(
-            backend,
-            decoder,
-            CheckpointProjectionWeight::Dense(embedding),
-            final_norm,
-            CheckpointProjectionWeight::Dense(output_head),
-            layers,
-            embedding_scale,
+            backend, decoder, embedding, final_norm, output_head, layers, embedding_scale,
         )
     }
 
@@ -88,10 +82,10 @@ impl CudaMoeModelTemplate {
             decoder.hidden_size,
             decoder.vocab_size,
         )?;
-        let logit_softcap = decoder
-            .final_logit_softcapping
-            .map(|value| value.to_string().parse())
-            .transpose()?;
+        let logit_shaping = crate::kernels::LogitShaping::new(
+            decoder.logits_divisor,
+            decoder.final_logit_softcapping,
+        )?;
         Ok(Self {
             backend: backend.clone(),
             decoder,
@@ -99,7 +93,7 @@ impl CudaMoeModelTemplate {
             final_norm,
             output_head,
             layers,
-            logit_softcap,
+            logit_shaping,
         })
     }
 
@@ -124,7 +118,12 @@ fn validate(
     final_norm: &CudaTensor,
     layers: &[DecoderLayerTemplate],
 ) -> Result<()> {
-    if final_norm.shape() != [decoder.hidden_size]
+    // The final norm follows the first layer's formula (a biased LayerNorm
+    // packs its bias after the weight).
+    let norm = layers.first().map_or(decoder.hidden_size, |layer| {
+        layer.attention().stream_norm.weight_len(decoder.hidden_size)
+    });
+    if final_norm.shape() != [norm]
         || layers.len() != decoder.num_hidden_layers
         || layers.iter().enumerate().any(|(index, layer)| {
             layer.attention().layer != index || layer.attention().hidden_size != decoder.hidden_size

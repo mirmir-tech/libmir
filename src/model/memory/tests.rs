@@ -32,14 +32,36 @@ fn bounds_clamped_sliding_layers_per_concurrent_session() -> crate::Result<()> {
         "layer_types": ["sliding_attention", "full_attention"]
     }))?;
     let config = RuntimeConfig::default();
-    let bounded = sliding_cache(&decoder, &config, &BackendTarget::Cuda);
-    let metal = sliding_cache(&decoder, &config, &BackendTarget::Metal);
+    let bounded = sliding_cache(128, &config, &BackendTarget::Cuda);
+    let metal = sliding_cache(128, &config, &BackendTarget::Metal);
     let (growing, total) = kv_budget(&decoder, &config, &BackendTarget::Cuda);
 
     assert_eq!(bounded.block_count, 576);
     assert_eq!(metal.block_count, 144);
     assert_eq!(growing, 256);
     assert!(total < growing * 4_096 * 16 * 2);
+    Ok(())
+}
+
+#[test]
+fn prices_a_latent_layer_as_its_latent_and_rotary_key() -> crate::Result<()> {
+    let decoder = DecoderConfig::from_value(&json!({
+        "hidden_size": 2048,
+        "intermediate_size": 10_944,
+        "num_hidden_layers": 27,
+        "num_attention_heads": 16,
+        "num_key_value_heads": 16,
+        "vocab_size": 102_400,
+        "kv_lora_rank": 512,
+        "qk_nope_head_dim": 128,
+        "qk_rope_head_dim": 64,
+        "v_head_dim": 128
+    }))?;
+    let (growing, _) = kv_budget(&decoder, &RuntimeConfig::default(), &BackendTarget::Cuda);
+
+    // BF16: 27 layers of one 512-wide latent plus one 64-wide rotary key, not
+    // 16 heads of 192-wide keys and 128-wide values.
+    assert_eq!(growing, 27 * (512 + 64) * 2);
     Ok(())
 }
 
@@ -85,7 +107,7 @@ fn prices_mamba_state_and_convolution_history_per_sequence() -> crate::Result<()
 }
 
 #[test]
-fn prediction_cache_and_rollback_residency_are_cuda_only() -> crate::Result<()> {
+fn prediction_cache_and_rollback_residency_follow_backend_drafts() -> crate::Result<()> {
     use models::{
         semantic::SemanticModelSpec,
         weights::{TensorCatalog, WeightBindingPlan},
@@ -104,10 +126,12 @@ fn prediction_cache_and_rollback_residency_are_cuda_only() -> crate::Result<()> 
     let mut config = RuntimeConfig::default();
     config.scheduler.speculation =
         Some(crate::Speculation { draft_tokens: crate::DraftTokens::MAX });
-    for target in [BackendTarget::Metal, BackendTarget::CpuReference] {
-        assert_eq!(prediction::kv_budget(Some(&execution), &config, &target), (0, 0));
-        assert_eq!(prediction::rollback_snapshots(Some(&execution), &config, &target), 0);
-    }
+    let target = BackendTarget::CpuReference;
+    assert_eq!(prediction::kv_budget(Some(&execution), &config, &target), (0, 0));
+    assert_eq!(prediction::rollback_snapshots(Some(&execution), &config, &target), 0);
+    let metal = BackendTarget::Metal;
+    assert!(prediction::kv_budget(Some(&execution), &config, &metal).0 > 0);
+    assert_eq!(prediction::rollback_snapshots(Some(&execution), &config, &metal), 8);
     let (per_token, total) = prediction::kv_budget(Some(&execution), &config, &BackendTarget::Cuda);
     assert!(per_token > 0 && total > per_token);
     assert_eq!(
@@ -189,4 +213,24 @@ fn pixel_shuffle_config() -> serde_json::Value {
             "hidden_act": "gelu"
         }
     })
+}
+
+#[test]
+fn metal_bounds_chunked_layers_to_their_chunk() -> crate::Result<()> {
+    // Llama 4: layers 0-2 attend in chunks of 32 tokens, layer 3 globally.
+    let decoder = DecoderConfig::from_value(&json!({
+        "model_type": "llama4_text", "hidden_size": 64, "intermediate_size": 32,
+        "num_hidden_layers": 4, "num_attention_heads": 4, "num_key_value_heads": 2,
+        "head_dim": 16, "vocab_size": 32, "num_local_experts": 4, "num_experts_per_tok": 1,
+        "attention_chunk_size": 32, "attn_temperature_tuning": true, "floor_scale": 32,
+        "attn_scale": 0.1, "use_qk_norm": true
+    }))?;
+    assert_eq!(decoder.layer_attention_span(0), Some(32));
+    assert_eq!(decoder.layer_attention_span(3), None);
+    let config = RuntimeConfig::default();
+    let (metal, _) = kv_budget(&decoder, &config, &BackendTarget::Metal);
+    let (cuda, _) = kv_budget(&decoder, &config, &BackendTarget::Cuda);
+    // Only the global layer grows with the sequence on Metal.
+    assert_eq!(cuda, 4 * metal);
+    Ok(())
 }

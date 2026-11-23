@@ -46,13 +46,31 @@ impl DecodeAttentionConfig {
             query_heads: attention.query_heads,
             rotary: rotary(&attention.position, attention.head_dim)?,
             rms_norm_epsilon: narrow("RMS norm epsilon", spec.input_norm.epsilon)?,
+            stream_norm: crate::kernels::NormFormula::Rms,
             attention_scale: narrow("attention scale", attention.scale)?,
             projection_format: policy.projection_format,
             qkv_normalization: attention.qk_normalization.into(),
-            sliding_window: attention.window,
+            window: attention.window,
+            score_softcap: attention
+                .logit_softcap
+                .map(|cap| crate::kernels::ScoreSoftcap::new(narrow("attention score cap", cap)?))
+                .transpose()?,
+            query_temperature: attention
+                .query_temperature
+                .map(crate::kernels::QueryTemperatureScale::new)
+                .transpose()?,
             max_sequence_blocks: policy.max_sequence_blocks,
             cache: KvStorageSpec::new(policy.cache, attention.key_value_heads, attention.head_dim),
         })
+    }
+}
+
+impl From<NormalizationKind> for crate::kernels::NormFormula {
+    fn from(kind: NormalizationKind) -> Self {
+        match kind {
+            NormalizationKind::Rms => Self::Rms,
+            NormalizationKind::Layer => Self::MeanCentred,
+        }
     }
 }
 
@@ -61,6 +79,13 @@ impl From<QkNormalization> for QkvNormalization {
         match normalization {
             QkNormalization::None => Self::NONE,
             QkNormalization::QueryKeyRms => Self::QUERY_KEY,
+            // RoPE rotates pairs within a head, so a unit RMS norm before it
+            // equals Llama 4's norm after it.
+            QkNormalization::QueryKeyUnitRms => Self {
+                weights: crate::kernels::QkNormWeights::Unit,
+                ..Self::QUERY_KEY
+            },
+            QkNormalization::QueryKeyRmsAcrossHeads => Self::QUERY_KEY_ACROSS_HEADS,
             QkNormalization::QueryKeyValueRms => Self::ALL,
         }
     }
@@ -73,24 +98,20 @@ fn rotary(position: &PositionEncodingSpec, head_dim: usize) -> Result<Option<Rot
     };
     let RotarySpec {
         theta,
-        partial_factor,
         layout: RotaryLayoutSpec::Standard,
         algorithm: None,
         scaling: None,
+        ..
     } = rotary
     else {
         return Err(unsupported("only standard unscaled rotary embeddings are implemented"));
     };
-    let dimensions = f64::from(u32::try_from(head_dim)?) * partial_factor;
-    if !(dimensions > 0.0 && dimensions.fract() == 0.0) {
-        return Err(unsupported("partial rotary factor does not produce an integral dimension"));
-    }
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let dimensions = dimensions as usize;
+    let dimensions = rotary.rotated_dimensions(head_dim)?;
     Ok(Some(RotaryEmbedding {
         dimensions,
         pairing: dimensions,
         theta: narrow("RoPE theta", *theta)?,
+        scaling: crate::kernels::RotaryScaling::NONE,
     }))
 }
 

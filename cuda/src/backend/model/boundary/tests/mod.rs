@@ -118,7 +118,7 @@ fn binding() -> TensorBinding {
         shape: vec![2, 4],
         logical_shape: Some(vec![2, 16]),
         transforms: Vec::<BindingTransform>::new(),
-        storage: TensorStorage::PackedInt8 {
+        storage: TensorStorage::PackedInteger {
             format: format(),
             scales: "boundary.weight_scale".into(),
             shape: "boundary.weight_shape".into(),

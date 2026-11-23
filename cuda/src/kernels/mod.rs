@@ -23,20 +23,24 @@ mod fingerprint;
 mod gated_attention;
 mod gated_delta;
 mod geometry;
+mod ggml;
 mod gptq;
 mod latent_moe;
 mod linear_fp8;
-mod logit_softcap;
+mod logit_shaping;
 mod mamba2;
+mod mla;
 mod mrope;
 mod mxfp4;
 mod nvfp4;
 mod output_fp8;
 mod paged;
+pub(crate) use paged::window as attention_window;
 mod projection_pack;
 mod qkv;
 mod qmm;
 mod rms_norm_shift;
+mod rope_rows;
 mod router;
 mod row;
 mod sampling;
@@ -55,16 +59,16 @@ pub use affine::{
 pub use awq::{AwqLaunch, AwqLinear, AwqSpec};
 pub use bitsandbytes::{BitsAndBytes4BitLaunch, BitsAndBytes4BitLinear, BitsAndBytes4BitSpec};
 pub(crate) use clamped_routed::{
-    ClampedRoutedAttention, ClampedRoutedBatchSplitDecode, ClampedRoutedKernels,
-    ClampedRoutedMarlinEpilogue, ClampedRoutedMarlinGeometry, ClampedRoutedSpec,
-    ClampedRoutedSplitDecode,
+    ClampedRoutedAttention, ClampedRoutedBatchSplitDecode, ClampedRoutedFmhaWorkspace,
+    ClampedRoutedKernels, ClampedRoutedMarlinEpilogue, ClampedRoutedMarlinGeometry,
+    ClampedRoutedSpec, ClampedRoutedSplitDecode,
 };
 pub use concat::ConcatColumnsBf16;
 pub use decision::{
     DecisionAttention, DecisionAttentionInput, DecisionElement, DecisionElementwise,
     DecisionLayout, DecisionWindow, HeadLayout, RopeTables, ScoreRows,
 };
-pub use decoder::{RmsNorm, RmsNormUnit, Rope, RopeSpec};
+pub use decoder::{NormFormula, RmsNorm, RmsNormUnit, Rope, RopeSpec};
 pub(crate) use dense_cast::DenseCast;
 pub(crate) use direct_fp8::{
     DirectE5M2WeightOnlyTensorCoreLinear, DirectFp8CachedLinear, DirectFp8CublasLtLinear,
@@ -87,16 +91,29 @@ pub use gated_delta::{
     GatedDeltaAlphaBeta, GatedDeltaAlphaBetaSplit, GatedDeltaBatchConvolution,
     GatedDeltaBatchConvolutionSpec, GatedDeltaBatchRecurrence, GatedDeltaBatchSpec,
     GatedDeltaChunked, GatedDeltaChunkedScratch, GatedDeltaConvolution, GatedDeltaConvolutionSpec,
-    GatedDeltaInputs as GatedDeltaKernelInputs, GatedDeltaLaunch, GatedDeltaRecurrence,
-    GatedDeltaRecurrenceMode, GatedDeltaSpec, GatedDeltaTransformSpec, GatedDeltaTransforms,
+    GatedDeltaInputs as GatedDeltaKernelInputs, GatedDeltaLaunch, GatedDeltaLlamaCpp,
+    GatedDeltaRecurrence, GatedDeltaRecurrenceMode, GatedDeltaSpec, GatedDeltaTiledValues,
+    GatedDeltaTransformSpec, GatedDeltaTransforms,
+};
+pub use ggml::{
+    GGML_GEMV_MAX_TOKENS, GgmlActivations, GgmlBankRows, GgmlDequantize, GgmlEmbedding,
+    GgmlEmbeddingOperands, GgmlExpertSpec, GgmlGatheredLinear, GgmlGroupedMmq, GgmlKernelType,
+    GgmlLinear, GgmlMmqGroups, GgmlMmqInput, GgmlMmqPlacement, GgmlMxFp4Repack, GgmlOutputScaling,
+    GgmlRouteCombine, GgmlRowPlacement, GgmlScaledRows, GgmlSelections, GgmlSpec,
 };
 pub use gptq::{GptqLaunch, GptqLinear, GptqSpec};
 pub use latent_moe::{ReluSquaredBf16, SigmoidRouter, SigmoidRouterOutputs, SigmoidRouterSpec};
 pub use linear_fp8::{BlockFp8LinearKernels, BlockFp8LinearSpec};
-pub(crate) use logit_softcap::LogitSoftcap;
+pub(crate) use logit_shaping::{LogitShaping, LogitShapingBf16};
 pub use mamba2::{
     MAMBA2_CHUNK, MAMBA2_SCAN_ROWS, Mamba2DecodeBatch, Mamba2Geometry, Mamba2Kernels, Mamba2Launch,
     Mamba2Parameters,
+};
+pub use mla::{
+    LatentAbsorption, LatentAttention, LatentAttentionInputs, LatentAttentionLayer,
+    LatentAttentionSpec, LatentAttentionWorkspace, LatentCacheView, LatentExpandedMetadata,
+    LatentExpandedRow, LatentExpandedRows, LatentExpansion, LatentExpansionBuffers, LatentUpLayout,
+    LatentUpWeights,
 };
 pub use mrope::{Mrope, MropeSpec};
 pub use mxfp4::{
@@ -127,29 +144,34 @@ pub(crate) use paged::{
 pub use paged::{
     BatchedPagedAttention, BatchedPagedKvGather, BatchedSplitAttentionWorkspace,
     BatchedSplitPagedAttention, PagedAttention, PagedAttentionSpec, PagedKvGather, PagedKvSpec,
-    PagedKvStore, PagedPrefillAttention, SplitAttentionWorkspace, SplitPagedAttention,
+    PagedKvStore, PagedPrefillAttention, ScoreSoftcap, SplitAttentionWorkspace,
+    SplitPagedAttention,
 };
 pub use projection_pack::ProjectionPackSplit;
-pub use qkv::RotaryEmbedding;
 pub(crate) use qkv::{
-    BatchedQkvPostprocess, QkvNormalization, QkvPostprocess, QkvPostprocessArguments,
-    QkvPostprocessKernel, QkvPostprocessSpec,
+    BatchedQkvPostprocess, QkNormWeights, QkvNormalization, QkvPostprocess,
+    QkvPostprocessArguments, QkvPostprocessKernel, QkvPostprocessSpec, QueryTemperatureScale,
 };
+pub use qkv::{RotaryEmbedding, RotaryPeriods, RotaryScaling};
 pub use qmm::{AffineQmmLaunch, AffineQmmSpec, AffineQuantizedQmm};
 pub use rms_norm_shift::ShiftedRmsNorm;
+pub use rope_rows::RopeRows;
 pub(crate) use router::{RoutePattern, RoutePatternGenerator, RoutePatternSpec};
-pub use router::{RouterSpec, RouterTopK, RouterUnitSpec, RouterUnitTopK};
+pub use router::{
+    RouterInputScale, RouterJitter, RouterSpec, RouterTopK, RouterUnitScoring, RouterUnitSpec,
+    RouterUnitTopK, RouterUnitWeighting,
+};
 pub use row::{CopyRowsBf16, GatherRowsBf16, SelectRowBf16};
 pub use sampling::{MAX_TOP_K, Sampling, SamplingSpec, SamplingWorkspace};
 pub use selected::{
-    DenseExpertCanonicalizer, DenseGateUpLayout, DenseGatedActivation, GatedActivation,
-    NvFp4BankView, SelectedAffineGated, SelectedAffineGatedLaunch, SelectedAffineGatedSpec,
-    SelectedAffinePair, SelectedAffinePairLaunch, SelectedAffinePairSpec, SelectedAffineReduce,
-    SelectedAffineReduceLaunch, SelectedAffineReduceSpec, SelectedDenseDispatch,
-    SelectedDenseGateLaunch, SelectedDenseMoe, SelectedDenseMoeSpec, SelectedDenseReduceLaunch,
-    SelectedNvFp4Gated, SelectedNvFp4Reduce, SelectedNvFp4Spec, SelectedNvFp4TensorCoreGated,
-    SelectedNvFp4TensorCoreLinear, SelectedNvFp4TiledGated, SelectedNvFp4TiledReduce,
-    SelectedNvFp4TiledRows,
+    DenseExpertCanonicalizer, DenseExpertInterleave, DenseGateUpLayout, DenseGatedActivation,
+    GatedActivation, NvFp4BankView, SelectedAffineGated, SelectedAffineGatedLaunch,
+    SelectedAffineGatedSpec, SelectedAffinePair, SelectedAffinePairLaunch, SelectedAffinePairSpec,
+    SelectedAffineReduce, SelectedAffineReduceLaunch, SelectedAffineReduceSpec,
+    SelectedDenseDispatch, SelectedDenseGateLaunch, SelectedDenseMoe, SelectedDenseMoeSpec,
+    SelectedDenseReduceLaunch, SelectedNvFp4Gated, SelectedNvFp4Reduce, SelectedNvFp4Spec,
+    SelectedNvFp4TensorCoreGated, SelectedNvFp4TensorCoreLinear, SelectedNvFp4TiledGated,
+    SelectedNvFp4TiledReduce, SelectedNvFp4TiledRows,
 };
 pub use sigmoid::{SigmoidElementwiseBf16, SigmoidMultiplyBf16};
 pub use text::{L2NormalizeBf16, TextAttention, TextAttentionSpec};

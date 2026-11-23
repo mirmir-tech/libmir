@@ -1,14 +1,19 @@
 use super::{
     AttentionProjectionRole, LayerTensorRole, LinearAttentionTensorRole, LogicalTensorRole,
     TensorBinding, WeightBindingPlan,
+    slot::LayerSlot,
     view::{RoutedExpertBindings, sources},
 };
 use crate::error::{ModelsError, Result};
 
 mod feed_forward;
-use feed_forward::feed_forward;
+pub(in crate::weights::binding) use feed_forward::feed_forward;
+mod latent;
 mod mixed;
 pub(super) mod moe;
+pub use latent::{
+    LatentAttentionBindings, LatentDecoderLayerBindings, LatentQueryBindings, LatentUpBindings,
+};
 pub use mixed::{DenseFeedForwardBindings, MixedDecoderLayerBindings, MixedFeedForwardBindings};
 
 #[derive(Debug, Clone, Copy)]
@@ -51,20 +56,25 @@ pub struct GatedSoftmaxBindings<'a> {
 #[derive(Debug, Clone, Copy)]
 pub struct SharedRoutedFeedForwardBindings<'a> {
     pub router: &'a TensorBinding,
+    /// Selection-only bias of a sigmoid router (`e_score_correction_bias`).
+    pub router_correction_bias: Option<&'a TensorBinding>,
     pub routed: RoutedExpertBindings<'a>,
     pub shared_gate: &'a TensorBinding,
     pub shared_up: &'a TensorBinding,
     pub shared_down: &'a TensorBinding,
-    pub shared_output_gate: &'a TensorBinding,
+    /// Sigmoid gate on the shared experts' output; absent when they add
+    /// ungated.
+    pub shared_output_gate: Option<&'a TensorBinding>,
 }
 
 impl WeightBindingPlan {
     pub fn hybrid_decoder_layer(&self, index: usize) -> Result<HybridDecoderLayerBindings<'_>> {
+        let slot = LayerSlot::Decoder(index);
         Ok(HybridDecoderLayerBindings {
-            input_norm: layer(self, index, LayerTensorRole::InputNorm)?,
-            mixer: mixer(self, index)?,
-            post_attention_norm: layer(self, index, LayerTensorRole::PostAttentionNorm)?,
-            feed_forward: feed_forward(self, index)?,
+            input_norm: layer(self, slot, LayerTensorRole::InputNorm)?,
+            mixer: mixer(self, slot)?,
+            post_attention_norm: layer(self, slot, LayerTensorRole::PostAttentionNorm)?,
+            feed_forward: feed_forward(self, slot)?,
         })
     }
 }
@@ -104,32 +114,31 @@ impl<'a> GatedSoftmaxBindings<'a> {
 }
 
 impl<'a> SharedRoutedFeedForwardBindings<'a> {
-    fn bindings(self) -> Vec<&'a TensorBinding> {
-        let mut bindings = vec![
-            self.router,
-            self.shared_gate,
-            self.shared_up,
-            self.shared_down,
-            self.shared_output_gate,
-        ];
+    pub(in crate::weights::binding) fn bindings(self) -> Vec<&'a TensorBinding> {
+        let mut bindings = vec![self.router, self.shared_gate, self.shared_up, self.shared_down];
+        bindings.extend(self.router_correction_bias);
+        bindings.extend(self.shared_output_gate);
         bindings.extend(self.routed.bindings());
         bindings
     }
 }
 
-fn mixer(plan: &WeightBindingPlan, index: usize) -> Result<HybridMixerBindings<'_>> {
-    let linear = optional_linear(plan, index, LinearAttentionTensorRole::QkvProjection).is_some();
-    let softmax = optional_attention(plan, index, AttentionProjectionRole::Query).is_some();
+fn mixer(plan: &WeightBindingPlan, slot: LayerSlot) -> Result<HybridMixerBindings<'_>> {
+    let linear = optional_linear(plan, slot, LinearAttentionTensorRole::QkvProjection).is_some();
+    let softmax = optional_attention(plan, slot, AttentionProjectionRole::Query).is_some();
     match (linear, softmax) {
-        (true, false) => linear_bindings(plan, index).map(HybridMixerBindings::Linear),
-        (false, true) => softmax_bindings(plan, index).map(HybridMixerBindings::Softmax),
-        (true, true) => Err(invalid(index, "both linear and softmax mixer bindings are present")),
-        (false, false) => Err(invalid(index, "no mixer binding is present")),
+        (true, false) => linear_bindings(plan, slot).map(HybridMixerBindings::Linear),
+        (false, true) => softmax_bindings(plan, slot).map(HybridMixerBindings::Softmax),
+        (true, true) => Err(invalid(slot, "both linear and softmax mixer bindings are present")),
+        (false, false) => Err(invalid(slot, "no mixer binding is present")),
     }
 }
 
-fn linear_bindings(plan: &WeightBindingPlan, index: usize) -> Result<LinearAttentionBindings<'_>> {
-    let get = |tensor| linear(plan, index, tensor);
+fn linear_bindings(
+    plan: &WeightBindingPlan,
+    slot: LayerSlot,
+) -> Result<LinearAttentionBindings<'_>> {
+    let get = |tensor| linear(plan, slot, tensor);
     Ok(LinearAttentionBindings {
         decay_log: get(LinearAttentionTensorRole::DecayLog)?,
         convolution: get(LinearAttentionTensorRole::Convolution)?,
@@ -143,68 +152,68 @@ fn linear_bindings(plan: &WeightBindingPlan, index: usize) -> Result<LinearAtten
     })
 }
 
-fn softmax_bindings(plan: &WeightBindingPlan, index: usize) -> Result<GatedSoftmaxBindings<'_>> {
-    let get = |projection| attention(plan, index, projection);
+fn softmax_bindings(plan: &WeightBindingPlan, slot: LayerSlot) -> Result<GatedSoftmaxBindings<'_>> {
+    let get = |projection| attention(plan, slot, projection);
     Ok(GatedSoftmaxBindings {
         query: get(AttentionProjectionRole::Query)?,
         key: get(AttentionProjectionRole::Key)?,
         value: get(AttentionProjectionRole::Value)?,
         output: get(AttentionProjectionRole::Output)?,
-        query_norm: layer(plan, index, LayerTensorRole::QueryNorm)?,
-        key_norm: layer(plan, index, LayerTensorRole::KeyNorm)?,
+        query_norm: layer(plan, slot, LayerTensorRole::QueryNorm)?,
+        key_norm: layer(plan, slot, LayerTensorRole::KeyNorm)?,
     })
 }
 
 fn linear(
     plan: &WeightBindingPlan,
-    index: usize,
+    slot: LayerSlot,
     tensor: LinearAttentionTensorRole,
 ) -> Result<&TensorBinding> {
-    layer(plan, index, LayerTensorRole::LinearAttention { tensor })
+    layer(plan, slot, LayerTensorRole::LinearAttention { tensor })
 }
 
 fn optional_linear(
     plan: &WeightBindingPlan,
-    index: usize,
+    slot: LayerSlot,
     tensor: LinearAttentionTensorRole,
 ) -> Option<&TensorBinding> {
-    optional(plan, index, LayerTensorRole::LinearAttention { tensor })
+    optional(plan, slot, LayerTensorRole::LinearAttention { tensor })
 }
 
 fn attention(
     plan: &WeightBindingPlan,
-    index: usize,
+    slot: LayerSlot,
     projection: AttentionProjectionRole,
 ) -> Result<&TensorBinding> {
-    layer(plan, index, LayerTensorRole::AttentionProjection { projection })
+    layer(plan, slot, LayerTensorRole::AttentionProjection { projection })
 }
 
 fn optional_attention(
     plan: &WeightBindingPlan,
-    index: usize,
+    slot: LayerSlot,
     projection: AttentionProjectionRole,
 ) -> Option<&TensorBinding> {
-    optional(plan, index, LayerTensorRole::AttentionProjection { projection })
+    optional(plan, slot, LayerTensorRole::AttentionProjection { projection })
 }
 
 fn layer(
     plan: &WeightBindingPlan,
-    index: usize,
+    slot: LayerSlot,
     tensor: LayerTensorRole,
 ) -> Result<&TensorBinding> {
-    let role = LogicalTensorRole::Layer { index, tensor };
+    let role = slot.role(tensor);
     plan.binding(&role)
-        .ok_or_else(|| invalid(index, &format!("unbound role {role:?}")))
+        .ok_or_else(|| invalid(slot, &format!("unbound role {role:?}")))
 }
 
 fn optional(
     plan: &WeightBindingPlan,
-    index: usize,
+    slot: LayerSlot,
     tensor: LayerTensorRole,
 ) -> Option<&TensorBinding> {
-    plan.binding(&LogicalTensorRole::Layer { index, tensor })
+    plan.binding(&slot.role(tensor))
 }
 
-fn invalid(index: usize, reason: &str) -> ModelsError {
-    ModelsError::InvalidConfig(format!("invalid hybrid decoder layer {index}: {reason}"))
+fn invalid(slot: LayerSlot, reason: &str) -> ModelsError {
+    ModelsError::InvalidConfig(format!("invalid hybrid decoder {slot}: {reason}"))
 }

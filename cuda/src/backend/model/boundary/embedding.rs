@@ -2,7 +2,7 @@ use mircuda::{DeviceBuffer, bf16};
 
 use crate::{
     AffineQuantizedEmbedding, Bf16Embedding, CudaBackend, DirectFp8EmbeddingLookup, Error,
-    MxFp4EmbeddingLookup, MxFp8EmbeddingLookup, Result,
+    GgmlEmbeddingLookup, MxFp4EmbeddingLookup, MxFp8EmbeddingLookup, Result,
     backend::linear::{
         CheckpointProjectionWeight, CompressedInt8Embedding, packed_integer_embedding,
     },
@@ -26,6 +26,7 @@ pub(in crate::backend::model) enum ModelEmbedding {
         weight: crate::CudaTensor,
     },
     MxFp4(MxFp4EmbeddingLookup),
+    Ggml(GgmlEmbeddingLookup),
     MxFp8(MxFp8EmbeddingLookup),
     DirectFp8(DirectFp8EmbeddingLookup),
     PackedInteger(CompressedInt8Embedding),
@@ -63,6 +64,9 @@ impl ModelEmbeddingTemplate {
             },
             CheckpointProjectionWeight::MxFp4(weight) => {
                 weight.prepare_embedding(backend, self.scale).map(ModelEmbedding::MxFp4)
+            },
+            CheckpointProjectionWeight::Ggml(weight) => {
+                weight.prepare_embedding(backend, self.scale).map(ModelEmbedding::Ggml)
             },
             CheckpointProjectionWeight::MxFp8(weight) => {
                 weight.prepare_embedding(backend, self.scale).map(ModelEmbedding::MxFp8)
@@ -107,6 +111,9 @@ impl ModelEmbedding {
             Self::MxFp4(operation) => {
                 operation.execute_batch(selected, selected_start, tokens, output)
             },
+            Self::Ggml(operation) => {
+                operation.execute_batch(selected, selected_start, tokens, output)
+            },
             Self::DirectFp8(operation) => {
                 operation.execute_batch(selected, selected_start, tokens, output)
             },
@@ -129,6 +136,7 @@ impl ModelEmbedding {
             Self::PackedInteger(operation) => operation.validate_token(token),
             Self::MxFp8(operation) => operation.validate_token(token),
             Self::MxFp4(operation) => operation.validate_token(token),
+            Self::Ggml(operation) => operation.validate_token(token),
             Self::DirectFp8(operation) => operation.validate_token(token),
         }
     }

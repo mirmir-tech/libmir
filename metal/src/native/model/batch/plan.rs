@@ -29,6 +29,15 @@ impl LoadedModel {
         &mut self,
         inputs: &[DecodeInput],
     ) -> Result<Vec<(NativeOutput, DecodeExecution)>> {
+        // Drafting pays only while a session decodes alone: sessions sharing
+        // a step leave speculation and join the packed pipeline.
+        if inputs.len() > 1 {
+            for input in inputs {
+                if let Some(state) = self.sessions.get_mut(&input.session) {
+                    state.speculation = None;
+                }
+            }
+        }
         let packed = self.execution.decoder()?.prefers_packed_decode(&self.stream);
         let groups =
             partition(inputs.len(), |row| packed && self.can_decode_packed_row(&inputs[row]));
@@ -37,8 +46,12 @@ impl LoadedModel {
             match group {
                 Group::Scalar(row) => {
                     let input = inputs[row].clone();
-                    let output =
-                        self.decode_admitted(input.session, input.token, &input.sampling)?;
+                    let output = self.decode_admitted(
+                        input.session,
+                        input.token,
+                        &input.sampling,
+                        input.speculation.as_ref(),
+                    )?;
                     outputs.push((row, (output, DecodeExecution::Scalar)));
                 },
                 Group::Packed(rows) => {

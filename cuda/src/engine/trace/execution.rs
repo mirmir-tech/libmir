@@ -43,6 +43,8 @@ pub(super) fn mlp_layout(model: &LoadedModel) -> &'static str {
         "native NVFP4 gate/up and down projections"
     } else if plan.all_dense() {
         "paired BF16 gate/up plus BF16 down projection"
+    } else if plan.all_dense_or_routed() {
+        "routed SwiGLU experts without a shared expert"
     } else if plan.all_shared_routed() && routed_experts_dense(model) {
         "BF16 shared expert plus routed BF16 SwiGLU experts"
     } else if plan.all_shared_routed() {
@@ -126,6 +128,8 @@ fn model_kernels(model: &LoadedModel) -> &'static str {
         "CUTLASS native NVFP4 dense SwiGLU kernels"
     } else if plan.all_dense() {
         "CUTLASS BF16 dense SwiGLU kernels"
+    } else if plan.all_dense_or_routed() {
+        "CUDA softmax attention with routed selected-expert kernels"
     } else if plan.all_shared_routed() && routed_experts_dense(model) {
         "CUDA mixed attention with BF16 shared and routed experts"
     } else if plan.all_shared_routed() {

@@ -40,7 +40,7 @@ pub(super) fn ensure(
                 .page_ids
                 .get(*logical)
                 .and_then(|page| usize::try_from(*page).ok())
-                .is_some_and(|page| arena.references[page] > 1)
+                .is_some_and(|page| !arena.appendable(page, storage.id))
         })
         .count();
     let free = arena.references.iter().filter(|count| **count == 0).count();
@@ -88,12 +88,14 @@ pub(super) fn ensure(
     let mut remapped = false;
     for page_id in &mut storage.page_ids[first..=last] {
         let source = usize::try_from(*page_id)?;
-        if arena.references[source] == 1 {
+        if arena.appendable(source, storage.id) {
+            arena.writers[source] = storage.id;
             continue;
         }
         let target = arena.allocate()?;
         copy_page(&mut arena, source, usize::try_from(target)?, stream)?;
         arena.references[source] -= 1;
+        arena.writers[usize::try_from(target)?] = storage.id;
         *page_id = target;
         remapped = true;
     }
@@ -103,11 +105,7 @@ pub(super) fn ensure(
         append_page_table(storage, needed - appended, stream)?;
     }
     if table_resized || remapped || appended > 0 {
-        storage.identity = storage
-            .page_ids
-            .iter()
-            .enumerate()
-            .all(|(index, page)| usize::try_from(*page) == Ok(index));
+        storage.contiguous = super::single_run(&storage.page_ids);
     }
     drop(arena);
     Ok(())
@@ -138,7 +136,8 @@ fn create(store: &PagedStore, keys: &Array, needed: usize, stream: &Stream) -> R
         page_ids: Vec::new(),
         reserved_page_ids: Vec::new(),
         table_capacity: capacity,
-        identity: true,
+        contiguous: true,
+        id: super::next_storage_id(),
     })
 }
 
@@ -162,6 +161,7 @@ fn ensure_capacity(arena: &mut Arena, required: usize, stream: &Stream) -> Resul
         Array::from_native(graph.concatenate(&[arena.values.native(), &extra_values], 1)?)?;
     grow_scales(arena, capacity, graph)?;
     arena.references.resize(capacity, 0);
+    arena.writers.resize(capacity, 0);
     arena.capacity = capacity;
     Ok(())
 }

@@ -2,7 +2,7 @@ use mircuda::{
     Compiler, DeviceBuffer, LaunchConfig, Stream, TypedKernel, bf16, cuda_export, cuda_kernel_file,
 };
 
-use super::{QkvPostprocessSpec, RotaryEmbedding, validate};
+use super::{QkvPostprocessSpec, RotaryEmbedding, compile_options, validate};
 use crate::{
     Error, Result,
     kernels::geometry::{narrow, product, require},
@@ -15,7 +15,8 @@ cuda_export!(BatchedQkvPostprocessKernel = "libmir_cuda_qkv_postprocess_batch_bf
     query_output: &mut DeviceBuffer<bf16>, key_output: &mut DeviceBuffer<bf16>,
     value_output: &mut DeviceBuffer<bf16>, tokens: u32, query_heads: u32,
     kv_heads: u32, head_dim: u32, value_head_dim: u32, rotary_dim: u32,
-    pairing_dim: u32, theta: f32, epsilon: f32, separate_inputs: u32, normalize_query: u32,
+    pairing_dim: u32, theta: f32, rope_factor: f32, rope_slope: f32, rope_offset: f32,
+    epsilon: f32, separate_inputs: u32, normalize_query: u32,
     normalize_key: u32, normalize_value: u32,
 ));
 
@@ -29,7 +30,7 @@ impl BatchedQkvPostprocess {
     pub(crate) fn compile(compiler: &Compiler, spec: QkvPostprocessSpec) -> Result<Self> {
         validate(spec)?;
         let source = cuda_kernel_file!("../../../kernels/qkv_postprocess_bf16.cu");
-        let module = compiler.compile(source, &mircuda::CompileOptions::default())?;
+        let module = compiler.compile(source, &compile_options(spec))?;
         Ok(Self { kernel: module.kernel()?, spec })
     }
 
@@ -67,8 +68,13 @@ impl BatchedQkvPostprocess {
             )?;
         }
         require("batched Q positions", self.spec.tokens, positions.len())?;
-        require("batched Q norm", self.spec.head_dim, query_weight.len())?;
-        require("batched K norm", self.spec.head_dim, key_weight.len())?;
+        let [query_norm, key_norm] = self.spec.normalization.weight_lengths(
+            self.spec.query_heads,
+            self.spec.kv_heads,
+            self.spec.head_dim,
+        );
+        require("batched Q norm", query_norm, query_weight.len())?;
+        require("batched K norm", key_norm, key_weight.len())?;
         require("batched Q output", product(self.spec.tokens, query)?, query_output.len())?;
         require("batched K output", product(self.spec.tokens, key)?, key_output.len())?;
         require("batched V output", product(self.spec.tokens, value)?, value_output.len())?;
@@ -78,7 +84,7 @@ impl BatchedQkvPostprocess {
             .checked_add(self.spec.kv_heads.saturating_mul(2))
             .and_then(|heads| heads.checked_mul(self.spec.tokens))
             .ok_or(Error::InvalidDecoderKernel("batched QKV launch overflow"))?;
-        let (rotary_dim, pairing_dim, theta) = RotaryEmbedding::arguments(self.spec.rotary)?;
+        let rotary = RotaryEmbedding::arguments(self.spec.rotary)?;
         Ok(self.kernel.launch(
             stream,
             LaunchConfig {
@@ -101,9 +107,12 @@ impl BatchedQkvPostprocess {
                 narrow(self.spec.kv_heads)?,
                 narrow(self.spec.head_dim)?,
                 narrow(self.spec.value_head_dim)?,
-                rotary_dim,
-                pairing_dim,
-                theta,
+                rotary.rotary_dim,
+                rotary.pairing_dim,
+                rotary.theta,
+                rotary.scaling.factor,
+                rotary.scaling.slope,
+                rotary.scaling.offset,
                 self.spec.epsilon,
                 u32::from(separate),
                 u32::from(self.spec.normalization.query),

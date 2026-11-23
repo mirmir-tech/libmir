@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use mircuda::{DeviceBuffer, bf16};
+use models::semantic::AttentionWindow;
 
 use self::measure::measure;
 use super::{BatchedPagedAttentionBf16, allocate_workspace, threshold};
@@ -22,7 +23,7 @@ impl BatchedPagedAttentionBf16 {
         cache: &PagedKvCache,
         batch: &PagedDecodeBatch,
         output: &mut DeviceBuffer<bf16>,
-        window: Option<usize>,
+        window: Option<AttentionWindow>,
         scale: f32,
     ) {
         if self.tuning_complete {
@@ -73,14 +74,14 @@ impl BatchedPagedAttentionBf16 {
         self.tuning_complete = true;
     }
 
-    fn profile_request(&self, window: Option<usize>) -> AttentionProfileRequest {
+    fn profile_request(&self, window: Option<AttentionWindow>) -> AttentionProfileRequest {
         AttentionProfileRequest {
             family: AttentionFamily::Paged,
             plan: self.plan_request,
             batch_rows: self.max_batch,
             block_size: self.storage.cache.block_size,
             dtype: self.storage.cache.dtype,
-            window_tokens: window,
+            window_tokens: crate::kernels::attention_window::span(window),
         }
     }
 
@@ -118,6 +119,7 @@ impl BatchedPagedAttentionBf16 {
             head_dim: self.storage.key_head_dim,
             value_head_dim: self.storage.value_head_dim,
             dtype: self.storage.cache.dtype,
+            score_softcap: self.split.spec().score_softcap,
         }
     }
 }

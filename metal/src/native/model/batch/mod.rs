@@ -27,6 +27,21 @@ pub struct DecodeInput {
     pub session: Uuid,
     pub token: u32,
     pub sampling: SamplingLogits,
+    /// Bounds of a speculative step; `None` decodes the token alone.
+    pub speculation: Option<runtime::speculation::DraftBounds>,
+}
+
+impl DecodeInput {
+    /// A step that decodes `token` alone.
+    #[must_use]
+    pub const fn single(session: Uuid, token: u32, sampling: SamplingLogits) -> Self {
+        Self {
+            session,
+            token,
+            sampling,
+            speculation: None,
+        }
+    }
 }
 
 impl LoadedModel {

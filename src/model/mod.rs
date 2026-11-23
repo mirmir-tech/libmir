@@ -223,13 +223,17 @@ impl Model {
             .config
             .scheduler
             .speculation
-            .filter(|_| self.engine().target() == BackendTarget::Cuda)
             .filter(|_| {
                 self.inner.descriptor.execution.as_ref().is_some_and(|execution| {
                     !execution.semantic.decoder.prediction_layers.is_empty()
                 })
             })
-            .map(|speculation| speculation.draft_tokens.get())
+            .and_then(|speculation| {
+                memory::prediction::backend_drafts(
+                    &self.engine().target(),
+                    speculation.draft_tokens.get(),
+                )
+            })
     }
 
     /// Renders, tokenizes, and validates a chat request for this model.

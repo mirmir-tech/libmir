@@ -13,9 +13,14 @@ use ring::RingGeometry;
 
 /// Device-resident encoded K/V pages addressed by runtime-owned physical
 /// blocks.
+///
+/// A storage without values (`value_head_dim == 0`) is a latent cache: one
+/// row per token whose leading columns are also the token's value, so the
+/// value pages alias the key pages and only latent attention writes them.
 #[derive(Clone, Debug)]
 pub struct PagedKvCache {
-    operation: PagedKvStore,
+    /// Absent for a latent cache, which K/V stores never target.
+    operation: Option<PagedKvStore>,
     stream: Stream,
     storage: KvStorageSpec,
     ring: Option<RingGeometry>,
@@ -60,6 +65,9 @@ impl PagedKvCache {
             || Ok(usize::try_from(storage.cache.block_count)?),
             RingGeometry::physical_blocks,
         )?;
+        if storage.value_head_dim == 0 {
+            return Self::latent(backend, layer, storage, ring, block_count);
+        }
         let spec = PagedKvSpec {
             block_size: storage.cache.block_size,
             block_count,
@@ -78,7 +86,7 @@ impl PagedKvCache {
             .pool
             .allocate_zeroed::<u8>(&backend.inner.stream, operation.value_bytes()?)?;
         Ok(Self {
-            operation,
+            operation: Some(operation),
             stream: backend.inner.stream.clone(),
             storage,
             ring,
@@ -86,6 +94,54 @@ impl PagedKvCache {
             key_pages,
             value_pages,
         })
+    }
+
+    fn latent(
+        backend: &CudaBackend,
+        layer: usize,
+        storage: KvStorageSpec,
+        ring: Option<RingGeometry>,
+        block_count: usize,
+    ) -> Result<Self> {
+        if ring.is_some()
+            || storage.kv_heads != 1
+            || storage.key_head_dim == 0
+            || !matches!(storage.cache.dtype, KvCacheDType::Auto | KvCacheDType::BFloat16)
+        {
+            return Err(Error::InvalidPagedKv(
+                "a latent cache is one unwindowed BF16 row per token",
+            ));
+        }
+        let bytes = block_count
+            .checked_mul(storage.cache.block_size)
+            .and_then(|rows| rows.checked_mul(storage.key_head_dim))
+            .and_then(|elements| elements.checked_mul(2))
+            .ok_or(Error::InvalidPagedKv("latent cache size overflow"))?;
+        let rows = backend.inner.pool.allocate_zeroed::<u8>(&backend.inner.stream, bytes)?;
+        Ok(Self {
+            operation: None,
+            stream: backend.inner.stream.clone(),
+            storage,
+            ring,
+            layer,
+            value_pages: rows.clone(),
+            key_pages: rows,
+        })
+    }
+
+    /// Whether the pages hold one latent row per token instead of keys and
+    /// values.
+    pub(crate) const fn is_latent(&self) -> bool {
+        self.operation.is_none()
+    }
+
+    /// The latent rows of a latent cache.
+    pub(crate) fn latent_rows_mut(&mut self) -> Result<&mut DeviceBuffer<u8>> {
+        if self.is_latent() {
+            Ok(&mut self.key_pages)
+        } else {
+            Err(Error::InvalidPagedKv("the cache holds keys and values, not latent rows"))
+        }
     }
 
     pub(crate) const fn is_windowed(&self) -> bool {
@@ -103,6 +159,9 @@ impl PagedKvCache {
 
     /// Device bytes held by the key and value pages of this layer.
     pub(crate) fn bytes(&self) -> usize {
+        if self.is_latent() {
+            return self.key_pages.bytes();
+        }
         self.key_pages.bytes().saturating_add(self.value_pages.bytes())
     }
 
@@ -118,8 +177,8 @@ impl PagedKvCache {
         (&mut self.key_pages, &mut self.value_pages)
     }
 
-    pub(crate) fn kernel(&self) -> TypedKernel<KvStoreKernel> {
-        self.operation.kernel()
+    pub(crate) fn kernel(&self) -> Result<TypedKernel<KvStoreKernel>> {
+        key_value(self.operation.as_ref()).map(PagedKvStore::kernel)
     }
 
     pub(super) fn validate_plan(&self, plan: &KvWritePlan) -> Result<()> {
@@ -148,8 +207,9 @@ impl KvBackendStorage for PagedKvCache {
         values: &Self::Tensor,
     ) -> Result<usize> {
         self.validate_plan(plan)?;
+        let operation = key_value(self.operation.as_ref())?;
         for write in plan.writes() {
-            self.operation.execute(
+            operation.execute(
                 &self.stream,
                 keys,
                 values,
@@ -172,4 +232,9 @@ impl KvBackendStorage for PagedKvCache {
             })
             .saturating_mul(self.storage.cache.block_size)
     }
+}
+
+/// The K/V store of a cache with values; a latent cache has none.
+fn key_value(operation: Option<&PagedKvStore>) -> Result<&PagedKvStore> {
+    operation.ok_or(Error::InvalidPagedKv("a latent cache takes no K/V stores"))
 }

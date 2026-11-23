@@ -1,11 +1,13 @@
-//! Mamba-2 layer: `RMSNorm` → FP8 `in_proj` → convolution, selective scan and
-//! gated norm → FP8 `out_proj` → residual, then the optional feed-forward.
+//! Mamba-2 layer: `RMSNorm` → `in_proj` → convolution, selective scan and
+//! gated norm → `out_proj` → residual, then the optional feed-forward. The
+//! projections take any checkpoint storage (direct FP8, BF16, GGML, ...).
 
 mod execution;
 mod scratch;
 
 pub use execution::CudaMamba2HybridExecution;
 use models::{
+    layout::StateSpaceLayout,
     semantic::{DecoderLayerSpec, MixerSpec, StateSpaceSpec, StateSpaceStateDTypeSpec},
     weights::{StateSpaceMixerBindings, TensorBinding, TensorStorage},
 };
@@ -13,10 +15,9 @@ pub(in crate::backend) use scratch::{MixerScratch, MixerScratchKey};
 
 use super::NormedFeedForward;
 use crate::{
-    CudaBackend, CudaMamba2State, CudaTensor, CudaTensorSet, DirectFp8CheckpointWeight, Error,
-    ExecutionPhase, Result,
-    backend::feed_forward::LayerNormConfig,
-    kernels::{Mamba2Geometry, Mamba2Parameters},
+    CudaBackend, CudaMamba2State, CudaTensor, CudaTensorSet, Error, ExecutionPhase, Result,
+    backend::{feed_forward::LayerNormConfig, linear::CheckpointProjectionWeight},
+    kernels::{GatedDeltaLlamaCpp, Mamba2Geometry, Mamba2Parameters},
 };
 
 #[derive(Clone, Debug)]
@@ -25,8 +26,8 @@ pub struct CudaMamba2HybridLayer {
     norm: LayerNormConfig,
     geometry: Mamba2Geometry,
     input_norm: CudaTensor,
-    input_projection: DirectFp8CheckpointWeight,
-    output_projection: DirectFp8CheckpointWeight,
+    input_projection: CheckpointProjectionWeight,
+    output_projection: CheckpointProjectionWeight,
     mixer: MixerWeights,
     feed_forward: Option<NormedFeedForward>,
 }
@@ -46,10 +47,9 @@ impl CudaMamba2HybridLayer {
         backend: &CudaBackend,
         tensors: &CudaTensorSet,
         spec: &DecoderLayerSpec,
-        input_norm: &TensorBinding,
-        bindings: StateSpaceMixerBindings<'_>,
+        (input_norm, bindings): (&TensorBinding, StateSpaceMixerBindings<'_>),
         feed_forward: Option<NormedFeedForward>,
-        hidden_size: usize,
+        (hidden_size, layout): (usize, StateSpaceLayout),
     ) -> Result<Self> {
         let MixerSpec::StateSpace(state_space) = &spec.mixer else {
             return Err(unsupported("layer mixer is not a state-space mixer"));
@@ -71,12 +71,12 @@ impl CudaMamba2HybridLayer {
         if convolution_bias.is_some() != state_space.convolution_bias {
             return Err(unsupported("convolution bias differs from the layer specification"));
         }
-        let input_projection =
-            DirectFp8CheckpointWeight::load_binding(tensors, bindings.input_projection)?;
-        input_projection.validate(hidden_size, geometry.projection_width()?)?;
-        let output_projection =
-            DirectFp8CheckpointWeight::load_binding(tensors, bindings.output_projection)?;
-        output_projection.validate(geometry.inner()?, hidden_size)?;
+        let load =
+            |binding| CheckpointProjectionWeight::load_binding_prepared(backend, tensors, binding);
+        let input_projection = load(bindings.input_projection)?;
+        input_projection.affine_format(1, hidden_size, geometry.projection_width()?)?;
+        let output_projection = load(bindings.output_projection)?;
+        output_projection.affine_format(1, geometry.inner()?, hidden_size)?;
         Ok(Self {
             backend: backend.clone(),
             norm: LayerNormConfig {
@@ -91,7 +91,7 @@ impl CudaMamba2HybridLayer {
             mixer: MixerWeights {
                 convolution_weight: tensor(bindings.convolution)?,
                 convolution_bias,
-                a_log: tensor(bindings.decay_log)?,
+                a_log: decay_log(backend, tensor(bindings.decay_log)?, layout)?,
                 skip: tensor(bindings.skip_scale)?,
                 dt_bias: tensor(bindings.time_bias)?,
                 norm_weight: tensor(bindings.gated_norm)?,
@@ -138,6 +138,24 @@ impl MixerWeights {
             norm_weight: bf16(&self.norm_weight)?,
         })
     }
+}
+
+/// `A_log`, taken back from llama.cpp's stored `A = -exp(A_log)` into a
+/// fresh tensor when the checkpoint stores that.
+fn decay_log(
+    backend: &CudaBackend,
+    stored: CudaTensor,
+    layout: StateSpaceLayout,
+) -> Result<CudaTensor> {
+    if layout == StateSpaceLayout::Checkpoint {
+        return Ok(stored);
+    }
+    let values = bf16(&stored)?;
+    let stream = &backend.inner.stream;
+    let mut decay = backend.inner.pool.allocate(stream, values.len())?;
+    stream.copy_device_range(values, 0..values.len(), &mut decay, 0)?;
+    GatedDeltaLlamaCpp::compile(&backend.inner.compiler)?.decay_log(stream, &mut decay)?;
+    Ok(CudaTensor::from_bf16(stored.name().into(), stored.shape().to_vec(), decay))
 }
 
 fn geometry(spec: &StateSpaceSpec, norm_epsilon: f32) -> Result<Mamba2Geometry> {

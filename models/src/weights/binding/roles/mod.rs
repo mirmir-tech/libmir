@@ -21,6 +21,22 @@ pub enum LogicalTensorRole {
     },
 }
 
+impl LogicalTensorRole {
+    /// The decoder-layer role of a decoder layer's or prediction module's
+    /// tensor.
+    #[must_use]
+    pub const fn layer_tensor(&self) -> Option<&LayerTensorRole> {
+        match self {
+            Self::Layer { tensor, .. }
+            | Self::Prediction {
+                tensor: PredictionTensorRole::Layer { tensor },
+                ..
+            } => Some(tensor),
+            _ => None,
+        }
+    }
+}
+
 /// Tensors of one multi-token prediction module.
 ///
 /// The fusion of the next token's embedding with the decoder's last hidden
@@ -85,6 +101,9 @@ pub enum LayerTensorRole {
     LatentProjection {
         projection: LatentProjectionRole,
     },
+    LatentAttention {
+        tensor: LatentAttentionTensorRole,
+    },
     Auxiliary {
         path: String,
     },
@@ -147,6 +166,31 @@ pub enum StateSpaceTensorRole {
     /// Gated grouped `RMSNorm` weight.
     GatedNorm,
     OutputProjection,
+}
+
+/// Multi-head latent attention projections besides the direct query
+/// (`q_proj`) and output projections, which keep their attention roles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LatentAttentionTensorRole {
+    /// Hidden state to the query latent (`q_a_proj`).
+    QueryDown,
+    QueryLatentNorm,
+    /// Query latent to every head's query (`q_b_proj`).
+    QueryUp,
+    /// Hidden state to the key/value latent plus the shared rotary key
+    /// (`kv_a_proj_with_mqa`).
+    KeyValueDown,
+    KeyValueLatentNorm,
+    /// Key/value latent to every head's position-free key and value
+    /// (`kv_b_proj`).
+    KeyValueUp,
+    /// The key part of `kv_b_proj`, transposed per head for absorption:
+    /// `[heads, latent, nope]` (GGUF `attn_k_b`).
+    KeyUp,
+    /// The value part of `kv_b_proj` per head: `[heads, value, latent]`
+    /// (GGUF `attn_v_b`).
+    ValueUp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

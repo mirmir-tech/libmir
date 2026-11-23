@@ -3,6 +3,7 @@ pub mod decision;
 pub mod error;
 pub mod execution;
 pub mod generation;
+pub mod gguf;
 pub mod layout;
 pub mod semantic;
 pub mod tokenizer;

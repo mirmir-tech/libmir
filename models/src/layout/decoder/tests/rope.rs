@@ -97,3 +97,38 @@ fn preserves_explicit_continuous_yarn_correction() -> Result<()> {
     }
     Ok(())
 }
+
+/// microsoft/Phi-3.5-mini-instruct: the original context at the top level
+/// and the default attention factor `sqrt(1 + ln 32 / ln 4096)`.
+#[test]
+fn reads_phi3_long_rope_with_its_default_attention_factor() -> Result<()> {
+    let mut value = decoder(&json!({
+        "type": "longrope", "long_factor": [1.08, 1.5, 2.0, 4.0],
+        "short_factor": [1.0, 1.0, 1.0, 1.0]
+    }));
+    value["max_position_embeddings"] = json!(131_072);
+    value["original_max_position_embeddings"] = json!(4096);
+    let config = DecoderConfig::from_value(&value)?;
+    let Some(RopeScaling::LongRope {
+        factors,
+        original_context_len,
+        attention_factor,
+    }) = config.rope_scaling
+    else {
+        return Err(ModelsError::InvalidConfig("expected LongRoPE scaling".into()));
+    };
+
+    assert_eq!(factors.as_slice(), [1.08, 1.5, 2.0, 4.0]);
+    assert_eq!(original_context_len, 4096);
+    assert!((attention_factor - 1.190_238_1).abs() < 1.0e-6);
+    let reloaded = DecoderConfig::from_value(&value)?.rope_scaling;
+    assert_eq!(reloaded, config.rope_scaling);
+    assert!(
+        DecoderConfig::from_value(&decoder(&json!({
+            "type": "longrope", "long_factor": [1.0, -1.0],
+            "original_max_position_embeddings": 4096
+        })))
+        .is_err()
+    );
+    Ok(())
+}

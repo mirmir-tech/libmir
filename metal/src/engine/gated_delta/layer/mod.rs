@@ -1,10 +1,12 @@
 mod decode;
+mod llama_cpp;
+pub(in crate::engine) use llama_cpp::decay_log;
 mod load;
 #[cfg(test)]
 mod prefill;
 mod projection;
 
-use models::layout::LinearAttentionConfig;
+use models::layout::{LinearAttentionConfig, LinearAttentionLayout};
 
 use self::{decode::CompiledDecode, projection::split_qkv};
 use crate::engine::{
@@ -19,6 +21,7 @@ pub struct GatedDeltaLayerConfig {
     key_head_dim: i32,
     value_head_dim: i32,
     rms_norm_eps: f32,
+    layout: LinearAttentionLayout,
 }
 
 #[derive(Debug)]
@@ -29,6 +32,9 @@ pub struct GatedDeltaLayer {
     in_proj_b: BoundLinear,
     in_proj_a: BoundLinear,
     out_proj: BoundLinear,
+    /// llama.cpp's tiled value order, which the output projection's columns
+    /// keep (`llama_cpp`); `None` when they are grouped.
+    tiled_output: Option<llama_cpp::TiledValues>,
     conv_weight: Array,
     norm_weight: NormWeight,
     a_log: Array,
@@ -47,6 +53,7 @@ impl GatedDeltaLayerConfig {
             key_head_dim: i32::try_from(linear.key_head_dim)?,
             value_head_dim: i32::try_from(linear.value_head_dim)?,
             rms_norm_eps: rms_norm_eps.to_string().parse()?,
+            layout: linear.layout,
         };
         if config.key_heads <= 0
             || config.value_heads <= 0
@@ -71,8 +78,15 @@ impl GatedDeltaLayer {
         stream: &Stream,
     ) -> Result<Array> {
         self.forward_with_gates(input, state, None, stream, |output| {
-            self.out_proj.forward(output, stream)
+            self.project_output(output, stream)
         })
+    }
+
+    pub(super) fn project_output(&self, output: &Array, stream: &Stream) -> Result<Array> {
+        match self.tiled_output {
+            Some(tiled) => self.out_proj.forward(&tiled.tile(output, stream)?, stream),
+            None => self.out_proj.forward(output, stream),
+        }
     }
 
     fn forward_with_gates(

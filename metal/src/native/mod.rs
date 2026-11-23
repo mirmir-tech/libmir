@@ -8,6 +8,7 @@ mod output;
 mod prefill;
 mod prefix;
 mod session;
+mod speculation;
 mod step;
 mod trace;
 

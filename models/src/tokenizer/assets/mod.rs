@@ -8,6 +8,7 @@ use crate::{
 
 const TOKENIZER_JSON: &str = "tokenizer.json";
 const TOKENIZER_MODEL: &str = "tokenizer.model";
+const TIKTOKEN_MODEL: &str = "tiktoken.model";
 const VOCAB: &str = "vocab.json";
 const MERGES: &str = "merges.txt";
 const OPTIONAL: [&str; 3] =
@@ -28,6 +29,8 @@ impl TokenizerAssets {
             (TokenizerKind::TokenizerJson, TOKENIZER_JSON, None)
         } else if files.contains_key(TOKENIZER_MODEL) {
             (TokenizerKind::SentencePieceModel, TOKENIZER_MODEL, None)
+        } else if files.contains_key(TIKTOKEN_MODEL) {
+            (TokenizerKind::TikToken, TIKTOKEN_MODEL, None)
         } else if files.contains_key(VOCAB) {
             if !files.contains_key(MERGES) {
                 return Err(ModelsError::MissingFile(PathBuf::from(MERGES)));

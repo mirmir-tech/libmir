@@ -73,7 +73,9 @@ impl Array {
         ] {
             positive(value, name)?;
         }
-        if high_frequency_factor <= low_frequency_factor || original_context_len <= 0 {
+        // Equal factors leave no smooth band (Llama 4): every pair is either
+        // kept or slowed by `factor`.
+        if high_frequency_factor < low_frequency_factor || original_context_len <= 0 {
             return Err(invalid("invalid piecewise RoPE interpolation range"));
         }
         let graph = stream.native().graph();
@@ -84,8 +86,10 @@ impl Array {
         let wavelength = graph.multiply(&scalar(graph, std::f32::consts::TAU)?, &frequencies)?;
         let ratio = graph.divide(&scalar(graph, as_f32(original_context_len)?)?, &wavelength)?;
         let smooth = graph.subtract(&ratio, &scalar(graph, low_frequency_factor)?)?;
-        let smooth =
-            graph.divide(&smooth, &scalar(graph, high_frequency_factor - low_frequency_factor)?)?;
+        let smooth = graph.divide(
+            &smooth,
+            &scalar(graph, (high_frequency_factor - low_frequency_factor).max(f32::EPSILON))?,
+        )?;
         let smooth = graph.maximum(&smooth, &scalar(graph, 0.0)?)?;
         let smooth = graph.minimum(&smooth, &scalar(graph, 1.0)?)?;
         let slowed = graph.divide(&inverse, &scalar(graph, factor)?)?;

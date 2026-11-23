@@ -1,19 +1,28 @@
 //! Layers of a state-space hybrid decoder (Nemotron-H): Mamba-2 or
-//! attention mixers, each with an optional latent routed feed-forward.
+//! attention mixers, each with an optional latent routed or ungated `relu²`
+//! feed-forward.
 
 use models::{
-    layout::DecoderConfig,
-    semantic::{DecoderLayerSpec, FeedForwardSpec, MixerSpec, PositionEncodingSpec},
-    weights::{StateSpaceHybridLayerBindings, StateSpaceHybridMixerBindings, TensorCatalog},
+    layout::{DecoderConfig, StateSpaceLayout},
+    semantic::{
+        ActivationSpec, DecoderLayerSpec, FeedForwardSpec, MixerSpec, PositionEncodingSpec,
+    },
+    weights::{
+        StateSpaceHybridFeedForwardBindings, StateSpaceHybridLayerBindings,
+        StateSpaceHybridMixerBindings, TensorCatalog,
+    },
 };
 use runtime::kv::CacheConfig;
 
 use super::{super::SharedRoutedLayerTemplate, required_norm};
 use crate::{
     AttentionLayerPolicy, CudaAttentionHybridLayer, CudaBackend, CudaLatentMoe,
-    CudaMamba2HybridLayer, CudaTensorDType, CudaTensorSet, Error, LatentMoeConfig,
-    LatentMoeWeights, ProjectionFormat, Result,
-    backend::{feed_forward::FeedForward, state_space_hybrid::NormedFeedForward},
+    CudaMamba2HybridLayer, CudaTensorSet, Error, LatentMoeConfig, LatentMoeWeights, Result,
+    backend::{
+        feed_forward::{DenseFeedForward, FeedForward},
+        linear::CheckpointProjectionWeight,
+        state_space_hybrid::NormedFeedForward,
+    },
 };
 
 /// Model-wide inputs every hybrid layer is built from.
@@ -36,43 +45,22 @@ impl HybridLoad<'_> {
         let hidden = self.decoder.hidden_size;
         let feed_forward = bindings
             .feed_forward
-            .map(|routed| {
-                let hybrid = self.decoder.state_space.as_ref().ok_or_else(|| {
-                    Error::UnsupportedDecoderLayer("missing parsed state-space geometry".into())
-                })?;
-                let config = LatentMoeConfig::from_hybrid(hidden, &hybrid.routed);
-                let weights = LatentMoeWeights::load_bindings(
-                    self.backend, self.tensors, self.catalog, routed, config,
-                )?;
-                Ok::<_, Error>(NormedFeedForward {
-                    norm: required_norm(self.tensors, &routed.norm.source, hidden)?,
-                    block: FeedForward::LatentRouted(Box::new(CudaLatentMoe::new(
-                        self.backend, config, weights,
-                    )?)),
-                })
-            })
+            .map(|feed_forward| self.feed_forward(spec, feed_forward))
             .transpose()?;
         match bindings.mixer {
             StateSpaceHybridMixerBindings::StateSpace(mixer) => CudaMamba2HybridLayer::load(
                 self.backend,
                 self.tensors,
                 spec,
-                bindings.input_norm,
-                mixer,
+                (bindings.input_norm, mixer),
                 feed_forward,
-                hidden,
+                (hidden, self.decay_layout()?),
             )
             .map(|layer| SharedRoutedLayerTemplate::Mamba2(Box::new(layer))),
             StateSpaceHybridMixerBindings::Attention(projections) => {
-                let query = self
-                    .tensors
-                    .get(&projections.query.source)
-                    .ok_or_else(|| Error::MissingTensor(projections.query.source.clone()))?;
-                let projection_format = if query.dtype() == CudaTensorDType::Bf16 {
-                    ProjectionFormat::Bf16
-                } else {
-                    ProjectionFormat::DirectFp8
-                };
+                let projection_format =
+                    CheckpointProjectionWeight::load_binding(self.tensors, projections.query)?
+                        .format();
                 CudaAttentionHybridLayer::load(
                     self.backend,
                     self.tensors,
@@ -94,8 +82,74 @@ impl HybridLoad<'_> {
     }
 }
 
+impl HybridLoad<'_> {
+    fn decay_layout(&self) -> Result<StateSpaceLayout> {
+        self.decoder
+            .state_space
+            .as_ref()
+            .map(|hybrid| hybrid.mamba.layout)
+            .ok_or_else(|| {
+                Error::UnsupportedDecoderLayer("missing parsed Mamba-2 configuration".into())
+            })
+    }
+
+    fn feed_forward(
+        &self,
+        spec: &DecoderLayerSpec,
+        bindings: StateSpaceHybridFeedForwardBindings<'_>,
+    ) -> Result<NormedFeedForward> {
+        let hidden = self.decoder.hidden_size;
+        match (bindings, &spec.feed_forward) {
+            (
+                StateSpaceHybridFeedForwardBindings::Dense(dense),
+                FeedForwardSpec::Dense {
+                    intermediate_size,
+                    activation: ActivationSpec::ReluSquared,
+                },
+            ) => Ok(NormedFeedForward {
+                norm: required_norm(self.tensors, &dense.norm.source, hidden)?,
+                block: FeedForward::Dense(Box::new(DenseFeedForward::load_relu_squared(
+                    self.backend,
+                    (hidden, *intermediate_size),
+                    self.tensors,
+                    (dense.up, dense.down),
+                )?)),
+            }),
+            (
+                StateSpaceHybridFeedForwardBindings::Routed(routed),
+                FeedForwardSpec::LatentRouted { .. },
+            ) => {
+                let routed_config = self
+                    .decoder
+                    .state_space
+                    .as_ref()
+                    .and_then(|hybrid| hybrid.routed.as_ref())
+                    .ok_or_else(|| {
+                        Error::UnsupportedDecoderLayer(
+                            "missing parsed routed-expert geometry".into(),
+                        )
+                    })?;
+                let config = LatentMoeConfig::from_hybrid(hidden, routed_config);
+                let weights = LatentMoeWeights::load_bindings(
+                    self.backend, self.tensors, self.catalog, routed, config,
+                )?;
+                Ok(NormedFeedForward {
+                    norm: required_norm(self.tensors, &routed.norm.source, hidden)?,
+                    block: FeedForward::LatentRouted(Box::new(CudaLatentMoe::new(
+                        self.backend, config, weights,
+                    )?)),
+                })
+            },
+            _ => Err(Error::UnsupportedDecoderLayer(
+                "hybrid feed-forward bindings differ from the layer's semantics".into(),
+            )),
+        }
+    }
+}
+
 /// A state-space hybrid stack: Mamba-2 and attention without positional
-/// encoding as mixers, latent routed experts or nothing as feed-forwards.
+/// encoding as mixers, latent routed experts, an ungated `relu²` MLP or
+/// nothing as feed-forwards.
 pub(in crate::backend::shared::routed) fn validate_composition(
     layers: &[DecoderLayerSpec],
     max_sequence_blocks: usize,
@@ -107,12 +161,17 @@ pub(in crate::backend::shared::routed) fn validate_composition(
                 MixerSpec::SoftmaxAttention(attention) => {
                     attention.position == PositionEncodingSpec::None
                 },
-                MixerSpec::LinearAttention(_) => false,
+                MixerSpec::LinearAttention(_) | MixerSpec::LatentAttention(_) => false,
             };
             mixer
                 && matches!(
                     layer.feed_forward,
-                    FeedForwardSpec::LatentRouted { .. } | FeedForwardSpec::None
+                    FeedForwardSpec::LatentRouted { .. }
+                        | FeedForwardSpec::Dense {
+                            activation: ActivationSpec::ReluSquared,
+                            ..
+                        }
+                        | FeedForwardSpec::None
                 )
         }) && layers.iter().any(|layer| matches!(layer.mixer, MixerSpec::SoftmaxAttention(_)));
     if !compatible || max_sequence_blocks == 0 {

@@ -6,6 +6,15 @@ use runtime::kv::KvStorageSpec;
 
 use crate::RuntimeConfig;
 
+/// Drafts a backend verifies per step of `requested`: the accelerators all
+/// of them; other backends do not speculate.
+pub fn backend_drafts(target: &BackendTarget, requested: usize) -> Option<usize> {
+    match target {
+        BackendTarget::Cuda | BackendTarget::Metal => Some(requested),
+        BackendTarget::CpuReference => None,
+    }
+}
+
 /// Recurrent-state snapshots a drafting session keeps: one per draft, to
 /// roll back to the accepted prefix.
 pub(super) fn rollback_snapshots(
@@ -18,8 +27,9 @@ pub(super) fn rollback_snapshots(
     config
         .scheduler
         .speculation
-        .filter(|_| drafts && *target == BackendTarget::Cuda)
-        .map_or(0, |speculation| speculation.draft_tokens.get())
+        .filter(|_| drafts)
+        .and_then(|speculation| backend_drafts(target, speculation.draft_tokens.get()))
+        .unwrap_or(0)
 }
 
 /// K/V bytes per token and in total of the prediction modules' attention,
@@ -30,7 +40,12 @@ pub(super) fn kv_budget(
     config: &RuntimeConfig,
     target: &BackendTarget,
 ) -> (u64, u64) {
-    if *target != BackendTarget::Cuda || config.scheduler.speculation.is_none() {
+    if config
+        .scheduler
+        .speculation
+        .and_then(|speculation| backend_drafts(target, speculation.draft_tokens.get()))
+        .is_none()
+    {
         return (0, 0);
     }
     execution
@@ -41,7 +56,9 @@ pub(super) fn kv_budget(
                 KvStorageSpec::new(config.kv_cache, attention.key_value_heads, attention.head_dim)
                     .memory_budget(),
             ),
-            MixerSpec::LinearAttention(_) | MixerSpec::StateSpace(_) => None,
+            MixerSpec::LinearAttention(_)
+            | MixerSpec::StateSpace(_)
+            | MixerSpec::LatentAttention(_) => None,
         })
         .fold((0_u64, 0_u64), |(per_token, total), budget| {
             let bytes = |value: usize| u64::try_from(value).unwrap_or(u64::MAX);

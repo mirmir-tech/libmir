@@ -124,10 +124,12 @@ impl LoadedModel {
         let mut total = 0_usize;
         for layer in 0..decoder.num_hidden_layers {
             let length = match decoder.layer_type(layer) {
-                AttentionLayerType::Linear | AttentionLayerType::StateSpace => continue,
-                AttentionLayerType::Full => tokens,
-                AttentionLayerType::Sliding => {
-                    tokens.min(decoder.layer_sliding_window(layer).unwrap_or(tokens))
+                // Latent attention has no Metal runtime; admission refuses it.
+                AttentionLayerType::Linear
+                | AttentionLayerType::StateSpace
+                | AttentionLayerType::Latent => continue,
+                AttentionLayerType::Full | AttentionLayerType::Sliding => {
+                    tokens.min(decoder.layer_attention_span(layer).unwrap_or(tokens))
                 },
             };
             let elements = length

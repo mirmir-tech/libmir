@@ -9,11 +9,14 @@ pub enum AttentionLayerType {
     Linear,
     Sliding,
     StateSpace,
+    /// Full attention through a cached key/value latent
+    /// ([`super::LatentAttentionConfig`]).
+    Latent,
 }
 
 pub(super) fn layer_types(value: &Value, layer_count: usize) -> Result<Vec<AttentionLayerType>> {
     let Some(raw) = value.get("layer_types") else {
-        return Ok(vec![AttentionLayerType::Full; layer_count]);
+        return pattern_layer_types(value, layer_count);
     };
     let Some(items) = raw.as_array() else {
         return Err(invalid("layer_types must be an array"));
@@ -25,6 +28,29 @@ pub(super) fn layer_types(value: &Value, layer_count: usize) -> Result<Vec<Atten
         )));
     }
     items.iter().map(layer_type).collect()
+}
+
+/// Gemma 3's `sliding_window_pattern = n`: every `n`-th layer attends
+/// globally and the others in the window (`Gemma3DecoderLayer.is_sliding`).
+fn pattern_layer_types(value: &Value, layer_count: usize) -> Result<Vec<AttentionLayerType>> {
+    let pattern = value.get("sliding_window_pattern").filter(|pattern| !pattern.is_null());
+    let windowed = value.get("sliding_window").is_some_and(|window| !window.is_null());
+    let Some(pattern) = pattern.filter(|_| windowed) else {
+        return Ok(vec![AttentionLayerType::Full; layer_count]);
+    };
+    let pattern = pattern
+        .as_u64()
+        .filter(|&pattern| pattern > 0)
+        .ok_or_else(|| invalid("sliding_window_pattern must be a positive integer"))?;
+    (1..=layer_count)
+        .map(|layer| {
+            Ok(if u64::try_from(layer)?.is_multiple_of(pattern) {
+                AttentionLayerType::Full
+            } else {
+                AttentionLayerType::Sliding
+            })
+        })
+        .collect()
 }
 
 pub(super) fn rope_theta(value: &Value, layer_type: &str) -> Option<f64> {
@@ -79,13 +105,27 @@ impl DecoderConfig {
             .filter(|_| self.layer_type(index) == AttentionLayerType::Sliding)
     }
 
+    /// The most recent tokens layer `index` attends to: a sliding layer's
+    /// window, or a chunked rotary layer's chunk (a query sees only its own
+    /// chunk, never more than `chunk` tokens back); `None` for full history.
+    #[must_use]
+    pub fn layer_attention_span(&self, index: usize) -> Option<usize> {
+        self.layer_sliding_window(index).or_else(|| {
+            self.attention_pattern
+                .rotary_chunk
+                .filter(|_| self.layer_type(index) == AttentionLayerType::Full)
+                .filter(|_| self.attention_pattern.rotates(index))
+        })
+    }
+
     #[must_use]
     pub fn layer_head_dim(&self, index: usize) -> usize {
         match self.layer_type(index) {
             AttentionLayerType::Full => self.global_head_dim.unwrap_or(self.head_dim),
             AttentionLayerType::Linear
             | AttentionLayerType::Sliding
-            | AttentionLayerType::StateSpace => self.head_dim,
+            | AttentionLayerType::StateSpace
+            | AttentionLayerType::Latent => self.head_dim,
         }
     }
 
@@ -101,7 +141,9 @@ impl DecoderConfig {
     #[must_use]
     pub fn rope_theta_for_layer(&self, index: usize) -> Option<f64> {
         match self.layer_type(index) {
-            AttentionLayerType::Full => self.full_attention_rope_theta.or(self.rope_theta),
+            AttentionLayerType::Full | AttentionLayerType::Latent => {
+                self.full_attention_rope_theta.or(self.rope_theta)
+            },
             AttentionLayerType::Linear | AttentionLayerType::StateSpace => None,
             AttentionLayerType::Sliding => self.sliding_attention_rope_theta.or(self.rope_theta),
         }
@@ -110,7 +152,9 @@ impl DecoderConfig {
     #[must_use]
     pub fn rope_type_for_layer(&self, index: usize) -> Option<&str> {
         match self.layer_type(index) {
-            AttentionLayerType::Full => self.full_attention_rope_type.as_deref(),
+            AttentionLayerType::Full | AttentionLayerType::Latent => {
+                self.full_attention_rope_type.as_deref()
+            },
             AttentionLayerType::Linear | AttentionLayerType::StateSpace => None,
             AttentionLayerType::Sliding => self.sliding_attention_rope_type.as_deref(),
         }
@@ -119,7 +163,9 @@ impl DecoderConfig {
     #[must_use]
     pub fn partial_rotary_factor_for_layer(&self, index: usize) -> Option<f64> {
         match self.layer_type(index) {
-            AttentionLayerType::Full => self.full_attention_partial_rotary_factor,
+            AttentionLayerType::Full | AttentionLayerType::Latent => {
+                self.full_attention_partial_rotary_factor
+            },
             AttentionLayerType::Linear | AttentionLayerType::StateSpace => None,
             AttentionLayerType::Sliding => self.sliding_attention_partial_rotary_factor,
         }

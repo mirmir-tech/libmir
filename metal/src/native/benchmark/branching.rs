@@ -42,6 +42,7 @@ fn measures_shared_prefix_decode_batch() -> Result<()> {
                 session,
                 token: greedy_token(&output.output)?,
                 sampling: SamplingLogits::None,
+                speculation: None,
             })
         })
         .collect::<Result<Vec<_>>>()?;

@@ -7,20 +7,21 @@ use crate::{
     },
 };
 
-pub(super) fn feed_forward(
+pub(in crate::weights::binding) fn feed_forward(
     plan: &WeightBindingPlan,
-    index: usize,
+    slot: LayerSlot,
 ) -> Result<SharedRoutedFeedForwardBindings<'_>> {
     let expert = |projection| {
-        layer(plan, index, LayerTensorRole::ExpertProjection { expert: None, projection })
+        layer(plan, slot, LayerTensorRole::ExpertProjection { expert: None, projection })
     };
     let optional_expert = |projection| {
-        optional(plan, index, LayerTensorRole::ExpertProjection { expert: None, projection })
+        optional(plan, slot, LayerTensorRole::ExpertProjection { expert: None, projection })
     };
     let shared =
-        |projection| layer(plan, index, LayerTensorRole::SharedExpertProjection { projection });
+        |projection| layer(plan, slot, LayerTensorRole::SharedExpertProjection { projection });
     Ok(SharedRoutedFeedForwardBindings {
-        router: layer(plan, index, LayerTensorRole::Router)?,
+        router: layer(plan, slot, LayerTensorRole::Router)?,
+        router_correction_bias: optional(plan, slot, LayerTensorRole::RouterCorrectionBias),
         routed: if let Some(gate_up) = optional_expert(ExpertProjectionRole::GateUp) {
             RoutedExpertBindings::InterleavedGateUp {
                 gate_up,
@@ -33,21 +34,18 @@ pub(super) fn feed_forward(
                 down: expert(ExpertProjectionRole::Down)?,
             }
         } else {
-            let routed = RoutedExpertBindings::Individual {
-                tensors: &plan.tensors,
-                layer: LayerSlot::Decoder(index),
-            };
+            let routed = RoutedExpertBindings::Individual { tensors: &plan.tensors, layer: slot };
             let gate = routed.individual(ExpertProjectionRole::Gate);
             let up = routed.individual(ExpertProjectionRole::Up);
             let down = routed.individual(ExpertProjectionRole::Down);
             if gate.is_empty() || gate.len() != up.len() || gate.len() != down.len() {
-                return Err(invalid(index, "incomplete individual expert projection set"));
+                return Err(invalid(slot, "incomplete individual expert projection set"));
             }
             routed
         },
         shared_gate: shared(FeedForwardProjectionRole::Gate)?,
         shared_up: shared(FeedForwardProjectionRole::Up)?,
         shared_down: shared(FeedForwardProjectionRole::Down)?,
-        shared_output_gate: layer(plan, index, LayerTensorRole::SharedExpertOutputGate)?,
+        shared_output_gate: optional(plan, slot, LayerTensorRole::SharedExpertOutputGate),
     })
 }

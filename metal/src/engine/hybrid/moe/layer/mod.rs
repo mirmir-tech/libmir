@@ -73,10 +73,11 @@ impl HybridMoeLayer {
             index: config.layer_index,
             input_norm: NormalizationLowering::Rms,
             post_attention_norm: NormalizationLowering::Rms,
+            norm_placement: models::semantic::NormPlacement::Pre,
             mixer: MixerLowering::Softmax {
                 normalization: models::semantic::QkNormalization::QueryKeyValueRms,
                 sinks: false,
-                window: config.max_context,
+                window: config.max_context.map(models::semantic::AttentionWindow::Sliding),
             },
             feed_forward: FeedForwardLowering::DenseAndRouted,
         };

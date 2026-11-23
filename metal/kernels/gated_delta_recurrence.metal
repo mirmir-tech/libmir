@@ -44,7 +44,16 @@ for (uint time = 0; time < STEPS; ++time) {
   output += HV * DV;
   decay_at += HV;
   update_at += HV;
+  // A trail keeps the state after every step, `[STEPS, B * HV, DV, DK]`.
+  if (TRAIL) {
+    for (int item = 0; item < VALUES_PER_THREAD; ++item) {
+      output_state[VALUES_PER_THREAD * key_index + item] = StT(memory[item]);
+    }
+    output_state += STATES * DV * DK;
+  }
 }
-for (int item = 0; item < VALUES_PER_THREAD; ++item) {
-  output_state[VALUES_PER_THREAD * key_index + item] = StT(memory[item]);
+if (!TRAIL) {
+  for (int item = 0; item < VALUES_PER_THREAD; ++item) {
+    output_state[VALUES_PER_THREAD * key_index + item] = StT(memory[item]);
+  }
 }

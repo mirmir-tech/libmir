@@ -5,10 +5,7 @@ pub(super) use history::persistent_attention;
 mod tests;
 
 use self::attention::packed_attention;
-use super::{
-    layer::DenseSwiGluLayer,
-    model::{DenseSwiGluModel, OutputProjection},
-};
+use super::{layer::DenseSwiGluLayer, model::DenseSwiGluModel, weights::FeedForwardWeights};
 use crate::engine::{
     Array, DecoderCache, KvCache, Result, Stream, decode, decoder::forward_packed_layers,
 };
@@ -21,13 +18,10 @@ impl DenseSwiGluModel {
         positions: &[i32],
         stream: &Stream,
     ) -> Result<Array> {
-        let hidden = self.embedding.lookup(token_ids, stream)?;
+        let hidden = self.embed(token_ids, stream)?;
         let hidden = forward_packed_layers(&self.layers, hidden, caches, positions, stream)?;
-        let hidden = self.final_norm.apply(&hidden, 1.0e-6, stream)?;
-        let logits = match &self.output_projection {
-            OutputProjection::TiedEmbedding => self.embedding.project(&hidden, stream)?,
-            OutputProjection::Linear(output) => output.forward(&hidden, stream)?,
-        };
+        let hidden = self.final_norm.apply(&hidden, self.final_norm_eps, stream)?;
+        let logits = self.logits(&hidden, stream)?;
         decode::graph::export_once(&logits, stream)?;
         Ok(logits)
     }
@@ -39,7 +33,7 @@ impl DenseSwiGluModel {
         positions: &[i32],
         stream: &Stream,
     ) -> Result<Array> {
-        let mut hidden = self.embedding.lookup(token_ids, stream)?;
+        let mut hidden = self.embed(token_ids, stream)?;
         let shape = token_ids.shape()?;
         let position = positions.iter().copied().min().map_or(Ok(0), usize::try_from)?;
         let evaluation_step = crate::engine::decoder::prefill_evaluation_step(
@@ -60,7 +54,9 @@ impl DenseSwiGluModel {
                 })
                 .collect::<Result<Vec<_>>>()?;
             hidden = layer.mix_packed_prefill(&hidden, &mut layer_caches, positions, stream)?;
-            hidden = layer.feed_forward_packed(&hidden, caches.len(), stream)?;
+            if !layer.weights.parallel() {
+                hidden = layer.feed_forward_packed(&hidden, caches.len(), stream)?;
+            }
             if evaluation_step
                 .is_some_and(|step| (index + 1) % step == 0 || index + 1 == self.layers.len())
             {
@@ -80,7 +76,7 @@ impl DenseSwiGluLayer {
         positions: &[i32],
         stream: &Stream,
     ) -> Result<Array> {
-        let normalized = self.weights.input_norm.apply(input, self.config.rms_norm_eps, stream)?;
+        let normalized = self.weights.attention_input(input, self.config.rms_norm_eps, stream)?;
         let attention = packed_attention(
             &normalized,
             &self.weights.attention,
@@ -91,7 +87,10 @@ impl DenseSwiGluLayer {
             false,
             stream,
         )?;
-        input.add(&attention, stream)
+        let rows = caches.len();
+        self.attention_join(input, &attention, stream, |input| {
+            self.feed_forward_packed(input, rows, stream)
+        })
     }
 
     pub(super) fn mix_packed_prefill(
@@ -101,7 +100,7 @@ impl DenseSwiGluLayer {
         positions: &[i32],
         stream: &Stream,
     ) -> Result<Array> {
-        let normalized = self.weights.input_norm.apply(input, self.config.rms_norm_eps, stream)?;
+        let normalized = self.weights.attention_input(input, self.config.rms_norm_eps, stream)?;
         let attention = packed_attention(
             &normalized,
             &self.weights.attention,
@@ -112,7 +111,10 @@ impl DenseSwiGluLayer {
             true,
             stream,
         )?;
-        input.add(&attention, stream)
+        let rows = caches.len();
+        self.attention_join(input, &attention, stream, |input| {
+            self.feed_forward_packed(input, rows, stream)
+        })
     }
 
     pub(super) fn feed_forward_packed(
@@ -122,20 +124,59 @@ impl DenseSwiGluLayer {
         stream: &Stream,
     ) -> Result<Array> {
         let normalized =
-            self.weights
-                .post_attention_norm
-                .apply(input, self.config.rms_norm_eps, stream)?;
+            self.weights.feed_forward_input(input, self.config.rms_norm_eps, stream)?;
+        let mlp = match &self.weights.feed_forward {
+            FeedForwardWeights::Gated(mlp) => mlp,
+            FeedForwardWeights::Routed(routed) => {
+                return self.feed_forward_residual(
+                    input,
+                    &routed.forward(&normalized, stream)?,
+                    stream,
+                );
+            },
+            FeedForwardWeights::SharedRouted(experts) => {
+                return self.feed_forward_residual(
+                    input,
+                    &experts.forward(&normalized, stream)?,
+                    stream,
+                );
+            },
+        };
         let fused = (batch_size <= 2).then_some(self.fused_gate_up.as_ref()).flatten();
         let (gate, up) = fused.map_or_else(
-            || {
-                Ok((
-                    self.weights.mlp.gate.forward(&normalized, stream)?,
-                    self.weights.mlp.up.forward(&normalized, stream)?,
-                ))
-            },
+            || Ok((mlp.gate.forward(&normalized, stream)?, mlp.up.forward(&normalized, stream)?)),
             |fused| fused.forward_pair(&normalized, stream),
         )?;
-        let activated = gate.silu_mul(&up, stream)?;
-        input.add(&self.weights.mlp.down.forward(&activated, stream)?, stream)
+        let activated = self.gated(&gate, &up, stream)?;
+        self.feed_forward_residual(input, &mlp.down.forward(&activated, stream)?, stream)
     }
+}
+
+/// How one packed row reads its K/V context. A batched decode row exposes
+/// both a view and its pages so execution tuning can choose, except that a
+/// fragmented row never reads a gathered view faster than its pages.
+fn row_context_mode(
+    cache: &KvCache,
+    config: super::config::DenseSwiGluLayerConfig,
+    position: i32,
+    sequence: usize,
+    batched: bool,
+    stream: &Stream,
+) -> Result<crate::engine::PagedContextMode> {
+    use crate::engine::{PagedContextMode, native_paged_attention_mode};
+    let native = native_paged_attention_mode(
+        config.head_dim,
+        config.heads,
+        config.kv_heads,
+        usize::try_from(position)? + 1,
+        stream.config().cache.force_native_paged_attention,
+    );
+    Ok(match (sequence, batched) {
+        (1, true) if cache.fragmented_pages() && native != PagedContextMode::View => {
+            PagedContextMode::Native
+        },
+        (1, true) => PagedContextMode::Both,
+        (1, false) => native,
+        _ => PagedContextMode::View,
+    })
 }

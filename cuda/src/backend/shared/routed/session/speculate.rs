@@ -5,7 +5,7 @@
 use runtime::{
     backend::SamplingLogits,
     kv::BlockTable,
-    sampling::{DraftSampling, verify_drafts},
+    sampling::{DraftSampling, SampledStep, speculative_seed, verify_drafts},
     speculation::DraftBounds,
 };
 use uuid::Uuid;
@@ -216,19 +216,10 @@ impl CudaSharedRoutedModelSession {
 pub(in crate::backend::shared::routed) fn draft_sampling(
     sampling: &SamplingLogits,
 ) -> Result<Option<(DraftSampling, f32, usize)>> {
-    match *sampling {
-        SamplingLogits::None => Ok(None),
-        SamplingLogits::Sample {
-            vocab_size,
-            temperature,
-            top_p,
-            top_k,
-            draw,
-        } => Ok(Some((DraftSampling { temperature, top_p, top_k }, draw, vocab_size))),
-        SamplingLogits::SampleTopK { k, vocab_size, temperature, draw } => {
-            Ok(Some((DraftSampling { temperature, top_p: 1.0, top_k: k }, draw, vocab_size)))
-        },
-        SamplingLogits::Masked { .. } | SamplingLogits::Full | SamplingLogits::TopK { .. } => {
+    match (sampling, SampledStep::of(sampling)) {
+        (SamplingLogits::None, _) => Ok(None),
+        (_, Some(step)) => Ok(Some((step.sampling, step.draw, step.vocab_size))),
+        (_, None) => {
             Err(Error::InvalidSampling("speculative decoding samples on the device".into()))
         },
     }
@@ -236,7 +227,7 @@ pub(in crate::backend::shared::routed) fn draft_sampling(
 
 /// The rejection-sampling seed of a step: the host's draw at `position`.
 pub(in crate::backend::shared::routed) fn seed(draw: f32, position: usize) -> Result<u64> {
-    Ok(u64::from(draw.to_bits()) | (u64::try_from(position)? << 32))
+    Ok(speculative_seed(draw, position)?)
 }
 
 fn poisoned() -> Error {

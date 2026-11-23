@@ -42,6 +42,11 @@ pub(super) fn validate_kv_storage(
             "INT8 Metal K/V does not yet support sliding-window layers".into(),
         ));
     }
+    if lowering.layers().iter().any(|layer| layer.mixer == MixerLowering::Latent) {
+        return Err(Error::UnsupportedModel(
+            "INT8 Metal K/V does not yet support latent attention rows".into(),
+        ));
+    }
     for layer in lowering.layers() {
         let index = layer.index;
         if matches!(layer.mixer, MixerLowering::Softmax { .. })
@@ -129,16 +134,16 @@ pub(super) fn load_decoder_model(
             KV_CACHE_STEP,
             stream,
         )?)),
-        DecoderRuntime::SharedRouted | DecoderRuntime::DenseMixed => {
-            Ok(DecoderModel::new(HybridLinearMoeModel::load(
-                tensors,
-                decoder,
-                bindings,
-                lowering.layers(),
-                KV_CACHE_STEP,
-                stream,
-            )?))
-        },
+        DecoderRuntime::SharedRouted
+        | DecoderRuntime::DenseMixed
+        | DecoderRuntime::LatentAttention => Ok(DecoderModel::new(HybridLinearMoeModel::load(
+            tensors,
+            decoder,
+            bindings,
+            lowering.layers(),
+            KV_CACHE_STEP,
+            stream,
+        )?)),
     }
 }
 
@@ -171,6 +176,7 @@ fn load_dense(
         decoder,
         bindings,
         lowering.layers(),
+        lowering.final_norm(),
         KV_CACHE_STEP,
         stream,
     )?))

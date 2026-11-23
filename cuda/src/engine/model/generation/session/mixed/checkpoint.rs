@@ -178,6 +178,33 @@ impl MixedMixerExecution {
 impl MixedMixerExecution {
     /// Starts the request's session from the longest stored prefix
     /// checkpoint between `minimum` and `maximum` tokens.
+    /// Prefix tokens to recompute without a checkpoint: recurrent layers
+    /// replay all of them, attention-only stacks continue from the pages.
+    pub(super) fn replay_tokens(&self) -> usize {
+        if self.template.pages_hold_state() {
+            0
+        } else {
+            usize::MAX
+        }
+    }
+
+    /// Opens the session of a prefill chunk at `offset`: a new session at
+    /// the start, or, when the pages hold every layer's state, one that
+    /// continues the shared prefix cached before `offset`.
+    pub(super) fn open_session(&mut self, session_id: uuid::Uuid, offset: usize) -> Result<()> {
+        if offset > 0
+            && (self.sessions.contains_key(&session_id) || !self.template.pages_hold_state())
+        {
+            return Ok(());
+        }
+        let mut session = self.template.instantiate_with_caches(&self.caches)?;
+        if offset > 0 {
+            session.continue_shared_prefix(offset)?;
+        }
+        self.sessions.insert(session_id, session);
+        Ok(())
+    }
+
     pub(super) fn restore_prefix_session(
         &mut self,
         request: &runtime::backend::PrefillRequest,

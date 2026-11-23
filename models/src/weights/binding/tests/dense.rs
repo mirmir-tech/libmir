@@ -79,20 +79,26 @@ fn resolves_gemma_sandwich_norms_and_shared_key_value_projection() -> Result<()>
     assert_eq!(layer.post_attention_norm.source, "custom.pre_mlp.scale");
     assert_eq!(sandwich.attention_output_norm.source, "custom.post.scale");
     assert_eq!(sandwich.feed_forward_output_norm.source, "custom.post_mlp.scale");
-    assert_eq!(sandwich.layer_scale.source, "custom.layer.scalar");
+    assert_eq!(
+        sandwich.layer_scale.map(|binding| binding.source.as_str()),
+        Some("custom.layer.scalar")
+    );
     assert!(layer.physical_sources().contains(&"custom.layer.scalar"));
     Ok(())
 }
 
+/// Gemma 3's sandwich norms come without Gemma 4's layer scalar.
 #[test]
-fn rejects_sandwich_norms_without_a_layer_scalar() {
+fn binds_sandwich_norms_without_a_layer_scalar() -> Result<()> {
     let mut plan = plan();
     plan.tensors.extend([
         layer(LayerTensorRole::PreDenseNorm, "custom.pre_mlp.scale"),
         layer(LayerTensorRole::PostFeedForwardNorm, "custom.post_mlp.scale"),
     ]);
 
-    assert!(plan.dense_decoder_layer(0).is_err());
+    let sandwich = plan.dense_decoder_layer(0)?.sandwich;
+    assert!(sandwich.is_some_and(|sandwich| sandwich.layer_scale.is_none()));
+    Ok(())
 }
 
 #[test]

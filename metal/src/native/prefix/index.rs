@@ -5,10 +5,14 @@ use super::PrefixEntry;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct PrefixKey(pub(super) [u8; 32]);
 
+/// The full prompt, plus block boundaries in its second half that the
+/// snapshot can rewind to (`floor`,
+/// [`crate::engine::DecoderCache::prefix_floor`]).
 pub(super) fn indexed_prefixes(
     model: &str,
     tokens: &[u32],
     block_size: Option<usize>,
+    floor: usize,
 ) -> Vec<(PrefixKey, usize)> {
     let mut hasher = prefix_hasher(model);
     let mut indexed = Vec::new();
@@ -17,12 +21,41 @@ pub(super) fn indexed_prefixes(
         let position = index + 1;
         let efficient = position.saturating_mul(2) >= tokens.len();
         if position == tokens.len()
-            || efficient && block_size.is_some_and(|size| position % size == 0)
+            || efficient && position >= floor && block_size.is_some_and(|size| position % size == 0)
         {
             indexed.push((PrefixKey(*hasher.finalize().as_bytes()), position));
         }
     }
     indexed
+}
+
+impl PrefixEntry {
+    /// Continuations restore `position` rounded down to a block, and complete
+    /// prompts without logits the block before their last token, wherever the
+    /// snapshot rewinds that far; otherwise the exact positions.
+    pub(super) fn new(
+        memory_group: u64,
+        position: usize,
+        block_size: Option<usize>,
+        floor: usize,
+    ) -> Self {
+        let aligned = |target: usize| {
+            block_size.map_or(target, |size| {
+                let rounded = target / size * size;
+                if rounded >= floor {
+                    rounded
+                } else {
+                    target
+                }
+            })
+        };
+        Self {
+            memory_group,
+            position,
+            continuation_position: aligned(position),
+            completion_position: aligned(position.saturating_sub(1)),
+        }
+    }
 }
 
 pub(super) fn longest_indexed_prefix(

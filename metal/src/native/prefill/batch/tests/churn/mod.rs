@@ -32,7 +32,7 @@ fn real_model_cohort_shrink_refill_releases_storage()
 
 fn token(model: &LoadedModel, output: NativeOutput) -> Result<u32> {
     match output {
-        NativeOutput::Greedy(token) => Ok(token),
+        NativeOutput::Greedy(token) | NativeOutput::Verified { next: token, .. } => Ok(token),
         NativeOutput::Logits(logits) => Ok(logits.argmax_u32(model.stream())?),
     }
 }
@@ -109,6 +109,7 @@ fn wave(model: &mut LoadedModel, seeds: &[u32], cached: bool) -> Result<Vec<Deco
                     session: row.request.session_id,
                     token: token(model, row.native.output)?,
                     sampling: SamplingLogits::None,
+                    speculation: None,
                 })
             })
             .collect();
@@ -142,12 +143,7 @@ fn advance(
 }
 
 fn recurrent_bytes(model: &LoadedModel, session: Uuid) -> Result<usize> {
-    Ok(model.sessions[&session]
-        .cache
-        .recurrent_allocations()?
-        .iter()
-        .map(mirtal::memory::Allocation::bytes)
-        .sum())
+    Ok(model.sessions[&session].cache.recurrent_logical_bytes()?)
 }
 
 fn occupied_pages(model: &LoadedModel) -> Result<usize> {

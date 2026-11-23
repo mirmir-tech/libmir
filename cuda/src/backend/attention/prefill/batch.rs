@@ -62,7 +62,7 @@ impl PrefillAttentionBf16 {
         state
             .cache
             .store_prefill_batch(batch, &self.scratch.key_rope, &self.scratch.value_norm)?;
-        if self.config.sliding_window.is_none() && self.fmha.is_some() {
+        if self.config.window.is_none() && self.fmha.is_some() {
             return self.execute_paged_varlen_attention(state, weights, batch, output);
         }
         let mut packed = 0;
@@ -94,7 +94,7 @@ impl PrefillAttentionBf16 {
                 &mut row_scratch.attention,
                 row.tokens(),
                 row.start(),
-                self.config.sliding_window,
+                self.config.window,
                 self.config.attention_scale,
             )?;
             self.output_rows.execute(

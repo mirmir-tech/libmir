@@ -35,16 +35,15 @@ fn template() -> Result<DenseFeedForward> {
             .map(CheckpointProjectionWeight::Dense)
             .ok_or_else(|| Error::MissingTensor(name.into()))
     };
-    let decoder = DecoderConfig::from_value(
-        &serde_json::json!({"hidden_size":2, "intermediate_size":2, "num_hidden_layers":1, "num_attention_heads":1, "num_key_value_heads":1, "vocab_size":2, "hidden_act":"silu"}),
-    )?;
     Ok(DenseFeedForward {
         backend,
         hidden: 2,
         intermediate: 2,
-        activation: GatedActivation::try_from(&decoder)?,
-        gate: weight("gate")?,
-        up: weight("up")?,
+        mlp: DenseMlp::Gated {
+            gate: Box::new(weight("gate")?),
+            up: weight("up")?,
+            activation: GatedActivation::Silu,
+        },
         down: weight("down")?,
     })
 }
