@@ -72,7 +72,7 @@ impl ModelTensors {
             let file = TensorFile::load_keeping(&weight.path, full_precision, stream)?;
             tensors += file.len()?;
             if materialize {
-                file.evaluate()?;
+                file.evaluate(stream)?;
             }
             files.push(file);
             loaded = loaded.saturating_add(weight.bytes).min(total);
@@ -124,8 +124,8 @@ impl ModelTensors {
         Ok(false)
     }
 
-    pub fn evaluate(&self) -> Result<()> {
-        self.files.iter().try_for_each(TensorFile::evaluate)
+    pub fn evaluate(&self, stream: &Stream) -> Result<()> {
+        self.files.iter().try_for_each(|file| file.evaluate(stream))
     }
 
     #[must_use]

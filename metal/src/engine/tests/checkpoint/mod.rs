@@ -135,8 +135,9 @@ fn quantized(tensors: &ModelTensors, prefix: &str) -> Result<QuantizedArrays> {
 
 fn load_model() -> Result<(ModelTensors, Stream)> {
     let root = model_root()?;
-    let tensors = ModelTensors::load(root, &Stream::new_cpu()?)?;
-    tensors.evaluate()?;
+    let cpu = Stream::new_cpu()?;
+    let tensors = ModelTensors::load(root, &cpu)?;
+    tensors.evaluate(&cpu)?;
     let stream = Stream::new_gpu()?;
     let _configured_wired_limit = configure_recommended_wired_limit()?;
     Ok((tensors, stream))

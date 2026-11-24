@@ -10,14 +10,15 @@ use super::{Array, Dtype, Result, Stream};
 #[derive(Debug)]
 pub struct TensorFile {
     native: mirtal::TensorFile,
-    /// GGUF float tensors cast to the BF16 activation type, by name. The cast
-    /// is lazy: it runs once, on first use, after the bytes are read.
+    /// GGUF float tensors cast to the BF16 activation type, by name, taken
+    /// out of `native`: the cast is the only owner of the stored array, which
+    /// is freed once the cast has run, so a tensor occupies memory once.
     converted: BTreeMap<String, mirtal::Array>,
 }
 
 impl TensorFile {
-    /// Binds a safetensors file, or a GGUF file whose tensors are read in
-    /// place under their mapped `SafeTensors` names.
+    /// Binds a safetensors file, or a GGUF file whose tensors are read from
+    /// their ranges under their mapped `SafeTensors` names.
     pub fn load(path: &Path, stream: &Stream) -> Result<Self> {
         Self::load_keeping(path, &BTreeSet::new(), stream)
     }
@@ -37,22 +38,28 @@ impl TensorFile {
             });
         }
         let ranges = gguf::ranges(path)?;
-        let native = mirtal::TensorFile::load_ranges(path, &ranges, stream.native())?;
+        let mut native = mirtal::TensorFile::load_ranges(path, &ranges, stream.native())?;
         let mut converted = BTreeMap::new();
         for range in ranges.iter().filter(|range| gguf::casts_to_bf16(range, full_precision)) {
-            let value = Array::from_native(native.get(&range.name)?)?;
+            let value = Array::from_native(native.take(range.name())?)?;
             let value = value.astype(Dtype::Bfloat16, stream)?;
-            converted.insert(range.name.clone(), value.native().clone());
+            converted.insert(range.name().to_owned(), value.native().clone());
         }
         Ok(Self { native, converted })
     }
 
     pub fn len(&self) -> Result<usize> {
-        Ok(self.native.len())
+        Ok(self.native.len() + self.converted.len())
     }
 
-    pub fn evaluate(&self) -> Result<()> {
-        Ok(self.native.evaluate()?)
+    /// Evaluates every tensor; the casts one at a time, so a stored tensor is
+    /// freed before the next is read.
+    pub fn evaluate(&self, stream: &Stream) -> Result<()> {
+        self.native.evaluate()?;
+        for value in self.converted.values() {
+            stream.native().eval(value)?;
+        }
+        Ok(())
     }
 
     pub fn get(&self, name: &str) -> Result<Array> {
@@ -63,10 +70,10 @@ impl TensorFile {
     }
 
     pub fn contains(&self, name: &str) -> Result<bool> {
-        Ok(self.native.contains(name)?)
+        Ok(self.converted.contains_key(name) || self.native.contains(name)?)
     }
 
     pub fn is_empty(&self) -> Result<bool> {
-        Ok(self.native.is_empty())
+        Ok(self.native.is_empty() && self.converted.is_empty())
     }
 }

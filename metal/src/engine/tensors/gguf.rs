@@ -1,4 +1,4 @@
-//! GGUF tensors as in-place file ranges.
+//! GGUF tensors as file ranges, each read once into memory on evaluation.
 //!
 //! Dense GGUF types keep their element type. Block-quantized GGML types stay
 //! opaque `Uint8` rows of whole blocks, `[leading..., row_bytes]`, so device
@@ -47,12 +47,7 @@ fn range(tensor: &TensorInfo) -> Result<TensorRange> {
             DType::Uint8
         },
     };
-    Ok(TensorRange {
-        name: tensor.name.clone(),
-        offset: tensor.payload_start()?,
-        dtype,
-        shape,
-    })
+    Ok(TensorRange::new(tensor.name.clone(), tensor.payload_start()?, dtype, shape)?)
 }
 
 fn invalid(tensor: &TensorInfo, reason: &str) -> Error {
@@ -64,5 +59,6 @@ fn invalid(tensor: &TensorInfo, reason: &str) -> Error {
 /// the binding plan's `full_precision` sources (quantized weights' scales,
 /// a GGML output scale, a sigmoid router's correction bias).
 pub(super) fn casts_to_bf16(range: &TensorRange, full_precision: &BTreeSet<String>) -> bool {
-    matches!(range.dtype, DType::Float32 | DType::Float16) && !full_precision.contains(&range.name)
+    matches!(range.dtype(), DType::Float32 | DType::Float16)
+        && !full_precision.contains(range.name())
 }
