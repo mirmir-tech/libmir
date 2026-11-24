@@ -30,13 +30,13 @@ impl CudaBackend {
     pub(crate) fn load_dense_swiglu_layer_tracked(
         &self,
         decoder: &DecoderConfig,
-        semantic: &SemanticModelSpec,
+        (semantic, plan): (&SemanticModelSpec, &architecture::cuda::CudaDecoderPlan),
         catalog: &TensorCatalog,
         layer: usize,
         bindings: DenseLayerBindings<'_>,
         load: DenseSwiGluLayerLoadConfig,
     ) -> Result<(DenseSwiGluLayerTemplate, u64)> {
-        let mut block = load.block(decoder, semantic, layer)?;
+        let mut block = load.block(decoder, (semantic, plan), layer)?;
         let source = DenseLayerSource::discover(catalog, bindings)?;
         let mut tensors = source.upload(self, bindings, load.projection_format)?;
         if decoder.query_key_rows_interleaved {

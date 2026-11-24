@@ -16,6 +16,9 @@ mod scheduler;
 mod session;
 mod telemetry;
 
+/// Architecture admission: the typed refusals `AdmissionCheck::refusal`
+/// carries, and the plans each backend admits.
+pub use architecture;
 pub use cancellation::CancellationToken;
 pub use config::{MemoryRuntimeConfig, RuntimeConfig, VisionRuntimeConfig};
 pub use embedding::{EmbeddingOutput, EmbeddingRequest};
@@ -35,7 +38,7 @@ pub use memory::{MemorySnapshot, ModelMemoryEstimate};
 pub use metal::DecodeReservation as MetalDecodeReservation;
 pub use model::{
     AdmissionCheck, AdmissionCheckKind, AdmissionStatus, BackendAdmissionReport, CacheStatsReader,
-    CheckpointEncoding, IMAGE_PLACEHOLDER, Library, LoadPreview,
+    CheckpointEncoding, EncodingKind, IMAGE_PLACEHOLDER, Library, LoadPreview,
     MODEL_FORMAT_REGISTRY_SCHEMA_VERSION, Model, ModelDescriptor, ModelLoadOptions, PreparedPrompt,
     PreparedVisionPrompt, PromptPreparationTimings, RemoteModelContract, RemoteTaskMetadata,
     RemoteVisionContract, UnloadedTensors, WeightEncoding,
@@ -48,6 +51,7 @@ pub use models::{
     },
     generation::{GenerationChannel, GenerationOverrides, GenerationSettings, GenerationToken},
     gguf,
+    layout::WeightContainer,
     tokenizer::{TokenizerAssets, TokenizerKind},
     weights::{TensorCatalog, TensorInfo, safetensors_header_len},
 };

@@ -2,6 +2,7 @@ use foundation::model::BackendTarget;
 use models::weights::GgmlBlockQuantization;
 
 use super::{AdmissionCheckKind, AdmissionStatus};
+use crate::EncodingKind;
 
 pub(super) fn assess(
     backend: &BackendTarget,
@@ -15,13 +16,13 @@ pub(super) fn assess(
     let name = format.ggml_type.name();
     if executed.contains(&format.ggml_type) {
         (
-            AdmissionCheckKind::Ggml,
+            AdmissionCheckKind::Encoding(EncodingKind::Ggml),
             AdmissionStatus::Partial,
             format!("{backend} executes GGML {name} blocks in place"),
         )
     } else {
         (
-            AdmissionCheckKind::Ggml,
+            AdmissionCheckKind::Encoding(EncodingKind::Ggml),
             AdmissionStatus::Unsupported,
             format!("{backend} has no kernels for GGML {name} blocks yet"),
         )

@@ -2,11 +2,13 @@
 //! attention mixers, each with an optional latent routed or ungated `relu²`
 //! feed-forward.
 
+use architecture::{
+    cuda::CudaLayer,
+    lowering::{Activation, FeedForwardLowering},
+};
 use models::{
     layout::{DecoderConfig, StateSpaceLayout},
-    semantic::{
-        ActivationSpec, DecoderLayerSpec, FeedForwardSpec, MixerSpec, PositionEncodingSpec,
-    },
+    semantic::{DecoderLayerSpec, FeedForwardSpec},
     weights::{
         StateSpaceHybridFeedForwardBindings, StateSpaceHybridLayerBindings,
         StateSpaceHybridMixerBindings, TensorCatalog,
@@ -39,13 +41,13 @@ impl HybridLoad<'_> {
     pub(in crate::backend::shared::routed) fn layer(
         &self,
         layer: usize,
-        spec: &DecoderLayerSpec,
+        (spec, lowered): (&DecoderLayerSpec, &CudaLayer),
         bindings: StateSpaceHybridLayerBindings<'_>,
     ) -> Result<SharedRoutedLayerTemplate> {
         let hidden = self.decoder.hidden_size;
         let feed_forward = bindings
             .feed_forward
-            .map(|feed_forward| self.feed_forward(spec, feed_forward))
+            .map(|feed_forward| self.feed_forward((spec, lowered), feed_forward))
             .transpose()?;
         match bindings.mixer {
             StateSpaceHybridMixerBindings::StateSpace(mixer) => CudaMamba2HybridLayer::load(
@@ -93,19 +95,18 @@ impl HybridLoad<'_> {
             })
     }
 
+    /// The block admission lowered, at the geometry the spec declares.
     fn feed_forward(
         &self,
-        spec: &DecoderLayerSpec,
+        (spec, lowered): (&DecoderLayerSpec, &CudaLayer),
         bindings: StateSpaceHybridFeedForwardBindings<'_>,
     ) -> Result<NormedFeedForward> {
         let hidden = self.decoder.hidden_size;
-        match (bindings, &spec.feed_forward) {
+        match (bindings, &spec.feed_forward, lowered.feed_forward) {
             (
                 StateSpaceHybridFeedForwardBindings::Dense(dense),
-                FeedForwardSpec::Dense {
-                    intermediate_size,
-                    activation: ActivationSpec::ReluSquared,
-                },
+                FeedForwardSpec::Dense { intermediate_size, .. },
+                FeedForwardLowering::Dense { activation: Activation::ReluSquared },
             ) => Ok(NormedFeedForward {
                 norm: required_norm(self.tensors, &dense.norm.source, hidden)?,
                 block: FeedForward::Dense(Box::new(DenseFeedForward::load_relu_squared(
@@ -118,6 +119,7 @@ impl HybridLoad<'_> {
             (
                 StateSpaceHybridFeedForwardBindings::Routed(routed),
                 spec @ FeedForwardSpec::LatentRouted { .. },
+                FeedForwardLowering::LatentRouted { .. },
             ) => {
                 let config = LatentMoeConfig::from_spec(hidden, spec)?;
                 let weights = LatentMoeWeights::load_bindings(
@@ -135,39 +137,4 @@ impl HybridLoad<'_> {
             )),
         }
     }
-}
-
-/// A state-space hybrid stack: Mamba-2 and attention without positional
-/// encoding as mixers, latent routed experts, an ungated `relu²` MLP or
-/// nothing as feed-forwards.
-pub(in crate::backend::shared::routed) fn validate_composition(
-    layers: &[DecoderLayerSpec],
-    max_sequence_blocks: usize,
-) -> Result<()> {
-    let compatible =
-        layers.iter().all(|layer| {
-            let mixer = match &layer.mixer {
-                MixerSpec::StateSpace(_) => true,
-                MixerSpec::SoftmaxAttention(attention) => {
-                    attention.position == PositionEncodingSpec::None
-                },
-                MixerSpec::LinearAttention(_) | MixerSpec::LatentAttention(_) => false,
-            };
-            mixer
-                && matches!(
-                    layer.feed_forward,
-                    FeedForwardSpec::LatentRouted { .. }
-                        | FeedForwardSpec::Dense {
-                            activation: ActivationSpec::ReluSquared,
-                            ..
-                        }
-                        | FeedForwardSpec::None
-                )
-        }) && layers.iter().any(|layer| matches!(layer.mixer, MixerSpec::SoftmaxAttention(_)));
-    if !compatible || max_sequence_blocks == 0 {
-        return Err(Error::UnsupportedDecoderLayer(
-            "parsed decoder is not a state-space hybrid stack".into(),
-        ));
-    }
-    Ok(())
 }

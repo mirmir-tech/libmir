@@ -7,7 +7,7 @@ mod error;
 pub mod kernels;
 mod tensor;
 
-pub use admission::{CudaArchitecture, CudaDecoderRuntime, admit_architecture};
+pub use admission::{CudaAdmitted, CudaArchitecture, CudaDecoderRuntime, admit_architecture};
 pub use backend::{
     AffineGatedDeltaLayerConfig, AffineGatedDeltaLayerWeights, AffineGatedDeltaMoeLayerConfig,
     AffineGatedFullAttentionConfig, AffineGatedFullAttentionMoeLayerConfig,

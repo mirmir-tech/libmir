@@ -6,7 +6,8 @@ use runtime::kv::{CacheConfig, KvStorageSpec};
 
 mod routed;
 
-use routed::{dense_router, feed_forward};
+use architecture::{cuda::CudaDecoderPlan, lowering::FeedForwardLowering};
+use routed::{dense_router, experts, feed_forward, lowered};
 
 use crate::{
     DecodeAttentionConfig, DecodeMoeBlockConfig, DenseSwiGluConfig, Error, GatedActivation, Result,
@@ -26,22 +27,27 @@ impl DenseSwiGluLayerLoadConfig {
     pub(super) fn block(
         self,
         decoder: &DecoderConfig,
-        semantic: &SemanticModelSpec,
+        (semantic, plan): (&SemanticModelSpec, &CudaDecoderPlan),
         layer: usize,
     ) -> Result<DenseSwiGluConfig> {
         validate_common(decoder, layer, self.max_sequence_blocks)?;
         // A dense layer's own width (Llama 4's `intermediate_size_mlp` beside
         // its experts) or its routed experts', as the semantic spec resolves
-        // them.
-        let (intermediate_size, activation, experts) = match feed_forward(semantic, layer)? {
-            FeedForwardSpec::Dense { intermediate_size, activation } => {
-                (*intermediate_size, activation, None)
-            },
-            FeedForwardSpec::Routed { routed, shared } => {
-                (routed.intermediate_size, &routed.activation, Some((routed, shared.as_ref())))
-            },
-            _ => return Err(unsupported("dense CUDA layers are gated MLPs or routed experts")),
-        };
+        // them; the activation and router as admission lowered them.
+        let (intermediate_size, activation, experts) =
+            match (feed_forward(semantic, layer)?, lowered(plan, layer)?.feed_forward) {
+                (
+                    FeedForwardSpec::Dense { intermediate_size, .. },
+                    FeedForwardLowering::Dense { activation },
+                ) => (*intermediate_size, activation, None),
+                (
+                    FeedForwardSpec::Routed { routed, shared },
+                    FeedForwardLowering::Routed { experts, .. },
+                ) => {
+                    (routed.intermediate_size, experts.activation, Some((experts, shared.as_ref())))
+                },
+                _ => return Err(unsupported("dense CUDA layers are gated MLPs or routed experts")),
+            };
         Ok(DenseSwiGluConfig {
             attention: attention_config(
                 decoder,
@@ -55,12 +61,12 @@ impl DenseSwiGluLayerLoadConfig {
             activation: GatedActivation::try_from(activation)?,
             feed_forward_format: self.projection_format,
             experts: experts
-                .map(|(routed, shared)| {
+                .map(|(lowered, shared)| {
                     let experts = crate::RoutedExpertsConfig {
-                        count: routed.expert_count,
-                        top_k: routed.top_k,
+                        count: lowered.count,
+                        top_k: lowered.top_k,
                     };
-                    dense_router(routed, shared, experts)
+                    dense_router(&lowered, shared, experts)
                 })
                 .transpose()?,
             feed_forward_input: match semantic
@@ -98,7 +104,7 @@ impl NvFp4MoeLayerLoadConfig {
     pub(super) fn block(
         self,
         decoder: &DecoderConfig,
-        semantic: &SemanticModelSpec,
+        (semantic, plan): (&SemanticModelSpec, &CudaDecoderPlan),
         layer: usize,
     ) -> Result<DecodeMoeBlockConfig> {
         validate_common(decoder, layer, self.max_sequence_blocks)?;
@@ -125,7 +131,7 @@ impl NvFp4MoeLayerLoadConfig {
             experts: routed.expert_count,
             top_k: routed.top_k,
             router_norm_multiplier: attention_scale(decoder.hidden_size)?,
-            activation: GatedActivation::try_from(&routed.activation)?,
+            activation: GatedActivation::try_from(experts(lowered(plan, layer)?)?.activation)?,
         })
     }
 }

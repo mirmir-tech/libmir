@@ -12,8 +12,10 @@ use super::{
     AdmissionCheck, AdmissionCheckKind, AdmissionStatus, CheckpointEncoding, WeightEncoding,
     aggregate, registry, resolve_dense_check,
 };
+use crate::EncodingKind;
 
 mod formats;
+mod kinds;
 mod vision;
 
 #[test]
@@ -152,9 +154,10 @@ fn resolved_dense_execution_replaces_conditional_format_status() {
     resolve_dense_check(
         &mut checks,
         AdmissionCheck {
-            kind: AdmissionCheckKind::Dense,
+            kind: AdmissionCheckKind::Encoding(EncodingKind::Dense),
             status: AdmissionStatus::Supported,
             detail: "dense execution is validated".into(),
+            refusal: None,
         },
     );
 

@@ -14,6 +14,7 @@ use models::{
 };
 
 use super::{AdmissionCheck, AdmissionCheckKind, AdmissionStatus};
+use crate::EncodingKind;
 
 pub(super) fn assess(
     backend: &BackendTarget,
@@ -34,9 +35,10 @@ pub(super) fn assess(
         ),
     };
     Some(AdmissionCheck {
-        kind: AdmissionCheckKind::Dense,
+        kind: AdmissionCheckKind::Encoding(EncodingKind::Dense),
         status,
         detail,
+        refusal: None,
     })
 }
 

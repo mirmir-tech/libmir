@@ -1,40 +1,31 @@
+//! Metal architecture admission: lower, require, select.
+
+mod lowering;
+mod runtime;
+
+pub use lowering::{LayerLowering, NormalizationLowering, lower_layer};
 use models::{
     execution::{PoolingMode, TaskExecutionPlan},
     layout::{
-        EncoderConfig, EncoderPositionEmbedding, EncoderRopeScaling, NormKind, VisionPipeline,
+        DecoderConfig, EncoderConfig, EncoderPositionEmbedding, EncoderRopeScaling, NormKind,
+        VisionPipeline,
     },
     semantic::SemanticModelSpec,
 };
+pub use runtime::MetalDecoderRuntime;
 
-use crate::{ArchitectureError, Result};
-
-mod operations;
-mod semantics;
-
-pub use operations::{
-    FeedForwardLowering, LayerLowering, MixerLowering, NormalizationLowering, lower_layer,
+pub use crate::lowering::{Activation, Clamp, Experts, FeedForwardLowering, MixerLowering};
+use crate::{
+    ArchitectureError, Result, TaskRefusal, capability::Operations, decoder::DecoderFeatures,
 };
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum MetalDecoderRuntime {
-    Dense,
-    DenseGelu,
-    DenseAndRouted,
-    SharedRouted,
-    /// Dense `SwiGLU` layers mixing linear and softmax attention.
-    DenseMixed,
-    ClampedRouted,
-    /// Mamba-2 and attention mixers with sigmoid-routed experts (Nemotron-H).
-    StateSpaceHybrid,
-    /// Multi-head latent attention with leading dense layers, then routed
-    /// plus shared experts (`DeepSeek-V2/V3`, Kimi, Moonlight).
-    LatentAttention,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// A lowered decoder and the runtime admitted to execute it, which the
+/// loaders build from.
+#[derive(Clone, Debug, PartialEq)]
 pub struct MetalDecoderPlan {
     layers: Vec<LayerLowering>,
     final_norm: NormalizationLowering,
+    features: DecoderFeatures,
     runtime: MetalDecoderRuntime,
 }
 
@@ -50,16 +41,41 @@ impl MetalDecoderPlan {
     }
 
     #[must_use]
+    pub const fn features(&self) -> DecoderFeatures {
+        self.features
+    }
+
+    #[must_use]
     pub const fn runtime(&self) -> MetalDecoderRuntime {
         self.runtime
     }
+
+    /// What the plan requires of a runtime.
+    #[must_use]
+    pub fn requirements(&self) -> Operations {
+        Operations::required(
+            self.layers.iter().map(|layer| (&layer.mixer, &layer.feed_forward)),
+            self.features,
+        )
+    }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum MetalArchitecture {
-    Generation(MetalDecoderRuntime),
+    Generation(MetalDecoderPlan),
     Embedding,
     SequenceScoring,
+}
+
+impl MetalArchitecture {
+    /// The admitted generation runtime.
+    #[must_use]
+    pub const fn runtime(&self) -> Option<MetalDecoderRuntime> {
+        match self {
+            Self::Generation(plan) => Some(plan.runtime),
+            Self::Embedding | Self::SequenceScoring => None,
+        }
+    }
 }
 
 /// Whether Metal runs a vision tower for `pipeline`. A model with another
@@ -80,24 +96,31 @@ pub fn admit(
     match task {
         TaskExecutionPlan::Generation { decoder }
         | TaskExecutionPlan::CausalScoring { decoder, .. } => {
-            let semantic = semantic.ok_or_else(|| {
-                ArchitectureError::invalid("Metal generation semantic contract is missing")
-            })?;
-            crate::activation::require_resolved(semantic)?;
-            let runtime = plan(semantic)?.runtime();
-            semantics::validate(decoder, semantic, runtime)?;
-            Ok(MetalArchitecture::Generation(runtime))
+            let semantic = semantic.ok_or(ArchitectureError::MissingSemanticContract)?;
+            plan(decoder, semantic).map(MetalArchitecture::Generation)
         },
         TaskExecutionPlan::Embedding { task, .. }
             if task.pooling == PoolingMode::LastToken && task.normalize =>
         {
             Ok(MetalArchitecture::Embedding)
         },
-        TaskExecutionPlan::Embedding { .. } => Err(ArchitectureError::invalid(
-            "Metal embedding requires normalized last-token pooling",
-        )),
+        TaskExecutionPlan::Embedding { .. } => {
+            Err(ArchitectureError::Task(TaskRefusal::EmbeddingPooling))
+        },
         TaskExecutionPlan::SequenceScoring { encoder, .. } => sequence_scoring(encoder),
     }
+}
+
+/// Lowers `spec`, whose configuration is `decoder`, and selects its runtime.
+pub fn plan(decoder: &DecoderConfig, spec: &SemanticModelSpec) -> Result<MetalDecoderPlan> {
+    let lowered = lowering::Lowered::lower(spec, decoder.attention_scale)?;
+    let runtime = MetalDecoderRuntime::select(&lowered.requirements())?;
+    Ok(MetalDecoderPlan {
+        layers: lowered.layers,
+        final_norm: lowered.final_norm,
+        features: lowered.features,
+        runtime,
+    })
 }
 
 fn sequence_scoring(config: &EncoderConfig) -> Result<MetalArchitecture> {
@@ -112,102 +135,6 @@ fn sequence_scoring(config: &EncoderConfig) -> Result<MetalArchitecture> {
     {
         Ok(MetalArchitecture::SequenceScoring)
     } else {
-        Err(ArchitectureError::invalid(
-            "Metal sequence scoring requires packed QKV, LayerNorm, GELU, one label, and supported RoPE",
-        ))
+        Err(ArchitectureError::Task(TaskRefusal::SequenceScoringEncoder))
     }
-}
-
-pub fn plan(spec: &SemanticModelSpec) -> Result<MetalDecoderPlan> {
-    let layers = spec.decoder.layers.iter().map(lower_layer).collect::<Result<Vec<_>>>()?;
-    let final_norm = operations::lower_normalization(
-        spec.decoder.layers.len(),
-        "final",
-        spec.decoder.final_norm,
-    )?;
-    let runtime = select_runtime(&layers)?;
-    Ok(MetalDecoderPlan { layers, final_norm, runtime })
-}
-
-fn select_runtime(layers: &[LayerLowering]) -> Result<MetalDecoderRuntime> {
-    if layers.iter().any(|layer| layer.mixer == MixerLowering::Latent) {
-        let supported = layers.iter().all(|layer| {
-            layer.mixer == MixerLowering::Latent
-                && matches!(
-                    layer.feed_forward,
-                    FeedForwardLowering::Dense | FeedForwardLowering::SharedRouted
-                )
-        });
-        return if supported {
-            Ok(MetalDecoderRuntime::LatentAttention)
-        } else {
-            Err(ArchitectureError::invalid(
-                "Metal latent attention requires latent attention in every layer with dense or shared-routed feed-forwards",
-            ))
-        };
-    }
-    if layers.iter().all(|layer| match (layer.feed_forward, layer.mixer) {
-        (FeedForwardLowering::Dense, MixerLowering::Softmax { .. }) => true,
-        (
-            FeedForwardLowering::Routed | FeedForwardLowering::SharedRouted,
-            MixerLowering::Softmax {
-                window: None | Some(models::semantic::AttentionWindow::Chunked { .. }),
-                sinks,
-                ..
-            },
-        ) => !sinks,
-        _ => false,
-    }) {
-        return Ok(MetalDecoderRuntime::Dense);
-    }
-    if layers.iter().all(|layer| {
-        layer.feed_forward == FeedForwardLowering::DenseGelu
-            && matches!(layer.mixer, MixerLowering::Softmax { .. })
-    }) {
-        return Ok(MetalDecoderRuntime::DenseGelu);
-    }
-    if layers.iter().all(|layer| {
-        layer.feed_forward == FeedForwardLowering::DenseAndRouted
-            && matches!(layer.mixer, MixerLowering::Softmax { .. })
-    }) {
-        return Ok(MetalDecoderRuntime::DenseAndRouted);
-    }
-    if layers
-        .iter()
-        .all(|layer| layer.feed_forward == FeedForwardLowering::SharedRouted)
-        && layers.iter().any(|layer| layer.mixer == MixerLowering::Linear)
-    {
-        return Ok(MetalDecoderRuntime::SharedRouted);
-    }
-    if layers.iter().all(|layer| layer.feed_forward == FeedForwardLowering::Dense)
-        && layers.iter().any(|layer| layer.mixer == MixerLowering::Linear)
-    {
-        return Ok(MetalDecoderRuntime::DenseMixed);
-    }
-    if layers.iter().all(|layer| {
-        layer.feed_forward == FeedForwardLowering::ClampedRouted
-            && matches!(layer.mixer, MixerLowering::Softmax { sinks: true, .. })
-    }) {
-        return Ok(MetalDecoderRuntime::ClampedRouted);
-    }
-    if layers.iter().any(|layer| layer.mixer == MixerLowering::StateSpace)
-        && layers.iter().any(|layer| matches!(layer.mixer, MixerLowering::Softmax { .. }))
-        && layers.iter().all(|layer| {
-            matches!(
-                layer.feed_forward,
-                FeedForwardLowering::LatentRouted
-                    | FeedForwardLowering::UngatedDense
-                    | FeedForwardLowering::None
-            ) && matches!(
-                layer.mixer,
-                MixerLowering::StateSpace
-                    | MixerLowering::Softmax { sinks: false, window: None, .. }
-            )
-        })
-    {
-        return Ok(MetalDecoderRuntime::StateSpaceHybrid);
-    }
-    Err(ArchitectureError::invalid(
-        "Metal has no runtime for the lowered decoder operation composition",
-    ))
 }

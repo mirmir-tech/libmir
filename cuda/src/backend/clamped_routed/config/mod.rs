@@ -1,9 +1,12 @@
-//! Semantic capability admission for clamped-routed CUDA execution.
+//! The clamped-routed CUDA geometry, from the plan admission accepted.
 
+use architecture::{
+    cuda::{CudaDecoderPlan, CudaLayer},
+    lowering::{Activation, FeedForwardLowering},
+};
 use models::semantic::{
-    ActivationSpec, AttentionSpec, FeedForwardSpec, KeyValueRelation, MixerSpec, NormalizationKind,
-    PositionEncodingSpec, QkNormalization, RopeScalingSpec, RotaryLayoutSpec, RouterNormalization,
-    SemanticModelSpec,
+    AttentionSpec, DecoderLayerSpec, FeedForwardSpec, MixerSpec, NormalizationKind,
+    PositionEncodingSpec, RopeScalingSpec, RotaryLayoutSpec, SemanticModelSpec,
 };
 use runtime::kv::{CacheConfig, KvStorageSpec};
 
@@ -31,16 +34,18 @@ pub(super) struct ClampedRoutedConfig {
 }
 
 impl ClampedRoutedConfig {
-    pub(super) fn from_semantic(spec: &SemanticModelSpec) -> Result<Self> {
-        let first =
-            spec.decoder.layers.first().ok_or_else(|| {
-                Error::UnsupportedDecoderLayer("empty clamped-routed decoder".into())
-            })?;
-        let (attention, intermediate, experts, top_k, clamp) = layer_contract(first)?;
+    /// The geometry of `spec`, run as `plan`, the plan admission accepted.
+    pub(super) fn from_admitted(plan: &CudaDecoderPlan, spec: &SemanticModelSpec) -> Result<Self> {
+        let (Some(first), Some(lowered)) = (spec.decoder.layers.first(), plan.layers().first())
+        else {
+            return Err(Error::UnsupportedDecoderLayer("empty clamped-routed decoder".into()));
+        };
+        let (attention, intermediate, experts, top_k, clamp) = layer_contract(first, lowered)?;
         let (theta, factor, initial_context, beta_fast, beta_slow, rope_truncate) =
             rotary(attention)?;
-        for layer in &spec.decoder.layers {
-            validate_uniform(layer_contract(layer)?, attention, intermediate, experts, top_k)?;
+        for (layer, lowered) in spec.decoder.layers.iter().zip(plan.layers()) {
+            let contract = layer_contract(layer, lowered)?;
+            validate_uniform(contract, attention, intermediate, experts, top_k)?;
             let position = rotary(match &layer.mixer {
                 MixerSpec::SoftmaxAttention(attention) => attention,
                 MixerSpec::LinearAttention(_)
@@ -115,44 +120,34 @@ impl ClampedRoutedConfig {
     }
 }
 
-fn layer_contract(
-    layer: &models::semantic::DecoderLayerSpec,
-) -> Result<(&AttentionSpec, usize, usize, usize, f64)> {
-    let MixerSpec::SoftmaxAttention(attention) = &layer.mixer else {
-        return Err(Error::UnsupportedDecoderLayer(format!(
-            "clamped-routed layer {} requires softmax attention",
+/// One layer's geometry from the spec, its experts and clamp from the plan
+/// admission accepted; admission already holds the sinks, separate values,
+/// plain Q/K, softmax router and clamp slope.
+fn layer_contract<'a>(
+    layer: &'a DecoderLayerSpec,
+    lowered: &CudaLayer,
+) -> Result<(&'a AttentionSpec, usize, usize, usize, f64)> {
+    let refuse = |what: &str| {
+        Err(Error::UnsupportedDecoderLayer(format!(
+            "clamped-routed layer {} {what}",
             layer.index
-        )));
+        )))
     };
-    let FeedForwardSpec::Routed { routed, shared: None } = &layer.feed_forward else {
-        return Err(Error::UnsupportedDecoderLayer(format!(
-            "clamped-routed layer {} requires routed experts without a shared expert",
-            layer.index
-        )));
+    let (MixerSpec::SoftmaxAttention(attention), FeedForwardSpec::Routed { routed, .. }) =
+        (&layer.mixer, &layer.feed_forward)
+    else {
+        return refuse("is not softmax attention with routed experts");
     };
-    let ActivationSpec::ClampedSwiGlu { alpha, limit: clamp } = routed.activation else {
-        return Err(Error::UnsupportedDecoderLayer(format!(
-            "clamped-routed layer {} requires clamped SwiGLU",
-            layer.index
-        )));
+    let FeedForwardLowering::Routed { experts, shared: None } = lowered.feed_forward else {
+        return refuse("was not admitted as routed experts without a shared expert");
     };
-    if !attention.sinks
-        || !attention.projection_bias
-        || attention.key_value_relation != KeyValueRelation::Separate
-        || attention.qk_normalization != QkNormalization::None
-        || !approx(alpha, 1.702)
-        // The runtime's router renormalizes a softmax over the selected
-        // experts, without groups or an output factor.
-        || routed.router_normalization != RouterNormalization::SoftmaxTopK
-        || routed.group_limit.is_some()
-        || !approx(routed.output_scale, 1.0)
-    {
-        return Err(Error::UnsupportedDecoderLayer(format!(
-            "clamped-routed layer {} lacks the sink, bias, separate-K/V, clamped-SwiGLU or softmax router capability contract",
-            layer.index
-        )));
+    let Activation::SwiGlu { clamp: Some(clamp) } = experts.activation else {
+        return refuse("was not admitted with clamped SwiGLU");
+    };
+    if !attention.projection_bias {
+        return refuse("lacks the attention projection bias");
     }
-    Ok((attention, routed.intermediate_size, routed.expert_count, routed.top_k, clamp))
+    Ok((attention, routed.intermediate_size, experts.count, experts.top_k, clamp.limit))
 }
 
 fn validate_uniform(

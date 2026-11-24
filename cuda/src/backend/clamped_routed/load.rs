@@ -1,3 +1,4 @@
+use architecture::cuda::CudaDecoderPlan;
 use models::{
     execution::DecoderExecutionContract,
     layout::DecoderConfig,
@@ -17,6 +18,7 @@ impl CudaBackend {
     pub fn load_clamped_routed_model_template_with_progress(
         &self,
         decoder: &DecoderConfig,
+        plan: &CudaDecoderPlan,
         contract: &DecoderExecutionContract,
         catalog: &TensorCatalog,
         cache: CacheConfig,
@@ -31,7 +33,7 @@ impl CudaBackend {
                 "clamped-routed semantic layer count differs from decoder geometry".into(),
             ));
         }
-        let config = ClampedRoutedConfig::from_semantic(semantic)?;
+        let config = ClampedRoutedConfig::from_admitted(plan, semantic)?;
         let layout = ClampedRoutedLayout::discover(bindings)?;
         let capabilities = ClampedRoutedCapabilityPlan::lower(config, layout, cache.dtype)?;
         if ring_sessions == 0 {
@@ -51,11 +53,6 @@ impl CudaBackend {
                     "clamped-routed layer {layer} requires softmax attention"
                 )));
             };
-            if !attention.sinks {
-                return Err(Error::UnsupportedDecoderLayer(format!(
-                    "clamped-routed layer {layer} requires learned attention sinks"
-                )));
-            }
             let layer_bindings = bindings.routed_decoder_layer(layer)?;
             let names = owned_names(layer_bindings.physical_sources());
             let tensors = upload_names(self, catalog, &names)?;

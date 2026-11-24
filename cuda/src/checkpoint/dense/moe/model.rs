@@ -17,7 +17,7 @@ impl CudaBackend {
     pub(crate) fn load_dense_moe_model_template_with_bindings(
         &self,
         decoder: &DecoderConfig,
-        semantic: &SemanticModelSpec,
+        (semantic, plan): (&SemanticModelSpec, &architecture::cuda::CudaDecoderPlan),
         bindings: &WeightBindingPlan,
         catalog: &TensorCatalog,
         load: NvFp4MoeLayerLoadConfig,
@@ -36,7 +36,12 @@ impl CudaBackend {
         for layer in 0..decoder.num_hidden_layers {
             let layer_bindings = bindings.hybrid_moe_layer(layer)?;
             let (template, bytes) = self.load_dense_moe_layer_template_tracked(
-                decoder, semantic, catalog, layer, &layer_bindings, load,
+                decoder,
+                (semantic, plan),
+                catalog,
+                layer,
+                &layer_bindings,
+                load,
             )?;
             completed = completed
                 .checked_add(bytes)

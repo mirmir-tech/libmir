@@ -1,3 +1,4 @@
+use architecture::ArchitectureError;
 use foundation::model::BackendTarget;
 use models::{
     execution::ArchitectureRequirements,
@@ -8,7 +9,9 @@ use models::{
         WeightBindingPlan,
     },
 };
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+
+use super::EncodingKind;
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 /// Conservative result of one checkpoint/backend admission check.
 pub enum AdmissionStatus {
     /// Every required execution contract has been validated.
@@ -33,38 +36,18 @@ impl AdmissionStatus {
         }
     }
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 /// Stable category of a backend admission check.
 pub enum AdmissionCheckKind {
-    /// Dense floating-point weights.
-    Dense,
-    /// Grouped affine integer weights.
-    Affine,
-    /// Packed compressed-tensors integer weights of any admitted width.
-    PackedInteger,
-    /// `AutoAWQ` GEMM packed weights.
-    Awq,
-    /// GPTQ input-packed weights.
-    Gptq,
-    /// bitsandbytes NF4 or FP4 block weights.
-    BitsAndBytes4Bit,
-    /// Direct FP8 floating-point weights.
-    Float8,
-    /// OCP MXFP4 block weights.
-    MxFp4,
-    /// OCP MXFP8 block weights.
-    MxFp8,
-    /// NVIDIA NVFP4 block weights.
-    NvFp4,
-    /// GGML block weights from GGUF files.
-    Ggml,
+    /// One family of weight encodings.
+    Encoding(EncodingKind),
     /// Semantic model composition and backend lowering.
     Architecture,
     /// Vision tensors and image preprocessing contract.
     Vision,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 /// One independently explainable backend admission decision.
 pub struct AdmissionCheck {
     /// Capability family inspected by this check.
@@ -73,6 +56,9 @@ pub struct AdmissionCheck {
     pub status: AdmissionStatus,
     /// User-facing explanation or missing requirement.
     pub detail: String,
+    /// Why the backend refused the architecture, typed: what is unlowerable
+    /// or what each runtime lacks.
+    pub refusal: Option<ArchitectureError>,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -211,7 +197,7 @@ impl CheckpointEncoding {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 /// Static checkpoint compatibility report for one accelerator backend.
 pub struct BackendAdmissionReport {
     /// Accelerator backend evaluated by this report.

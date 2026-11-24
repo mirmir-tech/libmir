@@ -36,12 +36,16 @@ fn lowers_dense_qk_normalization_from_semantics() -> Result<()> {
     };
     catalog.tensors.sort_by(|left, right| left.name.cmp(&right.name));
     let spec = SemanticModelSpec::discover(&decoder, &catalog)?;
-    let plan = CudaDecoderPlan::lower(&spec);
+    let plan = CudaDecoderPlan::lower(&spec, None)?;
 
-    assert!(plan.all_dense());
     assert_eq!(
-        crate::admit_architecture(&TaskExecutionPlan::Generation { decoder }, Some(&spec),)?,
-        crate::CudaArchitecture::Generation(crate::CudaDecoderRuntime::Dense)
+        plan.layers()[0].mixer.normalization(),
+        Some(models::semantic::QkNormalization::QueryKeyRms)
+    );
+    assert_eq!(
+        crate::admit_architecture(&TaskExecutionPlan::Generation { decoder }, Some(&spec))?
+            .runtime(),
+        Some(crate::CudaDecoderRuntime::Dense)
     );
     Ok(())
 }

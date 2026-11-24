@@ -2,37 +2,21 @@
 //! layer is latent attention followed by a dense or shared-routed
 //! feed-forward.
 
+use architecture::cuda::CudaLayer;
 use models::{
     layout::DecoderConfig,
-    semantic::{MixerSpec, SemanticModelSpec},
+    semantic::SemanticModelSpec,
     weights::{TensorCatalog, WeightBindingPlan},
 };
 use runtime::kv::CacheConfig;
 
 use super::super::SharedRoutedLayerTemplate;
-use crate::{CudaBackend, CudaLatentAttentionLayer, CudaTensorSet, Error, Result};
-
-pub(in super::super) fn validate_composition(
-    semantic: &SemanticModelSpec,
-    max_sequence_blocks: usize,
-) -> Result<()> {
-    let latent = semantic
-        .decoder
-        .layers
-        .iter()
-        .all(|layer| matches!(layer.mixer, MixerSpec::LatentAttention(_)));
-    if !latent || semantic.decoder.layers.is_empty() || max_sequence_blocks == 0 {
-        return Err(Error::UnsupportedDecoderLayer(
-            "parsed decoder is not a latent-attention stack".into(),
-        ));
-    }
-    Ok(())
-}
+use crate::{CudaBackend, CudaLatentAttentionLayer, CudaTensorSet, Result};
 
 pub(in super::super) fn layers(
     backend: &CudaBackend,
     decoder: &DecoderConfig,
-    semantic: &SemanticModelSpec,
+    (semantic, plan): (&SemanticModelSpec, &[CudaLayer]),
     tensors: &CudaTensorSet,
     catalog: &TensorCatalog,
     bindings: &WeightBindingPlan,
@@ -42,13 +26,14 @@ pub(in super::super) fn layers(
         .decoder
         .layers
         .iter()
-        .map(|spec| {
+        .zip(plan)
+        .map(|(spec, lowered)| {
             CudaLatentAttentionLayer::load(
                 backend,
                 decoder,
                 tensors,
                 catalog,
-                spec,
+                (spec, lowered),
                 bindings.latent_decoder_layer(spec.index)?,
                 cache,
             )

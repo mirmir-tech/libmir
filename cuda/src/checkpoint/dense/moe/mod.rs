@@ -22,13 +22,13 @@ impl CudaBackend {
     pub(in crate::checkpoint) fn load_dense_moe_layer_template_tracked(
         &self,
         decoder: &DecoderConfig,
-        semantic: &SemanticModelSpec,
+        (semantic, plan): (&SemanticModelSpec, &architecture::cuda::CudaDecoderPlan),
         catalog: &TensorCatalog,
         layer: usize,
         bindings: &HybridMoeLayerBindings<'_>,
         load: NvFp4MoeLayerLoadConfig,
     ) -> Result<(DecodeMoeLayerTemplate, u64)> {
-        let block = load.block(decoder, semantic, layer)?;
+        let block = load.block(decoder, (semantic, plan), layer)?;
         let physical = dense_sources(catalog, bindings)?;
         let raw = bindings
             .bindings()

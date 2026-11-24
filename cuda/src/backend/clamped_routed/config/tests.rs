@@ -10,7 +10,7 @@ use super::ClampedRoutedConfig;
 #[test]
 fn admits_dynamic_geometry_instead_of_one_checkpoint_size() -> crate::Result<()> {
     let spec = spec(64, 96, 4, 2, 16);
-    let config = ClampedRoutedConfig::from_semantic(&spec)?;
+    let config = ClampedRoutedConfig::from_admitted(&plan(&spec)?, &spec)?;
 
     assert_eq!(config.hidden, 64);
     assert_eq!(config.intermediate, 96);
@@ -21,9 +21,14 @@ fn admits_dynamic_geometry_instead_of_one_checkpoint_size() -> crate::Result<()>
 
 #[test]
 fn semantic_config_does_not_apply_cuda_kernel_limits() -> crate::Result<()> {
-    let config = ClampedRoutedConfig::from_semantic(&spec(64, 96, 4, 2, 258))?;
+    let spec = spec(64, 96, 4, 2, 258);
+    let config = ClampedRoutedConfig::from_admitted(&plan(&spec)?, &spec)?;
     assert_eq!(config.head_dim, 258);
     Ok(())
+}
+
+fn plan(spec: &SemanticModelSpec) -> crate::Result<architecture::cuda::CudaDecoderPlan> {
+    Ok(architecture::cuda::CudaDecoderPlan::lower(spec, None)?)
 }
 
 fn spec(

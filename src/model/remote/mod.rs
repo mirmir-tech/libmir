@@ -1,15 +1,17 @@
+mod vision;
+
 use foundation::model::BackendTarget;
 use models::{
     execution::{
         ArchitectureRequirements, CausalScoringTask, DecoderExecutionContract, EmbeddingTask,
         TaskExecutionPlan,
     },
-    layout::{DecoderConfig, ImageProcessorConfig, VisionConfig},
+    layout::{DecoderConfig, WeightContainer},
     semantic::SemanticModelSpec,
-    weights::{
-        TensorCatalog, TensorReadiness, TextTensorLayout, VisionTensorSchema, WeightBindingPlan,
-    },
+    weights::{TensorCatalog, TextTensorLayout, WeightBindingPlan},
 };
+pub use vision::RemoteVisionContract;
+use vision::remote_vision;
 
 use super::{BackendAdmissionReport, CheckpointEncoding};
 use crate::{Error, Result};
@@ -29,15 +31,6 @@ pub struct RemoteTaskMetadata<'a> {
     pub processor: Option<&'a serde_json::Value>,
 }
 
-/// Vision configuration, processor, and tensor readiness discovered from a
-/// remote checkpoint without fetching tensor payloads.
-#[derive(Debug, Clone, PartialEq)]
-pub struct RemoteVisionContract {
-    config: VisionConfig,
-    readiness: TensorReadiness,
-    processor: Option<ImageProcessorConfig>,
-}
-
 /// Backend-neutral execution contract discovered from remote model metadata
 /// and `SafeTensors` headers without downloading tensor payloads.
 #[derive(Debug, Clone, PartialEq)]
@@ -45,6 +38,7 @@ pub struct RemoteModelContract {
     execution: Option<DecoderExecutionContract>,
     task: TaskExecutionPlan,
     vision: Option<RemoteVisionContract>,
+    container: Option<WeightContainer>,
 }
 
 impl RemoteModelContract {
@@ -56,6 +50,7 @@ impl RemoteModelContract {
         metadata: RemoteTaskMetadata<'_>,
     ) -> Result<Option<Self>> {
         let vision = remote_vision(config, catalog, metadata.processor)?;
+        let container = container(catalog);
         if let (Some(modules), Some(pooling)) = (metadata.modules, metadata.pooling) {
             let task = EmbeddingTask::from_sentence_transformers_values(
                 modules,
@@ -73,6 +68,7 @@ impl RemoteModelContract {
                 execution: Some(execution),
                 task: TaskExecutionPlan::Embedding { decoder, task, tensors },
                 vision,
+                container,
             }));
         }
         if let Some(modules) = metadata.modules
@@ -91,10 +87,11 @@ impl RemoteModelContract {
                 execution: Some(decoder_execution(&decoder, catalog)?),
                 task: TaskExecutionPlan::CausalScoring { decoder, task },
                 vision,
+                container,
             }));
         }
         if let Some(task) = TaskExecutionPlan::discover_remote_sequence_scoring(config, catalog)? {
-            return Ok(Some(Self { execution: None, task, vision }));
+            return Ok(Some(Self { execution: None, task, vision, container }));
         }
         if generation_config(config) {
             return generation_contract(config, catalog, vision).map(Some);
@@ -107,6 +104,13 @@ impl RemoteModelContract {
     pub fn inspect_generation(config: &serde_json::Value, catalog: &TensorCatalog) -> Result<Self> {
         let vision = remote_vision(config, catalog, None)?;
         generation_contract(config, catalog, vision)
+    }
+
+    /// The container of the model's text weights, from the inspected
+    /// headers' files.
+    #[must_use]
+    pub const fn weight_container(&self) -> Option<WeightContainer> {
+        self.container
     }
 
     /// Reports physical and architectural compatibility for one backend.
@@ -171,26 +175,6 @@ impl RemoteModelContract {
     }
 }
 
-impl RemoteVisionContract {
-    /// Returns the normalized vision execution configuration.
-    #[must_use]
-    pub const fn config(&self) -> &VisionConfig {
-        &self.config
-    }
-
-    /// Returns vision tensor readiness derived from `SafeTensors` headers.
-    #[must_use]
-    pub const fn readiness(&self) -> &TensorReadiness {
-        &self.readiness
-    }
-
-    /// Returns the parsed image processor, when the repository provides one.
-    #[must_use]
-    pub const fn processor(&self) -> Option<&ImageProcessorConfig> {
-        self.processor.as_ref()
-    }
-}
-
 fn generation_contract(
     config: &serde_json::Value,
     catalog: &TensorCatalog,
@@ -201,24 +185,14 @@ fn generation_contract(
         execution: Some(decoder_execution(&decoder, catalog)?),
         task: TaskExecutionPlan::Generation { decoder },
         vision,
+        container: container(catalog),
     })
 }
 
-fn remote_vision(
-    config: &serde_json::Value,
-    catalog: &TensorCatalog,
-    processor: Option<&serde_json::Value>,
-) -> Result<Option<RemoteVisionContract>> {
-    // A vision tower without a supported execution contract leaves a text-only
-    // contract, matching local model inspection; its tensors stay unbound.
-    let Some(config) = VisionConfig::from_value(config)? else {
-        return Ok(None);
-    };
-    let readiness = VisionTensorSchema::discover(&config).readiness(catalog);
-    let processor = processor
-        .map(|value| ImageProcessorConfig::from_value(value, config.pipeline()))
-        .transpose()?;
-    Ok(Some(RemoteVisionContract { config, readiness, processor }))
+fn container(catalog: &TensorCatalog) -> Option<WeightContainer> {
+    WeightContainer::of_model(
+        catalog.tensors.iter().filter_map(|tensor| WeightContainer::of(&tensor.file)),
+    )
 }
 
 fn decoder_execution(

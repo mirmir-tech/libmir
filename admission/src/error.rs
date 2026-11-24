@@ -1,21 +1,133 @@
+//! Why a backend refuses a model's architecture, typed so that callers and
+//! tests can tell what is missing; `Display` is for logs.
+
 use std::fmt;
+
+use crate::{capability::Requirement, cuda::CudaDecoderRuntime, metal::MetalDecoderRuntime};
 
 pub type Result<T> = std::result::Result<T, ArchitectureError>;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ArchitectureError {
-    detail: String,
+#[derive(Clone, Debug, PartialEq)]
+pub enum ArchitectureError {
+    /// A generation task reached admission without its semantic spec.
+    MissingSemanticContract,
+    /// A layer (or the whole decoder) declares what no kernel of the backend
+    /// computes, whichever runtime runs it.
+    Unlowerable {
+        layer: Option<usize>,
+        feature: Unlowerable,
+    },
+    /// No runtime executes the lowered plan; each refusal names what that
+    /// runtime lacks.
+    NoRuntime { rejections: Vec<Rejection> },
+    /// The task itself, before any decoder.
+    Task(TaskRefusal),
 }
 
-impl ArchitectureError {
-    pub(crate) fn invalid(detail: impl Into<String>) -> Self {
-        Self { detail: detail.into() }
-    }
+/// What a backend's lowering cannot express.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Unlowerable {
+    /// An activation the semantic spec kept only by name.
+    Activation { name: String },
+    /// A latent attention geometry the latent kernels do not take.
+    LatentGeometry {
+        key_value_rank: usize,
+        rope_head_dim: usize,
+    },
+    /// Latent keys rotated other than plainly, linearly or by `YaRN`.
+    LatentRotary,
+    /// Latent routed experts without a projected latent space.
+    LatentExpertsWithoutLatentSize,
+    /// A clamped `SwiGLU` slope other than the one the kernel computes.
+    ClampAlpha { alpha: f64 },
+    /// More experts than the router kernel ranks.
+    ExpertCount { experts: usize, max: usize },
+    /// More expert groups than the router kernel ranks.
+    ExpertGroups { groups: usize, max: usize },
+    /// A norm weight offset other than none or Gemma's unit offset.
+    NormWeightOffset { offset: f64 },
+    /// A `LayerNorm` with a weight offset.
+    LayerNormWeightOffset,
+    /// A dimension beyond what the backend's kernels index.
+    Dimension { what: &'static str, value: usize },
+}
+
+/// A task the backend does not run.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TaskRefusal {
+    /// Embedding that does not pool the normalized last token.
+    EmbeddingPooling,
+    /// A sequence-scoring encoder other than packed-QKV `LayerNorm` GELU
+    /// with one label and supported `RoPE`.
+    SequenceScoringEncoder,
+}
+
+/// One runtime's refusal of a plan.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Rejection {
+    pub runtime: Runtime,
+    pub missing: Vec<Requirement>,
+}
+
+/// A decoder runtime of either backend.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Runtime {
+    Cuda(CudaDecoderRuntime),
+    Metal(MetalDecoderRuntime),
 }
 
 impl fmt::Display for ArchitectureError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.detail)
+        match self {
+            Self::MissingSemanticContract => {
+                formatter.write_str("the generation semantic contract is missing")
+            },
+            Self::Unlowerable { layer: Some(layer), feature } => {
+                write!(formatter, "layer {layer}: {feature}")
+            },
+            Self::Unlowerable { layer: None, feature } => write!(formatter, "{feature}"),
+            Self::NoRuntime { rejections } => {
+                formatter.write_str("no runtime executes the decoder")?;
+                for rejection in rejections {
+                    write!(formatter, "; {:?} lacks {:?}", rejection.runtime, rejection.missing)?;
+                }
+                Ok(())
+            },
+            Self::Task(refusal) => write!(formatter, "{refusal:?}"),
+        }
+    }
+}
+
+impl fmt::Display for Unlowerable {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Activation { name } => write!(formatter, "no kernel runs the {name} activation"),
+            Self::LatentGeometry { key_value_rank, rope_head_dim } => write!(
+                formatter,
+                "no latent attention kernel for a {key_value_rank}-wide latent with a {rope_head_dim}-wide rotary key"
+            ),
+            Self::LatentRotary => {
+                formatter.write_str("latent keys rotate only plainly, linearly or by YaRN")
+            },
+            Self::LatentExpertsWithoutLatentSize => formatter
+                .write_str("latent routed experts need a projected latent space (moe_latent_size)"),
+            Self::ClampAlpha { alpha } => {
+                write!(formatter, "no clamped SwiGLU kernel computes a slope of {alpha}")
+            },
+            Self::ExpertCount { experts, max } => {
+                write!(formatter, "{experts} experts exceed the router's {max}")
+            },
+            Self::ExpertGroups { groups, max } => {
+                write!(formatter, "{groups} expert groups exceed the router's {max}")
+            },
+            Self::NormWeightOffset { offset } => {
+                write!(formatter, "no norm kernel adds a weight offset of {offset}")
+            },
+            Self::LayerNormWeightOffset => {
+                formatter.write_str("no LayerNorm kernel adds a weight offset")
+            },
+            Self::Dimension { what, value } => write!(formatter, "{what} {value} is too large"),
+        }
     }
 }
 

@@ -81,6 +81,17 @@ impl RouterUnitScoring {
         scale: 1.0,
     };
 
+    /// The unit router of experts admission lowered, with their output scale.
+    pub fn of_experts(experts: &architecture::lowering::Experts) -> Result<Self> {
+        #[allow(clippy::cast_possible_truncation)]
+        let scale = experts.output_scale as f32;
+        Ok(Self {
+            weighting: experts.router.try_into()?,
+            group_limit: experts.group_limit,
+            scale,
+        })
+    }
+
     /// The unit router of `routed`, with its output scale.
     pub fn of(routed: &RoutedExpertsSpec) -> Result<Self> {
         #[allow(clippy::cast_possible_truncation)]

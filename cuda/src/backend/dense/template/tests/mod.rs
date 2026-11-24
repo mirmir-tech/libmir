@@ -61,7 +61,10 @@ fn qwen2_stack_matches_dynamic_fp8_activation_reference() -> TestResult<()> {
     for index in 0..decoder.num_hidden_layers {
         let (template, _bytes) = backend.load_dense_swiglu_layer_tracked(
             &decoder,
-            &spec,
+            (
+                &spec,
+                &architecture::cuda::CudaDecoderPlan::lower(&spec, decoder.attention_scale)?,
+            ),
             &catalog,
             index,
             bindings.dense_decoder_layer(index)?.into(),

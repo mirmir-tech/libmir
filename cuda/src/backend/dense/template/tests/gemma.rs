@@ -52,7 +52,10 @@ fn dense_gemma_layers_match_reference() -> TestResult<()> {
         let expected = values(&oracle.join(format!("layer{layer}.bf16")))?;
         let (template, _) = backend.load_dense_swiglu_layer_tracked(
             &decoder,
-            &spec,
+            (
+                &spec,
+                &architecture::cuda::CudaDecoderPlan::lower(&spec, decoder.attention_scale)?,
+            ),
             &catalog,
             layer,
             bindings.dense_decoder_layer(layer)?.into(),

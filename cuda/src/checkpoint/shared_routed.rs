@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use models::{
+    execution::TaskExecutionPlan,
     layout::DecoderConfig,
     semantic::SemanticModelSpec,
     weights::{
@@ -9,7 +10,9 @@ use models::{
 };
 
 use super::{SharedRoutedModelLoadConfig, model::payload_bytes};
-use crate::{CudaBackend, CudaSharedRoutedModelTemplate, Error, Result};
+use crate::{
+    CudaAdmitted, CudaArchitecture, CudaBackend, CudaSharedRoutedModelTemplate, Error, Result,
+};
 
 impl CudaBackend {
     pub fn load_shared_routed_model_template(
@@ -21,15 +24,25 @@ impl CudaBackend {
         let mut ignored = |_completed, _detail| {};
         let spec = SemanticModelSpec::discover(decoder, catalog)?;
         let bindings = WeightBindingPlan::discover(&spec, catalog)?;
+        let task = TaskExecutionPlan::Generation { decoder: decoder.clone() };
+        let CudaArchitecture::Generation(admitted) = crate::admit_architecture(&task, Some(&spec))?
+        else {
+            return Err(Error::State("CUDA admitted a non-generation runtime".into()));
+        };
         self.load_shared_routed_model_template_with_progress(
-            decoder, &spec, catalog, &bindings, load, &mut ignored,
+            decoder,
+            (&admitted, &spec),
+            catalog,
+            &bindings,
+            load,
+            &mut ignored,
         )
     }
 
     pub(crate) fn load_shared_routed_model_template_with_progress(
         &self,
         decoder: &DecoderConfig,
-        semantic: &SemanticModelSpec,
+        (admitted, semantic): (&CudaAdmitted, &SemanticModelSpec),
         catalog: &TensorCatalog,
         bindings: &WeightBindingPlan,
         load: SharedRoutedModelLoadConfig,
@@ -67,6 +80,7 @@ impl CudaBackend {
         CudaSharedRoutedModelTemplate::from_tensors(
             self,
             decoder,
+            admitted,
             semantic,
             &tensors,
             catalog,

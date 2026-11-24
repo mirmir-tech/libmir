@@ -40,6 +40,20 @@ impl TryFrom<&ActivationSpec> for GatedActivation {
     }
 }
 
+impl TryFrom<architecture::lowering::Activation> for GatedActivation {
+    type Error = Error;
+
+    /// The gated kernels run plain `SwiGLU` and tanh GELU.
+    fn try_from(activation: architecture::lowering::Activation) -> Result<Self> {
+        use architecture::lowering::Activation;
+        match activation {
+            Activation::GeluTanh => Ok(Self::GeluTanh),
+            Activation::SwiGlu { clamp: None } => Ok(Self::Silu),
+            other => Err(Error::UnsupportedGatedActivation(format!("{other:?}"))),
+        }
+    }
+}
+
 impl From<GatedActivation> for crate::kernels::GatedActivation {
     fn from(value: GatedActivation) -> Self {
         match value {

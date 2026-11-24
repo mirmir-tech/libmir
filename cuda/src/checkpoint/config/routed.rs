@@ -1,6 +1,10 @@
 //! The feed-forward of a dense-decoder layer as the semantic spec states it.
 
-use models::semantic::{FeedForwardSpec, RoutedExpertsSpec, SemanticModelSpec, SharedExpertSpec};
+use architecture::{
+    cuda::{CudaDecoderPlan, CudaLayer},
+    lowering::{Experts, FeedForwardLowering},
+};
+use models::semantic::{FeedForwardSpec, SemanticModelSpec, SharedExpertSpec};
 
 use super::unsupported;
 use crate::Result;
@@ -14,14 +18,33 @@ pub(super) fn feed_forward(semantic: &SemanticModelSpec, layer: usize) -> Result
         .ok_or_else(|| unsupported("layer is missing from the model spec"))
 }
 
+/// The layer as admission lowered it.
+pub(super) fn lowered(plan: &CudaDecoderPlan, layer: usize) -> Result<&CudaLayer> {
+    plan.layers()
+        .get(layer)
+        .ok_or_else(|| unsupported("layer is missing from the admitted plan"))
+}
+
+/// The routed experts of an admitted layer.
+pub(super) fn experts(layer: &CudaLayer) -> Result<Experts> {
+    match layer.feed_forward {
+        FeedForwardLowering::Routed { experts, .. }
+        | FeedForwardLowering::DenseAndRouted { experts, .. }
+        | FeedForwardLowering::LatentRouted { experts, .. } => Ok(experts),
+        FeedForwardLowering::Dense { .. } | FeedForwardLowering::None => {
+            Err(unsupported("a decode MoE layer has no routed experts"))
+        },
+    }
+}
+
 /// The router of a dense layer's routed experts, which select from every
 /// expert, and the ungated shared expert beside them.
 pub(super) fn dense_router(
-    spec: &RoutedExpertsSpec,
+    lowered: &Experts,
     shared: Option<&SharedExpertSpec>,
     experts: crate::RoutedExpertsConfig,
 ) -> Result<crate::DenseRoutedExperts> {
-    let scoring = crate::kernels::RouterUnitScoring::of(spec)?;
+    let scoring = crate::kernels::RouterUnitScoring::of_experts(lowered)?;
     if scoring.group_limit.is_some() {
         return Err(unsupported("a group-limited router in a dense layer"));
     }

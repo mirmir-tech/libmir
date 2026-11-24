@@ -1,15 +1,20 @@
 use models::{
-    execution::TaskExecutionPlan, layout::DecoderConfig, semantic::SemanticModelSpec,
+    execution::TaskExecutionPlan,
+    layout::DecoderConfig,
+    semantic::{FeedForwardSpec, MixerSpec, SemanticModelSpec},
     weights::TensorCatalog,
 };
 use serde_json::json;
 
 use super::fixtures::AnyResult;
-use crate::{cuda, metal};
+use crate::{
+    ArchitectureError, Unlowerable, cuda,
+    lowering::{LatentGeometry, MixerLowering},
+};
 
 /// A miniature DeepSeek-V2-Lite decoder: latent attention, one dense layer,
 /// then routed experts with shared experts, routed by `scoring`.
-fn latent_contract(scoring: &str) -> AnyResult<(TaskExecutionPlan, SemanticModelSpec)> {
+pub(super) fn latent_contract(scoring: &str) -> AnyResult<(TaskExecutionPlan, SemanticModelSpec)> {
     let decoder = DecoderConfig::from_value(&json!({
         "hidden_size": 32,
         "intermediate_size": 32,
@@ -36,32 +41,46 @@ fn latent_contract(scoring: &str) -> AnyResult<(TaskExecutionPlan, SemanticModel
 }
 
 #[test]
-fn admits_latent_attention_on_cuda_and_metal() -> AnyResult<()> {
-    let (task, semantic) = latent_contract("softmax")?;
-    let plan = cuda::CudaDecoderPlan::lower(&semantic);
-    assert!(plan.has_latent_mixer());
-    assert_eq!(plan.layers()[1].mixer, cuda::CudaMixerLowering::Latent);
+fn lowers_latent_attention_with_its_geometry_on_cuda() -> AnyResult<()> {
+    let (_, semantic) = latent_contract("softmax")?;
+    let plan = cuda::CudaDecoderPlan::lower(&semantic, None)?;
     assert_eq!(
-        cuda::admit(&task, Some(&semantic))?,
-        cuda::CudaArchitecture::Generation(cuda::CudaDecoderRuntime::LatentAttention)
-    );
-    assert_eq!(
-        metal::admit(&task, Some(&semantic))?,
-        metal::MetalArchitecture::Generation(metal::MetalDecoderRuntime::LatentAttention)
+        plan.layers()[1].mixer,
+        MixerLowering::Latent(LatentGeometry { key_value_rank: 64, rope_head_dim: 8 })
     );
     Ok(())
 }
 
 #[test]
-fn admits_a_sigmoid_router_with_its_correction_bias() -> AnyResult<()> {
-    let (task, semantic) = latent_contract("sigmoid")?;
+fn refuses_a_latent_geometry_without_a_kernel() -> AnyResult<()> {
+    let (task, mut semantic) = latent_contract("softmax")?;
+    for layer in &mut semantic.decoder.layers {
+        if let MixerSpec::LatentAttention(latent) = &mut layer.mixer {
+            latent.key_value_rank = 96;
+        }
+    }
     assert_eq!(
-        cuda::admit(&task, Some(&semantic))?,
-        cuda::CudaArchitecture::Generation(cuda::CudaDecoderRuntime::LatentAttention)
+        cuda::admit(&task, Some(&semantic)).err(),
+        Some(ArchitectureError::Unlowerable {
+            layer: Some(0),
+            feature: Unlowerable::LatentGeometry { key_value_rank: 96, rope_head_dim: 8 },
+        })
     );
+    Ok(())
+}
+
+#[test]
+fn refuses_more_experts_than_the_cuda_router_ranks() -> AnyResult<()> {
+    let (task, mut semantic) = latent_contract("softmax")?;
+    if let FeedForwardSpec::Routed { routed, .. } = &mut semantic.decoder.layers[1].feed_forward {
+        routed.expert_count = 384;
+    }
     assert_eq!(
-        metal::admit(&task, Some(&semantic))?,
-        metal::MetalArchitecture::Generation(metal::MetalDecoderRuntime::LatentAttention)
+        cuda::admit(&task, Some(&semantic)).err(),
+        Some(ArchitectureError::Unlowerable {
+            layer: Some(1),
+            feature: Unlowerable::ExpertCount { experts: 384, max: 256 },
+        })
     );
     Ok(())
 }

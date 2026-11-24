@@ -61,6 +61,7 @@ fn metal_runs_a_pixel_shuffle_tower() -> models::Result<()> {
         kind: AdmissionCheckKind::Architecture,
         status: AdmissionStatus::Supported,
         detail: String::new(),
+        refusal: None,
     };
     assert_eq!(aggregate(&[decoder, metal]), AdmissionStatus::Supported);
     Ok(())

@@ -4,6 +4,7 @@ use models::weights::{
 };
 
 use super::{AdmissionCheckKind, AdmissionStatus};
+use crate::EncodingKind;
 
 pub(super) fn metal(format: Float8Quantization) -> (AdmissionCheckKind, AdmissionStatus, String) {
     let activation = match (format.format, format.activation_scale) {
@@ -35,7 +36,7 @@ pub(super) fn metal(format: Float8Quantization) -> (AdmissionCheckKind, Admissio
     );
     let admitted = activation && (identity_scale || explicit_scale);
     (
-        AdmissionCheckKind::Float8,
+        AdmissionCheckKind::Encoding(EncodingKind::Float8),
         if admitted {
             AdmissionStatus::Partial
         } else {
@@ -78,7 +79,7 @@ pub(super) fn cuda(format: Float8Quantization) -> (AdmissionCheckKind, Admission
         ) && format.input_scale_dtype == format.scale_dtype);
     let admitted = value_format && activation_scale && (identity_scale || explicit_scale);
     (
-        AdmissionCheckKind::Float8,
+        AdmissionCheckKind::Encoding(EncodingKind::Float8),
         if admitted {
             AdmissionStatus::Partial
         } else {

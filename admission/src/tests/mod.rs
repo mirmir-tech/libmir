@@ -1,4 +1,5 @@
 mod fixtures;
+mod golden;
 mod latent;
 mod runtimes;
 mod semantics;

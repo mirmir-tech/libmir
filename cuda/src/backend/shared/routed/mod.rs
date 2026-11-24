@@ -35,7 +35,7 @@ use self::{
     prediction::PredictionTemplate,
 };
 use crate::{
-    CudaAffineGatedDeltaMoeLayer, CudaAffineGatedFullAttentionMoeLayer,
+    CudaAdmitted, CudaAffineGatedDeltaMoeLayer, CudaAffineGatedFullAttentionMoeLayer,
     CudaAffineGatedFullAttentionState, CudaAttentionHybridLayer, CudaBackend, CudaGatedDeltaState,
     CudaLatentAttentionLayer, CudaMamba2HybridLayer, CudaMamba2State, CudaTensor, CudaTensorSet,
     DecodeAttentionBf16, LatentAttentionState, PagedKvCache, Result,
@@ -89,6 +89,7 @@ impl CudaSharedRoutedModelTemplate {
     pub fn from_tensors(
         backend: &CudaBackend,
         decoder: &DecoderConfig,
+        admitted: &CudaAdmitted,
         semantic: &SemanticModelSpec,
         tensors: &CudaTensorSet,
         catalog: &TensorCatalog,
@@ -97,15 +98,8 @@ impl CudaSharedRoutedModelTemplate {
         max_sequence_blocks: usize,
         speculation: Option<Speculation>,
     ) -> Result<Self> {
-        let hybrid = decoder.state_space.is_some();
-        let latent = decoder.latent.is_some();
-        if hybrid {
-            load::validate_state_space_composition(&semantic.decoder.layers, max_sequence_blocks)?;
-        } else if latent {
-            load::validate_latent_composition(semantic, max_sequence_blocks)?;
-        } else {
-            load::validate_composition(semantic, max_sequence_blocks)?;
-        }
+        let (hybrid, latent) = load::composition(admitted.runtime, max_sequence_blocks)?;
+        let plan = admitted.plan.layers();
         let boundary = bindings.decoder_boundary_with_tied_output(decoder.tie_word_embeddings)?;
         let embedding = CheckpointProjectionWeight::load_binding_prepared(
             backend,
@@ -134,19 +128,27 @@ impl CudaSharedRoutedModelTemplate {
                 .layers
                 .iter()
                 .enumerate()
-                .map(|(layer, spec)| {
-                    load.layer(layer, spec, bindings.state_space_hybrid_layer(layer)?)
+                .zip(plan)
+                .map(|((layer, spec), lowered)| {
+                    load.layer(layer, (spec, lowered), bindings.state_space_hybrid_layer(layer)?)
                 })
                 .collect::<Result<Vec<_>>>()?;
             // Speculation drafts only with a checkpoint's prediction module.
             let prediction = speculation
                 .filter(|_| !semantic.decoder.prediction_layers.is_empty())
-                .map(|_| PredictionTemplate::load(&load, semantic, bindings))
+                .map(|_| PredictionTemplate::load(&load, (semantic, &admitted.plan), bindings))
                 .transpose()?;
             (0.0, layers, prediction)
         } else if latent {
-            let layers =
-                load::latent_layers(backend, decoder, semantic, tensors, catalog, bindings, cache)?;
+            let layers = load::latent_layers(
+                backend,
+                decoder,
+                (semantic, plan),
+                tensors,
+                catalog,
+                bindings,
+                cache,
+            )?;
             (0.0, layers, None)
         } else {
             let norm_shift = infer_norm_shift(tensors, decoder, bindings)?;
@@ -155,13 +157,14 @@ impl CudaSharedRoutedModelTemplate {
                 .layers
                 .iter()
                 .enumerate()
-                .map(|(layer, spec)| {
+                .zip(plan)
+                .map(|((layer, spec), lowered)| {
                     build_layer(
                         backend,
                         decoder,
                         tensors,
                         catalog,
-                        (layer, spec),
+                        (layer, spec, lowered),
                         bindings.mixed_decoder_layer(layer)?,
                         norm_shift,
                     )

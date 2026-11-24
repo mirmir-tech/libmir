@@ -22,7 +22,7 @@ use std::{
 
 pub use admission::{
     AdmissionCheck, AdmissionCheckKind, AdmissionStatus, BackendAdmissionReport,
-    CheckpointEncoding, MODEL_FORMAT_REGISTRY_SCHEMA_VERSION, WeightEncoding,
+    CheckpointEncoding, EncodingKind, MODEL_FORMAT_REGISTRY_SCHEMA_VERSION, WeightEncoding,
 };
 pub use cache::CacheStatsReader;
 use foundation::{

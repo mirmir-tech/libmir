@@ -63,7 +63,7 @@ pub(super) fn clamped_routed(mut semantic: SemanticModelSpec) -> SemanticModelSp
         };
         attention.sinks = true;
         layer.feed_forward = FeedForwardSpec::Routed {
-            routed: routed(ActivationSpec::ClampedSwiGlu { alpha: 1.0, limit: 7.0 }),
+            routed: routed(ActivationSpec::ClampedSwiGlu { alpha: 1.702, limit: 7.0 }),
             shared: None,
         };
     }

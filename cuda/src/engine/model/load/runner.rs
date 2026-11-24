@@ -12,7 +12,7 @@ use super::super::{
     },
 };
 use crate::{
-    CudaArchitecture, CudaDecoderRuntime, DenseSwiGluLayerLoadConfig, Error,
+    CudaAdmitted, CudaArchitecture, CudaDecoderRuntime, DenseSwiGluLayerLoadConfig, Error,
     NvFp4MoeLayerLoadConfig, Result, SharedRoutedModelLoadConfig,
     backend::{CudaSequenceScoringModel, CudaTextEmbeddingModel},
     engine::{CudaEngine, batch::DecodeBuckets, lowering::CudaDecoderPlan},
@@ -30,30 +30,54 @@ impl CudaEngine {
         catalog: &TensorCatalog,
         blocks: usize,
         report: &mut dyn FnMut(u64, String),
-    ) -> Result<ModelRunner> {
+    ) -> Result<(ModelRunner, Option<CudaAdmitted>)> {
         if let Some(encoder) = encoder {
             let TaskExecutionPlan::SequenceScoring { bindings, .. } = task else {
                 return Err(Error::State("CUDA encoder bindings are missing".into()));
             };
-            return Ok(runner(ModelExecution::SequenceScoring(Box::new(
-                CudaSequenceScoringModel::load(&self.backend, encoder, catalog, bindings)?,
-            ))));
+            return Ok((
+                runner(ModelExecution::SequenceScoring(Box::new(CudaSequenceScoringModel::load(
+                    &self.backend, encoder, catalog, bindings,
+                )?))),
+                None,
+            ));
         }
         let decoder =
             decoder.ok_or_else(|| Error::State("CUDA decoder config is missing".into()))?;
         if let TaskExecutionPlan::Embedding { tensors, .. } = task {
-            return Ok(runner(ModelExecution::Embedding(Box::new(CudaTextEmbeddingModel::load(
-                &self.backend, decoder, catalog, tensors,
-            )?))));
+            return Ok((
+                runner(ModelExecution::Embedding(Box::new(CudaTextEmbeddingModel::load(
+                    &self.backend, decoder, catalog, tensors,
+                )?))),
+                None,
+            ));
         }
         let contract =
             contract.ok_or_else(|| Error::State("CUDA decoder contract is missing".into()))?;
-        let plan = CudaDecoderPlan::lower(&contract.semantic);
-        let CudaArchitecture::Generation(runtime) =
+        let CudaArchitecture::Generation(admitted) =
             crate::admit_architecture(task, Some(&contract.semantic))?
         else {
             return Err(Error::State("CUDA admitted a non-generation runtime".into()));
         };
+        let runner =
+            self.load_admitted(manifest, decoder, &admitted, contract, catalog, blocks, report)?;
+        Ok((runner, Some(admitted)))
+    }
+
+    /// Builds the runtime admission chose from the plan it admitted.
+    #[allow(clippy::too_many_arguments)]
+    fn load_admitted(
+        &self,
+        manifest: &ModelManifest,
+        decoder: &models::layout::DecoderConfig,
+        admitted: &CudaAdmitted,
+        contract: &DecoderExecutionContract,
+        catalog: &TensorCatalog,
+        blocks: usize,
+        report: &mut dyn FnMut(u64, String),
+    ) -> Result<ModelRunner> {
+        let CudaAdmitted { runtime, plan } = admitted;
+        let runtime = *runtime;
         match runtime {
             CudaDecoderRuntime::SharedRouted
             | CudaDecoderRuntime::DenseMixed
@@ -61,7 +85,7 @@ impl CudaEngine {
             | CudaDecoderRuntime::LatentAttention => {
                 let template = self.backend.load_shared_routed_model_template_with_progress(
                     decoder,
-                    &contract.semantic,
+                    (admitted, &contract.semantic),
                     catalog,
                     &contract.bindings,
                     SharedRoutedModelLoadConfig {
@@ -81,13 +105,13 @@ impl CudaEngine {
             CudaDecoderRuntime::ClampedRouted => {
                 let ring_sessions = self.scheduler.max_batch_requests;
                 let template = self.backend.load_clamped_routed_model_template_with_progress(
-                    decoder, contract, catalog, self.cache, blocks, ring_sessions, report,
+                    decoder, plan, contract, catalog, self.cache, blocks, ring_sessions, report,
                 )?;
                 Ok(generation(SinkAttentionExecution::new(&template)?))
             },
             CudaDecoderRuntime::Dense | CudaDecoderRuntime::DenseAndRouted => self
                 .load_standard_runner(
-                    manifest, decoder, &plan, runtime, contract, catalog, blocks, report,
+                    manifest, decoder, plan, runtime, contract, catalog, blocks, report,
                 ),
         }
     }
@@ -114,7 +138,7 @@ impl CudaEngine {
         let template = if runtime == CudaDecoderRuntime::DenseAndRouted && nvfp4 {
             self.backend.load_nvfp4_moe_model_template_with_bindings(
                 decoder,
-                &contract.semantic,
+                (&contract.semantic, plan),
                 bindings,
                 catalog,
                 moe_load,
@@ -123,7 +147,7 @@ impl CudaEngine {
         } else if runtime == CudaDecoderRuntime::DenseAndRouted {
             self.backend.load_dense_moe_model_template_with_bindings(
                 decoder,
-                &contract.semantic,
+                (&contract.semantic, plan),
                 bindings,
                 catalog,
                 moe_load,
@@ -132,7 +156,7 @@ impl CudaEngine {
         } else if runtime == CudaDecoderRuntime::Dense {
             self.backend.load_dense_swiglu_model_template_with_bindings(
                 decoder,
-                &contract.semantic,
+                (&contract.semantic, plan),
                 bindings,
                 catalog,
                 DenseSwiGluLayerLoadConfig {

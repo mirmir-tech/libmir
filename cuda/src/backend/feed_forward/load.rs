@@ -2,6 +2,7 @@
 //! gated MLP, or routed experts plus always-active shared experts, weighted
 //! as the semantic router says.
 
+use architecture::lowering::FeedForwardLowering;
 use models::{
     semantic::FeedForwardSpec,
     weights::{MixedFeedForwardBindings, TensorCatalog},
@@ -19,17 +20,20 @@ pub(in crate::backend) fn load(
     hidden_size: usize,
     tensors: &CudaTensorSet,
     catalog: &TensorCatalog,
-    spec: &FeedForwardSpec,
+    (spec, lowered): (&FeedForwardSpec, &FeedForwardLowering),
     bindings: MixedFeedForwardBindings<'_>,
 ) -> Result<FeedForward> {
-    match (bindings, spec) {
+    // Sizes come from the spec; activations and routing from the block
+    // admission lowered.
+    match (bindings, spec, lowered) {
         (
             MixedFeedForwardBindings::Dense(bindings),
-            FeedForwardSpec::Dense { intermediate_size, activation },
+            FeedForwardSpec::Dense { intermediate_size, .. },
+            FeedForwardLowering::Dense { activation },
         ) => DenseFeedForward::load(
             backend,
             (hidden_size, *intermediate_size),
-            GatedActivation::try_from(activation)?,
+            GatedActivation::try_from(*activation)?,
             tensors,
             bindings,
         )
@@ -38,6 +42,7 @@ pub(in crate::backend) fn load(
         (
             MixedFeedForwardBindings::SharedRouted(bindings),
             FeedForwardSpec::Routed { routed, shared: Some(shared) },
+            FeedForwardLowering::Routed { experts, shared: Some(_) },
         ) => {
             let weights = AffineSharedExpertMoeWeights::load_bindings(
                 backend,
@@ -63,8 +68,8 @@ pub(in crate::backend) fn load(
                 group_size,
                 expert_bits,
                 router_bits,
-                activation: GatedActivation::try_from(&routed.activation)?,
-                routing: RouterUnitScoring::of(routed)?,
+                activation: GatedActivation::try_from(experts.activation)?,
+                routing: RouterUnitScoring::of_experts(experts)?,
             };
             CudaAffineSharedExpertMoe::new(backend, config, weights)
                 .map(Box::new)

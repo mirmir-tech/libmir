@@ -7,6 +7,7 @@ use models::{
 };
 
 mod dense_execution;
+mod kind;
 mod label;
 mod registry;
 mod types;
@@ -14,6 +15,7 @@ mod types;
 #[cfg(test)]
 mod tests;
 
+pub use kind::EncodingKind;
 pub use types::{
     AdmissionCheck, AdmissionCheckKind, AdmissionStatus, BackendAdmissionReport,
     CheckpointEncoding, WeightEncoding,
@@ -68,7 +70,8 @@ pub(super) fn inspect(
 
 fn resolve_dense_check(checks: &mut Vec<AdmissionCheck>, resolved: AdmissionCheck) {
     checks.retain(|check| {
-        check.kind != AdmissionCheckKind::Dense || check.status != AdmissionStatus::Partial
+        check.kind != AdmissionCheckKind::Encoding(EncodingKind::Dense)
+            || check.status != AdmissionStatus::Partial
     });
     checks.push(resolved);
 }
@@ -133,6 +136,7 @@ fn vision_check(
         kind: AdmissionCheckKind::Vision,
         status,
         detail,
+        refusal: None,
     }
 }
 
@@ -162,6 +166,7 @@ impl BackendAdmissionReport {
                 kind: AdmissionCheckKind::Architecture,
                 status: AdmissionStatus::Partial,
                 detail: "backend architecture admission is pending".into(),
+                refusal: None,
             }));
         }
         let status = aggregate(&checks);
@@ -189,24 +194,24 @@ fn assess_architecture(
             kind: AdmissionCheckKind::Architecture,
             status: AdmissionStatus::Unsupported,
             detail: "the CPU reference backend does not execute product models".into(),
+            refusal: None,
         },
     }
 }
 
-fn admission_result<T, E: std::fmt::Display>(
-    backend: &str,
-    result: Result<T, E>,
-) -> AdmissionCheck {
+fn admission_result<T>(backend: &str, result: architecture::Result<T>) -> AdmissionCheck {
     match result {
         Ok(_) => AdmissionCheck {
             kind: AdmissionCheckKind::Architecture,
             status: AdmissionStatus::Supported,
             detail: format!("{backend} admits the complete task and decoder composition"),
+            refusal: None,
         },
         Err(error) => AdmissionCheck {
             kind: AdmissionCheckKind::Architecture,
             status: AdmissionStatus::Unsupported,
-            detail: error.to_string(),
+            detail: format!("{backend}: {error}"),
+            refusal: Some(error),
         },
     }
 }

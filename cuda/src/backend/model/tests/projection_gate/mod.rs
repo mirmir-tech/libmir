@@ -197,14 +197,15 @@ pub(super) fn load_template_with_cache(
 ) -> Result<CudaMoeModelTemplate> {
     let cache = CacheConfig::new(u32::try_from(cache_blocks)?);
     let semantic = SemanticModelSpec::discover(decoder, catalog)?;
-    let plan = crate::engine::lowering::CudaDecoderPlan::lower(&semantic);
-    if plan.all_dense_and_routed() {
+    let plan = crate::engine::lowering::CudaDecoderPlan::lower(&semantic, decoder.attention_scale)?;
+    let every = |shape| plan.layers().iter().all(|layer| layer.feed_forward.shape() == shape);
+    if every(architecture::capability::FeedForwardShape::DenseAndRouted) {
         backend.load_nvfp4_moe_model_template(
             decoder,
             catalog,
             NvFp4MoeLayerLoadConfig { cache, max_sequence_blocks },
         )
-    } else if plan.all_dense() {
+    } else if every(architecture::capability::FeedForwardShape::Dense) {
         let mut ignored = |_completed, _detail| {};
         backend.load_dense_swiglu_model_template_with_progress(
             decoder,

@@ -94,7 +94,7 @@ impl CudaLatentAttentionLayer {
         decoder: &DecoderConfig,
         tensors: &CudaTensorSet,
         catalog: &TensorCatalog,
-        spec: &DecoderLayerSpec,
+        (spec, lowered): (&DecoderLayerSpec, &architecture::cuda::CudaLayer),
         bindings: LatentDecoderLayerBindings<'_>,
         cache: CacheConfig,
     ) -> Result<Self> {
@@ -141,7 +141,7 @@ impl CudaLatentAttentionLayer {
                 decoder.hidden_size,
                 tensors,
                 catalog,
-                &spec.feed_forward,
+                (&spec.feed_forward, &lowered.feed_forward),
                 bindings.feed_forward,
             )?,
         };

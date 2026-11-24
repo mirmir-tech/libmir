@@ -23,11 +23,17 @@ impl CudaBackend {
         load: NvFp4MoeLayerLoadConfig,
     ) -> Result<DecodeMoeLayerTemplate> {
         let spec = SemanticModelSpec::discover(decoder, catalog)?;
+        let plan = architecture::cuda::CudaDecoderPlan::lower(&spec, decoder.attention_scale)?;
         let bindings = WeightBindingPlan::discover(&spec, catalog)?;
         let layer_bindings = bindings.hybrid_moe_layer(layer)?;
         Ok(self
             .load_nvfp4_moe_layer_template_tracked(
-                decoder, &spec, catalog, layer, &layer_bindings, load,
+                decoder,
+                (&spec, &plan),
+                catalog,
+                layer,
+                &layer_bindings,
+                load,
             )?
             .0)
     }
@@ -35,13 +41,13 @@ impl CudaBackend {
     pub(super) fn load_nvfp4_moe_layer_template_tracked(
         &self,
         decoder: &DecoderConfig,
-        semantic: &SemanticModelSpec,
+        (semantic, plan): (&SemanticModelSpec, &architecture::cuda::CudaDecoderPlan),
         catalog: &TensorCatalog,
         layer: usize,
         bindings: &HybridMoeLayerBindings<'_>,
         load: NvFp4MoeLayerLoadConfig,
     ) -> Result<(DecodeMoeLayerTemplate, u64)> {
-        let block = load.block(decoder, semantic, layer)?;
+        let block = load.block(decoder, (semantic, plan), layer)?;
         let source = LayerSource::discover(catalog, bindings)?;
         let tensors = upload(self, &source)?;
         let gate = self.prepare_nvfp4_expert_bank(

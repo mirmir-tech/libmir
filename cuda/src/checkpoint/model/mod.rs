@@ -28,16 +28,22 @@ impl CudaBackend {
         progress: &mut dyn FnMut(u64, String),
     ) -> Result<CudaMoeModelTemplate> {
         let spec = SemanticModelSpec::discover(decoder, catalog)?;
+        let plan = architecture::cuda::CudaDecoderPlan::lower(&spec, decoder.attention_scale)?;
         let bindings = WeightBindingPlan::discover(&spec, catalog)?;
         self.load_dense_swiglu_model_template_with_bindings(
-            decoder, &spec, &bindings, catalog, load, progress,
+            decoder,
+            (&spec, &plan),
+            &bindings,
+            catalog,
+            load,
+            progress,
         )
     }
 
     pub(crate) fn load_dense_swiglu_model_template_with_bindings(
         &self,
         decoder: &DecoderConfig,
-        semantic: &SemanticModelSpec,
+        (semantic, plan): (&SemanticModelSpec, &architecture::cuda::CudaDecoderPlan),
         bindings: &WeightBindingPlan,
         catalog: &TensorCatalog,
         load: DenseSwiGluLayerLoadConfig,
@@ -74,7 +80,7 @@ impl CudaBackend {
         for layer in 0..decoder.num_hidden_layers {
             let (template, bytes) = self.load_dense_swiglu_layer_tracked(
                 decoder,
-                semantic,
+                (semantic, plan),
                 catalog,
                 layer,
                 crate::checkpoint::dense::DenseLayerBindings::of_layer(bindings, semantic, layer)?,

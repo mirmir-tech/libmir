@@ -1,49 +1,11 @@
 use models::semantic::{KeyValueRelation, MixerSpec, QkNormalization};
 
-use super::fixtures::{
-    AnyResult, clamped_routed, dense_and_routed, dense_contract, mixed_unsupported, shared_routed,
-    unshared_routed,
+use super::fixtures::{AnyResult, dense_contract, mixed_unsupported, unshared_routed};
+use crate::{
+    ArchitectureError, Runtime,
+    capability::{FeedForwardShape, LayerShape, MixerKind, Requirement},
+    cuda, metal,
 };
-use crate::{cuda, metal};
-
-#[test]
-fn admits_every_generation_runtime_without_a_device() -> AnyResult<()> {
-    let (task, dense) = dense_contract()?;
-    let cases = [
-        (
-            dense.clone(),
-            metal::MetalDecoderRuntime::Dense,
-            cuda::CudaDecoderRuntime::Dense,
-        ),
-        (
-            dense_and_routed(dense.clone()),
-            metal::MetalDecoderRuntime::DenseAndRouted,
-            cuda::CudaDecoderRuntime::DenseAndRouted,
-        ),
-        (
-            shared_routed(dense.clone()),
-            metal::MetalDecoderRuntime::SharedRouted,
-            cuda::CudaDecoderRuntime::SharedRouted,
-        ),
-        (
-            clamped_routed(dense),
-            metal::MetalDecoderRuntime::ClampedRouted,
-            cuda::CudaDecoderRuntime::ClampedRouted,
-        ),
-    ];
-
-    for (semantic, metal_runtime, cuda_runtime) in cases {
-        assert_eq!(
-            metal::admit(&task, Some(&semantic))?,
-            metal::MetalArchitecture::Generation(metal_runtime)
-        );
-        assert_eq!(
-            cuda::admit(&task, Some(&semantic))?,
-            cuda::CudaArchitecture::Generation(cuda_runtime)
-        );
-    }
-    Ok(())
-}
 
 #[test]
 fn admits_windowed_dense_layers_on_both_backends() -> AnyResult<()> {
@@ -52,69 +14,66 @@ fn admits_windowed_dense_layers_on_both_backends() -> AnyResult<()> {
         attention.window =
             std::num::NonZeroUsize::new(128).map(models::semantic::AttentionWindow::Sliding);
     }
-
     assert_eq!(
-        metal::admit(&task, Some(&semantic))?,
-        metal::MetalArchitecture::Generation(metal::MetalDecoderRuntime::Dense)
+        metal::admit(&task, Some(&semantic))?.runtime(),
+        Some(metal::MetalDecoderRuntime::Dense)
     );
     assert_eq!(
-        cuda::admit(&task, Some(&semantic))?,
-        cuda::CudaArchitecture::Generation(cuda::CudaDecoderRuntime::Dense)
+        cuda::admit(&task, Some(&semantic))?.runtime(),
+        Some(cuda::CudaDecoderRuntime::Dense)
     );
     Ok(())
 }
 
+/// Routed experts behind attention with sinks need the clamped runtime's
+/// attention, which runs only clamped experts.
 #[test]
-fn admits_unshared_routed_experts_to_the_cuda_dense_runtime() -> AnyResult<()> {
+fn cuda_refuses_unclamped_experts_behind_sinks() -> AnyResult<()> {
     let (task, dense) = dense_contract()?;
-    let semantic = unshared_routed(dense);
-    assert_eq!(
-        cuda::admit(&task, Some(&semantic))?,
-        cuda::CudaArchitecture::Generation(cuda::CudaDecoderRuntime::Dense)
-    );
-    // Sinks still need the clamped-routed runtime's attention.
-    let mut sinks = semantic;
-    if let MixerSpec::SoftmaxAttention(attention) = &mut sinks.decoder.layers[0].mixer {
-        attention.sinks = true;
+    let mut sinks = unshared_routed(dense);
+    for layer in &mut sinks.decoder.layers {
+        if let MixerSpec::SoftmaxAttention(attention) = &mut layer.mixer {
+            attention.sinks = true;
+        }
     }
-    assert!(cuda::admit(&task, Some(&sinks)).is_err());
+    let Some(ArchitectureError::NoRuntime { rejections }) = cuda::admit(&task, Some(&sinks)).err()
+    else {
+        return Err("CUDA admitted unclamped experts behind sinks".into());
+    };
+    let dense = rejections
+        .iter()
+        .find(|rejection| rejection.runtime == Runtime::Cuda(cuda::CudaDecoderRuntime::Dense));
+    let layer = Requirement::Layer(LayerShape {
+        mixer: MixerKind::SoftmaxSinks,
+        feed_forward: FeedForwardShape::Routed,
+    });
+    assert!(dense.is_some_and(|rejection| rejection.missing.contains(&layer)));
     Ok(())
 }
 
+/// A refusal lists every runtime of the backend with what it lacks.
 #[test]
-fn rejected_composition_names_the_missing_backend_runtime() -> AnyResult<()> {
+fn rejected_composition_names_what_each_runtime_lacks() -> AnyResult<()> {
     let (task, semantic) = dense_contract()?;
     let semantic = mixed_unsupported(semantic);
-    let Some(metal_error) = metal::admit(&task, Some(&semantic)).err() else {
-        return Err(std::io::Error::other("Metal admitted mixed runtime").into());
+    let Some(ArchitectureError::NoRuntime { rejections }) =
+        metal::admit(&task, Some(&semantic)).err()
+    else {
+        return Err("Metal admitted a mixed composition".into());
     };
-    let Some(cuda_error) = cuda::admit(&task, Some(&semantic)).err() else {
-        return Err(std::io::Error::other("CUDA admitted mixed runtime").into());
+    assert_eq!(rejections.len(), metal::MetalDecoderRuntime::ALL.len());
+    assert!(rejections.iter().all(|rejection| !rejection.missing.is_empty()));
+    let Some(ArchitectureError::NoRuntime { rejections }) =
+        cuda::admit(&task, Some(&semantic)).err()
+    else {
+        return Err("CUDA admitted a mixed composition".into());
     };
-
-    assert!(metal_error.to_string().contains("Metal has no runtime"));
-    assert!(cuda_error.to_string().contains("CUDA has no runtime"));
+    assert_eq!(rejections.len(), cuda::CudaDecoderRuntime::ALL.len());
     Ok(())
 }
 
-#[test]
-fn admits_dense_mixed_attention_on_both_backends() -> AnyResult<()> {
-    let (task, dense) = dense_contract()?;
-    let mut semantic = shared_routed(dense.clone());
-    for (layer, original) in semantic.decoder.layers.iter_mut().zip(&dense.decoder.layers) {
-        layer.feed_forward = original.feed_forward.clone();
-    }
-    assert_eq!(
-        cuda::admit(&task, Some(&semantic))?,
-        cuda::CudaArchitecture::Generation(cuda::CudaDecoderRuntime::DenseMixed)
-    );
-    assert_eq!(
-        metal::admit(&task, Some(&semantic))?,
-        metal::MetalArchitecture::Generation(metal::MetalDecoderRuntime::DenseMixed)
-    );
-    Ok(())
-}
-
+/// Each layer keeps its own Q/K/V normalization (Llama 4 normalizes its
+/// rotary layers only), and layers whose keys double as values say so.
 #[test]
 fn graph_decoder_keeps_each_layer_normalization() -> AnyResult<()> {
     let (task, mut semantic) = dense_contract()?;
@@ -128,10 +87,15 @@ fn graph_decoder_keeps_each_layer_normalization() -> AnyResult<()> {
             };
         }
     }
-    cuda::require_graph_attention(&cuda::CudaDecoderPlan::lower(&semantic))?;
+    let plan = cuda::CudaDecoderPlan::lower(&semantic, None)?;
+    let normalizations = plan.layers().iter().map(|layer| layer.mixer.normalization());
     assert_eq!(
-        cuda::admit(&task, Some(&semantic))?,
-        cuda::CudaArchitecture::Generation(cuda::CudaDecoderRuntime::Dense)
+        normalizations.collect::<Vec<_>>(),
+        [Some(QkNormalization::QueryKeyRms), Some(QkNormalization::QueryKeyValueRms)]
+    );
+    assert_eq!(
+        cuda::admit(&task, Some(&semantic))?.runtime(),
+        Some(cuda::CudaDecoderRuntime::Dense)
     );
     Ok(())
 }
