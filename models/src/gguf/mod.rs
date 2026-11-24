@@ -25,6 +25,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub use config::imports_architecture;
 pub use dequantize::dequantize;
 pub use header::GgufHeader;
 pub use import::Import;

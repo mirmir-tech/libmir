@@ -19,3 +19,13 @@ fn gemma3_27b_scales_attention_by_hidden_per_head() {
     // Every other size scales by its head dimension.
     assert_eq!(gemma3(48, 3840, 16)["query_pre_attn_scalar"], json!(128));
 }
+
+#[test]
+fn imports_the_architectures_it_knows_and_nemotron_h() {
+    for architecture in ["llama", "qwen3moe", "gemma4", "gpt-oss", "deepseek2", "nemotron_h"] {
+        assert!(super::imports(architecture), "{architecture}");
+    }
+    for architecture in ["bert", "mamba", "t5", ""] {
+        assert!(!super::imports(architecture), "{architecture}");
+    }
+}

@@ -47,6 +47,13 @@ const FLOATS: [(&str, &str); 5] = [
     ("final_logit_softcapping", "final_logit_softcapping"),
 ];
 
+/// Whether a GGUF file declaring `general.architecture` `architecture`
+/// imports; whether a backend runs it is decided from its header.
+#[must_use]
+pub fn imports_architecture(architecture: &str) -> bool {
+    defaults::imports(architecture)
+}
+
 /// Derives `config.json` from the metadata and tensor directory.
 pub fn config(model: &GgufModel) -> Result<Value> {
     let header = model.header();
