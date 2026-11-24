@@ -19,7 +19,13 @@ pub(super) fn restore(
     dims: (usize, usize),
 ) -> Result<()> {
     let operation = RopeRows::compile(backend.compiler())?;
-    for binding in [bindings.attention.query, bindings.attention.key] {
+    let key = match bindings.attention {
+        crate::checkpoint::dense::DenseAttentionBindings::Projected(attention) => {
+            Some(attention.key)
+        },
+        crate::checkpoint::dense::DenseAttentionBindings::Shared { .. } => None,
+    };
+    for binding in std::iter::once(bindings.attention.query()).chain(key) {
         let bias = match &binding.storage {
             TensorStorage::Dense { bias, .. } => bias.as_deref(),
             TensorStorage::Ggml { companion, .. } => companion.bias(),

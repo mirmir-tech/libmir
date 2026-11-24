@@ -9,6 +9,9 @@ use crate::{
     backend::linear::AffineProjection,
 };
 
+mod prepare;
+mod query;
+
 #[derive(Debug)]
 pub(super) enum AttentionQkvProjection {
     Affine(Box<[AffineProjection; 3]>),
@@ -19,6 +22,8 @@ pub(super) enum AttentionQkvProjection {
     MxFp8(Box<[MxFp8Bf16Linear; 3]>),
     PackedInteger(Box<[PackedIntegerBf16Linear; 3]>),
     NvFp4(Box<NvFp4Bf16Pack<3>>),
+    /// Queries only, into the first separate buffer.
+    Query(Box<query::QueryProjection>),
 }
 
 pub(super) struct QkvProjectionBuffers<'a> {
@@ -38,6 +43,10 @@ impl AttentionQkvProjection {
         let key = config.cache.kv_heads * config.cache.key_head_dim;
         let value = config.cache.kv_heads * config.cache.value_head_dim;
         let query = config.query_heads * config.cache.key_head_dim;
+        if !config.stores_key_values() {
+            return query::QueryProjection::new(backend, config, tokens, weights)
+                .map(|projection| Self::Query(Box::new(projection)));
+        }
         match config.projection_format {
             ProjectionFormat::Affine => {
                 let DecodeQkvWeights::Affine(weights) = weights.ok_or(
@@ -49,9 +58,9 @@ impl AttentionQkvProjection {
                     ));
                 };
                 Ok(Self::Affine(Box::new([
-                    affine(backend, tokens, config.hidden_size, query, weights[0])?,
-                    affine(backend, tokens, config.hidden_size, key, weights[1])?,
-                    affine(backend, tokens, config.hidden_size, value, weights[2])?,
+                    prepare::affine(backend, tokens, config.hidden_size, query, weights[0])?,
+                    prepare::affine(backend, tokens, config.hidden_size, key, weights[1])?,
+                    prepare::affine(backend, tokens, config.hidden_size, value, weights[2])?,
                 ])))
             },
             ProjectionFormat::Bf16 => Ok(Self::Bf16(Bf16LinearPack::new(
@@ -99,29 +108,7 @@ impl AttentionQkvProjection {
                         "packed integer attention received other QKV weights",
                     ));
                 };
-                Ok(Self::PackedInteger(Box::new([
-                    PackedIntegerBf16Linear::new(
-                        backend,
-                        tokens,
-                        config.hidden_size,
-                        query,
-                        weights[0],
-                    )?,
-                    PackedIntegerBf16Linear::new(
-                        backend,
-                        tokens,
-                        config.hidden_size,
-                        key,
-                        weights[1],
-                    )?,
-                    PackedIntegerBf16Linear::new(
-                        backend,
-                        tokens,
-                        config.hidden_size,
-                        value,
-                        weights[2],
-                    )?,
-                ])))
+                Ok(Self::PackedInteger(prepare::packed_integer(backend, config, tokens, weights)?))
             },
             ProjectionFormat::NvFp4 => {
                 let DecodeQkvWeights::NvFp4(weights) = weights.ok_or(
@@ -141,6 +128,12 @@ impl AttentionQkvProjection {
         }
     }
 
+    /// Whether the projection writes separate query, key and value buffers
+    /// rather than one packed row.
+    pub(in crate::backend) const fn separate(&self) -> bool {
+        !matches!(self, Self::Bf16(_))
+    }
+
     pub(super) fn execute(
         &mut self,
         input: &DeviceBuffer<bf16>,
@@ -150,6 +143,9 @@ impl AttentionQkvProjection {
         buffers: &mut QkvProjectionBuffers<'_>,
     ) -> Result<bool> {
         match self {
+            Self::Query(operation) => {
+                operation.execute(input, (input_norm, norm_weight), weights, buffers)
+            },
             Self::Affine(operations) => {
                 let DecodeQkvWeights::Affine(weights) = weights else {
                     return Err(Error::InvalidExecutionPlan(
@@ -233,15 +229,4 @@ impl AttentionQkvProjection {
             },
         }
     }
-}
-
-fn affine(
-    backend: &CudaBackend,
-    tokens: usize,
-    input: usize,
-    output: usize,
-    weight: &crate::AffineQuantizedWeight,
-) -> Result<AffineProjection> {
-    let config = weight.infer_config(1, input, output)?;
-    AffineProjection::new(backend, tokens, input, output, config.group_size, config.bits, weight)
 }

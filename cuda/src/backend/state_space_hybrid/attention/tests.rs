@@ -83,6 +83,7 @@ fn layer(backend: &CudaBackend, tensors: &CudaTensorSet) -> Result<CudaAttention
         query_temperature: None,
         max_sequence_blocks: 2,
         cache: KvStorageSpec::new(cache(2), KV_HEADS, HEAD_DIM),
+        key_value_source: None,
     };
     let qkv = backend.pack_bf16_linears([get("query")?, get("key")?, get("value")?])?;
     Ok(CudaAttentionHybridLayer {

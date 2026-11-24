@@ -26,7 +26,7 @@ pub(super) fn load(
         gate_up: DenseGateUpSource::NvFp4 { gate: &gate, up: &up },
         down: DenseDownSource::NvFp4(&down),
     };
-    let attention = bindings.attention;
+    let attention = bindings.attention.projected()?;
     if matches!(attention.query.storage, TensorStorage::Dense { .. }) {
         block.attention.projection_format = ProjectionFormat::Bf16;
         let qkv = backend.pack_bf16_linears([

@@ -76,6 +76,20 @@ impl DenseOutputOwned {
         )
     }
 
+    /// A query projection, executed as it is stored.
+    pub(super) fn query(source: DenseOutputSource<'_>) -> Self {
+        match source {
+            DenseOutputSource::Affine(weight) => Self::Affine(weight.clone()),
+            DenseOutputSource::Bf16(weight) => Self::Bf16(weight.clone()),
+            DenseOutputSource::PackedInteger(weight) => Self::PackedInteger(weight.clone()),
+            DenseOutputSource::DirectFp8(weight) => Self::DirectFp8(weight.clone()),
+            DenseOutputSource::MxFp4(weight) => Self::MxFp4(weight.clone()),
+            DenseOutputSource::Ggml(weight) => Self::Ggml(weight.clone()),
+            DenseOutputSource::MxFp8(weight) => Self::MxFp8(weight.clone()),
+            DenseOutputSource::NvFp4(weight) => Self::NvFp4(weight.clone()),
+        }
+    }
+
     pub(super) fn borrow(&self) -> DecodeAttentionOutputWeight<'_> {
         match self {
             Self::Affine(weight) => DecodeAttentionOutputWeight::Affine(weight),

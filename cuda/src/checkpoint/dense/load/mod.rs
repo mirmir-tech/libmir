@@ -13,6 +13,7 @@ use crate::{
     checkpoint::{dense::DenseLayerBindings, model::payload_bytes},
 };
 
+mod bf16;
 mod bias;
 mod direct_fp8;
 mod ggml;
@@ -85,7 +86,7 @@ impl CudaBackend {
     ) -> Result<DenseSwiGluLayerTemplate> {
         Ok(match format {
             ProjectionFormat::Affine => load_affine(self, block, tensors, bindings)?,
-            ProjectionFormat::Bf16 => load_bf16(self, block, tensors, bindings)?,
+            ProjectionFormat::Bf16 => bf16::load(self, block, tensors, bindings)?,
             ProjectionFormat::DirectFp8 => direct_fp8::load(self, block, tensors, bindings)?,
             ProjectionFormat::Ggml => ggml::load(self, block, tensors, bindings, residual)?,
             ProjectionFormat::MxFp4 => mxfp4::load(self, block, tensors, bindings)?,
@@ -103,11 +104,12 @@ fn load_affine(
     bindings: DenseLayerBindings<'_>,
 ) -> Result<DenseSwiGluLayerTemplate> {
     let feed_forward = bindings.feed_forward.gated()?;
+    let attention = bindings.attention.projected()?;
     let affine = |binding| crate::AffineQuantizedWeight::load_binding(tensors, binding);
-    let q = affine(bindings.attention.query)?;
-    let k = affine(bindings.attention.key)?;
-    let v = affine(bindings.attention.value)?;
-    let output = affine(bindings.attention.output)?;
+    let q = affine(attention.query)?;
+    let k = affine(attention.key)?;
+    let v = affine(attention.value)?;
+    let output = affine(attention.output)?;
     let gate = affine(feed_forward.gate)?;
     let up = affine(feed_forward.up)?;
     let down = affine(feed_forward.down)?;
@@ -138,10 +140,11 @@ fn load_packed_integer(
     let query = block.attention.query_heads * head;
     let key_value = block.attention.cache.kv_heads * head;
     let intermediate = block.intermediate_size;
-    let q = packed_integer(tensors, bindings.attention.query, hidden, query)?;
-    let k = packed_integer(tensors, bindings.attention.key, hidden, key_value)?;
-    let v = packed_integer(tensors, bindings.attention.value, hidden, key_value)?;
-    let output = packed_integer(tensors, bindings.attention.output, query, hidden)?;
+    let attention = bindings.attention.projected()?;
+    let q = packed_integer(tensors, attention.query, hidden, query)?;
+    let k = packed_integer(tensors, attention.key, hidden, key_value)?;
+    let v = packed_integer(tensors, attention.value, hidden, key_value)?;
+    let output = packed_integer(tensors, attention.output, query, hidden)?;
     let gate = packed_integer(tensors, feed_forward.gate, hidden, intermediate)?;
     let up = packed_integer(tensors, feed_forward.up, hidden, intermediate)?;
     let down = packed_integer(tensors, feed_forward.down, intermediate, hidden)?;
@@ -169,37 +172,6 @@ fn packed_integer(
     PackedIntegerWeight::load_binding(tensors, binding, input, output)
 }
 
-fn load_bf16(
-    backend: &CudaBackend,
-    block: crate::DenseSwiGluConfig,
-    tensors: &CudaTensorSet,
-    bindings: DenseLayerBindings<'_>,
-) -> Result<DenseSwiGluLayerTemplate> {
-    let feed_forward = bindings.feed_forward.gated()?;
-    let qkv = backend.pack_bf16_linears([
-        tensor(tensors, &bindings.attention.query.source)?,
-        tensor(tensors, &bindings.attention.key.source)?,
-        tensor(tensors, &bindings.attention.value.source)?,
-    ])?;
-    let gate_up = backend.pack_bf16_linear_pair(
-        tensor(tensors, &feed_forward.gate.source)?,
-        tensor(tensors, &feed_forward.up.source)?,
-    )?;
-    backend.prepare_dense_swiglu_layer_template(
-        block,
-        common_source(
-            tensors,
-            bindings,
-            DenseQkvSource::Bf16(&qkv),
-            DenseOutputSource::Bf16(tensor(tensors, &bindings.attention.output.source)?),
-            DenseFeedForwardSource::Gated {
-                gate_up: DenseGateUpSource::Bf16(&gate_up),
-                down: DenseDownSource::Bf16(tensor(tensors, &feed_forward.down.source)?),
-            },
-        )?,
-    )
-}
-
 pub(super) fn common_source<'a>(
     tensors: &'a CudaTensorSet,
     bindings: DenseLayerBindings<'_>,
@@ -210,8 +182,8 @@ pub(super) fn common_source<'a>(
     Ok(DenseWeightSource {
         input_norm: optional_tensor(tensors, bindings.input_norm)?,
         qkv,
-        query_norm: optional_tensor(tensors, bindings.attention.query_norm)?,
-        key_norm: optional_tensor(tensors, bindings.attention.key_norm)?,
+        query_norm: optional_tensor(tensors, bindings.attention.query_norm())?,
+        key_norm: optional_tensor(tensors, bindings.attention.key_norm())?,
         output,
         post_attention_norm: optional_tensor(tensors, bindings.post_attention_norm)?,
         sandwich: bindings
@@ -231,6 +203,16 @@ pub(super) fn common_source<'a>(
             })
             .transpose()?,
         feed_forward,
+        per_layer_input: bindings
+            .per_layer_input
+            .map(|input| {
+                Ok::<_, Error>(crate::PerLayerInputWeights {
+                    gate: tensor(tensors, &input.gate.source)?,
+                    projection: tensor(tensors, &input.projection.source)?,
+                    output_norm: tensor(tensors, &input.output_norm.source)?,
+                })
+            })
+            .transpose()?,
     })
 }
 

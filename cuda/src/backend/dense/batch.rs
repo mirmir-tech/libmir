@@ -56,6 +56,7 @@ impl BatchedDecodeDenseSwiGlu {
         input: &DeviceBuffer<bf16>,
         weights: DenseSwiGluWeights<'_>,
         batch: &PagedDecodeBatch,
+        per_layer: Option<&DeviceBuffer<bf16>>,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
         if batch.active() != self.rows {
@@ -63,7 +64,7 @@ impl BatchedDecodeDenseSwiGlu {
         }
         self.attention
             .execute(input, weights.attention, batch, &mut self.scratch.attention)?;
-        self.feed_forward.execute(input, weights, &mut self.scratch, output)
+        self.feed_forward.execute(input, weights, &mut self.scratch, per_layer, output)
     }
 }
 
@@ -90,9 +91,10 @@ impl BatchedDecodeDenseLayer {
         &mut self,
         input: &DeviceBuffer<bf16>,
         batch: &PagedDecodeBatch,
+        per_layer: Option<&DeviceBuffer<bf16>>,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
-        self.block.execute(input, self.template.weights(), batch, output)
+        self.block.execute(input, self.template.weights(), batch, per_layer, output)
     }
 
     /// Split-attention partitions a captured graph of this layer launches.

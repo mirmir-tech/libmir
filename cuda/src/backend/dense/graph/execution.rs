@@ -11,6 +11,7 @@ impl DecodeDenseSwiGlu {
         weights: DenseSwiGluWeights<'_>,
         write_plan: &KvWritePlan,
         table: &BlockTable,
+        per_layer: Option<&DeviceBuffer<bf16>>,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<Nodes> {
         let nodes = self.attention.execute_captured(
@@ -20,7 +21,8 @@ impl DecodeDenseSwiGlu {
             table,
             &mut self.scratch.attention,
         )?;
-        self.feed_forward.execute(input, weights, &mut self.scratch, output)?;
+        self.feed_forward
+            .execute(input, weights, &mut self.scratch, per_layer, output)?;
         Ok(nodes)
     }
 }

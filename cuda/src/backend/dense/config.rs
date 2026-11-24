@@ -21,6 +21,10 @@ pub struct DenseSwiGluConfig {
     /// the width of one expert.
     pub experts: Option<DenseRoutedExperts>,
     pub feed_forward_input: FeedForwardInput,
+    /// The width of the layer's per-layer input (Gemma 4's E models), which
+    /// it gates into its output; `None` without per-layer inputs. Narrow, so
+    /// the config stays small enough to pass by value.
+    pub per_layer_input: Option<std::num::NonZeroU16>,
 }
 
 /// The stream a dense layer's feed-forward normalizes.
@@ -86,6 +90,7 @@ pub struct DenseSwiGluWeights<'a> {
     pub post_attention_norm: Option<&'a CudaTensor>,
     pub sandwich: Option<DenseSandwichWeights<'a>>,
     pub feed_forward: DenseFeedForwardWeights<'a>,
+    pub per_layer_input: Option<super::PerLayerInputWeights<'a>>,
 }
 
 #[derive(Clone, Copy)]

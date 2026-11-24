@@ -40,6 +40,7 @@ fn executes_complete_dense_layer_from_mxfp4_checkpoint_blocks() -> Result<()> {
                 gate_up: DenseGateUpSource::MxFp4 { gate: &weight, up: &weight },
                 down: DenseDownSource::MxFp4(&weight),
             },
+            per_layer_input: None,
         },
     )?;
     let input = copy(&backend, &[bf16::ONE; 32])?;
@@ -52,7 +53,7 @@ fn executes_complete_dense_layer_from_mxfp4_checkpoint_blocks() -> Result<()> {
     table.set_token_len(1);
     let mut batch = backend.prepare_paged_prefill_batch(config.attention.cache, 1, 1, 1)?;
     batch.prepare(&[&table], &[0], &[1])?;
-    prefill.execute_batch(&mut state, &input, template.weights(), &batch, &mut output)?;
+    prefill.execute_batch(&mut state, &input, template.weights(), &batch, None, &mut output)?;
     let output = read(&backend, &output)?;
     assert!(output.iter().all(|value| value.to_f32().is_finite()));
     assert!(output.iter().all(|value| value.to_f32() > 1.0));
@@ -90,12 +91,14 @@ fn config() -> DenseSwiGluConfig {
                 1,
                 32,
             ),
+            key_value_source: None,
         },
         intermediate_size: 32,
         activation: GatedActivation::Silu,
         feed_forward_format: ProjectionFormat::MxFp4,
         experts: None,
         feed_forward_input: crate::FeedForwardInput::AttentionResidual,
+        per_layer_input: None,
     }
 }
 

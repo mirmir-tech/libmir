@@ -88,7 +88,7 @@ impl BatchedDecodeAttentionBf16 {
         if batch_size == 0 {
             return Err(Error::InvalidPagedKv("decode attention batch is empty"));
         }
-        if cache.layer() != config.layer || cache.storage_spec() != config.cache {
+        if cache.layer() != config.cache_layer() || cache.storage_spec() != config.cache {
             return Err(Error::InvalidPagedKv("shared cache differs from batched attention"));
         }
         let geometry = (config.query_heads, config.max_sequence_blocks, batch_size);
@@ -176,8 +176,10 @@ impl BatchedDecodeAttentionBf16 {
             &mut self.scratch.key_rope,
             &mut self.scratch.value_norm,
         )?;
-        self.cache
-            .store_batch(batch, &self.scratch.key_rope, &self.scratch.value_norm)?;
+        if self.config.stores_key_values() {
+            self.cache
+                .store_batch(batch, &self.scratch.key_rope, &self.scratch.value_norm)?;
+        }
         self.attention.execute(
             &self.scratch.query_rope,
             &self.cache,

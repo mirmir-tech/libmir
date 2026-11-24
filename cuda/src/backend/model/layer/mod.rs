@@ -47,6 +47,8 @@ pub(super) struct DenseLayer {
     prefill: HashMap<usize, PrefillDenseSwiGlu>,
     input: DeviceBuffer<bf16>,
     output: DeviceBuffer<bf16>,
+    /// The layer's view of the session's decode per-layer inputs.
+    per_layer: Option<DeviceBuffer<bf16>>,
 }
 
 impl DecoderLayerTemplate {
@@ -55,7 +57,13 @@ impl DecoderLayerTemplate {
         input: &DeviceBuffer<bf16>,
         output: &DeviceBuffer<bf16>,
         cache: PagedKvCache,
+        per_layer: Option<DeviceBuffer<bf16>>,
     ) -> Result<SessionLayer> {
+        if per_layer.is_some() && matches!(self, Self::Moe(_)) {
+            return Err(Error::UnsupportedDecoderLayer(
+                "CUDA gates per-layer inputs into dense layers only".into(),
+            ));
+        }
         match self {
             Self::Moe(template) => Ok(SessionLayer::Moe(Box::new(MoeLayer {
                 decode: Some(template.instantiate_with_cache(input, output, cache)?),
@@ -68,6 +76,7 @@ impl DecoderLayerTemplate {
                 prefill: HashMap::new(),
                 input: input.clone(),
                 output: output.clone(),
+                per_layer,
             }))),
         }
     }
@@ -131,11 +140,15 @@ impl BatchedLayer {
         &mut self,
         input: &DeviceBuffer<bf16>,
         batch: &PagedDecodeBatch,
+        per_layer: Option<&DeviceBuffer<bf16>>,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
-        match self {
-            Self::Moe(layer) => layer.execute(input, batch, output),
-            Self::Dense(layer) => layer.execute(input, batch, output),
+        match (self, per_layer) {
+            (Self::Moe(layer), None) => layer.execute(input, batch, output),
+            (Self::Dense(layer), per_layer) => layer.execute(input, batch, per_layer, output),
+            (Self::Moe(_), Some(_)) => {
+                Err(Error::InvalidDecoderKernel("CUDA MoE layers take no per-layer input"))
+            },
         }
     }
 
@@ -165,7 +178,14 @@ impl SessionLayer {
                     .decode
                     .as_mut()
                     .ok_or(Error::InvalidDecoderKernel("model layer already belongs to a graph"))?
-                    .execute(&layer.input, weights, write_plan, table, &mut layer.output)
+                    .execute(
+                        &layer.input,
+                        weights,
+                        write_plan,
+                        table,
+                        layer.per_layer.as_ref(),
+                        &mut layer.output,
+                    )
             },
         }
     }
@@ -186,6 +206,7 @@ impl SessionLayer {
                     .ok_or(Error::InvalidDecoderKernel("model layer already belongs to a graph"))?,
                 input: layer.input.clone(),
                 output: layer.output.clone(),
+                per_layer: layer.per_layer.clone(),
                 weights: DenseSwiGluWeightsOwned::try_from(layer.template.weights())?,
             }))),
         }

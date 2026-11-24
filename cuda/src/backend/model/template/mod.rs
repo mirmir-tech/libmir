@@ -6,7 +6,10 @@ use crate::{
     Result,
     backend::{
         linear::CheckpointProjectionWeight,
-        model::boundary::{ModelEmbeddingTemplate, ModelOutputHeadTemplate},
+        model::{
+            boundary::{ModelEmbeddingTemplate, ModelOutputHeadTemplate},
+            per_layer::PerLayerInputsTemplate,
+        },
     },
 };
 
@@ -21,6 +24,7 @@ pub struct CudaMoeModelTemplate {
     output_head: ModelOutputHeadTemplate,
     layers: Vec<DecoderLayerTemplate>,
     logit_shaping: Option<crate::kernels::LogitShaping>,
+    per_layer_inputs: Option<PerLayerInputsTemplate>,
 }
 
 impl CudaMoeModelTemplate {
@@ -94,7 +98,14 @@ impl CudaMoeModelTemplate {
             output_head,
             layers,
             logit_shaping,
+            per_layer_inputs: None,
         })
+    }
+
+    /// Gives every layer its per-layer input (Gemma 4's E models).
+    pub(crate) fn with_per_layer_inputs(mut self, inputs: Option<PerLayerInputsTemplate>) -> Self {
+        self.per_layer_inputs = inputs;
+        self
     }
 
     #[must_use]
@@ -102,14 +113,22 @@ impl CudaMoeModelTemplate {
         &self.decoder
     }
 
+    /// One cache per layer; a layer reading an earlier layer's keys and
+    /// values shares that layer's pages.
     pub(crate) fn allocate_shared_kv(&self) -> Result<Vec<PagedKvCache>> {
-        self.layers
-            .iter()
-            .map(|layer| {
-                let attention = layer.attention();
-                self.backend.prepare_paged_kv(attention.layer, attention.cache)
-            })
-            .collect()
+        let mut caches: Vec<PagedKvCache> = Vec::with_capacity(self.layers.len());
+        for layer in &self.layers {
+            let attention = layer.attention();
+            let cache = match attention.key_value_source {
+                Some(source) => caches
+                    .get(usize::from(source))
+                    .cloned()
+                    .ok_or(Error::InvalidDecoderKernel("shared keys come from a later layer"))?,
+                None => self.backend.prepare_paged_kv(attention.layer, attention.cache)?,
+            };
+            caches.push(cache);
+        }
+        Ok(caches)
     }
 }
 

@@ -56,11 +56,11 @@ pub use backend::{
     NvFp4LinearWeight, NvFp4ScaleMode, NvFp4Tensors, NvFp4WeightOnlyBf16Linear,
     NvFp4WeightOnlyWeight, OutputHeadExecution, OutputHeadPlan, OutputHeadPlanRequest,
     PackedIntegerBf16Linear, PackedIntegerWeight, PagedAttentionBf16, PagedDecodeBatch,
-    PagedKvCache, PagedPrefillBatch, PlanSource, PrefillAttentionBf16, PrefillDenseSwiGlu,
-    PrefillMoeBlockBf16, ProjectionFormat, RmsNormBf16, RopeBf16, RoutedExpertWeights,
-    RoutedExpertsConfig, RouterBf16, RouterSelection, RouterTensors, SelectedAffineGatedBf16Linear,
-    SelectedAffinePairBf16Linear, SelectedAffineReduceBf16Linear, SelectedNvFp4LinearBf16,
-    SelectedNvFp4MoeBf16, SelectedNvFp4TensorCoreMoeBf16, SpeculativeStep,
+    PagedKvCache, PagedPrefillBatch, PerLayerInputWeights, PlanSource, PrefillAttentionBf16,
+    PrefillDenseSwiGlu, PrefillMoeBlockBf16, ProjectionFormat, RmsNormBf16, RopeBf16,
+    RoutedExpertWeights, RoutedExpertsConfig, RouterBf16, RouterSelection, RouterTensors,
+    SelectedAffineGatedBf16Linear, SelectedAffinePairBf16Linear, SelectedAffineReduceBf16Linear,
+    SelectedNvFp4LinearBf16, SelectedNvFp4MoeBf16, SelectedNvFp4TensorCoreMoeBf16, SpeculativeStep,
 };
 pub use checkpoint::{
     DenseSwiGluLayerLoadConfig, NvFp4MoeLayerLoadConfig, SharedRoutedModelLoadConfig,

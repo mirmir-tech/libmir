@@ -11,6 +11,7 @@ use crate::{
 };
 
 mod nvfp4_moe;
+mod per_layer;
 mod source;
 #[cfg(test)]
 mod tests;
@@ -67,6 +68,7 @@ impl CudaBackend {
             crate::checkpoint::dense::append_norm_bias(self, &mut tensors, binding)?;
         }
         let final_norm = tensor(&tensors, source.final_norm)?.clone();
+        let per_layer_inputs = per_layer::template(self, (decoder, semantic), &tensors, &source)?;
         let output = match &source.output.storage {
             TensorStorage::Ggml {
                 companion: models::weights::GgmlCompanion::Bias(_),
@@ -118,6 +120,7 @@ impl CudaBackend {
             output,
             layers,
         )
+        .map(|template| template.with_per_layer_inputs(per_layer_inputs))
     }
 }
 

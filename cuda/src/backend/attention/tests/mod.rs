@@ -143,6 +143,7 @@ pub(super) fn config() -> DecodeAttentionConfig {
             8,
             256,
         ),
+        key_value_source: None,
     }
 }
 

@@ -42,8 +42,10 @@ impl SessionLayer {
         input: &DeviceBuffer<bf16>,
         output: &mut DeviceBuffer<bf16>,
         batch: &PagedPrefillBatch,
+        per_layer: Option<&DeviceBuffer<bf16>>,
     ) -> Result<()> {
         match (self, prefill) {
+            (Self::Moe(_), _) if per_layer.is_some() => Err(moe_per_layer()),
             (Self::Moe(layer), LayerPrefill::Moe(prefill)) => {
                 let decode = layer.decode.as_mut().ok_or(Error::InvalidDecoderKernel(
                     "CUDA prefill executor belongs to model graph",
@@ -55,7 +57,7 @@ impl SessionLayer {
                 let decode = layer.decode.as_mut().ok_or(Error::InvalidDecoderKernel(
                     "CUDA prefill executor belongs to model graph",
                 ))?;
-                prefill.execute_batch(decode, input, weights, batch, output)
+                prefill.execute_batch(decode, input, weights, batch, per_layer, output)
             },
             _ => Err(Error::InvalidDecoderKernel(
                 "shared CUDA prefill plan differs from decoder layer",
@@ -70,9 +72,10 @@ impl SessionLayer {
         output: &mut DeviceBuffer<bf16>,
         plan: &KvWritePlan,
         table: &BlockTable,
-        start: usize,
+        (start, per_layer): (usize, Option<&DeviceBuffer<bf16>>),
     ) -> Result<()> {
         match (self, prefill) {
+            (Self::Moe(_), _) if per_layer.is_some() => Err(moe_per_layer()),
             (Self::Moe(layer), LayerPrefill::Moe(prefill)) => layer
                 .decode
                 .as_mut()
@@ -83,11 +86,15 @@ impl SessionLayer {
                 let decode = layer.decode.as_mut().ok_or(Error::InvalidDecoderKernel(
                     "CUDA prefill executor belongs to model graph",
                 ))?;
-                prefill.execute(decode, input, weights, plan, table, start, output)
+                prefill.execute(decode, input, weights, plan, table, (start, per_layer), output)
             },
             _ => Err(Error::InvalidDecoderKernel(
                 "shared CUDA prefill plan differs from decoder layer",
             )),
         }
     }
+}
+
+fn moe_per_layer() -> Error {
+    Error::InvalidDecoderKernel("CUDA MoE layers take no per-layer input")
 }

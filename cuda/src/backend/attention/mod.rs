@@ -92,7 +92,7 @@ impl DecodeAttentionBf16 {
         weights: Option<DecodeAttentionWeights<'_>>,
     ) -> Result<Self> {
         validate(config)?;
-        if cache.layer() != config.layer || cache.storage_spec() != config.cache {
+        if cache.layer() != config.cache_layer() || cache.storage_spec() != config.cache {
             return Err(Error::InvalidPagedKv("shared cache differs from attention layer"));
         }
         let attention = PagedAttentionBf16::new(
@@ -180,7 +180,9 @@ impl DecodeAttentionBf16 {
                 position,
             )?;
         }
-        self.cache.store(write_plan, &self.scratch.key_rope, &self.scratch.value_norm)?;
+        if self.config.stores_key_values() {
+            self.cache.store(write_plan, &self.scratch.key_rope, &self.scratch.value_norm)?;
+        }
         self.attention.execute(
             &self.scratch.query_rope,
             &self.cache,

@@ -11,11 +11,12 @@ pub(super) fn load(
     bindings: DenseLayerBindings<'_>,
 ) -> Result<DenseSwiGluLayerTemplate> {
     let feed_forward = bindings.feed_forward.gated()?;
+    let attention = bindings.attention.projected()?;
     let fp8 = |binding| DirectFp8CheckpointWeight::load_binding(tensors, binding);
-    let q = fp8(bindings.attention.query)?;
-    let k = fp8(bindings.attention.key)?;
-    let v = fp8(bindings.attention.value)?;
-    let output = fp8(bindings.attention.output)?;
+    let q = fp8(attention.query)?;
+    let k = fp8(attention.key)?;
+    let v = fp8(attention.value)?;
+    let output = fp8(attention.output)?;
     let gate = fp8(feed_forward.gate)?;
     let up = fp8(feed_forward.up)?;
     let down = fp8(feed_forward.down)?;

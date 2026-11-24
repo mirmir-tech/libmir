@@ -75,7 +75,20 @@ impl CudaMoeModelSession {
             count,
             &mut self.prefill_first,
         )?;
+        self.compute_prefill_inputs(count)?;
         self.execute_shared_prefill(session_id, table, write_offset, count)
+    }
+
+    /// Computes the per-layer inputs of the `tokens` prompt rows the
+    /// embedding lookup just wrote.
+    pub(super) fn compute_prefill_inputs(&mut self, tokens: usize) -> Result<()> {
+        if let Some(inputs) = &mut self.per_layer {
+            inputs.prefill.ensure_capacity(tokens)?;
+            inputs
+                .prefill
+                .compute(self.prefill_tokens.device(), 0, tokens, &self.prefill_first)?;
+        }
+        Ok(())
     }
 
     pub(crate) fn finish_prefill(
@@ -173,6 +186,15 @@ impl CudaMoeModelSession {
         };
         self.select_row.execute(&self.stream, source, output, row, tokens)
     }
+}
+
+/// Layer `layer`'s view of a `tokens`-row prefill step's per-layer inputs.
+fn per_layer_view(
+    inputs: Option<&crate::backend::model::per_layer::SessionPerLayerInputs>,
+    layer: usize,
+    tokens: usize,
+) -> Result<Option<DeviceBuffer<bf16>>> {
+    inputs.map(|inputs| inputs.prefill.layer(layer, tokens)).transpose()
 }
 
 /// A chunk takes what the scheduler offers up to the token capacity. Packed

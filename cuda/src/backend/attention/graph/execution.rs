@@ -58,7 +58,7 @@ impl Geometry {
             rope_scaling: rotary.scaling,
             epsilon: config.rms_norm_epsilon,
             normalization: config.qkv_normalization,
-            separate_qkv: config.projection_format != crate::ProjectionFormat::Bf16,
+            separate_qkv: attention.qkv.separate(),
         })
     }
 }
@@ -144,11 +144,17 @@ impl DecodeAttentionBf16 {
                 position,
             )?
         };
-        let kv_store = self.cache.store_captured(
-            write_plan,
-            &self.scratch.key_rope,
-            &self.scratch.value_norm,
-        )?;
+        let kv_store = self
+            .config
+            .stores_key_values()
+            .then(|| {
+                self.cache.store_captured(
+                    write_plan,
+                    &self.scratch.key_rope,
+                    &self.scratch.value_norm,
+                )
+            })
+            .transpose()?;
         let attention = self.attention.execute_captured(
             &self.scratch.query_rope,
             &self.cache,

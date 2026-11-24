@@ -61,6 +61,7 @@ impl DecodeAttentionConfig {
                 .transpose()?,
             max_sequence_blocks: policy.max_sequence_blocks,
             cache: KvStorageSpec::new(policy.cache, attention.key_value_heads, attention.head_dim),
+            key_value_source: None,
         })
     }
 }

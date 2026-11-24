@@ -85,38 +85,33 @@ fn dense_sources(bindings: DenseLayerBindings<'_>) -> HashSet<&str> {
 }
 
 fn layer_bindings(bindings: DenseLayerBindings<'_>) -> Vec<&TensorBinding> {
-    let mut values = vec![
-        bindings.attention.query,
-        bindings.attention.key,
-        bindings.attention.value,
-        bindings.attention.output,
-    ];
+    let mut values = bindings.attention.projections();
     values.extend(bindings.input_norm.into_iter().chain(bindings.post_attention_norm));
     values.extend(gated(bindings));
-    values.extend(bindings.attention.query_norm);
-    values.extend(bindings.attention.key_norm);
+    values.extend(bindings.attention.query_norm());
+    values.extend(bindings.attention.key_norm());
     if let Some(sandwich) = bindings.sandwich {
         values.extend([sandwich.attention_output_norm, sandwich.feed_forward_output_norm]);
         values.extend(sandwich.layer_scale);
+    }
+    if let Some(input) = bindings.per_layer_input {
+        values.extend([input.gate, input.projection, input.output_norm]);
     }
     values
 }
 
 fn packed_shape_sources(bindings: DenseLayerBindings<'_>) -> HashSet<&str> {
-    [
-        bindings.attention.query,
-        bindings.attention.key,
-        bindings.attention.value,
-        bindings.attention.output,
-    ]
-    .into_iter()
-    .chain(gated(bindings))
-    .filter_map(|binding| match &binding.storage {
-        TensorStorage::PackedInteger { shape, .. } => Some(shape.as_str()),
-        TensorStorage::BitsAndBytes4Bit { quant_state, .. } => Some(quant_state.as_str()),
-        _ => None,
-    })
-    .collect()
+    bindings
+        .attention
+        .projections()
+        .into_iter()
+        .chain(gated(bindings))
+        .filter_map(|binding| match &binding.storage {
+            TensorStorage::PackedInteger { shape, .. } => Some(shape.as_str()),
+            TensorStorage::BitsAndBytes4Bit { quant_state, .. } => Some(quant_state.as_str()),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The gated MLP projections; routed layers have none.

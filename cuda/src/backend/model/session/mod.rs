@@ -9,6 +9,7 @@ use self::prefill::shapes::PrefillShapeCache;
 use super::{
     graph::{CapturedModelDecode, execute_layers},
     layer::{SessionLayer, SharedLayerPrefill},
+    per_layer::SessionPerLayerInputs,
     prefill::PrefillTokenBuffer,
 };
 use crate::{
@@ -48,6 +49,7 @@ pub struct CudaMoeModelSession {
     logits: DeviceBuffer<bf16>,
     logit_shaper: Option<crate::kernels::LogitShapingBf16>,
     logit_shaping: Option<crate::kernels::LogitShaping>,
+    per_layer: Option<SessionPerLayerInputs>,
 }
 
 impl CudaMoeModelSession {
@@ -73,6 +75,7 @@ impl CudaMoeModelSession {
         prefill_second: DeviceBuffer<bf16>,
         logits: DeviceBuffer<bf16>,
         logit_shaping: Option<crate::kernels::LogitShaping>,
+        per_layer: Option<SessionPerLayerInputs>,
     ) -> Result<Self> {
         if layers.is_empty() {
             return Err(Error::InvalidDecoderKernel("CUDA model session requires layers"));
@@ -112,6 +115,7 @@ impl CudaMoeModelSession {
             logits,
             logit_shaper,
             logit_shaping,
+            per_layer,
         })
     }
 
@@ -136,6 +140,9 @@ impl CudaMoeModelSession {
         self.token_staging.copy_from_slice(&[token])?;
         self.stream.copy_to_device(&mut self.token_staging, &mut self.input_token)?;
         self.embedding.execute(&self.input_token, 0, &mut self.first)?;
+        if let Some(inputs) = &mut self.per_layer {
+            inputs.decode.compute(&self.input_token, 0, 1, &self.first)?;
+        }
         self.forward(session_id, table, sampling)
     }
 
@@ -160,6 +167,9 @@ impl CudaMoeModelSession {
         sampling: &SamplingLogits,
     ) -> Result<&DeviceBuffer<bf16>> {
         self.embedding.execute(self.sampler.selected(), 0, &mut self.first)?;
+        if let Some(inputs) = &mut self.per_layer {
+            inputs.decode.compute(self.sampler.selected(), 0, 1, &self.first)?;
+        }
         self.forward(session_id, table, sampling)
     }
 

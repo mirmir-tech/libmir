@@ -3,6 +3,7 @@ mod config;
 mod decode;
 mod feed_forward;
 pub(in crate::backend) mod graph;
+mod per_layer;
 mod prefill;
 mod projection;
 pub(super) mod routed;
@@ -19,6 +20,7 @@ pub use config::{
 pub use decode::DecodeDenseSwiGlu;
 use decode::validate;
 use feed_forward::DenseFeedForward;
+pub use per_layer::PerLayerInputWeights;
 pub use prefill::PrefillDenseSwiGlu;
 use projection::{DownProjection, GateUpBuffers, GateUpProjection};
 pub use routed::RoutedExpertWeights;

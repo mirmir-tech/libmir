@@ -11,11 +11,12 @@ pub(super) fn load(
     bindings: DenseLayerBindings<'_>,
 ) -> Result<DenseSwiGluLayerTemplate> {
     let feed_forward = bindings.feed_forward.gated()?;
+    let attention = bindings.attention.projected()?;
     let weight = |binding| MxFp4CheckpointWeight::load_binding(tensors, binding);
-    let q = weight(bindings.attention.query)?;
-    let k = weight(bindings.attention.key)?;
-    let v = weight(bindings.attention.value)?;
-    let output = weight(bindings.attention.output)?;
+    let q = weight(attention.query)?;
+    let k = weight(attention.key)?;
+    let v = weight(attention.value)?;
+    let output = weight(attention.output)?;
     let gate = weight(feed_forward.gate)?;
     let up = weight(feed_forward.up)?;
     let down = weight(feed_forward.down)?;

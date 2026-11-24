@@ -69,30 +69,49 @@ impl AttentionOutputProjection {
         weight: Option<DecodeAttentionOutputWeight<'_>>,
     ) -> Result<Self> {
         let input_features = config.query_heads * config.cache.value_head_dim;
-        let request = DensePlanRequest {
-            phase: if tokens == 1 {
-                ExecutionPhase::Decode
-            } else {
-                ExecutionPhase::Prefill
-            },
-            role: DenseRole::AttentionOutput,
-            tokens,
-            input_features,
-            output_features: config.hidden_size,
-        };
-        match config.projection_format {
+        let request =
+            request(DenseRole::AttentionOutput, tokens, input_features, config.hidden_size);
+        Self::prepare(backend, config.projection_format, request, weight)
+    }
+
+    /// The query projection of a layer that reads another layer's keys and
+    /// values: one projection of the normalized stream, in the layer's
+    /// format.
+    pub(super) fn new_query(
+        backend: &CudaBackend,
+        config: DecodeAttentionConfig,
+        tokens: usize,
+        weight: Option<DecodeAttentionOutputWeight<'_>>,
+    ) -> Result<Self> {
+        let query = config.query_heads * config.cache.key_head_dim;
+        let request = request(DenseRole::AttentionQkv, tokens, config.hidden_size, query);
+        if config.projection_format == ProjectionFormat::Bf16 {
+            return Ok(Self::Bf16(backend.prepare_bf16_projection(request)?));
+        }
+        Self::prepare(backend, config.projection_format, request, weight)
+    }
+
+    fn prepare(
+        backend: &CudaBackend,
+        format: ProjectionFormat,
+        request: DensePlanRequest,
+        weight: Option<DecodeAttentionOutputWeight<'_>>,
+    ) -> Result<Self> {
+        let (tokens, role) = (request.tokens, request.role);
+        let (input_features, output_features) = (request.input_features, request.output_features);
+        match format {
             ProjectionFormat::Affine => {
                 let Some(DecodeAttentionOutputWeight::Affine(weight)) = weight else {
                     return Err(Error::InvalidExecutionPlan(
                         "affine attention requires affine output weight",
                     ));
                 };
-                let affine = weight.infer_config(1, input_features, config.hidden_size)?;
+                let affine = weight.infer_config(1, input_features, output_features)?;
                 Ok(Self::Affine(crate::backend::linear::AffineProjection::new(
                     backend,
                     tokens,
                     input_features,
-                    config.hidden_size,
+                    output_features,
                     affine.group_size,
                     affine.bits,
                     weight,
@@ -105,11 +124,7 @@ impl AttentionOutputProjection {
                     ));
                 };
                 Ok(Self::PackedInteger(PackedIntegerBf16Linear::new(
-                    backend,
-                    tokens,
-                    input_features,
-                    config.hidden_size,
-                    weight,
+                    backend, tokens, input_features, output_features, weight,
                 )?))
             },
             ProjectionFormat::DirectFp8 => {
@@ -134,7 +149,7 @@ impl AttentionOutputProjection {
                         "GGML attention requires prepared output weight",
                     ));
                 };
-                Ok(Self::Ggml(weight.prepare(backend, tokens, DenseRole::AttentionOutput)?))
+                Ok(Self::Ggml(weight.prepare(backend, tokens, role)?))
             },
             ProjectionFormat::MxFp8 => {
                 let Some(DecodeAttentionOutputWeight::MxFp8(weight)) = weight else {
@@ -166,5 +181,24 @@ impl AttentionOutputProjection {
                 },
             ),
         }
+    }
+}
+
+const fn request(
+    role: DenseRole,
+    tokens: usize,
+    input_features: usize,
+    output_features: usize,
+) -> DensePlanRequest {
+    DensePlanRequest {
+        phase: if tokens == 1 {
+            ExecutionPhase::Decode
+        } else {
+            ExecutionPhase::Prefill
+        },
+        role,
+        tokens,
+        input_features,
+        output_features,
     }
 }

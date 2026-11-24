@@ -35,9 +35,27 @@ pub struct DecodeAttentionConfig {
     pub query_temperature: Option<crate::kernels::QueryTemperatureScale>,
     pub max_sequence_blocks: usize,
     pub cache: KvStorageSpec,
+    /// The earlier layer whose cached keys and values this layer attends
+    /// over (Gemma 4's E models): it projects and rotates only its queries,
+    /// stores nothing, and reads that layer's pages. `None` for a layer
+    /// that caches its own. Narrow, so the config stays small enough to
+    /// pass by value.
+    pub key_value_source: Option<u16>,
 }
 
 impl DecodeAttentionConfig {
+    /// The cache layer whose pages this layer attends over.
+    #[must_use]
+    pub fn cache_layer(&self) -> usize {
+        self.key_value_source.map_or(self.layer, usize::from)
+    }
+
+    /// Whether the layer projects and stores its own keys and values.
+    #[must_use]
+    pub const fn stores_key_values(&self) -> bool {
+        self.key_value_source.is_none()
+    }
+
     /// Gemma 3 opens bidirectional image blocks in its sliding layers only.
     #[must_use]
     pub(in crate::backend) const fn opens_image_blocks(&self) -> bool {
@@ -67,6 +85,9 @@ pub enum DecodeQkvWeights<'a> {
     MxFp8([&'a MxFp8CheckpointWeight; 3]),
     PackedInteger([&'a PackedIntegerWeight; 3]),
     NvFp4([&'a NvFp4LinearWeight; 3]),
+    /// The query projection alone, of a layer that attends over another
+    /// layer's keys and values ([`DecodeAttentionConfig::key_value_source`]).
+    Query(DecodeAttentionOutputWeight<'a>),
 }
 
 impl<'a> DecodeQkvWeights<'a> {
@@ -79,7 +100,8 @@ impl<'a> DecodeQkvWeights<'a> {
             | Self::Ggml(_)
             | Self::MxFp8(_)
             | Self::PackedInteger(_)
-            | Self::NvFp4(_) => {
+            | Self::NvFp4(_)
+            | Self::Query(_) => {
                 Err(Error::InvalidExecutionPlan("BF16 QKV operation received NVFP4 weights"))
             },
         }

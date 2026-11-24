@@ -8,7 +8,7 @@ impl BatchedDecodeAttentionBf16 {
         let storage = cache.storage_spec();
         let mut expected = self.config.cache;
         expected.cache.block_count = storage.cache.block_count;
-        if storage != expected || cache.layer() != self.config.layer {
+        if storage != expected || cache.layer() != self.config.cache_layer() {
             return Err(Error::InvalidPagedKv("rebound cache differs from batched attention"));
         }
         self.config.cache = storage;

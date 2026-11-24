@@ -35,6 +35,7 @@ mod mxfp4;
 mod nvfp4;
 mod output_fp8;
 mod paged;
+mod per_layer_input;
 mod projection_pack;
 mod qkv;
 mod qmm;
@@ -147,6 +148,7 @@ pub use paged::{
     PagedKvStore, PagedPrefillAttention, ScoreSoftcap, SplitAttentionWorkspace,
     SplitPagedAttention,
 };
+pub(crate) use per_layer_input::{PerLayerInputBf16, PerLayerInputSpec};
 pub use projection_pack::ProjectionPackSplit;
 pub(crate) use qkv::{
     BatchedQkvPostprocess, QkNormWeights, QkvNormalization, QkvPostprocess,

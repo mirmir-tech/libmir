@@ -13,9 +13,8 @@ use crate::{
     set::Flag,
 };
 
-/// No CUDA runtime executes Gemma 4's E-model layer sharing.
-const UNSUPPORTED: [Feature; 2] = [Feature::PerLayerInput, Feature::SharedLayerKeyValues];
-/// Only the graph decoder executes these, beside what none executes.
+/// Only the graph decoder executes these; of its runtimes, only the dense
+/// one runs Gemma 4's E-model per-layer inputs and shared keys and values.
 const GRAPH_ONLY: [Feature; 9] = [
     Feature::PerLayerInput,
     Feature::SharedLayerKeyValues,
@@ -44,7 +43,7 @@ pub(super) fn capabilities(runtime: CudaDecoderRuntime) -> Operations {
             .activations(Shared, &[SwiGlu])
             .routers(&[Block::Routed, Block::SharedRouted], <RouterKind as Flag>::ALL)
             .normalizations(<QkNormalization as Flag>::ALL)
-            .features_except(&[&UNSUPPORTED[..], &[Feature::AttentionFree]].concat()),
+            .features_except(&[Feature::AttentionFree]),
         CudaDecoderRuntime::DenseAndRouted => none
             .layers(softmax, &[Block::DenseAndRouted])
             .activations(Dense, &[SwiGlu, GeluTanh])

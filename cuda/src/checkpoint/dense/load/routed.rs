@@ -34,7 +34,7 @@ pub(super) fn load(
         experts.scale_down(backend, factor)?;
     }
     let feed_forward = DenseFeedForwardSource::Routed(&experts);
-    let attention = bindings.attention;
+    let attention = bindings.attention.projected()?;
     match block.attention.projection_format {
         ProjectionFormat::Bf16 => {
             let qkv = backend.pack_bf16_linears([

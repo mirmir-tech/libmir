@@ -46,11 +46,19 @@ pub(super) fn fixtures() -> AnyResult<Vec<Fixture>> {
     let mut per_layer = gelu.clone();
     per_layer.decoder.per_layer_input =
         Some(models::semantic::PerLayerInputSpec { width: 4, vocab_size: 32 });
+    // ... whose later layers attend over an earlier layer's keys and values.
+    let mut sharing = per_layer.clone();
+    if let Some(models::semantic::MixerSpec::SoftmaxAttention(attention)) =
+        sharing.decoder.layers.get_mut(1).map(|layer| &mut layer.mixer)
+    {
+        attention.key_value_source = Some(0);
+    }
     Ok(vec![
         ("dense", task.clone(), dense.clone()),
         ("dense and routed", task.clone(), dense_and_routed(dense.clone())),
         ("dense gelu", task.clone(), gelu),
         ("per-layer inputs", task.clone(), per_layer),
+        ("shared key values", task.clone(), sharing),
         ("shared routed", task.clone(), shared_routed(dense.clone())),
         ("dense mixed", task.clone(), mixed),
         ("linear shared routed", task.clone(), linear),
@@ -86,7 +94,8 @@ fn admits_each_fixture_to_its_runtime() -> AnyResult<()> {
         ("dense", Some(Cuda::Dense), Some(Metal::Dense)),
         ("dense and routed", Some(Cuda::DenseAndRouted), Some(Metal::DenseAndRouted)),
         ("dense gelu", Some(Cuda::Dense), Some(Metal::DenseGelu)),
-        ("per-layer inputs", None, Some(Metal::DenseGelu)),
+        ("per-layer inputs", Some(Cuda::Dense), Some(Metal::DenseGelu)),
+        ("shared key values", Some(Cuda::Dense), Some(Metal::DenseGelu)),
         ("shared routed", Some(Cuda::SharedRouted), Some(Metal::SharedRouted)),
         ("dense mixed", Some(Cuda::DenseMixed), Some(Metal::DenseMixed)),
         ("linear shared routed", None, Some(Metal::SharedRouted)),

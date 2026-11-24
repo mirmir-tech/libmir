@@ -18,6 +18,7 @@ pub(in crate::backend) struct PreparedDecodeDense {
     pub block: DecodeDenseSwiGlu,
     pub input: DeviceBuffer<bf16>,
     pub output: DeviceBuffer<bf16>,
+    pub per_layer: Option<DeviceBuffer<bf16>>,
     pub weights: DenseSwiGluWeightsOwned,
 }
 
@@ -25,6 +26,7 @@ pub(in crate::backend) struct CapturedDenseLayer {
     block: DecodeDenseSwiGlu,
     input: DeviceBuffer<bf16>,
     output: DeviceBuffer<bf16>,
+    per_layer: Option<DeviceBuffer<bf16>>,
     weights: CapturedDenseWeights,
     write_plan: KvWritePlan,
     table: BlockTable,
@@ -45,6 +47,7 @@ impl CapturedDenseLayer {
             block: prepared.block,
             input: prepared.input,
             output: prepared.output,
+            per_layer: prepared.per_layer,
             weights: prepared.weights.0,
             write_plan: write_plan.clone(),
             table: table.clone(),
@@ -59,6 +62,7 @@ impl CapturedDenseLayer {
             self.weights.borrow(),
             &self.write_plan,
             &self.table,
+            self.per_layer.as_ref(),
             &mut self.output,
         )
     }
@@ -82,18 +86,11 @@ impl CapturedDenseLayer {
         input: &DeviceBuffer<bf16>,
         write_plan: &KvWritePlan,
         table: &BlockTable,
-        start_position: usize,
+        start: (usize, Option<&DeviceBuffer<bf16>>),
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
-        prefill.execute(
-            &mut self.block,
-            input,
-            self.weights.borrow(),
-            write_plan,
-            table,
-            start_position,
-            output,
-        )
+        let weights = self.weights.borrow();
+        prefill.execute(&mut self.block, input, weights, write_plan, table, start, output)
     }
 
     pub(in crate::backend) fn execute_prefill_batch(
@@ -101,9 +98,11 @@ impl CapturedDenseLayer {
         prefill: &mut PrefillDenseSwiGlu,
         input: &DeviceBuffer<bf16>,
         batch: &PagedPrefillBatch,
+        per_layer: Option<&DeviceBuffer<bf16>>,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
-        prefill.execute_batch(&mut self.block, input, self.weights.borrow(), batch, output)
+        let weights = self.weights.borrow();
+        prefill.execute_batch(&mut self.block, input, weights, batch, per_layer, output)
     }
 
     pub(in crate::backend) fn kernels(&self) -> Result<Kernels> {

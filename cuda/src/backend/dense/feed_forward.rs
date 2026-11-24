@@ -3,6 +3,7 @@ use mircuda::{DeviceBuffer, Stream, bf16};
 use super::{
     CudaBackend, DenseFeedForwardWeights, DenseScratch, DenseSwiGluConfig, DenseSwiGluWeights,
     DownProjection, FeedForwardInput, GateUpBuffers, GateUpProjection,
+    per_layer::PerLayerGate,
     routed::RoutedFeedForward,
     sandwich::{SandwichNorms, scalar},
 };
@@ -13,12 +14,14 @@ use crate::{
 
 /// Everything after attention in a dense layer, for a fixed number of rows:
 /// the attention residual, the normalized gated MLP and its residual, plus
-/// the sandwich norms and layer scalar of Gemma-style layers. Routed layers
-/// take their experts in place of the gated MLP.
+/// the sandwich norms and layer scalar of Gemma-style layers, and the
+/// per-layer input gate of Gemma 4's E models. Routed layers take their
+/// experts in place of the gated MLP.
 pub(super) struct DenseFeedForward {
     post_attention_norm: RmsNormBf16,
     input: FeedForwardInput,
     sandwich: Option<SandwichNorms>,
+    per_layer: Option<PerLayerGate>,
     mlp: Mlp,
     hidden_ops: ElementwiseBf16,
     stream: Stream,
@@ -54,6 +57,12 @@ impl DenseFeedForward {
                 .sandwich
                 .map(|_| SandwichNorms::new(backend, rows, hidden, epsilon))
                 .transpose()?,
+            per_layer: config
+                .per_layer_input
+                .map(|width| {
+                    PerLayerGate::new(backend, rows, [hidden, width.get().into()], epsilon)
+                })
+                .transpose()?,
             mlp: match weights.feed_forward {
                 DenseFeedForwardWeights::Gated { gate_up, down } => Mlp::Gated {
                     gate_up: GateUpProjection::new(backend, config, rows, Some(gate_up))?,
@@ -78,12 +87,14 @@ impl DenseFeedForward {
     }
 
     /// Completes the layer from `input` and its attention output, which the
-    /// caller leaves in `scratch.attention`.
+    /// caller leaves in `scratch.attention`; `per_layer` is the layer's
+    /// per-layer input when it has one.
     pub(super) fn execute(
         &mut self,
         input: &DeviceBuffer<bf16>,
         weights: DenseSwiGluWeights<'_>,
         scratch: &mut DenseScratch,
+        per_layer: Option<&DeviceBuffer<bf16>>,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
         let sandwich = match (self.sandwich.is_some(), weights.sandwich) {
@@ -104,34 +115,46 @@ impl DenseFeedForward {
                 .add(&self.stream, input, &scratch.attention, &mut scratch.residual)?;
         }
         self.mlp(input, weights, scratch)?;
-        let (Some(norms), Some(sandwich)) = (&self.sandwich, sandwich) else {
-            return self.hidden_ops.add(&self.stream, &scratch.residual, &scratch.mlp, output);
+        if let (Some(norms), Some(sandwich)) = (&self.sandwich, sandwich) {
+            norms.feed_forward_output.execute(
+                &scratch.mlp,
+                sandwich.feed_forward_output_norm,
+                &mut scratch.normalized,
+            )?;
+        }
+        let branch = if sandwich.is_some() {
+            &scratch.normalized
+        } else {
+            &scratch.mlp
         };
-        norms.feed_forward_output.execute(
-            &scratch.mlp,
-            sandwich.feed_forward_output_norm,
-            &mut scratch.normalized,
-        )?;
-        let Some(layer_scalar) = sandwich.layer_scalar else {
-            return self.hidden_ops.add(
-                &self.stream,
-                &scratch.residual,
-                &scratch.normalized,
-                output,
-            );
+        let layer_scalar = sandwich.and_then(|sandwich| sandwich.layer_scalar);
+        let gate = match (&mut self.per_layer, weights.per_layer_input, per_layer) {
+            (Some(gate), Some(weights), Some(input)) => Some((gate, weights, input)),
+            (None, None, None) => None,
+            _ => return Err(Error::InvalidDecoderKernel("dense layer per-layer input mismatch")),
         };
-        self.hidden_ops.add(
-            &self.stream,
-            &scratch.residual,
-            &scratch.normalized,
-            &mut scratch.attention,
-        )?;
-        self.hidden_ops.multiply_scalar(
-            &self.stream,
-            &scratch.attention,
-            scalar(layer_scalar)?,
-            output,
-        )
+        if gate.is_none() && layer_scalar.is_none() {
+            return self.hidden_ops.add(&self.stream, &scratch.residual, branch, output);
+        }
+        self.hidden_ops
+            .add(&self.stream, &scratch.residual, branch, &mut scratch.attention)?;
+        // `h` is in `scratch.attention`; the gate adds its per-layer input.
+        let finished = if let Some((gate, weights, input)) = gate {
+            let (hidden, normalized) = (&scratch.attention, &mut scratch.normalized);
+            gate.execute(hidden, weights, input, &mut scratch.mlp, normalized)?;
+            if layer_scalar.is_none() {
+                return self.hidden_ops.add(&self.stream, hidden, &scratch.normalized, output);
+            }
+            let gated = &mut scratch.residual;
+            self.hidden_ops.add(&self.stream, hidden, &scratch.normalized, gated)?;
+            &scratch.residual
+        } else {
+            &scratch.attention
+        };
+        let layer_scalar =
+            layer_scalar.ok_or(Error::InvalidDecoderKernel("dense layer lacks its scalar"))?;
+        self.hidden_ops
+            .multiply_scalar(&self.stream, finished, scalar(layer_scalar)?, output)
     }
 
     /// Writes the MLP of the normalized residual, or of the normalized layer

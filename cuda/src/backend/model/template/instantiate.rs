@@ -6,6 +6,7 @@ use crate::{
     backend::model::{
         batch::DecodeBatchSource,
         layer::{DecoderLayerTemplate, SessionLayer},
+        per_layer::{PerLayerInputs, SessionPerLayerInputs},
         prefill::PrefillTokenBuffer,
     },
 };
@@ -39,6 +40,7 @@ impl CudaMoeModelTemplate {
                 final_norm: self.final_norm.clone(),
                 output_head: &self.output_head,
                 layers: &self.layers,
+                per_layer: self.per_layer_inputs.as_ref(),
                 caches,
                 attention,
                 vocab: self.decoder.vocab_size,
@@ -69,7 +71,19 @@ impl CudaMoeModelTemplate {
         let first = self.backend.inner.pool.allocate::<bf16>(&self.backend.inner.stream, hidden)?;
         let second =
             self.backend.inner.pool.allocate::<bf16>(&self.backend.inner.stream, hidden)?;
-        let layers = instantiate_layers(&self.layers, caches, &first, &second)?;
+        let per_layer = self
+            .per_layer_inputs
+            .as_ref()
+            .map(|inputs| {
+                SessionPerLayerInputs::new(&self.backend, inputs, config.prefill_chunk_tokens)
+            })
+            .transpose()?;
+        let layers = instantiate_layers(
+            &self.layers,
+            caches,
+            (&first, &second),
+            per_layer.as_ref().map(|inputs| &inputs.decode),
+        )?;
         let prefill_elements = config
             .prefill_chunk_tokens
             .checked_mul(hidden)
@@ -113,6 +127,7 @@ impl CudaMoeModelTemplate {
             prefill_second,
             logits,
             self.logit_shaping,
+            per_layer,
         )
     }
 }
@@ -120,8 +135,8 @@ impl CudaMoeModelTemplate {
 fn instantiate_layers(
     templates: &[DecoderLayerTemplate],
     caches: &[crate::PagedKvCache],
-    first: &DeviceBuffer<bf16>,
-    second: &DeviceBuffer<bf16>,
+    (first, second): (&DeviceBuffer<bf16>, &DeviceBuffer<bf16>),
+    per_layer: Option<&PerLayerInputs>,
 ) -> Result<Vec<SessionLayer>> {
     if templates.len() != caches.len() {
         return Err(Error::InvalidDecoderKernel("CUDA session cache count differs from layers"));
@@ -136,7 +151,8 @@ fn instantiate_layers(
             } else {
                 (second, first)
             };
-            template.instantiate(input, output, cache.clone())
+            let per_layer = per_layer.map(|inputs| inputs.layer(index, 1)).transpose()?;
+            template.instantiate(input, output, cache.clone(), per_layer)
         })
         .collect()
 }

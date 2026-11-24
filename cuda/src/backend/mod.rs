@@ -53,7 +53,7 @@ pub use dense::{
     DenseFeedForwardWeights, DenseGateUpSource, DenseGateUpWeights, DenseOutputSource,
     DenseQkvSource, DenseRoutedExperts, DenseSandwichWeights, DenseSwiGluConfig,
     DenseSwiGluLayerTemplate, DenseSwiGluWeights, DenseWeightSource, FeedForwardInput,
-    PrefillDenseSwiGlu, RoutedExpertWeights, RoutedExpertsConfig,
+    PerLayerInputWeights, PrefillDenseSwiGlu, RoutedExpertWeights, RoutedExpertsConfig,
 };
 pub use embedding::{AffineQuantizedEmbedding, Bf16Embedding};
 use gated_delta::workspace::CudaGatedDeltaWorkspace;
@@ -105,7 +105,8 @@ use mircuda::{Compiler, Context, DeviceInfo, MemoryPool, Stream};
 pub use mla::{CudaLatentAttentionExecution, CudaLatentAttentionLayer, LatentAttentionState};
 pub use model::{
     CudaDecodeBatch, CudaModelSessionConfig, CudaMoeModelSession, CudaMoeModelTemplate,
-    DEFAULT_PREFILL_CHUNK_TOKENS, RETAINED_CHUNK_SLACK_TOKENS, SMALL_PLAN_TOKENS,
+    DEFAULT_PREFILL_CHUNK_TOKENS, PerLayerInputTensors, PerLayerInputsTemplate,
+    RETAINED_CHUNK_SLACK_TOKENS, SMALL_PLAN_TOKENS,
 };
 pub use output::{CudaAffineOutputHead, CudaOutputHead};
 pub use planning::{

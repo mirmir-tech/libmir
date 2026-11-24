@@ -80,6 +80,11 @@ impl DenseSwiGluLayerLoadConfig {
                 },
                 _ => crate::FeedForwardInput::AttentionResidual,
             },
+            per_layer_input: semantic
+                .decoder
+                .per_layer_input
+                .map(|input| Ok::<_, Error>(u16::try_from(input.width)?.try_into()?))
+                .transpose()?,
         })
     }
 }
@@ -148,6 +153,12 @@ fn attention_config(
 ) -> Result<DecodeAttentionConfig> {
     let spec = softmax_attention(semantic, layer)?;
     let head_dim = decoder.layer_head_dim(layer);
+    let mut qkv_normalization: crate::kernels::QkvNormalization = spec.qk_normalization.into();
+    // A layer reading another's keys and values normalizes only its queries.
+    if spec.key_value_source.is_some() {
+        qkv_normalization.key = false;
+        qkv_normalization.value = false;
+    }
     Ok(DecodeAttentionConfig {
         layer,
         hidden_size: decoder.hidden_size,
@@ -162,7 +173,7 @@ fn attention_config(
             .into(),
         attention_scale: to_f32("attention scale", spec.scale)?,
         projection_format,
-        qkv_normalization: spec.qk_normalization.into(),
+        qkv_normalization,
         window: spec.window,
         score_softcap: spec
             .logit_softcap
@@ -174,6 +185,7 @@ fn attention_config(
             .transpose()?,
         max_sequence_blocks,
         cache: KvStorageSpec::new(cache, decoder.layer_key_value_heads(layer), head_dim),
+        key_value_source: spec.key_value_source.map(u16::try_from).transpose()?,
     })
 }
 

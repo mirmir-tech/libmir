@@ -1,7 +1,10 @@
 //! The decoder boundary a model template loads: embedding, final norm and
 //! output head, and the tensors they read.
 
-use models::weights::{TensorBinding, TensorCatalog, TensorInfo, TensorStorage, WeightBindingPlan};
+use models::weights::{
+    PerLayerEmbeddingBindings, TensorBinding, TensorCatalog, TensorInfo, TensorStorage,
+    WeightBindingPlan,
+};
 
 use super::payload_bytes;
 use crate::{CudaBackend, CudaTensorSet, Error, Result};
@@ -11,6 +14,8 @@ pub(in crate::checkpoint) struct ModelSource<'a> {
     pub(in crate::checkpoint) final_norm: &'a str,
     pub(in crate::checkpoint) final_norm_bias: Option<&'a str>,
     pub(in crate::checkpoint) output: &'a TensorBinding,
+    /// Gemma 4's per-layer input tensors, when the checkpoint has them.
+    pub(in crate::checkpoint) per_layer: Option<PerLayerEmbeddingBindings<'a>>,
     tensors: Vec<&'a TensorInfo>,
 }
 
@@ -40,6 +45,12 @@ impl<'a> ModelSource<'a> {
         let boundary = bindings.decoder_boundary_with_tied_output(tied)?;
         let final_norm_bias = boundary.final_norm.dense_bias();
         let final_norm = required(catalog, &boundary.final_norm.source)?;
+        let per_layer = bindings.per_layer_embedding()?;
+        let per_layer_sources = per_layer.into_iter().flat_map(|inputs| {
+            [inputs.embedding, inputs.model_projection, inputs.projection_norm]
+                .into_iter()
+                .flat_map(TensorBinding::physical_sources)
+        });
         let mut seen = std::collections::HashSet::new();
         let mut tensors = Vec::new();
         for name in boundary
@@ -49,6 +60,7 @@ impl<'a> ModelSource<'a> {
             .chain(boundary.output.physical_sources())
             .chain(std::iter::once(boundary.final_norm.source.as_str()))
             .chain(final_norm_bias)
+            .chain(per_layer_sources)
         {
             if seen.insert(name) {
                 tensors.push(required(catalog, name)?);
@@ -59,6 +71,7 @@ impl<'a> ModelSource<'a> {
             final_norm: &final_norm.name,
             final_norm_bias,
             output: boundary.output,
+            per_layer,
             tensors,
         })
     }
@@ -77,7 +90,10 @@ impl<'a> ModelSource<'a> {
     pub(in crate::checkpoint) fn upload(&self, backend: &CudaBackend) -> Result<CudaTensorSet> {
         let cast = backend.prepare_dense_cast()?;
         let mut upload = backend.begin_tensor_upload();
-        let bindings = [self.embedding, self.output];
+        let bindings = [self.embedding, self.output]
+            .into_iter()
+            .chain(self.per_layer.map(|inputs| inputs.embedding))
+            .collect::<Vec<_>>();
         let raw = bindings
             .iter()
             .flat_map(|binding| runtime_raw_sources(binding))

@@ -35,7 +35,7 @@ pub(super) fn fold_dense(
     match (format, bindings.feed_forward) {
         (ProjectionFormat::Ggml, _) => Ok(()),
         (ProjectionFormat::Bf16, DenseLayerFeedForwardBindings::Gated(feed_forward)) => {
-            tensors.scale_bf16(&bindings.attention.output.source, factor)?;
+            tensors.scale_bf16(&bindings.attention.output().source, factor)?;
             tensors.scale_bf16(&feed_forward.down.source, factor)
         },
         _ => Err(unsupported("a residual multiplier outside BF16 and GGML dense layers")),

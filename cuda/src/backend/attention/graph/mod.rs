@@ -111,7 +111,8 @@ pub(in crate::backend) struct Geometry {
 #[derive(Clone, Copy)]
 pub(in crate::backend) struct Nodes {
     pub(in crate::backend) qkv_postprocess: KernelNode<QkvPostprocessKernel>,
-    pub(in crate::backend) kv_store: KernelNode<KvStoreKernel>,
+    /// `None` for a layer reading another layer's keys and values.
+    pub(in crate::backend) kv_store: Option<KernelNode<KvStoreKernel>>,
     pub(in crate::backend) attention: CapturedPagedAttentionNodes,
 }
 
@@ -183,12 +184,14 @@ impl CapturedDecodeAttentionBf16 {
                 qkv_arguments(resources)
             },
         )?;
-        self.graph.update_kernel(
-            &self.nodes.kv_store,
-            &self.kernels.kv_store,
-            self.configs.kv_store,
-            kv_arguments,
-        )?;
+        if let Some(kv_store) = &self.nodes.kv_store {
+            self.graph.update_kernel(
+                kv_store,
+                &self.kernels.kv_store,
+                self.configs.kv_store,
+                kv_arguments,
+            )?;
+        }
         self.graph.update_kernel(
             &self.nodes.attention.direct,
             &self.kernels.attention.direct,
