@@ -114,7 +114,7 @@ pub(super) fn capabilities(runtime: MetalDecoderRuntime) -> Operations {
             .activations(Shared, &[ReluSquared])
             .routers(&latent, &[RouterKind::SigmoidBiasedTopK])
             .normalizations(&[QkNormalization::None])
-            .features_except(&declared)
+            .features_except(&[&declared[..], &[Feature::StateSpaceFree]].concat())
         },
         MetalDecoderRuntime::LatentAttention => none
             .layers([MixerKind::Latent], &[Block::Dense, Block::SharedRouted])

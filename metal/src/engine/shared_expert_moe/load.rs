@@ -9,7 +9,7 @@ use super::{
 };
 use crate::engine::{
     Dtype, ModelTensors, QuantizedLinear, Result, Stream, binding::BoundLinear,
-    fusion_planner::ProjectionBiases, lowering::FeedForwardLowering,
+    fusion_planner::ProjectionBiases,
 };
 
 pub(super) fn projection_biases(gate: &BoundLinear, up: &BoundLinear) -> ProjectionBiases {
@@ -30,7 +30,6 @@ impl SharedExpertMoe {
         tensors: &ModelTensors,
         bindings: SharedRoutedFeedForwardBindings<'_>,
         config: SharedExpertMoeConfig,
-        lowering: FeedForwardLowering,
         routing: ExpertRouter,
         stream: &Stream,
     ) -> Result<Self> {
@@ -45,7 +44,6 @@ impl SharedExpertMoe {
                 .shared_output_gate
                 .map(|gate| BoundLinear::load(tensors, gate, stream))
                 .transpose()?,
-            lowering,
             stream,
         );
         Ok(Self {
@@ -64,11 +62,10 @@ impl SharedExpertMoe {
         tensors: &ModelTensors,
         routed: &RoutedExpertsSpec,
         bindings: SharedRoutedFeedForwardBindings<'_>,
-        lowering: FeedForwardLowering,
         stream: &Stream,
     ) -> Result<Self> {
         let routing = router(tensors, routed, bindings.router_correction_bias, stream)?;
-        Self::load_bindings(tensors, bindings, config(routed)?, lowering, routing, stream)
+        Self::load_bindings(tensors, bindings, config(routed)?, routing, stream)
     }
 
     /// Routed experts alone, with no shared expert (Qwen3-MoE, Mixtral,

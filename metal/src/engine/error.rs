@@ -28,6 +28,8 @@ pub enum Error {
     Float(#[from] std::num::ParseFloatError),
     #[error("model layout error: {0}")]
     Model(#[from] models::ModelsError),
+    #[error("Metal does not run this architecture: {0}")]
+    Architecture(#[from] architecture::ArchitectureError),
     #[error("mirtal error: {0}")]
     Mirtal(#[from] mirtal::Error),
     #[error("integer conversion failed: {0}")]

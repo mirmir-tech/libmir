@@ -1,4 +1,7 @@
-use super::{Stream, lowering::FeedForwardLowering};
+use super::{
+    Stream,
+    lowering::{Activation, FeedForwardLowering},
+};
 use crate::{FusionMode, MetalFusionConfig};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,47 +47,74 @@ impl<'a> FusionPlanner<'a> {
         Self { config: &stream.config().fusion }
     }
 
+    /// Fusions of a layer whose feed-forward block is `feed_forward`, in the
+    /// dense, mixed, shared-routed and clamped-routed runtimes.
     pub fn projections(
         self,
-        feed_forward: FeedForwardLowering,
+        feed_forward: &FeedForwardLowering,
         biases: ProjectionBiases,
     ) -> ProjectionFusion {
-        let (attention, gate_up, key_value) = match feed_forward {
-            FeedForwardLowering::Dense => (
-                self.config.dense_attention.enabled(),
-                self.config.dense_gate_up.enabled(),
-                false,
-            ),
-            FeedForwardLowering::Routed => (self.config.dense_attention.enabled(), false, false),
-            FeedForwardLowering::DenseAndRouted | FeedForwardLowering::DenseGelu => (
-                self.config.hybrid_attention.enabled(),
-                self.config.hybrid_dense_gate_up.enabled(),
-                true,
-            ),
-            FeedForwardLowering::SharedRouted => (false, true, false),
-            FeedForwardLowering::ClampedRouted
-            | FeedForwardLowering::LatentRouted
-            | FeedForwardLowering::UngatedDense
-            | FeedForwardLowering::None => (false, false, false),
+        let (attention, gate_up) = match feed_forward {
+            FeedForwardLowering::Dense {
+                activation: Activation::SwiGlu { clamp: None } | Activation::GeluTanh,
+            } => (self.config.dense_attention.enabled(), self.config.dense_gate_up.enabled()),
+            FeedForwardLowering::Routed { experts, shared: None }
+                if experts.activation == (Activation::SwiGlu { clamp: None }) =>
+            {
+                (self.config.dense_attention.enabled(), false)
+            },
+            FeedForwardLowering::Routed { shared: Some(_), .. } => (false, true),
+            FeedForwardLowering::Dense { .. }
+            | FeedForwardLowering::Routed { .. }
+            | FeedForwardLowering::DenseAndRouted { .. }
+            | FeedForwardLowering::LatentRouted { .. }
+            | FeedForwardLowering::None => (false, false),
         };
         ProjectionFusion {
             attention: attention && !biases.attention,
-            key_value: attention && key_value && !biases.key_value,
+            key_value: false,
             gate_up: gate_up && !biases.gate_up,
         }
     }
 
-    pub fn expert_mode(self, feed_forward: FeedForwardLowering) -> FusionMode {
+    /// Fusions of a layer in the hybrid runtimes (`DenseAndRouted` and
+    /// `DenseGelu`), whose attention also fuses keys with values.
+    pub fn hybrid_projections(self, biases: ProjectionBiases) -> ProjectionFusion {
+        let attention = self.config.hybrid_attention.enabled();
+        ProjectionFusion {
+            attention: attention && !biases.attention,
+            key_value: attention && !biases.key_value,
+            gate_up: self.config.hybrid_dense_gate_up.enabled() && !biases.gate_up,
+        }
+    }
+
+    /// How the gate and up projections of the experts beside the hybrid
+    /// runtimes' dense blocks fuse.
+    pub const fn hybrid_expert_mode(self) -> FusionMode {
+        self.config.routed_expert_gate_up
+    }
+
+    /// How a shared expert's gate and up projections fuse; routed blocks
+    /// without one fuse none.
+    pub const fn expert_mode(self, feed_forward: &FeedForwardLowering) -> FusionMode {
         match feed_forward {
-            FeedForwardLowering::DenseAndRouted => self.config.routed_expert_gate_up,
-            FeedForwardLowering::SharedRouted => self.config.shared_expert_gate_up,
-            FeedForwardLowering::Dense
-            | FeedForwardLowering::Routed
-            | FeedForwardLowering::DenseGelu
-            | FeedForwardLowering::ClampedRouted
-            | FeedForwardLowering::LatentRouted
-            | FeedForwardLowering::UngatedDense
+            FeedForwardLowering::Routed { shared: Some(_), .. } => {
+                self.config.shared_expert_gate_up
+            },
+            FeedForwardLowering::Dense { .. }
+            | FeedForwardLowering::Routed { shared: None, .. }
+            | FeedForwardLowering::DenseAndRouted { .. }
+            | FeedForwardLowering::LatentRouted { .. }
             | FeedForwardLowering::None => FusionMode::Disabled,
+        }
+    }
+
+    /// How a shared expert's gate and up projections fuse at decode.
+    pub fn shared_expert_gate_up_mode(self, biases: ProjectionBiases) -> FusionMode {
+        if biases.gate_up {
+            FusionMode::Disabled
+        } else {
+            self.shared_dense_gate_up_mode()
         }
     }
 
@@ -96,8 +126,9 @@ impl<'a> FusionPlanner<'a> {
         }
     }
 
-    pub fn native_router(self, feed_forward: FeedForwardLowering) -> bool {
-        feed_forward == FeedForwardLowering::DenseAndRouted && self.config.native_router.enabled()
+    /// Whether the dense-and-routed runtime routes with the native kernel.
+    pub fn native_router(self) -> bool {
+        self.config.native_router.enabled()
     }
 
     pub fn gated_delta(self) -> GatedDeltaFusion {
@@ -120,6 +151,10 @@ mod tests {
     use super::*;
     use crate::{FeatureToggle, MetalConfig};
 
+    const DENSE: FeedForwardLowering = FeedForwardLowering::Dense {
+        activation: Activation::SwiGlu { clamp: None },
+    };
+
     #[test]
     fn admits_fusions_by_operation_and_bias_contract() -> super::super::Result<()> {
         let stream = Stream::new_gpu_with_config(Arc::new(MetalConfig::default()))?;
@@ -127,7 +162,7 @@ mod tests {
         let unbiased = ProjectionBiases::new([false, false], Some(false), [false, false]);
 
         assert_eq!(
-            planner.projections(FeedForwardLowering::DenseAndRouted, unbiased),
+            planner.hybrid_projections(unbiased),
             ProjectionFusion {
                 attention: true,
                 key_value: true,
@@ -136,7 +171,7 @@ mod tests {
         );
         assert_eq!(
             planner.projections(
-                FeedForwardLowering::Dense,
+                &DENSE,
                 ProjectionBiases::new([true, false], Some(false), [false, false])
             ),
             ProjectionFusion {
@@ -146,19 +181,26 @@ mod tests {
             }
         );
         assert_eq!(
-            planner.projections(
-                FeedForwardLowering::DenseAndRouted,
-                ProjectionBiases::new([false, false], None, [false, false])
-            ),
+            planner.hybrid_projections(ProjectionBiases::new([false, false], None, [false, false])),
             ProjectionFusion {
                 attention: true,
                 key_value: false,
                 gate_up: true
             }
         );
-        assert_eq!(planner.expert_mode(FeedForwardLowering::Dense), FusionMode::Disabled);
-        assert!(planner.native_router(FeedForwardLowering::DenseAndRouted));
-        assert!(!planner.native_router(FeedForwardLowering::SharedRouted));
+        assert_eq!(
+            planner.projections(
+                &FeedForwardLowering::Dense { activation: Activation::ReluSquared },
+                unbiased
+            ),
+            ProjectionFusion {
+                attention: false,
+                key_value: false,
+                gate_up: false
+            }
+        );
+        assert_eq!(planner.expert_mode(&DENSE), FusionMode::Disabled);
+        assert!(planner.native_router());
         Ok(())
     }
 
@@ -168,7 +210,7 @@ mod tests {
         config.fusion.dense_gate_up = FeatureToggle::Disabled;
         let stream = Stream::new_gpu_with_config(Arc::new(config))?;
         let fusion = FusionPlanner::new(&stream).projections(
-            FeedForwardLowering::Dense,
+            &DENSE,
             ProjectionBiases::new([false, false], Some(false), [false, false]),
         );
 

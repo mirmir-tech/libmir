@@ -3,7 +3,6 @@
 use super::{
     Array, Error, FusedExpertGateUp, FusedGateUp, ModelTensors, Result, Stream,
     binding::BoundLinear,
-    lowering::FeedForwardLowering,
     route_tuning::{self, ExpertActivation, RoutingSpec},
 };
 
@@ -66,7 +65,6 @@ impl SharedExpertMoe {
                 linear(tensors, prefix, "shared_expert.down_proj", group_size)?,
             ],
             Some(linear(tensors, prefix, "shared_expert_gate", group_size)?),
-            FeedForwardLowering::SharedRouted,
             stream,
         );
         Ok(Self {

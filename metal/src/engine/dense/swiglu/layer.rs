@@ -120,7 +120,7 @@ impl DenseSwiGluLayer {
             )?,
         };
         let fusion = FusionPlanner::new(stream).projections(
-            lowering.feed_forward,
+            &lowering.feed_forward,
             ProjectionBiases::new(
                 [weights.attention.query.has_bias(), weights.attention.key.has_bias()],
                 Some(weights.attention.value.has_bias()),

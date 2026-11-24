@@ -71,13 +71,12 @@ impl HybridLinearMoeModel {
         let mut layers = Vec::with_capacity(decoder.num_hidden_layers);
         for (index, lowered) in lowering.iter().enumerate() {
             let layer = spec.layer(index)?;
-            if lowered.mixer == MixerLowering::Latent {
+            if let MixerLowering::Latent(_) = lowered.mixer {
                 layers.push(HybridLinearMoeLayer::load_latent(
                     tensors,
                     layer,
                     index,
                     bindings.latent_decoder_layer(index)?,
-                    *lowered,
                     stream,
                 )?);
                 continue;
@@ -88,7 +87,6 @@ impl HybridLinearMoeModel {
                 layer,
                 index,
                 bindings.mixed_decoder_layer(index)?,
-                *lowered,
                 norm_shift,
                 stream,
             )?);
@@ -101,8 +99,11 @@ impl HybridLinearMoeModel {
                 lowering
                     .iter()
                     .map(|layer| layer.feed_forward)
-                    .find(|feed_forward| *feed_forward == FeedForwardLowering::SharedRouted)
-                    .unwrap_or(lowering[0].feed_forward),
+                    .find(|feed_forward| {
+                        matches!(feed_forward, FeedForwardLowering::Routed { shared: Some(_), .. })
+                    })
+                    .as_ref()
+                    .unwrap_or(&lowering[0].feed_forward),
             ),
         )?;
         super::decode_plan::prepare(&mut layers, stream)?;

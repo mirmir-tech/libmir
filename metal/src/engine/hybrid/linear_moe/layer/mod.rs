@@ -19,10 +19,7 @@ use super::{
     },
     feed_forward::FeedForward,
 };
-use crate::engine::{
-    decoder::{LayerContext, LoweredLayer, MixerKind},
-    lowering::LayerLowering,
-};
+use crate::engine::decoder::{LayerContext, LoweredLayer, MixerKind};
 
 impl LoweredLayer for HybridLinearMoeLayer {
     fn mixer_kind(&self) -> MixerKind {
@@ -62,20 +59,18 @@ pub(super) struct HybridLinearMoeLayer {
 }
 
 impl HybridLinearMoeLayer {
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn load(
         tensors: &ModelTensors,
         decoder: &DecoderConfig,
         layer: &DecoderLayerSpec,
         index: usize,
         bindings: MixedDecoderLayerBindings<'_>,
-        lowering: LayerLowering,
         norm_shift: f32,
         stream: &Stream,
     ) -> Result<Self> {
         let attention =
             Attention::load(tensors, decoder, layer, bindings.mixer, norm_shift, stream)?;
-        let moe = moe::load(tensors, layer, bindings.feed_forward, lowering, stream)?;
+        let moe = moe::load(tensors, layer, bindings.feed_forward, stream)?;
         Ok(Self {
             index,
             attention,
@@ -97,7 +92,6 @@ impl HybridLinearMoeLayer {
         layer: &DecoderLayerSpec,
         index: usize,
         bindings: LatentDecoderLayerBindings<'_>,
-        lowering: LayerLowering,
         stream: &Stream,
     ) -> Result<Self> {
         Ok(Self {
@@ -108,7 +102,7 @@ impl HybridLinearMoeLayer {
                 tensors,
                 &bindings.post_attention_norm.source,
             )?,
-            moe: moe::load(tensors, layer, bindings.feed_forward, lowering, stream)?,
+            moe: moe::load(tensors, layer, bindings.feed_forward, stream)?,
             rms_norm_eps: layer.input_norm.epsilon.to_string().parse()?,
         })
     }

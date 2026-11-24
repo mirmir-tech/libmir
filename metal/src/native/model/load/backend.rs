@@ -43,7 +43,11 @@ pub(super) fn validate_kv_storage(
             "INT8 Metal K/V does not yet support sliding-window layers".into(),
         ));
     }
-    if lowering.layers().iter().any(|layer| layer.mixer == MixerLowering::Latent) {
+    if lowering
+        .layers()
+        .iter()
+        .any(|layer| matches!(layer.mixer, MixerLowering::Latent(_)))
+    {
         return Err(Error::UnsupportedModel(
             "INT8 Metal K/V does not yet support latent attention rows".into(),
         ));

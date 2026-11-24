@@ -4,10 +4,7 @@
 use super::{Array, FusedGateUp, Result, SharedExpertMoe, Stream};
 use crate::{
     FusionMode,
-    engine::{
-        binding::BoundLinear, fusion_planner::FusionPlanner, gate_up_tuning,
-        lowering::FeedForwardLowering,
-    },
+    engine::{binding::BoundLinear, fusion_planner::FusionPlanner, gate_up_tuning},
 };
 
 #[derive(Debug)]
@@ -25,22 +22,17 @@ impl SharedExpert {
     pub(super) fn new(
         [gate, up, down]: [BoundLinear; 3],
         output_gate: Option<BoundLinear>,
-        lowering: FeedForwardLowering,
         stream: &Stream,
     ) -> Self {
-        let planner = FusionPlanner::new(stream);
-        let fusion = planner.projections(lowering, super::load::projection_biases(&gate, &up));
+        let gate_up_mode = FusionPlanner::new(stream)
+            .shared_expert_gate_up_mode(super::load::projection_biases(&gate, &up));
         Self {
             gate,
             up,
             fused_gate_up: None,
             down,
             output_gate,
-            gate_up_mode: if fusion.gate_up {
-                planner.shared_dense_gate_up_mode()
-            } else {
-                FusionMode::Disabled
-            },
+            gate_up_mode,
         }
     }
 

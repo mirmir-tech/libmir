@@ -59,7 +59,7 @@ impl PredictionModule {
             fusion: BoundLinear::load(tensors, module.fusion, stream)?,
             // Index 0 of the module's own one-layer cache.
             layer: HybridLinearMoeLayer::load(
-                tensors, decoder, layer, 0, module.layer, lowered, norm_shift, stream,
+                tensors, decoder, layer, 0, module.layer, norm_shift, stream,
             )?,
             final_norm: norm(module.final_norm)?,
             mixer: lowered.mixer,

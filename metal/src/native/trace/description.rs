@@ -66,7 +66,8 @@ pub(super) fn weights(model: &LoadedModel) -> TraceWeights {
     else {
         return unknown_weights();
     };
-    let Ok(lowering) = lowering::plan(spec) else {
+    let Some(Ok(lowering)) = info.decoder.as_ref().map(|decoder| lowering::plan(decoder, spec))
+    else {
         return unknown_weights();
     };
     TraceWeights {

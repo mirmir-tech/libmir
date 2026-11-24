@@ -8,7 +8,7 @@ use crate::engine::{
     binding::BoundEmbedding,
     configure_expert_fusion, decode,
     fusion_planner::FusionPlanner,
-    lowering::{FeedForwardLowering, LayerLowering, MixerLowering},
+    lowering::{Activation, FeedForwardLowering, LayerLowering, MixerLowering},
 };
 
 mod prefill;
@@ -45,7 +45,8 @@ impl HybridMoeModel {
             && lowering.iter().all(|layer| {
                 matches!(
                     layer.feed_forward,
-                    FeedForwardLowering::DenseAndRouted | FeedForwardLowering::DenseGelu
+                    FeedForwardLowering::DenseAndRouted { .. }
+                        | FeedForwardLowering::Dense { activation: Activation::GeluTanh }
                 ) && matches!(layer.mixer, MixerLowering::Softmax { .. })
             });
         if !compatible {
@@ -64,21 +65,18 @@ impl HybridMoeModel {
                 decoder.query_key_rows_interleaved,
                 1,
             )?;
-            layers.push(if lowered.feed_forward == FeedForwardLowering::DenseGelu {
+            layers.push(if let FeedForwardLowering::Dense { .. } = lowered.feed_forward {
                 sharing::ModelSharing::load_dense_layer(
                     sharing.as_ref(),
                     tensors,
                     bindings,
                     layer,
-                    *lowered,
                     config,
                     stream,
                 )?
             } else {
                 let layer_bindings = bindings.hybrid_moe_layer(index)?;
-                HybridMoeLayer::load_bindings(
-                    tensors, &layer_bindings, *lowered, layer, config, stream,
-                )?
+                HybridMoeLayer::load_bindings(tensors, &layer_bindings, layer, config, stream)?
             });
             let MixerLowering::Softmax { window, .. } = lowered.mixer else {
                 unreachable!("validated hybrid MoE mixer");
@@ -121,7 +119,7 @@ impl HybridMoeModel {
         let expert_fusion = configure_expert_fusion(
             &mut layers,
             stream,
-            FusionPlanner::new(stream).expert_mode(FeedForwardLowering::DenseAndRouted),
+            FusionPlanner::new(stream).hybrid_expert_mode(),
         )?;
         let embed_scale = decoder.hidden_size.to_string().parse::<f32>()?.sqrt();
         Ok(Self {

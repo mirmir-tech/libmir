@@ -36,7 +36,7 @@ pub(super) fn new(
                 window: None | Some(AttentionWindow::Chunked { .. }),
                 ..
             }
-            | MixerLowering::Latent => KvCache::new_paged_with_pool_capacity(
+            | MixerLowering::Latent(_) => KvCache::new_paged_with_pool_capacity(
                 step,
                 page_size,
                 format,

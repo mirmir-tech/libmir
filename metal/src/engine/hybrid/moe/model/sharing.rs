@@ -17,7 +17,6 @@ use crate::engine::{
         sharing::{PerLayerGate, PerLayerInputs, StepShare},
         weights::Publish,
     },
-    lowering::LayerLowering,
 };
 
 /// The model's per-layer inputs and the step slot its layers share.
@@ -70,13 +69,11 @@ impl ModelSharing {
     /// A dense GELU layer: reading its source's keys and values, or projecting
     /// its own (published when later layers read them); with its per-layer
     /// input gate.
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn load_dense_layer(
         sharing: Option<&Self>,
         tensors: &ModelTensors,
         bindings: &WeightBindingPlan,
         layer: &DecoderLayerSpec,
-        lowered: LayerLowering,
         config: HybridMoeLayerConfig,
         stream: &Stream,
     ) -> Result<HybridMoeLayer> {
@@ -87,7 +84,6 @@ impl ModelSharing {
             (Some(sharing), Some(source)) => HybridMoeLayer::load_shared_dense_bindings(
                 tensors,
                 &bindings.dense_decoder_layer_sharing_key_values(index)?,
-                lowered,
                 layer,
                 (Arc::clone(&sharing.step), source),
                 config,
@@ -96,7 +92,6 @@ impl ModelSharing {
             _ => HybridMoeLayer::load_dense_bindings(
                 tensors,
                 &bindings.dense_decoder_layer(index)?,
-                lowered,
                 layer,
                 sharing
                     .filter(|sharing| sharing.sources.contains(&index))

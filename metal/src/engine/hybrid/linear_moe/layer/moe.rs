@@ -1,16 +1,13 @@
 use models::{semantic::DecoderLayerSpec, weights::MixedFeedForwardBindings};
 
 use super::super::feed_forward::{DenseMlp, FeedForward};
-use crate::engine::{
-    Error, ModelTensors, Result, SharedExpertMoe, Stream, lowering::LayerLowering,
-};
+use crate::engine::{Error, ModelTensors, Result, SharedExpertMoe, Stream};
 
 /// A dense `SwiGLU` or routed plus shared experts.
 pub(super) fn load(
     tensors: &ModelTensors,
     layer: &DecoderLayerSpec,
     bindings: MixedFeedForwardBindings<'_>,
-    lowering: LayerLowering,
     stream: &Stream,
 ) -> Result<FeedForward> {
     Ok(match bindings {
@@ -24,7 +21,6 @@ pub(super) fn load(
                     Error::InvalidModel("shared experts need routed experts".into())
                 })?,
                 routed,
-                lowering.feed_forward,
                 stream,
             )?))
         },

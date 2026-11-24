@@ -41,7 +41,7 @@ fn execute_model(
             }
         }
     }
-    let lowering = lowering::plan(&contract.semantic)?;
+    let lowering = lowering::plan(&decoder, &contract.semantic)?;
     let stream = Stream::new_cpu()?;
     let tensors = ModelTensors::load(&root, &stream)?;
     let model = DenseSwiGluModel::load(

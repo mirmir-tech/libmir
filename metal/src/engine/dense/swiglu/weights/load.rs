@@ -13,7 +13,7 @@ use super::{
 };
 use crate::engine::{
     Array, Error, ModelTensors, NormWeight, Result, SharedExpertMoe, Stream,
-    lowering::{FeedForwardLowering, NormalizationLowering},
+    lowering::NormalizationLowering,
 };
 
 /// A layer norm as the layer's lowering scales it.
@@ -190,15 +190,9 @@ fn feed_forward(
         DenseLayerFeedForwardBindings::Routed(bindings) => FeedForwardWeights::Routed(Box::new(
             SharedExpertMoe::load_routed_spec(tensors, routed(layer)?, bindings, stream)?,
         )),
-        DenseLayerFeedForwardBindings::SharedRouted(bindings) => {
-            FeedForwardWeights::Routed(Box::new(SharedExpertMoe::load_spec(
-                tensors,
-                routed(layer)?,
-                bindings,
-                FeedForwardLowering::SharedRouted,
-                stream,
-            )?))
-        },
+        DenseLayerFeedForwardBindings::SharedRouted(bindings) => FeedForwardWeights::Routed(
+            Box::new(SharedExpertMoe::load_spec(tensors, routed(layer)?, bindings, stream)?),
+        ),
     })
 }
 

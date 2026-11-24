@@ -51,6 +51,9 @@ flag_enum! {
         ExpertOutputScale,
         /// No attention layer at all, so nothing to cache per token.
         AttentionFree,
+        /// No state-space mixer, which the state-space hybrid runtimes are
+        /// built around.
+        StateSpaceFree,
         /// Per-layer inputs beside the residual stream (Gemma 4's E models).
         PerLayerInput,
         /// Layers attending over an earlier layer's keys and values instead
@@ -137,6 +140,10 @@ pub fn lower_features(
         matches!(layer.mixer, MixerSpec::SoftmaxAttention(_) | MixerSpec::LatentAttention(_))
     });
     set(Feature::AttentionFree, !attends);
+    set(
+        Feature::StateSpaceFree,
+        !layers.iter().any(|layer| matches!(layer.mixer, MixerSpec::StateSpace(_))),
+    );
     set(Feature::PerLayerInput, decoder.per_layer_input.is_some());
     Ok(features)
 }

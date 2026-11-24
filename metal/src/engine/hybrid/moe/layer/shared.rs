@@ -13,16 +13,14 @@ use super::{
     },
     HybridMoeLayer,
 };
-use crate::engine::{Array, ModelTensors, Result, Stream, lowering::LayerLowering};
+use crate::engine::{Array, ModelTensors, Result, Stream};
 
 impl HybridMoeLayer {
     /// A layer whose attention reads layer `source`'s keys and values of the
     /// same step.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::engine::hybrid::moe) fn load_shared_dense_bindings(
         tensors: &ModelTensors,
         bindings: &SharedKeyValueLayerBindings<'_>,
-        lowering: LayerLowering,
         layer: &DecoderLayerSpec,
         (step, source): (Arc<StepShare>, usize),
         config: HybridMoeLayerConfig,
@@ -37,7 +35,7 @@ impl HybridMoeLayer {
             (step, source),
             stream,
         )?;
-        Self::finish_load(weights, lowering, config, stream)
+        Self::finish_load(weights, config, stream)
     }
 
     #[must_use]

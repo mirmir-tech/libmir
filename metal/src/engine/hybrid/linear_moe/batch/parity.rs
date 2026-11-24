@@ -74,7 +74,7 @@ fn diagnose(probe: Probe) -> std::result::Result<(), Box<dyn std::error::Error>>
     let catalog = models::weights::TensorCatalog::from_layout(&layout)?;
     let contract =
         models::execution::DecoderExecutionContract::discover(&layout, &decoder, &catalog)?;
-    let lowering = lowering::plan(&contract.semantic)?;
+    let lowering = lowering::plan(&decoder, &contract.semantic)?;
     let load_stream = Stream::new_cpu()?;
     let tensors = ModelTensors::load(std::path::Path::new(&path), &load_stream)?;
     let mut config = crate::MetalConfig::default();

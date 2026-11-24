@@ -1,25 +1,23 @@
-use models::semantic::{DecoderLayerSpec, SemanticModelSpec};
+use models::{
+    layout::DecoderConfig,
+    semantic::{DecoderLayerSpec, SemanticModelSpec},
+};
 
-use super::{Error, Result};
+use super::Result;
 
 #[cfg(test)]
 mod tests;
 
 pub use architecture::metal::{
-    FeedForwardLowering, LayerLowering, MetalDecoderPlan as DecoderLowering,
+    Activation, Experts, FeedForwardLowering, LayerLowering, MetalDecoderPlan as DecoderLowering,
     MetalDecoderRuntime as DecoderRuntime, MixerLowering, NormalizationLowering,
 };
 
-pub fn plan(spec: &SemanticModelSpec) -> Result<DecoderLowering> {
-    match architecture::metal::plan(spec) {
-        Ok(plan) => Ok(plan),
-        Err(error) => Err(Error::InvalidModel(error.to_string())),
-    }
+/// Lowers `spec`, whose configuration is `decoder`, and selects its runtime.
+pub fn plan(decoder: &DecoderConfig, spec: &SemanticModelSpec) -> Result<DecoderLowering> {
+    Ok(architecture::metal::plan(decoder, spec)?)
 }
 
 pub fn lower_layer(layer: &DecoderLayerSpec) -> Result<LayerLowering> {
-    match architecture::metal::lower_layer(layer) {
-        Ok(layer) => Ok(layer),
-        Err(error) => Err(Error::InvalidModel(error.to_string())),
-    }
+    Ok(architecture::metal::lower_layer(layer)?)
 }

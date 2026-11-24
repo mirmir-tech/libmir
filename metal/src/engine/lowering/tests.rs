@@ -1,20 +1,22 @@
+use architecture::{ArchitectureError, Unlowerable};
 use models::{
     execution::TaskExecutionPlan,
     layout::DecoderConfig,
     semantic::{
-        ActivationSpec, AttentionOutputSpec, FeedForwardSpec, LinearAttentionSpec, MixerSpec,
-        NormalizationKind, SemanticModelSpec,
+        ActivationSpec, AttentionOutputSpec, FeedForwardSpec, KeyValueRelation,
+        LinearAttentionSpec, MixerSpec, NormalizationKind, SemanticModelSpec,
     },
     weights::{TensorCatalog, TensorInfo},
 };
 use serde_json::json;
 
 use super::*;
+use crate::engine::Error;
 
 #[test]
 fn materializes_dense_layers_without_model_identity() -> Result<()> {
     let spec = dense_spec()?;
-    let lowering = plan(&spec)?;
+    let lowering = plan(&dense_decoder()?, &spec)?;
 
     assert_eq!(
         lowering.layers(),
@@ -26,9 +28,12 @@ fn materializes_dense_layers_without_model_identity() -> Result<()> {
             mixer: MixerLowering::Softmax {
                 normalization: models::semantic::QkNormalization::None,
                 sinks: false,
-                window: None
+                window: None,
+                key_value_relation: KeyValueRelation::Separate,
             },
-            feed_forward: FeedForwardLowering::Dense,
+            feed_forward: FeedForwardLowering::Dense {
+                activation: Activation::SwiGlu { clamp: None }
+            },
         }]
     );
     assert_eq!(lowering.runtime(), DecoderRuntime::Dense);
@@ -37,7 +42,7 @@ fn materializes_dense_layers_without_model_identity() -> Result<()> {
             &TaskExecutionPlan::Generation { decoder: dense_decoder()? },
             Some(&spec),
         )?,
-        crate::MetalArchitecture::Generation(DecoderRuntime::Dense)
+        crate::MetalArchitecture::Generation(lowering)
     );
     Ok(())
 }
@@ -48,11 +53,13 @@ fn rejects_an_unavailable_normalization_independently() -> Result<()> {
     spec.decoder.layers[0].input_norm.kind = NormalizationKind::Layer;
     spec.decoder.layers[0].input_norm.weight_offset = 1.0;
 
-    let error = lower_layer(&spec.decoder.layers[0])
-        .err()
-        .ok_or_else(|| Error::InvalidModel("offset layer normalization was admitted".into()))?;
-
-    assert!(error.to_string().contains("input layer normalization"));
+    assert!(matches!(
+        lower_layer(&spec.decoder.layers[0]),
+        Err(Error::Architecture(ArchitectureError::Unlowerable {
+            layer: Some(0),
+            feature: Unlowerable::LayerNormWeightOffset,
+        }))
+    ));
     Ok(())
 }
 
@@ -69,7 +76,7 @@ fn admits_linear_attention_through_the_dense_mixed_runtime() -> Result<()> {
     });
 
     assert_eq!(lower_layer(&spec.decoder.layers[0])?.mixer, MixerLowering::Linear);
-    assert_eq!(plan(&spec)?.runtime(), DecoderRuntime::DenseMixed);
+    assert_eq!(plan(&dense_decoder()?, &spec)?.runtime(), DecoderRuntime::DenseMixed);
     Ok(())
 }
 
@@ -87,11 +94,12 @@ fn preserves_windows_for_the_dense_runtime() -> Result<()> {
             normalization: models::semantic::QkNormalization::None,
             sinks: false,
             window: std::num::NonZeroUsize::new(128)
-                .map(models::semantic::AttentionWindow::Sliding)
+                .map(models::semantic::AttentionWindow::Sliding),
+            key_value_relation: KeyValueRelation::Separate,
         }
     );
     // The dense runtime runs sliding layers (Gemma 3) with the cache's mask.
-    assert_eq!(plan(&spec)?.runtime(), DecoderRuntime::Dense);
+    assert_eq!(plan(&dense_decoder()?, &spec)?.runtime(), DecoderRuntime::Dense);
     Ok(())
 }
 
@@ -99,7 +107,8 @@ fn preserves_windows_for_the_dense_runtime() -> Result<()> {
 fn rejects_an_activation_the_dense_operator_does_not_implement() -> Result<()> {
     let mut spec = dense_spec()?;
     // Tanh GELU (Gemma's GeGLU) lowers; an ungated activation lowers to the
-    // hybrid MLP, which no softmax-only runtime executes.
+    // relu² MLP, which only the state-space hybrid runtime executes, beside
+    // its Mamba mixers.
     if let FeedForwardSpec::Dense { activation, .. } = &mut spec.decoder.layers[0].feed_forward {
         *activation = ActivationSpec::GeluTanh;
     }
@@ -110,12 +119,12 @@ fn rejects_an_activation_the_dense_operator_does_not_implement() -> Result<()> {
 
     assert_eq!(
         lower_layer(&spec.decoder.layers[0])?.feed_forward,
-        FeedForwardLowering::UngatedDense
+        FeedForwardLowering::Dense { activation: Activation::ReluSquared }
     );
-    let error = plan(&spec)
-        .err()
-        .ok_or_else(|| Error::InvalidModel("dense relu-squared was admitted".into()))?;
-    assert!(error.to_string().contains("no runtime"));
+    assert!(matches!(
+        plan(&dense_decoder()?, &spec),
+        Err(Error::Architecture(ArchitectureError::NoRuntime { .. }))
+    ));
     Ok(())
 }
 

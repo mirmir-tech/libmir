@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use architecture::metal::MetalArchitecture;
 use foundation::model::ModelManifest;
 use models::{
     execution::TaskExecutionPlan,
@@ -22,7 +23,7 @@ use tokenizer::tokenizer_info;
 
 use crate::{
     MetalConfig, MetalProgressEvent,
-    engine::{ModelTensors, Stream, configure_recommended_wired_limit, lowering, memory_stats},
+    engine::{ModelTensors, Stream, configure_recommended_wired_limit, memory_stats},
     native::{
         error::{Error, Result},
         prefix::PrefixCache,
@@ -60,22 +61,15 @@ impl LoadedModel {
         let catalog = TensorCatalog::from_layout(&layout)?;
         let task_plan = TaskExecutionPlan::discover(&layout, &catalog)?;
         let (decoder, encoder, contract) = execution_metadata(&task_plan, &layout, &catalog)?;
-        architecture::metal::admit(
+        let architecture = architecture::metal::admit(
             &task_plan,
             contract.as_ref().map(|contract| &contract.semantic),
         )
         .map_err(|error| Error::UnsupportedModel(error.to_string()))?;
-        let decoder_lowering = matches!(
-            task_plan,
-            TaskExecutionPlan::Generation { .. } | TaskExecutionPlan::CausalScoring { .. }
-        )
-        .then(|| {
-            contract
-                .as_ref()
-                .ok_or_else(|| Error::UnsupportedModel("generation contract is missing".into()))
-                .and_then(|contract| Ok(lowering::plan(&contract.semantic)?))
-        })
-        .transpose()?;
+        let decoder_lowering = match architecture {
+            MetalArchitecture::Generation(plan) => Some(plan),
+            MetalArchitecture::Embedding | MetalArchitecture::SequenceScoring => None,
+        };
         let vision = VisionConfig::from_layout(&layout)?;
         if let Some(decoder) = decoder.as_ref()
             && matches!(

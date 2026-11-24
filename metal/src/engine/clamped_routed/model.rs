@@ -8,7 +8,7 @@ use super::{
 use crate::engine::{
     Array, DecoderCache, KvPageFormat, ModelTensors, NormWeight, Result, Stream, decode,
     decoder::{LayerContext, LayerLoopOptions, forward_layers},
-    lowering::{FeedForwardLowering, LayerLowering, MixerLowering},
+    lowering::{Activation, Experts, FeedForwardLowering, LayerLowering, MixerLowering},
 };
 
 #[derive(Debug)]
@@ -39,8 +39,16 @@ impl ClampedRoutedModel {
     ) -> Result<Self> {
         let compatible = lowering.len() == spec.layers.len()
             && lowering.iter().all(|layer| {
-                layer.feed_forward == FeedForwardLowering::ClampedRouted
-                    && matches!(layer.mixer, MixerLowering::Softmax { sinks: true, .. })
+                matches!(
+                    layer.feed_forward,
+                    FeedForwardLowering::Routed {
+                        experts: Experts {
+                            activation: Activation::SwiGlu { clamp: Some(_) },
+                            ..
+                        },
+                        shared: None,
+                    }
+                ) && matches!(layer.mixer, MixerLowering::Softmax { sinks: true, .. })
             });
         if !compatible {
             return Err(crate::engine::Error::InvalidModel(
@@ -68,7 +76,7 @@ impl ClampedRoutedModel {
                 MixerLowering::Softmax { window, .. } => {
                     window.and_then(models::semantic::AttentionWindow::sliding)
                 },
-                MixerLowering::Linear | MixerLowering::StateSpace | MixerLowering::Latent => {
+                MixerLowering::Linear | MixerLowering::StateSpace | MixerLowering::Latent(_) => {
                     unreachable!("validated sink-attention mixer")
                 },
             })

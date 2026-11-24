@@ -168,14 +168,20 @@ pub(super) fn require_dense_layers(
     decoder: &DecoderConfig,
     lowering: &[crate::engine::lowering::LayerLowering],
 ) -> Result<()> {
-    use crate::engine::lowering::{FeedForwardLowering, MixerLowering};
+    use crate::engine::lowering::{Activation, Experts, FeedForwardLowering, MixerLowering};
     let compatible = lowering.len() == decoder.num_hidden_layers
         && lowering.iter().all(|layer| {
             matches!(
                 layer.feed_forward,
-                FeedForwardLowering::Dense
-                    | FeedForwardLowering::Routed
-                    | FeedForwardLowering::SharedRouted
+                FeedForwardLowering::Dense {
+                    activation: Activation::SwiGlu { clamp: None } | Activation::GeluTanh,
+                } | FeedForwardLowering::Routed {
+                    experts: Experts {
+                        activation: Activation::SwiGlu { clamp: None },
+                        ..
+                    },
+                    ..
+                }
             ) && matches!(layer.mixer, MixerLowering::Softmax { .. })
         });
     if compatible {

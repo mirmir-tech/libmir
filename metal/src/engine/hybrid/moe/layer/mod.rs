@@ -13,17 +13,13 @@ use super::{
     attention::{self, DecodeContext},
     feed_forward,
 };
+#[cfg(test)]
+use crate::engine::KvCache;
 use crate::engine::{
     Array, ExpertFusion, FusedAttention, FusedExpertGateUp, FusedGateUp, FusedKeyValue,
     ModelTensors, Result, Stream,
     binding::BoundLinear,
     fusion_planner::{FusionPlanner, ProjectionBiases},
-    lowering::LayerLowering,
-};
-#[cfg(test)]
-use crate::engine::{
-    KvCache,
-    lowering::{FeedForwardLowering, MixerLowering, NormalizationLowering},
 };
 
 mod forward;
@@ -51,7 +47,6 @@ impl HybridMoeLayer {
     pub fn load_bindings(
         tensors: &ModelTensors,
         bindings: &HybridMoeLayerBindings<'_>,
-        lowering: LayerLowering,
         layer: &DecoderLayerSpec,
         config: HybridMoeLayerConfig,
         stream: &Stream,
@@ -59,13 +54,12 @@ impl HybridMoeLayer {
         let config = config.validate()?;
         let frequencies = Array::rope_periods(super::attention(layer)?)?;
         let weights = LayerWeights::load_bindings(tensors, bindings, frequencies, config, stream)?;
-        Self::finish_load(weights, lowering, config, stream)
+        Self::finish_load(weights, config, stream)
     }
 
     pub(in crate::engine::hybrid::moe) fn load_dense_bindings(
         tensors: &ModelTensors,
         bindings: &DenseDecoderLayerBindings<'_>,
-        lowering: LayerLowering,
         layer: &DecoderLayerSpec,
         publish: Option<Publish>,
         config: HybridMoeLayerConfig,
@@ -76,7 +70,7 @@ impl HybridMoeLayer {
         let weights = LayerWeights::load_dense_bindings(
             tensors, bindings, frequencies, publish, config, stream,
         )?;
-        Self::finish_load(weights, lowering, config, stream)
+        Self::finish_load(weights, config, stream)
     }
 
     #[cfg(test)]
@@ -88,39 +82,20 @@ impl HybridMoeLayer {
         let config = layer.config.validate()?;
         let frequencies = Array::rope_periods(super::attention(&layer.spec)?)?;
         let weights = LayerWeights::load(tensors, frequencies, config, stream)?;
-        let lowering = LayerLowering {
-            index: config.layer_index,
-            input_norm: NormalizationLowering::Rms,
-            post_attention_norm: NormalizationLowering::Rms,
-            norm_placement: models::semantic::NormPlacement::Pre,
-            mixer: MixerLowering::Softmax {
-                normalization: models::semantic::QkNormalization::QueryKeyValueRms,
-                sinks: false,
-                window: config.sliding_window.map(models::semantic::AttentionWindow::Sliding),
-            },
-            feed_forward: FeedForwardLowering::DenseAndRouted,
-        };
-        Self::finish_load(weights, lowering, config, stream)
+        Self::finish_load(weights, config, stream)
     }
 
     fn finish_load(
         weights: LayerWeights,
-        lowering: LayerLowering,
         config: HybridMoeLayerConfig,
         stream: &Stream,
     ) -> Result<Self> {
         let key_values = weights.attention.key_values.projections();
-        let fusion = FusionPlanner::new(stream).projections(
-            lowering.feed_forward,
-            ProjectionBiases::new(
-                [
-                    weights.attention.query.has_bias(),
-                    key_values.is_some_and(|(key, _)| key.has_bias()),
-                ],
-                key_values.and_then(|(_, value)| value).map(BoundLinear::has_bias),
-                [weights.dense.gate.has_bias(), weights.dense.up.has_bias()],
-            ),
-        );
+        let fusion = FusionPlanner::new(stream).hybrid_projections(ProjectionBiases::new(
+            [weights.attention.query.has_bias(), key_values.is_some_and(|(key, _)| key.has_bias())],
+            key_values.and_then(|(_, value)| value).map(BoundLinear::has_bias),
+            [weights.dense.gate.has_bias(), weights.dense.up.has_bias()],
+        ));
         // A layer reading another's keys and values projects queries alone.
         let fused_attention = key_values
             .filter(|_| fusion.attention)

@@ -24,7 +24,7 @@ fn executes_a_complete_dense_shared_routed_model() -> Result<()> {
     let decoder = DecoderConfig::from_layout(&layout)?;
     let catalog = TensorCatalog::from_layout(&layout)?;
     let contract = DecoderExecutionContract::discover(&layout, &decoder, &catalog)?;
-    let lowering = lowering::plan(&contract.semantic)?;
+    let lowering = lowering::plan(&decoder, &contract.semantic)?;
     let load_stream = Stream::new_cpu()?;
     let tensors = ModelTensors::load(&root, &load_stream)?;
     let stream = Stream::new_gpu()?;
@@ -59,7 +59,7 @@ fn packed_prefill_matches_independent_rows() -> Result<()> {
     let decoder = DecoderConfig::from_layout(&layout)?;
     let catalog = TensorCatalog::from_layout(&layout)?;
     let contract = DecoderExecutionContract::discover(&layout, &decoder, &catalog)?;
-    let lowering = lowering::plan(&contract.semantic)?;
+    let lowering = lowering::plan(&decoder, &contract.semantic)?;
     let load_stream = Stream::new_cpu()?;
     let tensors = ModelTensors::load(&root, &load_stream)?;
     let stream = Stream::new_gpu()?;
