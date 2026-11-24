@@ -85,9 +85,10 @@ impl CapturedAttentionWeights {
                 exact: output.clone(),
                 quantized: backend.prepare_fp8_residual_linear_weight(output)?,
             },
-            DenseExecution::Matrix | DenseExecution::Vector | DenseExecution::CublasLt => {
-                CapturedOutputWeight::Bf16(output.clone())
-            },
+            DenseExecution::Matrix
+            | DenseExecution::Vector
+            | DenseExecution::RowGroupVector
+            | DenseExecution::CublasLt => CapturedOutputWeight::Bf16(output.clone()),
         };
         Ok(Self {
             input_norm: weights.input_norm.cloned(),

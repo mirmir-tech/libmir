@@ -16,7 +16,10 @@ pub enum DenseRole {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum DenseExecution {
     Matrix,
+    /// BF16 GEMV with one block per output row; input features divisible by 8.
     Vector,
+    /// BF16 GEMV with 32 output rows per block; any input width.
+    RowGroupVector,
     CublasLt,
     BlockFp8Vector,
     Fp8Int4Vector,
@@ -121,8 +124,10 @@ impl CudaExecutionPlanner {
                 DenseExecution::BlockFp8Vector
             } else if vendor {
                 DenseExecution::CublasLt
-            } else if vector {
+            } else if vector && request.input_features.is_multiple_of(8) {
                 DenseExecution::Vector
+            } else if vector {
+                DenseExecution::RowGroupVector
             } else {
                 DenseExecution::Matrix
             },

@@ -144,9 +144,10 @@ impl DownProjection {
             {
                 DenseExecution::BlockFp8Vector => Self::BlockFp8,
                 DenseExecution::Fp8Int4Vector => Self::Fp8Int4,
-                DenseExecution::Matrix | DenseExecution::Vector | DenseExecution::CublasLt => {
-                    Self::Bf16(backend.prepare_bf16_projection(request)?)
-                },
+                DenseExecution::Matrix
+                | DenseExecution::Vector
+                | DenseExecution::RowGroupVector
+                | DenseExecution::CublasLt => Self::Bf16(backend.prepare_bf16_projection(request)?),
             },
         )
     }

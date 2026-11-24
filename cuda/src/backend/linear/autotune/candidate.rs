@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use mircuda::{
-    Context, CublasLtBf16Plan, CublasLtBf16Spec, DenseMatmulPlan, DenseMatmulSpec, DenseVectorPlan,
-    DenseVectorSpec, DeviceBuffer, Stream, bf16,
+    Context, CublasLtBf16Plan, CublasLtBf16Spec, DenseMatmulPlan, DenseMatmulSpec,
+    DenseVectorKernel, DenseVectorPlan, DenseVectorSpec, DeviceBuffer, Stream, bf16,
 };
 
 use super::super::CudaBackend;
@@ -46,11 +46,12 @@ impl Candidate {
                     request.input_features,
                 )?,
             )?),
-            DenseExecution::Vector if request.tokens == 1 => Plan::Vector(DenseVectorPlan::new(
-                context,
-                stream,
-                DenseVectorSpec::new(request.output_features, request.input_features)?,
-            )?),
+            DenseExecution::Vector if request.tokens == 1 => {
+                vector(context, stream, request, DenseVectorKernel::BlockPerRow)?
+            },
+            DenseExecution::RowGroupVector if request.tokens == 1 => {
+                vector(context, stream, request, DenseVectorKernel::RowGroups)?
+            },
             DenseExecution::CublasLt => Plan::Vendor(CublasLtBf16Plan::new(
                 context,
                 stream,
@@ -60,7 +61,7 @@ impl Candidate {
                     request.input_features,
                 )?,
             )?),
-            DenseExecution::Vector => {
+            DenseExecution::Vector | DenseExecution::RowGroupVector => {
                 return Err(Error::InvalidExecutionPlan("BF16 vector tuning requires one token"));
             },
             DenseExecution::BlockFp8Vector | DenseExecution::Fp8Int4Vector => {
@@ -71,6 +72,17 @@ impl Candidate {
         };
         Ok(Self { execution, plan })
     }
+}
+
+fn vector(
+    context: &Context,
+    stream: &Stream,
+    request: DensePlanRequest,
+    kernel: DenseVectorKernel,
+) -> Result<Plan> {
+    let spec = DenseVectorSpec::new(request.output_features, request.input_features)?
+        .with_kernel(kernel)?;
+    Ok(Plan::Vector(DenseVectorPlan::new(context, stream, spec)?))
 }
 
 impl Plan {
@@ -92,7 +104,10 @@ impl Plan {
 pub(super) fn candidates(request: DensePlanRequest) -> Vec<DenseExecution> {
     let mut executions = vec![DenseExecution::Matrix, DenseExecution::CublasLt];
     if request.tokens == 1 {
-        executions.push(DenseExecution::Vector);
+        if request.input_features.is_multiple_of(8) {
+            executions.push(DenseExecution::Vector);
+        }
+        executions.push(DenseExecution::RowGroupVector);
     }
     executions
 }
@@ -166,5 +181,23 @@ mod tests {
             ),
             [DenseExecution::Vector, DenseExecution::Matrix]
         );
+    }
+
+    #[test]
+    fn decode_measures_both_vector_kernels_the_width_admits() {
+        let request = DensePlanRequest {
+            phase: ExecutionPhase::Decode,
+            role: crate::DenseRole::Router,
+            tokens: 1,
+            input_features: 2_048,
+            output_features: 128,
+        };
+        let vectors = [DenseExecution::Vector, DenseExecution::RowGroupVector];
+        assert!(vectors.iter().all(|execution| candidates(request).contains(execution)));
+        let odd = candidates(DensePlanRequest { input_features: 2_050, ..request });
+        assert!(!odd.contains(&DenseExecution::Vector));
+        assert!(odd.contains(&DenseExecution::RowGroupVector));
+        let prefill = candidates(DensePlanRequest { tokens: 2, ..request });
+        assert!(vectors.iter().all(|execution| !prefill.contains(execution)));
     }
 }

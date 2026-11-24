@@ -74,6 +74,7 @@ impl GateUpProjection {
                         DenseExecution::Fp8Int4Vector => Self::Fp8Int4,
                         DenseExecution::Matrix
                         | DenseExecution::Vector
+                        | DenseExecution::RowGroupVector
                         | DenseExecution::CublasLt => Self::Bf16(Bf16LinearPair::new(
                             backend,
                             phase,

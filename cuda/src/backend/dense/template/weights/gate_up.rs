@@ -96,9 +96,10 @@ impl DenseGateUpOwned {
                     exact: weights.clone(),
                     quantized: backend.prepare_fp8_residual_linear_pair_weight(weights)?,
                 },
-                DenseExecution::Matrix | DenseExecution::Vector | DenseExecution::CublasLt => {
-                    Self::Bf16(weights.clone())
-                },
+                DenseExecution::Matrix
+                | DenseExecution::Vector
+                | DenseExecution::RowGroupVector
+                | DenseExecution::CublasLt => Self::Bf16(weights.clone()),
             },
         )
     }

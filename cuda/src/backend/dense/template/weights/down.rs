@@ -68,9 +68,10 @@ impl DenseDownOwned {
                     exact: weight.clone(),
                     quantized: backend.prepare_fp8_residual_linear_weight(weight)?,
                 },
-                DenseExecution::Matrix | DenseExecution::Vector | DenseExecution::CublasLt => {
-                    Self::Bf16(weight.clone())
-                },
+                DenseExecution::Matrix
+                | DenseExecution::Vector
+                | DenseExecution::RowGroupVector
+                | DenseExecution::CublasLt => Self::Bf16(weight.clone()),
             },
         )
     }
