@@ -6,10 +6,11 @@
 //! the tokens before it.
 //!
 //! Usage: `perplexity <model> <text> [chunks=N] [context=N] [prefill=N]
-//! [reserve=PERCENT] [bos=ID]`, where `prefill` sets the CUDA or Metal prefill
-//! chunk in tokens and `bos` starts the text and replaces each chunk's first
-//! token, as `llama-perplexity` does for models whose vocabulary adds a BOS
-//! token.
+//! [reserve=PERCENT] [bos=ID|none]`, where `prefill` sets the CUDA or Metal
+//! prefill chunk in tokens. A BOS token starts the text and replaces each
+//! chunk's first token, as `llama-perplexity` does for models whose
+//! vocabulary adds one: by default the model's `tokenizer_config.json`
+//! decides (`add_bos_token` and `bos_token`), and `bos` overrides it.
 #![allow(clippy::print_stdout)]
 
 use std::{env, fs, io::Write, path::PathBuf};
@@ -23,14 +24,17 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let text = args.next().map(PathBuf::from).ok_or("missing text path")?;
     let mut chunks = usize::MAX;
     let mut context = 512_usize;
-    let mut bos = None;
+    let mut bos = Bos::Configured;
     #[allow(unused_mut)]
     let mut config = RuntimeConfig::default();
     for option in args.filter_map(|option| option.into_string().ok()) {
         if let Some(value) = option.strip_prefix("chunks=") {
             chunks = value.parse()?;
         } else if let Some(value) = option.strip_prefix("bos=") {
-            bos = Some(value.parse::<u32>()?);
+            bos = match value {
+                "none" => Bos::Disabled,
+                id => Bos::Token(id.parse()?),
+            };
         } else if let Some(value) = option.strip_prefix("reserve=") {
             // Platform reserve as a percentage of memory (mirmir defaults to
             // 1).
@@ -67,6 +71,12 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
     let tokenizer = Tokenizer::from_file(model_path.join("tokenizer.json"))?;
     let mut tokens = tokenizer.encode(fs::read_to_string(text)?, false)?.get_ids().to_vec();
+    let bos = match bos {
+        Bos::Configured => configured_bos(&model_path, &tokenizer)?,
+        Bos::Token(id) => Some(id),
+        Bos::Disabled => None,
+    };
+    println!("bos={}", bos.map_or_else(|| "none".to_owned(), |id| id.to_string()));
     // `llama-perplexity` tokenizes with the BOS token in front of the text.
     if let Some(bos) = bos {
         tokens.insert(0, bos);
@@ -122,4 +132,39 @@ fn log_probability(
     let sum = logits.iter().map(|value| f64::from(value - maximum).exp()).sum::<f64>();
     let value = logits.get(usize::try_from(token)?).ok_or("token outside the vocabulary")?;
     Ok(f64::from(value - maximum) - sum.ln())
+}
+
+/// Where the BOS token comes from.
+enum Bos {
+    /// The model's tokenizer configuration.
+    Configured,
+    Token(u32),
+    Disabled,
+}
+
+/// The BOS token the model's tokenizer adds in front of a text, if any:
+/// `add_bos_token` with `bos_token` given as a string or an added-token
+/// object.
+fn configured_bos(
+    model: &std::path::Path,
+    tokenizer: &Tokenizer,
+) -> Result<Option<u32>, Box<dyn std::error::Error + Send + Sync>> {
+    let Ok(text) = fs::read_to_string(model.join("tokenizer_config.json")) else {
+        return Ok(None);
+    };
+    let config: serde_json::Value = serde_json::from_str(&text)?;
+    if config.get("add_bos_token").and_then(serde_json::Value::as_bool) != Some(true) {
+        return Ok(None);
+    }
+    let token = config.get("bos_token").and_then(|token| {
+        token
+            .as_str()
+            .or_else(|| token.get("content").and_then(serde_json::Value::as_str))
+    });
+    let token = token.ok_or("add_bos_token is set without a bos_token")?;
+    Ok(Some(
+        tokenizer
+            .token_to_id(token)
+            .ok_or_else(|| format!("{token} is not in the vocabulary"))?,
+    ))
 }
