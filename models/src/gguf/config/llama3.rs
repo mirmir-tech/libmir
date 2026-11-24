@@ -10,24 +10,15 @@
 //! with `low_freq_factor = 1` that gives the Hugging Face parameters, and
 //! they must reproduce every divisor.
 
-use std::{
-    fs::File,
-    io::{Read, Seek, SeekFrom},
-    path::Path,
-};
-
 use serde_json::{Map, Value, json};
 
-use super::super::{GgmlType, GgufModel, GgufTensor};
+use super::super::{ConfigurationVector, GgufModel};
 use crate::error::{ModelsError, Result};
 
-pub(super) const TENSOR: &str = "rope_freqs.weight";
+const TENSOR: &str = ConfigurationVector::RopeFrequencies.tensor();
 
 pub(super) fn rope_scaling(model: &GgufModel, config: &mut Map<String, Value>) -> Result<()> {
-    let Some((path, start, tensor)) = model.shards.iter().find_map(|(path, header)| {
-        let tensor = header.tensors.iter().find(|tensor| tensor.name == TENSOR)?;
-        Some((path, header.data_start, tensor))
-    }) else {
+    let Some(divisors) = model.vector(ConfigurationVector::RopeFrequencies) else {
         return Ok(());
     };
     let invalid = |detail: &str| ModelsError::InvalidGguf(format!("{TENSOR}: {detail}"));
@@ -35,7 +26,7 @@ pub(super) fn rope_scaling(model: &GgufModel, config: &mut Map<String, Value>) -
         .get("rope_theta")
         .and_then(Value::as_f64)
         .ok_or_else(|| invalid("needs rope.freq_base"))?;
-    let divisors = read(path, start, tensor)?;
+    let divisors = divisors?;
     let dims = f64::from(u32::try_from(divisors.len() * 2)?);
     let frequencies = (0..divisors.len())
         .map(|pair| Ok(theta.powf(-2.0 * f64::from(u32::try_from(pair)?) / dims)))
@@ -136,16 +127,4 @@ fn hard_boundary(
         }),
     );
     Ok(())
-}
-
-pub(super) fn read(path: &Path, start: u64, tensor: &GgufTensor) -> Result<Vec<f64>> {
-    if tensor.ggml_type != GgmlType::F32 || tensor.dims.len() != 1 {
-        return Err(ModelsError::InvalidGguf(format!("{} is not a vector of F32", tensor.name)));
-    }
-    let mut bytes = vec![0_u8; usize::try_from(tensor.bytes)?];
-    let mut file = File::open(path)?;
-    file.seek(SeekFrom::Start(start + tensor.offset))?;
-    file.read_exact(&mut bytes)?;
-    let (words, _) = bytes.as_chunks::<4>();
-    Ok(words.iter().map(|word| f64::from(f32::from_le_bytes(*word))).collect())
 }

@@ -40,6 +40,9 @@ const BLOCK: [(&str, &str); 13] = [
     ("ffn_down", "mlp.down_proj.linear"),
 ];
 
+/// The scalar bounds a clipped linear clamps its input and output to.
+const CLIP_BOUNDS: [&str; 4] = ["input_min", "input_max", "output_min", "output_max"];
+
 const GLOBAL: [(&str, &str); 4] = [
     (
         "v.position_embd.weight",
@@ -58,6 +61,12 @@ pub(super) fn tensor_name(gguf: &str) -> Option<String> {
     layer.bytes().all(|byte| byte.is_ascii_digit()).then_some(())?;
     let (role, suffix) = rest.rsplit_once('.')?;
     let (_, name) = BLOCK.iter().find(|(from, _)| *from == role)?;
+    // A clipped linear's bounds sit beside its `linear` module.
+    let name = if CLIP_BOUNDS.contains(&suffix) {
+        name.strip_suffix(".linear")?
+    } else {
+        name
+    };
     Some(format!("{PREFIX}.encoder.layers.{layer}.{name}.{suffix}"))
 }
 
@@ -73,11 +82,10 @@ pub(super) fn derive(
         })
     };
     let catalog = header.catalog(file)?;
-    if catalog.tensors.iter().any(|tensor| tensor.name.ends_with(".input_max")) {
-        return Err(ModelsError::InvalidGguf(
-            "clipped Gemma 4 vision linears are not supported".into(),
-        ));
-    }
+    let clipped = catalog
+        .tensors
+        .iter()
+        .any(|tensor| tensor.name.starts_with("v.blk.") && tensor.name.ends_with(".input_max"));
     let (hidden, heads) = (unsigned("embedding_length")?, unsigned("attention.head_count")?);
     let (patch, channels) = (unsigned("patch_size")?, 3_u64);
     let assembled = patch_projection(header, file, channels)?;
@@ -118,7 +126,7 @@ pub(super) fn derive(
             "hidden_activation": "gelu_pytorch_tanh",
             "rope_parameters": {"rope_type": "default", "rope_theta": ROPE_THETA},
             "standardize": catalog.contains("v.std_bias"),
-            "use_clipped_linears": false,
+            "use_clipped_linears": clipped,
             "default_output_length": SOFT_TOKENS,
         }),
     );

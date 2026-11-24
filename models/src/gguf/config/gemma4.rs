@@ -10,9 +10,12 @@ use serde_json::{Map, Value, json};
 
 use super::{
     super::{GgufModel, MetadataValue},
-    decimal, llama3,
+    decimal,
 };
-use crate::error::{ModelsError, Result};
+use crate::{
+    error::{ModelsError, Result},
+    gguf::ConfigurationVector,
+};
 
 /// Whether `architecture` is Gemma 4; fills its keys.
 pub(super) fn gemma4(
@@ -116,12 +119,7 @@ fn rope_parameters(
     let theta = |name: &str| header.get(&format!("gemma4.{name}")).and_then(decimal);
     // The rotated share of a full layer's head: its `rope_freqs` pairs of 1.
     let rotated = model
-        .shards
-        .iter()
-        .find_map(|(path, header)| {
-            let tensor = header.tensors.iter().find(|tensor| tensor.name == llama3::TENSOR)?;
-            Some(llama3::read(path, header.data_start, tensor))
-        })
+        .vector(ConfigurationVector::RopeFrequencies)
         .transpose()?
         .map(|factors| factors.iter().filter(|&&factor| (factor - 1.0).abs() < 1e-6).count());
     let full_factor = rotated.map_or(1.0, |pairs| {

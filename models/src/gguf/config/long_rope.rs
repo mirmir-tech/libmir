@@ -5,11 +5,11 @@
 
 use serde_json::{Map, Value, json};
 
-use super::super::GgufModel;
+use super::super::{ConfigurationVector, GgufModel};
 use crate::error::{ModelsError, Result};
 
-const LONG: &str = "rope_factors_long.weight";
-const SHORT: &str = "rope_factors_short.weight";
+const LONG: &str = ConfigurationVector::LongRopeFactors.tensor();
+const SHORT: &str = ConfigurationVector::ShortRopeFactors.tensor();
 /// microsoft/Phi-3.5-MoE-instruct `rope_scaling.long_mscale`.
 const PHIMOE_MSCALE: f64 = 1.243_163_121_016_122;
 
@@ -19,13 +19,10 @@ pub(super) fn rope_scaling(
     architecture: &str,
     config: &mut Map<String, Value>,
 ) -> Result<()> {
-    let factors = |name: &str| {
-        model.shards.iter().find_map(|(path, header)| {
-            let tensor = header.tensors.iter().find(|tensor| tensor.name == name)?;
-            Some(super::llama3::read(path, header.data_start, tensor))
-        })
-    };
-    let (long, short) = match (factors(LONG), factors(SHORT)) {
+    let (long, short) = match (
+        model.vector(ConfigurationVector::LongRopeFactors),
+        model.vector(ConfigurationVector::ShortRopeFactors),
+    ) {
         (None, None) => return Ok(()),
         (Some(long), Some(short)) => (long?, short?),
         _ => {

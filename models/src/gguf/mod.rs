@@ -18,6 +18,7 @@ mod tiled;
 mod tokenizer;
 mod types;
 mod value;
+mod vectors;
 mod vision;
 
 use std::{
@@ -36,6 +37,7 @@ pub use tensor::GgufTensor;
 pub use tiled::TiledValueHeads;
 pub use types::{Affine32, GgmlType};
 pub use value::MetadataValue;
+pub use vectors::ConfigurationVector;
 pub use vision::{Projector, VisionImport};
 
 use crate::{error::Result, layout::WeightContainer};

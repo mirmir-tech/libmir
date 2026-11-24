@@ -44,10 +44,10 @@ fn headers_from_elsewhere_build_the_same_model() -> Result<()> {
     let paths =
         [1, 2].map(|number| std::path::PathBuf::from(format!("m-{number:05}-of-00002.gguf")));
     let shards = vec![(paths[0].clone(), header(&first)?), (paths[1].clone(), header(&second)?)];
-    let catalog = GgufModel::from_headers(shards.clone())?.mapped_catalog()?;
+    let catalog = GgufModel::from_headers(shards.clone(), [])?.mapped_catalog()?;
     assert!(catalog.get("backbone.layers.1.mixer.A_log").is_some());
     let reversed = shards.into_iter().rev().collect::<Vec<_>>();
-    assert!(GgufModel::from_headers(reversed).is_err());
-    assert!(GgufModel::from_headers(Vec::new()).is_err());
+    assert!(GgufModel::from_headers(reversed, []).is_err());
+    assert!(GgufModel::from_headers(Vec::new(), []).is_err());
     Ok(())
 }

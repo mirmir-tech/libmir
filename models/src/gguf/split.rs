@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::{GgmlType, GgufHeader, GgufTensor};
+use super::{GgmlType, GgufHeader, GgufTensor, vectors::VectorSource};
 use crate::{
     error::{ModelsError, Result},
     layout::WeightContainer,
@@ -15,6 +15,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct GgufModel {
     pub shards: Vec<(PathBuf, GgufHeader)>,
+    pub(super) vectors: VectorSource,
 }
 
 impl GgufModel {
@@ -24,18 +25,7 @@ impl GgufModel {
             .into_iter()
             .map(|shard| GgufHeader::read(&shard).map(|header| (shard, header)))
             .collect::<Result<Vec<_>>>()?;
-        let model = Self { shards };
-        model.validate()?;
-        Ok(model)
-    }
-
-    /// A model from headers read elsewhere, such as range requests against a
-    /// remote file: every shard's header, in order, named by its file.
-    pub fn from_headers(shards: Vec<(PathBuf, GgufHeader)>) -> Result<Self> {
-        if shards.is_empty() {
-            return Err(ModelsError::InvalidGguf("a GGUF model needs one header".into()));
-        }
-        let model = Self { shards };
+        let model = Self { shards, vectors: VectorSource::Files };
         model.validate()?;
         Ok(model)
     }
@@ -82,7 +72,7 @@ impl GgufModel {
         super::type_bytes(self.tensors())
     }
 
-    fn validate(&self) -> Result<()> {
+    pub(super) fn validate(&self) -> Result<()> {
         let count = self.shards.len();
         if count == 1 && self.header().unsigned("split.count").is_none_or(|declared| declared == 1)
         {

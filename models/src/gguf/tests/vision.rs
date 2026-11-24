@@ -137,7 +137,8 @@ fn the_import_joins_the_patch_frames() -> TestResult {
     Ok(())
 }
 
-/// A one-block `gemma4v` tower with one `[2, 3, 2, 2]` patch projection.
+/// A one-block `gemma4v` tower with one `[2, 3, 2, 2]` patch projection and
+/// a clipped attention output.
 fn gemma4v() -> TestResult<Writer> {
     let mut writer = Writer::new()
         .text("general.architecture", "clip")?
@@ -161,7 +162,8 @@ fn gemma4v() -> TestResult<Writer> {
     Ok(writer
         .tensor("v.patch_embd.weight", &[2, 2, 3, 2], GgmlType::F32)?
         .tensor("v.position_embd.weight", &[4, 6, 2], GgmlType::F32)?
-        .tensor("v.blk.0.attn_out.weight", &[4, 4], GgmlType::F16)?)
+        .tensor("v.blk.0.attn_out.weight", &[4, 4], GgmlType::F16)?
+        .tensor("v.blk.0.attn_out.input_max", &[1], GgmlType::F32)?)
 }
 
 #[test]
@@ -173,6 +175,8 @@ fn gemma4_patch_rows_return_to_pixel_major_order() -> TestResult {
     let header = parse(&bytes).map_err(|error| format!("{error:?}"))?;
     let catalog = header.mapped_catalog(std::path::Path::new("mmproj.gguf"))?;
     assert!(catalog.contains("model.vision_tower.encoder.layers.0.self_attn.o_proj.linear.weight"));
+    // Its bounds sit beside the `linear` module, as in the checkpoint.
+    assert!(catalog.contains("model.vision_tower.encoder.layers.0.self_attn.o_proj.input_max"));
     // Value at [out, channel, y, x] is `channel * 10 + y * 2 + x + out * 100`.
     let start = usize::try_from(header.data_start + header.tensors[0].offset)?;
     for (index, chunk) in bytes[start..start + 24 * 4].as_chunks_mut::<4>().0.iter_mut().enumerate()
@@ -194,6 +198,7 @@ fn gemma4_patch_rows_return_to_pixel_major_order() -> TestResult {
     std::fs::remove_dir_all(&directory)?;
     let import = import?;
     assert_eq!(import.root["vision_config"]["position_embedding_size"], 6);
+    assert_eq!(import.root["vision_config"]["use_clipped_linears"], true);
     assert_eq!(import.root["image_token_id"], 1);
     assert_eq!(import.root["text_config"]["use_bidirectional_attention"], "vision");
     let (_, file) = import.assembled.ok_or("nothing assembled")?;
