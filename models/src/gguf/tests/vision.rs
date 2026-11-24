@@ -65,9 +65,14 @@ fn the_text_model_is_not_the_projector_beside_it() -> TestResult {
     std::fs::write(directory.join("mmproj-F16.gguf"), mmproj()?.bytes()?)?;
     std::fs::write(directory.join("model-Q4_K_M.gguf"), text()?.bytes()?)?;
     let model = crate::gguf::text_model(&directory);
+    let projector = crate::gguf::projector(&directory);
     std::fs::remove_dir_all(&directory)?;
     let architecture = model?.map(|model| model.header().architecture().map(str::to_owned));
     assert_eq!(architecture, Some(Some("qwen35".to_owned())));
+    assert_eq!(projector?, Some(directory.join("mmproj-F16.gguf")));
+    assert!(crate::gguf::is_projector_name("MMPROJ-model-F16.gguf"));
+    assert!(crate::gguf::is_projector_name("gemma-4-E4B-it-mmproj.gguf"));
+    assert!(!crate::gguf::is_projector_name("model-Q4_K_M.gguf"));
     Ok(())
 }
 

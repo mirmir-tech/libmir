@@ -113,6 +113,13 @@ impl GgufHeader {
         self.string("general.architecture")
     }
 
+    /// Whether this is a vision tower's `mmproj` file rather than a text
+    /// model.
+    #[must_use]
+    pub fn is_projector(&self) -> bool {
+        self.architecture() == Some(super::PROJECTOR_ARCHITECTURE)
+    }
+
     /// The catalog of this one file under `SafeTensors` names, which the
     /// binding layer reads; tensors without a mapped role keep their GGUF
     /// name. Split models map through [`super::GgufModel::mapped_catalog`],

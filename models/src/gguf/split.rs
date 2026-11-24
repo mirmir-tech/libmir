@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use super::{GgmlType, GgufHeader, GgufTensor};
 use crate::{
     error::{ModelsError, Result},
+    layout::WeightContainer,
     weights::{TensorCatalog, TensorInfo},
 };
 
@@ -128,7 +129,8 @@ pub fn shard_paths(path: &Path) -> Result<Vec<PathBuf>> {
 
 /// `name-00002-of-00003.gguf` → (`name`, 3).
 fn split_name(path: &Path) -> Option<(String, u32)> {
-    let stem = path.file_name()?.to_str()?.strip_suffix(".gguf")?;
+    let name = path.file_name()?.to_str()?;
+    let stem = name.strip_suffix(WeightContainer::Gguf.extension())?.strip_suffix('.')?;
     let (rest, count) = stem.rsplit_once("-of-")?;
     let (prefix, number) = rest.rsplit_once('-')?;
     let valid =

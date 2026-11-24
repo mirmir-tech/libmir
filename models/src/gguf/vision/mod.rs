@@ -26,7 +26,7 @@ pub enum Projector {
 impl Projector {
     /// The projector of an `mmproj` header; `None` for a text model.
     pub fn of(header: &GgufHeader) -> Result<Option<Self>> {
-        if header.architecture() != Some("clip") {
+        if !header.is_projector() {
             return Ok(None);
         }
         // Converters write the projector at either key.

@@ -5,6 +5,8 @@ use std::{
     path::Path,
 };
 
+use models::layout::WeightContainer;
+
 use super::{Array, Dtype, Result, Stream};
 
 #[derive(Debug)]
@@ -31,7 +33,7 @@ impl TensorFile {
         full_precision: &BTreeSet<String>,
         stream: &Stream,
     ) -> Result<Self> {
-        if !models::gguf::is_gguf(path) {
+        if WeightContainer::of(path) != Some(WeightContainer::Gguf) {
             return Ok(Self {
                 native: mirtal::TensorFile::load(path, stream.native())?,
                 converted: BTreeMap::new(),

@@ -45,9 +45,10 @@ pub const MAGIC: [u8; 4] = *b"GGUF";
 /// `general.architecture` of a vision tower's projector (`mmproj`) file.
 pub const PROJECTOR_ARCHITECTURE: &str = "clip";
 
-/// The prefix llama.cpp names projector files with (`mmproj-*.gguf`), the
+/// The word projector file names carry, as a prefix (`mmproj-*.gguf`, as
+/// llama.cpp names them) or anywhere (`gemma-4-E4B-it-mmproj.gguf`): the
 /// only sign of one before its header is read, as in a Hub listing.
-const PROJECTOR_FILE_PREFIX: &str = "mmproj";
+const PROJECTOR_FILE_WORD: &str = "mmproj";
 
 /// Payload bytes per GGML type, largest first.
 fn type_bytes<'a>(tensors: impl IntoIterator<Item = &'a GgufTensor>) -> Vec<(GgmlType, u64)> {
@@ -89,10 +90,9 @@ pub fn projector(directory: &Path) -> Result<Option<PathBuf>> {
     Ok(None)
 }
 
-/// Whether a file name, without its header, names a projector by llama.cpp's
-/// convention; for listings whose headers are not at hand.
+/// Whether a file name, without its header, names a projector; for
+/// listings whose headers are not at hand.
 #[must_use]
 pub fn is_projector_name(name: &str) -> bool {
-    name.get(..PROJECTOR_FILE_PREFIX.len())
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(PROJECTOR_FILE_PREFIX))
+    name.to_ascii_lowercase().contains(PROJECTOR_FILE_WORD)
 }
