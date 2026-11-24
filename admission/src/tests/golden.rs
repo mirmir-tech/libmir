@@ -53,6 +53,13 @@ pub(super) fn fixtures() -> AnyResult<Vec<Fixture>> {
     {
         attention.key_value_source = Some(0);
     }
+    // Nemotron-H's attention and routed relu² layers without its Mamba
+    // layers, which the state-space hybrid runtimes are built around.
+    let mut state_space_free = hybrid.clone();
+    state_space_free
+        .decoder
+        .layers
+        .retain(|layer| !matches!(layer.mixer, models::semantic::MixerSpec::StateSpace(_)));
     Ok(vec![
         ("dense", task.clone(), dense.clone()),
         ("dense and routed", task.clone(), dense_and_routed(dense.clone())),
@@ -67,7 +74,8 @@ pub(super) fn fixtures() -> AnyResult<Vec<Fixture>> {
         ("unsupported mix", task, mixed_unsupported(dense)),
         ("latent softmax", latent_task, latent),
         ("latent sigmoid", sigmoid_task, sigmoid),
-        ("state-space hybrid", hybrid_task, hybrid),
+        ("state-space hybrid", hybrid_task.clone(), hybrid),
+        ("state-space free", hybrid_task, state_space_free),
     ])
 }
 
@@ -111,6 +119,7 @@ fn admits_each_fixture_to_its_runtime() -> AnyResult<()> {
             Some(Cuda::StateSpaceHybrid),
             Some(Metal::StateSpaceHybrid),
         ),
+        ("state-space free", None, None),
     ];
     let fixtures = fixtures()?;
     assert_eq!(fixtures.len(), expected.len());

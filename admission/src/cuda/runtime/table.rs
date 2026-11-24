@@ -80,6 +80,7 @@ pub(super) fn capabilities(runtime: CudaDecoderRuntime) -> Operations {
             ),
         // Plain attention beside the Mamba-2 mixers: no sinks, Q/K norm or
         // positions, separate values; biased sigmoid routing into relu² experts.
+        // Its loader binds Nemotron-H layers, so a decoder needs a Mamba layer.
         CudaDecoderRuntime::StateSpaceHybrid => {
             let latent = [Block::LatentRouted, Block::SharedLatentRouted];
             none.layers(
@@ -92,7 +93,11 @@ pub(super) fn capabilities(runtime: CudaDecoderRuntime) -> Operations {
             .routers(&latent, &[RouterKind::SigmoidBiasedTopK])
             .normalizations(&[QkNormalization::None])
             .features_except(
-                &[&GRAPH_ONLY[..], &[Feature::SharedKeyValue, Feature::RotaryAttention]].concat(),
+                &[
+                    &GRAPH_ONLY[..],
+                    &[Feature::SharedKeyValue, Feature::RotaryAttention, Feature::StateSpaceFree],
+                ]
+                .concat(),
             )
         },
         CudaDecoderRuntime::LatentAttention => none
