@@ -1,3 +1,4 @@
+mod container;
 mod decoder;
 mod encoder;
 mod files;
@@ -5,6 +6,7 @@ mod metadata;
 mod modernbert;
 mod vision;
 
+pub use container::WeightContainer;
 pub use decoder::{
     AttentionLayerType, AttentionOutput, DecoderConfig, HybridBlockKind, HybridBlockPattern,
     HybridFeedForward, HybridLayer, HybridLayerBlock, LINEAR_ATTENTION_LAYOUT,

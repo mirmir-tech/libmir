@@ -18,7 +18,7 @@ fn array<T>(kind: u32, values: &[T], item: impl Fn(&T) -> Vec<u8>) -> Vec<u8> {
 }
 
 /// A two-block `qwen3vl_merger` tower with `[4, 3, 2, 2]` frames.
-fn mmproj() -> TestResult<Writer> {
+pub(super) fn mmproj() -> TestResult<Writer> {
     let mut writer = Writer::new()
         .text("general.architecture", "clip")?
         .text("clip.projector_type", "qwen3vl_merger")?;
@@ -54,6 +54,21 @@ fn text() -> TestResult<Writer> {
         9,
         array(8, &tokens, |token| Writer::string(token).unwrap_or_default()),
     ))
+}
+
+/// The `mmproj` file sorts before the text model; the directory's model is
+/// still the text one.
+#[test]
+fn the_text_model_is_not_the_projector_beside_it() -> TestResult {
+    let directory = std::env::temp_dir().join(format!("libmir-gguf-text-{}", std::process::id()));
+    std::fs::create_dir_all(&directory)?;
+    std::fs::write(directory.join("mmproj-F16.gguf"), mmproj()?.bytes()?)?;
+    std::fs::write(directory.join("model-Q4_K_M.gguf"), text()?.bytes()?)?;
+    let model = crate::gguf::text_model(&directory);
+    std::fs::remove_dir_all(&directory)?;
+    let architecture = model?.map(|model| model.header().architecture().map(str::to_owned));
+    assert_eq!(architecture, Some(Some("qwen35".to_owned())));
+    Ok(())
 }
 
 #[test]

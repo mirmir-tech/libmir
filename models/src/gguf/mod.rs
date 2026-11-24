@@ -37,7 +37,7 @@ pub use types::{Affine32, GgmlType};
 pub use value::MetadataValue;
 pub use vision::{Projector, VisionImport};
 
-use crate::error::Result;
+use crate::{error::Result, layout::WeightContainer};
 
 pub const MAGIC: [u8; 4] = *b"GGUF";
 
@@ -52,18 +52,26 @@ fn type_bytes<'a>(tensors: impl IntoIterator<Item = &'a GgufTensor>) -> Vec<(Ggm
     totals
 }
 
-/// Whether a path names a GGUF file by extension.
+/// Whether a path names a GGUF file.
 #[must_use]
 pub fn is_gguf(path: &Path) -> bool {
-    path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("gguf"))
+    WeightContainer::of(path) == Some(WeightContainer::Gguf)
 }
 
 /// The GGUF files directly inside a directory, sorted.
 pub fn files_in(directory: &Path) -> Result<Vec<PathBuf>> {
-    let mut files: Vec<PathBuf> = std::fs::read_dir(directory)?
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| path.is_file() && is_gguf(path))
-        .collect();
-    files.sort();
-    Ok(files)
+    WeightContainer::Gguf.discover(directory)
+}
+
+/// The text model among the GGUF files in a directory, opened with all its
+/// shards: an import links a vision tower's `mmproj` file
+/// (`general.architecture = clip`) beside it, which may sort first.
+pub fn text_model(directory: &Path) -> Result<Option<GgufModel>> {
+    for path in files_in(directory)? {
+        let model = GgufModel::open(&path)?;
+        if model.header().architecture() != Some("clip") {
+            return Ok(Some(model));
+        }
+    }
+    Ok(None)
 }

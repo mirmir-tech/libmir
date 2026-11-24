@@ -1,7 +1,4 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use super::{AgentConfig, DecisionTensorPlan, DecisionTokenizer};
 use crate::{
@@ -44,10 +41,7 @@ impl DecisionCheckpoint {
             required(root.join("tokenizer/tokenizer_config.json"))?,
         )?;
         let weights = required(root.join("model.safetensors"))?;
-        let weight = WeightFile {
-            bytes: fs::metadata(&weights)?.len(),
-            path: weights,
-        };
+        let weight = WeightFile::open(weights)?;
         let catalog = TensorCatalog::from_weight_files(&[weight])?;
         let tensors = DecisionTensorPlan::discover(&encoder, agent.head_layers, &catalog)?;
         if encoder.hidden_size % 64 != 0 {

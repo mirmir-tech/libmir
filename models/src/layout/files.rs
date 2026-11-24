@@ -6,12 +6,30 @@ use std::{
 
 use serde::Deserialize;
 
+use super::WeightContainer;
 use crate::error::{ModelsError, Result};
 
 #[derive(Debug, Clone)]
 pub struct WeightFile {
     pub path: PathBuf,
     pub bytes: u64,
+    pub container: WeightContainer,
+}
+
+impl WeightFile {
+    /// A weight file on disk; any other file is an error.
+    pub fn open(path: PathBuf) -> Result<Self> {
+        let Ok(metadata) = fs::metadata(&path) else {
+            return Err(ModelsError::MissingFile(path));
+        };
+        let Some(container) = WeightContainer::of(&path) else {
+            return Err(ModelsError::InvalidConfig(format!(
+                "{} is not a SafeTensors or GGUF weight file",
+                path.display()
+            )));
+        };
+        Ok(Self { path, bytes: metadata.len(), container })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -96,6 +114,13 @@ impl ModelLayout {
         })
     }
 
+    /// The container of the model's text weights; `None` without weight
+    /// files. A GGUF import also holds a vision tower's `SafeTensors` file.
+    #[must_use]
+    pub fn container(&self) -> Option<WeightContainer> {
+        WeightContainer::of_model(self.weights.iter().map(|weight| weight.container))
+    }
+
     #[must_use]
     pub fn has_tokenizer(&self) -> bool {
         self.tokenizer_path.is_some()
@@ -119,7 +144,7 @@ fn read_weights(root: &Path, index_path: Option<&Path>) -> Result<Vec<WeightFile
         Some(path) => read_indexed_names(path)?,
         None => read_safetensor_names(root)?,
     };
-    names.into_iter().map(|name| weight_file(root.join(name))).collect()
+    names.into_iter().map(|name| WeightFile::open(root.join(name))).collect()
 }
 
 fn read_indexed_names(path: &Path) -> Result<BTreeSet<String>> {
@@ -130,30 +155,16 @@ fn read_indexed_names(path: &Path) -> Result<BTreeSet<String>> {
 
 fn read_safetensor_names(root: &Path) -> Result<BTreeSet<String>> {
     let mut names = BTreeSet::new();
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().is_some_and(|ext| ext == "safetensors")
-            && let Some(name) = path.file_name().and_then(|name| name.to_str())
-        {
-            let _inserted = names.insert(name.to_owned());
-        }
-    }
     // A GGUF import directory links its shards, beside the few tensors a
     // vision import assembles as `SafeTensors`.
-    for path in crate::gguf::files_in(root)? {
-        if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
-            let _inserted = names.insert(name.to_owned());
+    for container in [WeightContainer::SafeTensors, WeightContainer::Gguf] {
+        for path in container.discover(root)? {
+            if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+                let _inserted = names.insert(name.to_owned());
+            }
         }
     }
     Ok(names)
-}
-
-fn weight_file(path: PathBuf) -> Result<WeightFile> {
-    let Ok(metadata) = fs::metadata(&path) else {
-        return Err(ModelsError::MissingFile(path));
-    };
-    Ok(WeightFile { path, bytes: metadata.len() })
 }
 
 #[cfg(test)]

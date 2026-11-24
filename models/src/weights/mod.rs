@@ -36,6 +36,7 @@ pub use binding::{
     StateSpaceTensorRole, TensorBinding, TensorPacking, TensorStorage, UngatedExpertBindings,
     WeightBindingPlan,
 };
+pub(crate) use catalog::read_weight_header;
 pub use catalog::{
     MAX_SAFETENSORS_HEADER_BYTES, TensorCatalog, TensorInfo, safetensors_header_len,
 };

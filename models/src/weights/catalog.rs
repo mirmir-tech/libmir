@@ -9,7 +9,7 @@ use serde::Deserialize;
 
 use crate::{
     error::Result,
-    layout::{ModelLayout, WeightFile},
+    layout::{ModelLayout, WeightContainer, WeightFile},
 };
 
 pub const MAX_SAFETENSORS_HEADER_BYTES: usize = 100 * 1024 * 1024;
@@ -64,19 +64,13 @@ impl TensorCatalog {
 
     pub fn from_weight_files(weights: &[WeightFile]) -> Result<Self> {
         let mut tensors = Vec::new();
-        // A split GGUF model maps its names once over every shard.
-        let mut shards = std::collections::HashSet::new();
-        for weight in weights {
-            if crate::gguf::is_gguf(&weight.path) {
-                if shards.contains(&weight.path) {
-                    continue;
-                }
-                let model = crate::gguf::GgufModel::open(&weight.path)?;
-                shards.extend(model.shards.iter().map(|(path, _)| path.clone()));
-                tensors.extend(model.mapped_catalog()?.tensors);
-            } else {
-                tensors.extend(read_weight_header(weight)?);
-            }
+        for container in [WeightContainer::SafeTensors, WeightContainer::Gguf] {
+            let files = weights
+                .iter()
+                .filter(|weight| weight.container == container)
+                .cloned()
+                .collect::<Vec<_>>();
+            tensors.extend(container.read_catalog(&files)?);
         }
         Ok(Self::new(tensors))
     }
@@ -125,7 +119,7 @@ impl TensorCatalog {
     }
 }
 
-fn read_weight_header(weight: &WeightFile) -> Result<Vec<TensorInfo>> {
+pub fn read_weight_header(weight: &WeightFile) -> Result<Vec<TensorInfo>> {
     let mut file = File::open(&weight.path)?;
     let header_len = read_header_len(&mut file)?;
     let mut header = vec![0; usize::try_from(header_len)?];
@@ -202,10 +196,7 @@ mod tests {
         bytes.extend_from_slice(&[0; 8]);
         fs::write(&path, &bytes)?;
 
-        let weight = WeightFile {
-            path: path.clone(),
-            bytes: u64::try_from(bytes.len())?,
-        };
+        let weight = WeightFile::open(path.clone())?;
         let tensors = read_weight_header(&weight)?;
         let _removed = fs::remove_file(path);
 

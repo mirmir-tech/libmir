@@ -2,6 +2,7 @@ use super::*;
 use crate::error::ModelsError;
 
 mod cohere;
+mod container;
 mod fused;
 mod gemma4;
 mod glm;
