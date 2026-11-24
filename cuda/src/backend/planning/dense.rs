@@ -1,3 +1,5 @@
+use std::num::NonZeroU16;
+
 use super::{CudaExecutionPlanner, ExecutionPhase, PlanSource};
 use crate::{Error, Result};
 
@@ -20,6 +22,11 @@ pub enum DenseExecution {
     Vector,
     /// BF16 GEMV with 32 output rows per block; any input width.
     RowGroupVector,
+    /// BF16 GEMV splitting each row's input across `splits` blocks, reduced
+    /// in fixed order; measured by the decode tuner, never planned directly.
+    SplitKVector {
+        splits: NonZeroU16,
+    },
     CublasLt,
     BlockFp8Vector,
     Fp8Int4Vector,

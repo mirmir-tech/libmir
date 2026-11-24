@@ -88,6 +88,7 @@ impl CapturedAttentionWeights {
             DenseExecution::Matrix
             | DenseExecution::Vector
             | DenseExecution::RowGroupVector
+            | DenseExecution::SplitKVector { .. }
             | DenseExecution::CublasLt => CapturedOutputWeight::Bf16(output.clone()),
         };
         Ok(Self {

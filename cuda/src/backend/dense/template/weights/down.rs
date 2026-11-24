@@ -71,6 +71,7 @@ impl DenseDownOwned {
                 DenseExecution::Matrix
                 | DenseExecution::Vector
                 | DenseExecution::RowGroupVector
+                | DenseExecution::SplitKVector { .. }
                 | DenseExecution::CublasLt => Self::Bf16(weight.clone()),
             },
         )

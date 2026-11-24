@@ -12,7 +12,7 @@ use super::{
 };
 use crate::{AttentionExecution, DenseExecution, DensePlanRequest};
 
-const SCHEMA: u32 = 44;
+const SCHEMA: u32 = 45;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(super) struct DeviceKey {

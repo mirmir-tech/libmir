@@ -52,6 +52,9 @@ impl Candidate {
             DenseExecution::RowGroupVector if request.tokens == 1 => {
                 vector(context, stream, request, DenseVectorKernel::RowGroups)?
             },
+            DenseExecution::SplitKVector { splits } if request.tokens == 1 => {
+                vector(context, stream, request, DenseVectorKernel::SplitK { splits })?
+            },
             DenseExecution::CublasLt => Plan::Vendor(CublasLtBf16Plan::new(
                 context,
                 stream,
@@ -61,7 +64,9 @@ impl Candidate {
                     request.input_features,
                 )?,
             )?),
-            DenseExecution::Vector | DenseExecution::RowGroupVector => {
+            DenseExecution::Vector
+            | DenseExecution::RowGroupVector
+            | DenseExecution::SplitKVector { .. } => {
                 return Err(Error::InvalidExecutionPlan("BF16 vector tuning requires one token"));
             },
             DenseExecution::BlockFp8Vector | DenseExecution::Fp8Int4Vector => {
@@ -101,13 +106,25 @@ impl Plan {
     }
 }
 
-pub(super) fn candidates(request: DensePlanRequest) -> Vec<DenseExecution> {
+/// Executions the tuner measures; one-token requests add every vector
+/// kernel the width admits, with split-K slice counts sized to the device.
+pub(super) fn candidates(request: DensePlanRequest, multiprocessors: u32) -> Vec<DenseExecution> {
     let mut executions = vec![DenseExecution::Matrix, DenseExecution::CublasLt];
     if request.tokens == 1 {
         if request.input_features.is_multiple_of(8) {
             executions.push(DenseExecution::Vector);
         }
         executions.push(DenseExecution::RowGroupVector);
+        if let Ok(spec) = DenseVectorSpec::new(request.output_features, request.input_features) {
+            executions.extend(spec.split_k_candidates(multiprocessors).into_iter().filter_map(
+                |kernel| match kernel {
+                    DenseVectorKernel::SplitK { splits } => {
+                        Some(DenseExecution::SplitKVector { splits })
+                    },
+                    DenseVectorKernel::RowGroups | DenseVectorKernel::BlockPerRow => None,
+                },
+            ));
+        }
     }
     executions
 }
@@ -155,49 +172,4 @@ pub(super) fn measure(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ExecutionPhase;
-
-    #[test]
-    fn prefill_uses_vendor_then_planner_fallback() {
-        assert_eq!(
-            initial_executions(DenseExecution::Matrix, None, ExecutionPhase::Prefill),
-            [DenseExecution::CublasLt, DenseExecution::Matrix]
-        );
-        assert_eq!(
-            initial_executions(DenseExecution::Vector, None, ExecutionPhase::Decode),
-            [DenseExecution::Vector]
-        );
-    }
-
-    #[test]
-    fn cached_execution_precedes_planner_fallback() {
-        assert_eq!(
-            initial_executions(
-                DenseExecution::Matrix,
-                Some(DenseExecution::Vector),
-                ExecutionPhase::Decode
-            ),
-            [DenseExecution::Vector, DenseExecution::Matrix]
-        );
-    }
-
-    #[test]
-    fn decode_measures_both_vector_kernels_the_width_admits() {
-        let request = DensePlanRequest {
-            phase: ExecutionPhase::Decode,
-            role: crate::DenseRole::Router,
-            tokens: 1,
-            input_features: 2_048,
-            output_features: 128,
-        };
-        let vectors = [DenseExecution::Vector, DenseExecution::RowGroupVector];
-        assert!(vectors.iter().all(|execution| candidates(request).contains(execution)));
-        let odd = candidates(DensePlanRequest { input_features: 2_050, ..request });
-        assert!(!odd.contains(&DenseExecution::Vector));
-        assert!(odd.contains(&DenseExecution::RowGroupVector));
-        let prefill = candidates(DensePlanRequest { tokens: 2, ..request });
-        assert!(vectors.iter().all(|execution| !prefill.contains(execution)));
-    }
-}
+mod tests;

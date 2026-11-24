@@ -51,6 +51,24 @@ fn measured_profile_survives_as_device_shape_cache() -> Result<(), Box<dyn std::
     Ok(())
 }
 
+/// Split-K entries carry their slice count, which the device key already
+/// scopes through its multiprocessor count.
+#[test]
+fn split_k_profile_entry_keeps_its_slice_count() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = temporary_directory();
+    let request = request();
+    let execution = DenseExecution::SplitKVector {
+        splits: std::num::NonZeroU16::new(18).ok_or("zero splits")?,
+    };
+    let tuner = CudaAutoTuner::new(&device(), config(&directory, CudaTuningMode::Startup));
+    assert!(tuner.claim_dense(request));
+    tuner.record_dense(request, execution, Duration::from_micros(3), Duration::from_millis(1));
+    let cached = CudaAutoTuner::new(&device(), config(&directory, CudaTuningMode::Cached));
+    assert_eq!(cached.lookup_dense(request), Some((execution, PlanSource::MeasuredCache)));
+    fs::remove_dir_all(&directory)?;
+    Ok(())
+}
+
 #[test]
 fn device_identity_invalidates_profile() -> Result<(), Box<dyn std::error::Error>> {
     let directory = temporary_directory();

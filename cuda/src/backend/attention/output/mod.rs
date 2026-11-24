@@ -178,6 +178,7 @@ impl AttentionOutputProjection {
                     DenseExecution::Matrix
                     | DenseExecution::Vector
                     | DenseExecution::RowGroupVector
+                    | DenseExecution::SplitKVector { .. }
                     | DenseExecution::CublasLt => {
                         Self::Bf16(backend.prepare_bf16_projection(request)?)
                     },

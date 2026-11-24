@@ -8,6 +8,8 @@ use super::CudaBackend;
 use crate::{DenseExecution, DensePlanRequest, ExecutionPhase, PlanSource, Result};
 
 mod candidate;
+#[cfg(test)]
+mod tests;
 mod validation;
 
 #[derive(Debug)]
@@ -17,6 +19,7 @@ pub(in crate::backend) struct AutoBf16Plan {
     selected: Option<usize>,
     fallback: usize,
     tunable: bool,
+    multiprocessors: u32,
     context: Context,
     stream: Stream,
     tuner: crate::backend::tuning::CudaAutoTuner,
@@ -61,6 +64,7 @@ impl AutoBf16Plan {
             candidates: prepared,
             fallback: 0,
             tunable: prepare_candidates,
+            multiprocessors: backend.execution_planner().hardware().multiprocessor_count().get(),
             context: backend.inner.context.clone(),
             stream: backend.inner.stream.clone(),
             tuner: backend.inner.tuner.clone(),
@@ -112,7 +116,7 @@ impl AutoBf16Plan {
         if !self.tuner.claim_dense(self.request) {
             return Ok(());
         }
-        for execution in candidates(self.request) {
+        for execution in candidates(self.request, self.multiprocessors) {
             if !self.candidates.iter().any(|candidate| candidate.execution == execution) {
                 match Candidate::new_with_resources(
                     &self.context, &self.stream, self.request, execution,
