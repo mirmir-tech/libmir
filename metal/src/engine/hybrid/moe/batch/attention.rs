@@ -1,11 +1,17 @@
 use super::{
-    super::{HybridMoeLayerConfig, attention, weights::AttentionWeights},
+    super::{
+        HybridMoeLayerConfig,
+        attention::{self, KeyValues},
+        sharing::SourceAttention,
+        weights::AttentionWeights,
+    },
     history,
 };
 use crate::engine::{
     Array, Error, FusedAttention, FusedKeyValue, KvCache, KvContext, PagedContextMode, Result,
     Stream, attention::tuning, native_paged_attention_mode, paged_attention_min_context,
 };
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn packed_attention(
     input: &Array,
@@ -18,12 +24,12 @@ pub(super) fn packed_attention(
     causal: bool,
     stream: &Stream,
 ) -> Result<Array> {
-    let batch = i32::try_from(caches.len())?;
+    let batch = i32::try_from(positions.len())?;
     let sequence = *input
         .shape()?
         .get(1)
         .ok_or_else(|| Error::InvalidModel("packed input has no sequence axis".into()))?;
-    let attention::Projected { queries, keys, values } = attention::project(
+    let attention::Projected { queries, key_values } = attention::project(
         input,
         weights,
         config,
@@ -38,43 +44,85 @@ pub(super) fn packed_attention(
         causal,
         stream,
     };
-    if let Some(attended) = history::persistent([&queries, &keys, &values], caches, context)? {
-        return history::project(&attended, weights, config, [batch, sequence], stream);
-    }
-    let rows = attention_rows(&queries, &keys, &values, caches, context)?;
-    let rows = rows.iter().collect::<Vec<_>>();
-    let output = Array::concatenate(&rows, 0, stream)?;
+    let output = match key_values {
+        KeyValues::Shared(attended) => match attended.as_ref() {
+            SourceAttention::Persistent(attended) => {
+                attended.attend(&history::rotate(&queries, context)?, 1.0, None, stream)?
+            },
+            SourceAttention::Rows(rows) => {
+                let rows = rows
+                    .iter()
+                    .enumerate()
+                    .map(|(row, (shared, mode))| {
+                        Ok((row_query(&queries, row, context)?, shared, *mode))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                concatenate(&attend_rows(&rows, causal, stream)?, stream)?
+            },
+        },
+        KeyValues::Own { keys, values, publish } => {
+            if let Some((output, attended)) =
+                history::persistent([&queries, &keys, &values], caches, context)?
+            {
+                if let Some(publish) = publish {
+                    publish.publish(SourceAttention::Persistent(attended))?;
+                }
+                output
+            } else {
+                let prepared = prepare_rows(&queries, &keys, &values, caches, context)?;
+                if let Some(publish) = publish {
+                    let shared = prepared
+                        .iter()
+                        .map(|(_, context, mode)| Ok((context.share()?, *mode)))
+                        .collect::<Result<Vec<_>>>()?;
+                    publish.publish(SourceAttention::Rows(shared))?;
+                }
+                let rows = prepared
+                    .iter()
+                    .map(|(query, context, mode)| (query.snapshot(), context, *mode))
+                    .map(|(query, context, mode)| Ok((query?, context, mode)))
+                    .collect::<Result<Vec<_>>>()?;
+                concatenate(&attend_rows(&rows, causal, stream)?, stream)?
+            }
+        },
+    };
     history::project(&output, weights, config, [batch, sequence], stream)
 }
-fn attention_rows(
+
+fn concatenate(rows: &[Array], stream: &Stream) -> Result<Array> {
+    Array::concatenate(&rows.iter().collect::<Vec<_>>(), 0, stream)
+}
+
+/// Row `row`'s rotated `[1, heads, S, D]` queries.
+fn row_query(queries: &Array, row: usize, context: AttentionRows<'_>) -> Result<Array> {
+    let AttentionRows { weights, config, positions, stream, .. } = context;
+    let query = sequence_row_slice(queries, row, config.attention_heads, config.head_dim, stream)?;
+    attention::rope_layout(
+        &query,
+        weights.rope_frequencies.as_ref(),
+        config,
+        positions[row],
+        stream,
+    )
+}
+
+/// Each row's rotated queries, its cache context after appending its keys
+/// and values, and the mode the context was read in.
+fn prepare_rows(
     queries: &Array,
     keys: &Array,
     values: &Array,
     caches: &mut [&mut KvCache],
     context: AttentionRows<'_>,
-) -> Result<Vec<Array>> {
-    let AttentionRows {
-        weights,
-        config,
-        positions,
-        causal,
-        stream,
-    } = context;
+) -> Result<Vec<(Array, KvContext, PagedContextMode)>> {
+    let AttentionRows { weights, config, positions, stream, .. } = context;
     let tune_paged = caches.len() > 1;
-    let prepared = caches
+    caches
         .iter_mut()
         .enumerate()
         .map(|(row, cache)| {
             let position = positions[row];
-            let query =
-                sequence_row_slice(queries, row, config.attention_heads, config.head_dim, stream)?;
-            let query = attention::rope_layout(
-                &query,
-                weights.rope_frequencies.as_ref(),
-                config,
-                position,
-                stream,
-            )?;
+            let query = row_query(queries, row, context)?;
             let key = sequence_row_slice(keys, row, config.kv_heads, config.head_dim, stream)?;
             let key = attention::rope_layout(
                 &key,
@@ -107,45 +155,50 @@ fn attention_rows(
             )?;
             Ok((query, context, mode))
         })
-        .collect::<Result<Vec<_>>>()?;
-    let mut outputs = grouped_attention(&prepared, causal, stream)?;
-    prepared
-        .into_iter()
+        .collect()
+}
+
+/// Each row's queries over its context: grouped where rows can share one
+/// call, else one by one.
+fn attend_rows(
+    rows: &[(Array, &KvContext, PagedContextMode)],
+    causal: bool,
+    stream: &Stream,
+) -> Result<Vec<Array>> {
+    let mut outputs = grouped_attention(rows, causal, stream)?;
+    rows.iter()
         .enumerate()
         .map(|(row, (query, context, mode))| {
             if let Some(output) = outputs[row].take() {
                 return Ok(output);
             }
-            let view = mode == PagedContextMode::Both
+            let view = *mode == PagedContextMode::Both
                 && context
                     .paged
                     .as_ref()
                     .is_none_or(|paged| paged.key_scales.is_none() && paged.value_scales.is_none());
-            if view || context.paged.is_none() {
-                return query.scaled_dot_product_attention(
+            match &context.paged {
+                Some(paged) if !view => query.paged_scaled_dot_product_attention_with_scratch(
+                    paged.attention(),
+                    paged.scratch(),
+                    1.0,
+                    stream,
+                ),
+                _ => query.scaled_dot_product_attention(
                     &context.keys, &context.values, 1.0, causal, stream,
-                );
+                ),
             }
-            let paged = context
-                .paged
-                .ok_or_else(|| Error::InvalidModel("native paged context is missing".into()))?;
-            query.paged_scaled_dot_product_attention_with_scratch(
-                paged.attention(),
-                paged.scratch(),
-                1.0,
-                stream,
-            )
         })
         .collect()
 }
 
 fn grouped_attention(
-    prepared: &[(Array, KvContext, PagedContextMode)],
+    prepared: &[(Array, &KvContext, PagedContextMode)],
     causal: bool,
     stream: &Stream,
 ) -> Result<Vec<Option<Array>>> {
     let queries = prepared.iter().map(|(query, _, _)| query).collect::<Vec<_>>();
-    let contexts = prepared.iter().map(|(_, context, _)| context).collect::<Vec<_>>();
+    let contexts = prepared.iter().map(|(_, context, _)| *context).collect::<Vec<_>>();
     let groups = tuning::batch::compatible_groups(&queries, &contexts, causal)?;
     let mut outputs = std::iter::repeat_with(|| None).take(prepared.len()).collect::<Vec<_>>();
     for rows in groups.iter().filter(|rows| rows.len() > 1) {

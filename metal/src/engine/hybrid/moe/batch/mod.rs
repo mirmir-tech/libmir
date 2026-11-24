@@ -10,7 +10,7 @@ use super::{
     model::HybridMoeModel,
 };
 use crate::engine::{
-    Array, DecoderCache, Error, KvCache, Result, Stream, decode,
+    Array, DecoderCache, KvCache, Result, Stream, decode,
     decoder::{LoweredPackedLayer, forward_packed_layers},
 };
 
@@ -60,14 +60,7 @@ impl HybridMoeModel {
             self.layers.len(),
         );
         for (index, layer) in self.layers.iter().enumerate() {
-            let mut layer_caches = caches
-                .iter_mut()
-                .map(|cache| {
-                    cache.attention_caches_mut()?.get_mut(index).ok_or_else(|| {
-                        Error::InvalidModel(format!("missing cache for layer {index}"))
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
+            let mut layer_caches = layer.own_caches(caches, index)?;
             hidden = layer.mix_packed_prefill(&hidden, &mut layer_caches, positions, stream)?;
             hidden = layer.feed_forward_packed(&hidden, stream)?;
             if evaluation_step
@@ -110,15 +103,7 @@ impl LoweredPackedLayer for HybridMoeLayer {
     ) -> Result<Array> {
         let profile = profile_components(stream);
         let started = Instant::now();
-        let mut layer_caches = caches
-            .iter_mut()
-            .map(|cache| {
-                cache
-                    .attention_caches_mut()?
-                    .get_mut(index)
-                    .ok_or_else(|| Error::InvalidModel(format!("missing cache for layer {index}")))
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let mut layer_caches = self.own_caches(caches, index)?;
         let output = self.mix_packed(input, &mut layer_caches, positions, stream)?;
         if profile {
             emit_profile(&output, stream, self.config.layer_index, "attention", started)?;

@@ -30,13 +30,9 @@ impl LoweredLayer for HybridMoeLayer {
                 )
             })
             .transpose()?;
-        let cache = cache
-            .attention_caches_mut()?
-            .get_mut(index)
-            .ok_or_else(|| Error::InvalidModel(format!("missing cache for layer {index}")))?;
         self.mix(
             input,
-            Some(cache),
+            self.own_cache(cache, index)?,
             context.position,
             context.causal,
             mask.as_ref(),

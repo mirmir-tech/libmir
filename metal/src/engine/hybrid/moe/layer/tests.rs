@@ -133,7 +133,7 @@ impl HybridMoeLayer {
             input.shape()?.get(1).copied().ok_or_else(|| {
                 Error::InvalidModel("attention input has no sequence axis".into())
             })?;
-        let attention::Projected { keys, values, .. } = attention::project(
+        let attention::Projected { key_values, .. } = attention::project(
             &input,
             &self.weights.attention,
             self.config,
@@ -141,6 +141,9 @@ impl HybridMoeLayer {
             [1, sequence],
             stream,
         )?;
+        let attention::KeyValues::Own { keys, values, .. } = key_values else {
+            return Err(Error::InvalidModel("the layer shares another layer's keys".into()));
+        };
         let keys = attention::rope_layout(
             &keys,
             self.weights.attention.rope_frequencies.as_ref(),

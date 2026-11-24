@@ -4,7 +4,10 @@
 
 use std::sync::Arc;
 
-use super::{History, KvCache, admits, attend_history, enabled, execute, row_attention, take};
+use super::{
+    Attended, History, KvCache, admits, attend_history, enabled, execute_publishing, row_attention,
+    take,
+};
 use crate::engine::{Array, PagedContextMode, Result, Stream, paged_attention_min_context};
 
 pub struct Attend<'a> {
@@ -27,6 +30,18 @@ pub fn attend(
     rotate: impl Fn(&Array) -> Result<Array>,
     stream: &Stream,
 ) -> Result<Option<Array>> {
+    Ok(attend_publishing(layer, caches, positions, rotate, stream)?.map(|(output, _)| output))
+}
+
+/// [`attend`], also returning what the rows attended over, for later layers
+/// that attend over the same keys and values.
+pub fn attend_publishing(
+    layer: &Attend<'_>,
+    caches: &mut [&mut KvCache],
+    positions: &[i32],
+    rotate: impl Fn(&Array) -> Result<Array>,
+    stream: &Stream,
+) -> Result<Option<(Array, Attended)>> {
     let shape = layer.keys.shape()?;
     let &[_, sequence, kv_heads, head_dim] = shape.as_slice() else {
         return Ok(None);
@@ -65,8 +80,8 @@ pub fn attend(
         && KvCache::write_rows(caches, [&keys, layer.values], stream)?
     {
         let history = Arc::new(History::appended(previous, [&keys, layer.values], stream)?);
-        return attend_history(&history, caches, &queries, layer.scale, layer.sinks, stream)
-            .map(Some);
+        let output = attend_history(&history, caches, &queries, layer.scale, layer.sinks, stream)?;
+        return Ok(Some((output, Attended::History(history))));
     }
     let row = |array: &Array, index: usize| {
         array.slice(&[index, 0, 0, 0], &[index + 1, kv_heads, 1, head_dim], stream)
@@ -85,7 +100,7 @@ pub fn attend(
         })
         .collect::<Result<Vec<_>>>()?;
     if enabled(caches, &contexts, false, 1) {
-        return execute(
+        let (output, history) = execute_publishing(
             previous.as_deref(),
             caches,
             &contexts,
@@ -94,8 +109,10 @@ pub fn attend(
             layer.scale,
             layer.sinks,
             stream,
-        )
-        .map(Some);
+        )?;
+        let attended = history.map_or_else(|| Attended::Rows(contexts), Attended::History);
+        return Ok(Some((output, attended)));
     }
-    row_attention(&queries, &contexts, layer.scale, layer.sinks, stream).map(Some)
+    let output = row_attention(&queries, &contexts, layer.scale, layer.sinks, stream)?;
+    Ok(Some((output, Attended::Rows(contexts))))
 }

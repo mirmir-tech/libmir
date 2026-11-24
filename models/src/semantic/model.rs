@@ -136,12 +136,14 @@ pub struct DecoderLayerSpec {
 }
 
 impl DecoderLayerSpec {
-    /// What the layer caches per token; `None` for recurrent mixers. A
-    /// latent layer caches one `kv_lora_rank + rope_dim` row shared by every
-    /// head, with no separate values.
+    /// What the layer caches per token; `None` for recurrent mixers and for
+    /// layers attending over an earlier layer's cache. A latent layer caches
+    /// one `kv_lora_rank + rope_dim` row shared by every head, with no
+    /// separate values.
     #[must_use]
     pub const fn cache_shape(&self) -> Option<LayerCacheShape> {
         match &self.mixer {
+            MixerSpec::SoftmaxAttention(attention) if attention.key_value_source.is_some() => None,
             MixerSpec::SoftmaxAttention(attention) => Some(LayerCacheShape {
                 heads: attention.key_value_heads,
                 key_width: attention.head_dim,

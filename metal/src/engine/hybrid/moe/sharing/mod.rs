@@ -1,33 +1,44 @@
 //! What one forward step hands between the layers of Gemma 4's E models:
-//! every layer's per-layer input, and the keys and values of the layers that
-//! later layers attend over instead of projecting their own.
+//! every layer's per-layer input, and what each source layer attended over,
+//! which the later layers sharing its keys and values attend over too
+//! instead of keeping their own cache.
 //!
 //! The model's layers run in order on its one worker, so the model sets the
-//! per-layer inputs and a source layer publishes its keys and values before
-//! any layer reads them in the same step.
+//! per-layer inputs and a source layer publishes what it attended over
+//! before any layer reads it in the same step.
 
 mod per_layer;
 
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 pub(super) use per_layer::{PerLayerGate, PerLayerInputs};
 
-use crate::engine::{Array, Error, Result, Stream};
+use crate::engine::{
+    Array, Error, KvContext, PagedContextMode, Result, Stream, persistent_history::Attended,
+};
+
+/// What a source layer attended over in the current step.
+#[derive(Debug)]
+pub(super) enum SourceAttention {
+    /// Each sequence's cache context and the mode it was read in.
+    Rows(Vec<(KvContext, PagedContextMode)>),
+    /// A packed decode's persistent history, or its rows.
+    Persistent(Attended),
+}
 
 #[derive(Debug, Default)]
 pub(super) struct StepShare {
     /// `[B, S, layers, width]` per-layer inputs of the current step.
     per_layer: Mutex<Option<Array>>,
-    /// Normalized, unrotated `[B, S, kv_heads, D]` keys and `[B, kv_heads,
-    /// S, D]` values each source layer computed in the current step.
-    key_values: Mutex<Vec<Option<(Array, Array)>>>,
+    /// What each source layer attended over in the current step.
+    attended: Mutex<Vec<Option<Arc<SourceAttention>>>>,
 }
 
 impl StepShare {
     pub(super) fn new(layers: usize) -> Self {
         Self {
             per_layer: Mutex::new(None),
-            key_values: Mutex::new((0..layers).map(|_| None).collect()),
+            attended: Mutex::new((0..layers).map(|_| None).collect()),
         }
     }
 
@@ -56,28 +67,23 @@ impl StepShare {
             .reshape(&[batch, sequence, width], stream)
     }
 
-    pub(super) fn publish(&self, layer: usize, keys: &Array, values: &Array) -> Result<()> {
-        let entry = Some((keys.snapshot()?, values.snapshot()?));
-        let mut slots = self.key_values.lock().unwrap_or_else(PoisonError::into_inner);
+    pub(super) fn publish(&self, layer: usize, attended: SourceAttention) -> Result<()> {
+        let mut slots = self.attended.lock().unwrap_or_else(PoisonError::into_inner);
         let slot = slots
             .get_mut(layer)
-            .ok_or_else(|| Error::InvalidModel(format!("no K/V slot for layer {layer}")))?;
-        *slot = entry;
+            .ok_or_else(|| Error::InvalidModel(format!("no attention slot for layer {layer}")))?;
+        *slot = Some(Arc::new(attended));
         drop(slots);
         Ok(())
     }
 
-    /// The keys and values layer `source` published in the current step.
-    pub(super) fn key_values(&self, source: usize) -> Result<(Array, Array)> {
-        let slots = self.key_values.lock().unwrap_or_else(PoisonError::into_inner);
-        let pair = slots
-            .get(source)
-            .and_then(Option::as_ref)
-            .map(|(keys, values)| Ok::<_, Error>((keys.snapshot()?, values.snapshot()?)))
-            .transpose()?;
+    /// What layer `source` attended over in the current step.
+    pub(super) fn attended(&self, source: usize) -> Result<Arc<SourceAttention>> {
+        let slots = self.attended.lock().unwrap_or_else(PoisonError::into_inner);
+        let attended = slots.get(source).and_then(Option::as_ref).map(Arc::clone);
         drop(slots);
-        pair.ok_or_else(|| {
-            Error::InvalidModel(format!("layer {source} published no keys and values"))
+        attended.ok_or_else(|| {
+            Error::InvalidModel(format!("layer {source} published no attention for this step"))
         })
     }
 }

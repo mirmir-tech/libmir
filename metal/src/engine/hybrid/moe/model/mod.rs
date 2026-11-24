@@ -81,7 +81,16 @@ impl HybridMoeModel {
             let MixerLowering::Softmax { window, .. } = lowered.mixer else {
                 unreachable!("validated hybrid MoE mixer");
             };
-            cache_windows.push(window.and_then(models::semantic::AttentionWindow::sliding));
+            // Caches are indexed by layer: the sharing layers, which keep
+            // none, must follow every caching one.
+            if layers.last().is_some_and(HybridMoeLayer::caches_key_values) {
+                if cache_windows.len() != index {
+                    return Err(crate::engine::Error::InvalidModel(format!(
+                        "layer {index} caches keys and values after a layer sharing them"
+                    )));
+                }
+                cache_windows.push(window.and_then(models::semantic::AttentionWindow::sliding));
+            }
         }
         let boundary = bindings.decoder_boundary_with_tied_output(true)?;
         let mut model = Self::finish_load(

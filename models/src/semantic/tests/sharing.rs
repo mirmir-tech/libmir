@@ -3,7 +3,10 @@
 
 use serde_json::json;
 
-use super::{super::PerLayerInputSpec, catalog, *};
+use super::{
+    super::{LayerCacheShape, PerLayerInputSpec},
+    catalog, *,
+};
 
 fn spec() -> Result<SemanticModelSpec> {
     let decoder = DecoderConfig::from_value(&json!({
@@ -36,6 +39,21 @@ fn shared_layers_and_per_layer_inputs_reach_the_spec() -> Result<()> {
         spec.decoder.per_layer_input,
         Some(PerLayerInputSpec { width: 8, vocab_size: 32 })
     );
+    Ok(())
+}
+
+/// A sharing layer attends over its source's cache and keeps none.
+#[test]
+fn only_source_layers_cache_keys_and_values() -> Result<()> {
+    let spec = spec()?;
+    let shapes = spec
+        .decoder
+        .layers
+        .iter()
+        .map(DecoderLayerSpec::cache_shape)
+        .collect::<Vec<_>>();
+    let cached = Some(LayerCacheShape { heads: 2, key_width: 16, value_width: 16 });
+    assert_eq!(shapes, [cached, cached, None, None]);
     Ok(())
 }
 

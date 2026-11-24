@@ -22,6 +22,7 @@ use crate::engine::{
     fusion_planner::{FusionPlanner, ProjectionBiases},
 };
 
+mod cache;
 mod forward;
 mod lowered;
 mod shared;

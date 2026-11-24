@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use super::sharing::StepShare;
+use super::sharing::{SourceAttention, StepShare};
 use crate::engine::{
     Array, Error, NormWeight, Result, Stream,
     binding::BoundLinear,
@@ -42,6 +42,13 @@ pub(super) struct ProjectedKeyValues {
 pub(super) struct Publish {
     pub(super) step: Arc<StepShare>,
     pub(super) layer: usize,
+}
+
+impl Publish {
+    /// Hands what the source layer attended over to the layers sharing it.
+    pub(super) fn publish(&self, attended: SourceAttention) -> Result<()> {
+        self.step.publish(self.layer, attended)
+    }
 }
 
 impl KeyValueWeights {
