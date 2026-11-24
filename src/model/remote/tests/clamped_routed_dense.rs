@@ -34,8 +34,8 @@ fn admits_dense_clamped_routed_generation_on_metal_and_cuda() -> Result<()> {
     for report in [&metal, &cuda] {
         assert_eq!(report.status, AdmissionStatus::Supported);
         assert!(report.checks.iter().any(|check| {
-            check.kind == AdmissionCheckKind::Encoding(EncodingKind::Dense)
-                && check.status == AdmissionStatus::Supported
+            check.kind() == AdmissionCheckKind::Encoding(EncodingKind::Dense)
+                && check.status() == AdmissionStatus::Supported
         }));
     }
     Ok(())

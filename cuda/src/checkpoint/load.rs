@@ -1,5 +1,6 @@
 use mircuda::{DeviceBuffer, bf16};
 use models::{
+    execution::TaskExecutionPlan,
     layout::DecoderConfig,
     semantic::SemanticModelSpec,
     weights::{HybridMoeLayerBindings, TensorCatalog, WeightBindingPlan},
@@ -23,7 +24,14 @@ impl CudaBackend {
         load: NvFp4MoeLayerLoadConfig,
     ) -> Result<DecodeMoeLayerTemplate> {
         let spec = SemanticModelSpec::discover(decoder, catalog)?;
-        let plan = architecture::cuda::CudaDecoderPlan::lower(&spec, decoder.attention_scale)?;
+        // Admitted, not only lowered: a model no runtime runs stays unloaded.
+        let task = TaskExecutionPlan::Generation { decoder: decoder.clone() };
+        let architecture::cuda::CudaArchitecture::Generation(admitted) =
+            architecture::cuda::admit(&task, Some(&spec))?
+        else {
+            return Err(Error::State("a generation task admitted as another task".into()));
+        };
+        let plan = admitted.plan;
         let bindings = WeightBindingPlan::discover(&spec, catalog)?;
         let layer_bindings = bindings.hybrid_moe_layer(layer)?;
         Ok(self

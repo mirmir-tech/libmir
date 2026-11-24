@@ -43,6 +43,7 @@ pub(super) fn capabilities(runtime: CudaDecoderRuntime) -> Operations {
             .activations(Shared, &[SwiGlu])
             .routers(&[Block::Routed, Block::SharedRouted], <RouterKind as Flag>::ALL)
             .normalizations(<QkNormalization as Flag>::ALL)
+            .any_scale()
             .features_except(&[Feature::AttentionFree]),
         CudaDecoderRuntime::DenseAndRouted => none
             .layers(softmax, &[Block::DenseAndRouted])
@@ -50,6 +51,7 @@ pub(super) fn capabilities(runtime: CudaDecoderRuntime) -> Operations {
             .activations(Expert, &[SwiGlu, GeluTanh])
             .routers(&[Block::DenseAndRouted], &RouterKind::TOP_K)
             .normalizations(&NORMALIZATIONS)
+            .any_scale()
             .features_except(&GRAPH_ONLY),
         CudaDecoderRuntime::SharedRouted => none
             .layers(mixed, &[Block::SharedRouted])
@@ -57,24 +59,33 @@ pub(super) fn capabilities(runtime: CudaDecoderRuntime) -> Operations {
             .activations(Shared, &[SwiGlu])
             .routers(&[Block::SharedRouted], &RouterKind::TOP_K)
             .normalizations(&NORMALIZATIONS)
+            .any_scale()
             .features_except(&GRAPH_ONLY),
         CudaDecoderRuntime::DenseMixed => none
             .layers(mixed, &[Block::Dense])
             .activations(Dense, &[SwiGlu, GeluTanh])
             .normalizations(&NORMALIZATIONS)
+            .any_scale()
             .features_except(&GRAPH_ONLY),
         // The sink-attention runtime renormalizes a softmax over the selected
-        // experts, without groups or an output factor, behind plain attention
-        // with separate values.
+        // experts, without groups or an output factor, behind plain biased
+        // attention with separate values, and repeats one layer.
         CudaDecoderRuntime::ClampedRouted => none
             .layers(MixerKind::SOFTMAX_WITH_SINKS, &[Block::Routed])
             .activations(Expert, &[ClampedSwiGlu])
             .routers(&[Block::Routed], &[RouterKind::SoftmaxTopK])
             .normalizations(&[QkNormalization::None])
+            .any_scale()
             .features_except(
                 &[
                     &GRAPH_ONLY[..],
-                    &[Feature::ExpertGroups, Feature::ExpertOutputScale, Feature::SharedKeyValue],
+                    &[
+                        Feature::ExpertGroups,
+                        Feature::ExpertOutputScale,
+                        Feature::SharedKeyValue,
+                        Feature::UnbiasedAttention,
+                        Feature::NoRepeatedLayer,
+                    ],
                 ]
                 .concat(),
             ),
@@ -92,6 +103,7 @@ pub(super) fn capabilities(runtime: CudaDecoderRuntime) -> Operations {
             .activations(Shared, &[ReluSquared])
             .routers(&latent, &[RouterKind::SigmoidBiasedTopK])
             .normalizations(&[QkNormalization::None])
+            .any_scale()
             .features_except(
                 &[
                     &GRAPH_ONLY[..],
@@ -106,6 +118,7 @@ pub(super) fn capabilities(runtime: CudaDecoderRuntime) -> Operations {
             .activations(Expert, &[SwiGlu])
             .activations(Shared, &[SwiGlu])
             .routers(&[Block::SharedRouted], &RouterKind::TOP_K)
+            .any_scale()
             .features_except(&GRAPH_ONLY),
     }
 }

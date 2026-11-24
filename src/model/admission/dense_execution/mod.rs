@@ -13,7 +13,7 @@ use models::{
     },
 };
 
-use super::{AdmissionCheck, AdmissionCheckKind, AdmissionStatus};
+use super::{AdmissionCheck, AdmissionStatus, CheckSubject};
 use crate::EncodingKind;
 
 pub(super) fn assess(
@@ -35,10 +35,8 @@ pub(super) fn assess(
         ),
     };
     Some(AdmissionCheck {
-        kind: AdmissionCheckKind::Encoding(EncodingKind::Dense),
-        status,
+        subject: CheckSubject::Encoding { kind: EncodingKind::Dense, status },
         detail,
-        refusal: None,
     })
 }
 

@@ -1,13 +1,13 @@
 use foundation::model::BackendTarget;
 use models::weights::GgmlBlockQuantization;
 
-use super::{AdmissionCheckKind, AdmissionStatus};
+use super::AdmissionStatus;
 use crate::EncodingKind;
 
 pub(super) fn assess(
     backend: &BackendTarget,
     format: GgmlBlockQuantization,
-) -> (AdmissionCheckKind, AdmissionStatus, String) {
+) -> (EncodingKind, AdmissionStatus, String) {
     let (backend, executed) = match backend {
         BackendTarget::Cuda => ("CUDA", architecture::ggml::CUDA),
         BackendTarget::Metal => ("Metal", architecture::ggml::METAL),
@@ -16,13 +16,13 @@ pub(super) fn assess(
     let name = format.ggml_type.name();
     if executed.contains(&format.ggml_type) {
         (
-            AdmissionCheckKind::Encoding(EncodingKind::Ggml),
+            EncodingKind::Ggml,
             AdmissionStatus::Partial,
             format!("{backend} executes GGML {name} blocks in place"),
         )
     } else {
         (
-            AdmissionCheckKind::Encoding(EncodingKind::Ggml),
+            EncodingKind::Ggml,
             AdmissionStatus::Unsupported,
             format!("{backend} has no kernels for GGML {name} blocks yet"),
         )

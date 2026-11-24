@@ -8,6 +8,7 @@ use models::semantic::{
 
 use crate::{
     ArchitectureError, Result, Unlowerable,
+    capability::{AttentionScale, EmbeddingScale},
     set::{Set, flag_enum},
 };
 
@@ -34,17 +35,6 @@ flag_enum! {
         SharedKeyValue,
         /// Softmax attention that rotates positions.
         RotaryAttention,
-        /// An embedding factor other than one.
-        EmbeddingNotUnit,
-        /// An embedding factor other than `sqrt(hidden_size)`.
-        EmbeddingNotSqrtHidden,
-        /// An attention scale other than one.
-        AttentionScaleNotUnit,
-        /// An attention scale other than `1 / sqrt(head_dim)`.
-        AttentionScaleNotDefault,
-        /// An attention scale other than the configuration's (or the
-        /// default): an override that only a spec-driven kernel honors.
-        AttentionScaleUndeclared,
         /// Experts selected from their best groups.
         ExpertGroups,
         /// A factor on the selected experts' output other than one.
@@ -59,10 +49,30 @@ flag_enum! {
         /// Layers attending over an earlier layer's keys and values instead
         /// of projecting their own (Gemma 4's E models).
         SharedLayerKeyValues,
+        /// Softmax attention projecting without biases.
+        UnbiasedAttention,
+        /// Not one softmax-attention layer with routed experts and full
+        /// `YaRN` rotation repeated in every layer (set by CUDA's plan,
+        /// which lowers that layer for the runtimes built around it).
+        NoRepeatedLayer,
     }
 }
 
-pub type DecoderFeatures = Set<Feature>;
+/// The decoder-wide properties of a plan: its feature flags, its embedding
+/// factor and the scale of each attention layer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DecoderFeatures {
+    pub flags: Set<Feature>,
+    pub embedding: EmbeddingScale,
+    pub attention: Set<AttentionScale>,
+}
+
+impl DecoderFeatures {
+    #[must_use]
+    pub fn contains(self, feature: Feature) -> bool {
+        self.flags.contains(feature)
+    }
+}
 
 /// The features of `spec`; `declared_attention_scale` is the configuration's
 /// attention scale, against which spec overrides are told apart.
@@ -73,7 +83,8 @@ pub fn lower_features(
 ) -> Result<DecoderFeatures> {
     let decoder = &spec.decoder;
     let layers = &decoder.layers;
-    let mut features = DecoderFeatures::EMPTY;
+    let mut features = Set::<Feature>::EMPTY;
+    let mut attention_scales = Set::EMPTY;
     let mut set = |feature, present: bool| {
         if present {
             features.insert(feature);
@@ -98,8 +109,7 @@ pub fn lower_features(
         }));
     set(Feature::NormWeightOffset, offsets.into_iter().any(|offset| offset != 0.0));
     let sqrt_hidden = sqrt(decoder.hidden_size, "hidden size")?;
-    set(Feature::EmbeddingNotUnit, decoder.embedding_multiplier != 1.0);
-    set(Feature::EmbeddingNotSqrtHidden, decoder.embedding_multiplier != sqrt_hidden);
+    let embedding = EmbeddingScale::of(decoder.embedding_multiplier, sqrt_hidden);
     for layer in layers {
         if let Some(routed) = layer.feed_forward.routed() {
             set(Feature::ExpertGroups, routed.group_limit.is_some());
@@ -109,6 +119,7 @@ pub fn lower_features(
             continue;
         };
         set(Feature::ScoreSoftcap, attention.logit_softcap.is_some());
+        set(Feature::UnbiasedAttention, !attention.projection_bias);
         set(Feature::SharedLayerKeyValues, attention.key_value_source.is_some());
         set(
             Feature::ChunkedAttention,
@@ -129,12 +140,11 @@ pub fn lower_features(
             attention.key_value_relation == models::semantic::KeyValueRelation::KeyEqualsValue,
         );
         let default = sqrt(attention.head_dim, "head dimension")?.recip();
-        set(Feature::AttentionScaleNotUnit, attention.scale != 1.0);
-        set(Feature::AttentionScaleNotDefault, attention.scale != default);
-        set(
-            Feature::AttentionScaleUndeclared,
-            attention.scale != declared_attention_scale.unwrap_or(default),
-        );
+        attention_scales.insert(AttentionScale::of(
+            attention.scale,
+            default,
+            declared_attention_scale,
+        ));
     }
     let attends = layers.iter().any(|layer| {
         matches!(layer.mixer, MixerSpec::SoftmaxAttention(_) | MixerSpec::LatentAttention(_))
@@ -145,7 +155,11 @@ pub fn lower_features(
         !layers.iter().any(|layer| matches!(layer.mixer, MixerSpec::StateSpace(_))),
     );
     set(Feature::PerLayerInput, decoder.per_layer_input.is_some());
-    Ok(features)
+    Ok(DecoderFeatures {
+        flags: features,
+        embedding,
+        attention: attention_scales,
+    })
 }
 
 fn sqrt(value: usize, what: &'static str) -> Result<f64> {

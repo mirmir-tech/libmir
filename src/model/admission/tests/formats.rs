@@ -80,7 +80,7 @@ fn current_format_matrix_is_explicit() {
     ];
 
     for (backend, encoding, expected) in cases {
-        assert_eq!(registry::assess(&backend, &encoding).status, expected);
+        assert_eq!(registry::assess(&backend, &encoding).status(), expected);
     }
 }
 
@@ -97,11 +97,11 @@ fn direct_e4m3_output_channel_is_admitted_with_backend_specific_gates() {
         },
     };
     assert_eq!(
-        registry::assess(&BackendTarget::Cuda, &encoding).status,
+        registry::assess(&BackendTarget::Cuda, &encoding).status(),
         AdmissionStatus::Partial
     );
     assert_eq!(
-        registry::assess(&BackendTarget::Metal, &encoding).status,
+        registry::assess(&BackendTarget::Metal, &encoding).status(),
         AdmissionStatus::Partial
     );
 }
@@ -124,11 +124,11 @@ fn direct_fp8_block_grid_is_admitted_on_both_accelerators() {
         },
     };
     assert_eq!(
-        registry::assess(&BackendTarget::Cuda, &encoding).status,
+        registry::assess(&BackendTarget::Cuda, &encoding).status(),
         AdmissionStatus::Partial
     );
     assert_eq!(
-        registry::assess(&BackendTarget::Metal, &encoding).status,
+        registry::assess(&BackendTarget::Metal, &encoding).status(),
         AdmissionStatus::Partial
     );
 }
@@ -150,11 +150,11 @@ fn direct_e5m2_bf16_activation_is_admitted_on_both_accelerators() {
     };
     for encoding in [scaled, unscaled] {
         assert_eq!(
-            registry::assess(&BackendTarget::Cuda, &encoding).status,
+            registry::assess(&BackendTarget::Cuda, &encoding).status(),
             AdmissionStatus::Partial
         );
         assert_eq!(
-            registry::assess(&BackendTarget::Metal, &encoding).status,
+            registry::assess(&BackendTarget::Metal, &encoding).status(),
             AdmissionStatus::Partial
         );
     }
@@ -172,35 +172,36 @@ fn static_e4m3_activation_requires_matching_explicit_scale() {
     };
     let encoding = WeightEncoding::Float8 { format };
     assert_eq!(
-        registry::assess(&BackendTarget::Cuda, &encoding).status,
+        registry::assess(&BackendTarget::Cuda, &encoding).status(),
         AdmissionStatus::Partial
     );
     assert_eq!(
-        registry::assess(&BackendTarget::Metal, &encoding).status,
+        registry::assess(&BackendTarget::Metal, &encoding).status(),
         AdmissionStatus::Partial
     );
     format.input_scale_dtype = Some(Float8ParameterDType::BF16);
     assert_eq!(
-        registry::assess(&BackendTarget::Cuda, &WeightEncoding::Float8 { format }).status,
+        registry::assess(&BackendTarget::Cuda, &WeightEncoding::Float8 { format }).status(),
         AdmissionStatus::Unsupported
     );
     assert_eq!(
-        registry::assess(&BackendTarget::Metal, &WeightEncoding::Float8 { format }).status,
+        registry::assess(&BackendTarget::Metal, &WeightEncoding::Float8 { format }).status(),
         AdmissionStatus::Unsupported
     );
     format.scale_dtype = Some(Float8ParameterDType::BF16);
     assert_eq!(
-        registry::assess(&BackendTarget::Cuda, &WeightEncoding::Float8 { format }).status,
+        registry::assess(&BackendTarget::Cuda, &WeightEncoding::Float8 { format }).status(),
         AdmissionStatus::Partial
     );
     assert_eq!(
-        registry::assess(&BackendTarget::Metal, &WeightEncoding::Float8 { format }).status,
+        registry::assess(&BackendTarget::Metal, &WeightEncoding::Float8 { format }).status(),
         AdmissionStatus::Partial
     );
     let mut unscaled = Float8Quantization::unscaled(Float8Format::E4M3);
     unscaled.activation_scale = Float8ActivationScale::StaticTensor;
     assert_eq!(
-        registry::assess(&BackendTarget::Cuda, &WeightEncoding::Float8 { format: unscaled }).status,
+        registry::assess(&BackendTarget::Cuda, &WeightEncoding::Float8 { format: unscaled })
+            .status(),
         AdmissionStatus::Unsupported
     );
 }

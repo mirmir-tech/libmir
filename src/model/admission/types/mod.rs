@@ -1,4 +1,3 @@
-use architecture::ArchitectureError;
 use foundation::model::BackendTarget;
 use models::{
     execution::ArchitectureRequirements,
@@ -10,7 +9,9 @@ use models::{
     },
 };
 
-use super::EncodingKind;
+mod check;
+
+pub use check::{AdmissionCheck, AdmissionCheckKind, ArchitectureOutcome, CheckSubject};
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 /// Conservative result of one checkpoint/backend admission check.
 pub enum AdmissionStatus {
@@ -36,31 +37,6 @@ impl AdmissionStatus {
         }
     }
 }
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-/// Stable category of a backend admission check.
-pub enum AdmissionCheckKind {
-    /// One family of weight encodings.
-    Encoding(EncodingKind),
-    /// Semantic model composition and backend lowering.
-    Architecture,
-    /// Vision tensors and image preprocessing contract.
-    Vision,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-/// One independently explainable backend admission decision.
-pub struct AdmissionCheck {
-    /// Capability family inspected by this check.
-    pub kind: AdmissionCheckKind,
-    /// Result of this check.
-    pub status: AdmissionStatus,
-    /// User-facing explanation or missing requirement.
-    pub detail: String,
-    /// Why the backend refused the architecture, typed: what is unlowerable
-    /// or what each runtime lacks.
-    pub refusal: Option<ArchitectureError>,
-}
-
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 /// Physical representation of one family of checkpoint weights.
 pub enum WeightEncoding {
@@ -197,7 +173,7 @@ impl CheckpointEncoding {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 /// Static checkpoint compatibility report for one accelerator backend.
 pub struct BackendAdmissionReport {
     /// Accelerator backend evaluated by this report.

@@ -37,11 +37,12 @@ pub use memory::{MemorySnapshot, ModelMemoryEstimate};
 #[cfg(feature = "metal")]
 pub use metal::DecodeReservation as MetalDecodeReservation;
 pub use model::{
-    AdmissionCheck, AdmissionCheckKind, AdmissionStatus, BackendAdmissionReport, CacheStatsReader,
-    CheckpointEncoding, EncodingKind, IMAGE_PLACEHOLDER, Library, LoadPreview,
-    MODEL_FORMAT_REGISTRY_SCHEMA_VERSION, Model, ModelDescriptor, ModelLoadOptions, PreparedPrompt,
-    PreparedVisionPrompt, PromptPreparationTimings, RemoteModelContract, RemoteTaskMetadata,
-    RemoteVisionContract, UnloadedTensors, WeightEncoding,
+    AdmissionCheck, AdmissionCheckKind, AdmissionStatus, ArchitectureOutcome,
+    BackendAdmissionReport, CacheStatsReader, CheckSubject, CheckpointEncoding, EncodingKind,
+    IMAGE_PLACEHOLDER, Library, LoadPreview, MODEL_FORMAT_REGISTRY_SCHEMA_VERSION, Model,
+    ModelDescriptor, ModelLoadOptions, PreparedPrompt, PreparedVisionPrompt,
+    PromptPreparationTimings, RemoteModelContract, RemoteTaskMetadata, RemoteVisionContract,
+    UnloadedTensors, WeightEncoding,
 };
 pub use models::{
     chat::{ReasoningEffort, ReasoningHistory, ReasoningMode, TemplateKind},

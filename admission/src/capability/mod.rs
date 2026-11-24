@@ -3,12 +3,14 @@
 //! check names what a runtime lacks.
 
 mod kinds;
+mod scale;
 
 pub use kinds::{
     ActivationKind, ActivationSite, ActivationUse, FeedForwardShape, LayerShape, MixerKind,
     RouterKind, RouterUse,
 };
 use models::semantic::QkNormalization;
+pub use scale::{AttentionScale, AttentionScaleValue, EmbeddingScale, ScaleSource};
 
 use crate::{
     decoder::{DecoderFeatures, Feature},
@@ -25,6 +27,8 @@ pub struct Operations {
     pub routers: Set<RouterUse>,
     pub normalizations: Set<QkNormalization>,
     pub features: Set<Feature>,
+    pub embedding_scales: Set<EmbeddingScale>,
+    pub attention_scales: Set<AttentionScale>,
 }
 
 /// One operation a runtime lacks.
@@ -35,6 +39,8 @@ pub enum Requirement {
     Router(RouterUse),
     Normalization(QkNormalization),
     Feature(Feature),
+    EmbeddingScale(EmbeddingScale),
+    AttentionScale(AttentionScale),
 }
 
 impl Operations {
@@ -43,7 +49,12 @@ impl Operations {
         layers: impl IntoIterator<Item = (&'a MixerLowering, &'a FeedForwardLowering)>,
         features: DecoderFeatures,
     ) -> Self {
-        let mut required = Self { features, ..Self::default() };
+        let mut required = Self {
+            features: features.flags,
+            embedding_scales: Set::EMPTY.with(features.embedding),
+            attention_scales: features.attention,
+            ..Self::default()
+        };
         for (mixer, feed_forward) in layers {
             let shape = feed_forward.shape();
             required.layers.insert(LayerShape { mixer: mixer.kind(), feed_forward: shape });
@@ -79,6 +90,16 @@ impl Operations {
                 Requirement::Normalization,
             ))
             .chain(lacking(self.features, required.features, Requirement::Feature))
+            .chain(lacking(
+                self.embedding_scales,
+                required.embedding_scales,
+                Requirement::EmbeddingScale,
+            ))
+            .chain(lacking(
+                self.attention_scales,
+                required.attention_scales,
+                Requirement::AttentionScale,
+            ))
             .collect()
     }
 }
@@ -124,6 +145,32 @@ impl Operations {
         for &normalization in normalizations {
             self.normalizations.insert(normalization);
         }
+        self
+    }
+
+    /// These embedding factors, and attention scales of these values from
+    /// these sources.
+    #[must_use]
+    pub fn scales(
+        mut self,
+        embeddings: &[EmbeddingScale],
+        values: &[AttentionScaleValue],
+        sources: &[ScaleSource],
+    ) -> Self {
+        self.embedding_scales = embeddings.iter().copied().collect();
+        for &value in values {
+            for &source in sources {
+                self.attention_scales.insert(AttentionScale { value, source });
+            }
+        }
+        self
+    }
+
+    /// Every embedding factor and attention scale.
+    #[must_use]
+    pub fn any_scale(mut self) -> Self {
+        self.embedding_scales = Set::all();
+        self.attention_scales = Set::all();
         self
     }
 

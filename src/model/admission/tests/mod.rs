@@ -9,8 +9,8 @@ use models::weights::{
 };
 
 use super::{
-    AdmissionCheck, AdmissionCheckKind, AdmissionStatus, CheckpointEncoding, WeightEncoding,
-    aggregate, registry, resolve_dense_check,
+    AdmissionCheck, AdmissionStatus, CheckSubject, CheckpointEncoding, WeightEncoding, aggregate,
+    registry, resolve_dense_check,
 };
 use crate::EncodingKind;
 
@@ -71,14 +71,15 @@ fn affine_admission_uses_the_complete_physical_contract() {
     no_bias.zero_point = AffineZeroPointMode::None;
     no_bias.bias_dtype = None;
     assert_eq!(
-        registry::assess(&BackendTarget::Metal, &WeightEncoding::Affine { format: no_bias }).status,
+        registry::assess(&BackendTarget::Metal, &WeightEncoding::Affine { format: no_bias })
+            .status(),
         AdmissionStatus::Unsupported
     );
 
     let mut signed = affine(AffineBits::Four);
     signed.signedness = AffineSignedness::Signed;
     assert_eq!(
-        registry::assess(&BackendTarget::Cuda, &WeightEncoding::Affine { format: signed }).status,
+        registry::assess(&BackendTarget::Cuda, &WeightEncoding::Affine { format: signed }).status(),
         AdmissionStatus::Unsupported
     );
 
@@ -86,11 +87,11 @@ fn affine_admission_uses_the_complete_physical_contract() {
     f16.scale_dtype = AffineParameterDType::F16;
     f16.bias_dtype = Some(AffineParameterDType::F16);
     assert_eq!(
-        registry::assess(&BackendTarget::Metal, &WeightEncoding::Affine { format: f16 }).status,
+        registry::assess(&BackendTarget::Metal, &WeightEncoding::Affine { format: f16 }).status(),
         AdmissionStatus::Partial
     );
     assert_eq!(
-        registry::assess(&BackendTarget::Cuda, &WeightEncoding::Affine { format: f16 }).status,
+        registry::assess(&BackendTarget::Cuda, &WeightEncoding::Affine { format: f16 }).status(),
         AdmissionStatus::Unsupported
     );
 
@@ -98,7 +99,7 @@ fn affine_admission_uses_the_complete_physical_contract() {
     byte_storage.storage_dtype = AffineStorageDType::U8;
     assert_eq!(
         registry::assess(&BackendTarget::Metal, &WeightEncoding::Affine { format: byte_storage })
-            .status,
+            .status(),
         AdmissionStatus::Unsupported
     );
 }
@@ -106,7 +107,7 @@ fn affine_admission_uses_the_complete_physical_contract() {
 #[test]
 fn packed_integer_admission_is_backend_specific() {
     let assess = |backend, format| {
-        registry::assess(&backend, &WeightEncoding::PackedInteger { format }).status
+        registry::assess(&backend, &WeightEncoding::PackedInteger { format }).status()
     };
     // Metal converts F16/F32 scales; CUDA kernels read BF16 scales only.
     for scale_dtype in [CompressedIntegerScaleDType::F16, CompressedIntegerScaleDType::F32] {
@@ -154,10 +155,11 @@ fn resolved_dense_execution_replaces_conditional_format_status() {
     resolve_dense_check(
         &mut checks,
         AdmissionCheck {
-            kind: AdmissionCheckKind::Encoding(EncodingKind::Dense),
-            status: AdmissionStatus::Supported,
+            subject: CheckSubject::Encoding {
+                kind: EncodingKind::Dense,
+                status: AdmissionStatus::Supported,
+            },
             detail: "dense execution is validated".into(),
-            refusal: None,
         },
     );
 

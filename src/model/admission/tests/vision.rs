@@ -7,7 +7,10 @@ use models::{
 };
 use serde_json::json;
 
-use super::super::{AdmissionCheck, AdmissionCheckKind, AdmissionStatus, aggregate, vision_check};
+use super::super::{
+    AdmissionCheck, AdmissionCheckKind, AdmissionStatus, ArchitectureOutcome, CheckSubject,
+    aggregate, vision_check,
+};
 
 #[test]
 fn metal_runs_a_pixel_shuffle_tower() -> models::Result<()> {
@@ -53,15 +56,13 @@ fn metal_runs_a_pixel_shuffle_tower() -> models::Result<()> {
     let check = |backend| vision_check(&vision, Some(&readiness), Some(&processor), &backend);
     let metal = check(BackendTarget::Metal);
     assert_eq!(
-        (metal.kind, metal.status),
+        (metal.kind(), metal.status()),
         (AdmissionCheckKind::Vision, AdmissionStatus::Supported)
     );
-    assert_eq!(check(BackendTarget::Cuda).status, AdmissionStatus::Supported);
+    assert_eq!(check(BackendTarget::Cuda).status(), AdmissionStatus::Supported);
     let decoder = AdmissionCheck {
-        kind: AdmissionCheckKind::Architecture,
-        status: AdmissionStatus::Supported,
+        subject: CheckSubject::Architecture(ArchitectureOutcome::Admitted),
         detail: String::new(),
-        refusal: None,
     };
     assert_eq!(aggregate(&[decoder, metal]), AdmissionStatus::Supported);
     Ok(())

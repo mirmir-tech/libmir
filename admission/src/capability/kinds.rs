@@ -2,7 +2,7 @@
 
 use models::semantic::{AttentionWindow, QkNormalization, RouterNormalization};
 
-use crate::set::{Flag, flag_enum};
+use crate::set::{Flag, flag_enum, product_flag};
 
 flag_enum! {
     /// How a layer mixes tokens. Softmax attention splits by the two
@@ -150,34 +150,6 @@ pub struct ActivationUse {
 pub struct RouterUse {
     pub feed_forward: FeedForwardShape,
     pub router: RouterKind,
-}
-
-/// The product of two flag kinds, in row-major order.
-macro_rules! product_flag {
-    ($name:ident { $first:ident : $first_type:ty, $second:ident : $second_type:ty }) => {
-        impl Flag for $name {
-            const ALL: &'static [Self] = &{
-                const FIRST: &[$first_type] = <$first_type as Flag>::ALL;
-                const SECOND: &[$second_type] = <$second_type as Flag>::ALL;
-                let mut all =
-                    [Self { $first: FIRST[0], $second: SECOND[0] }; FIRST.len() * SECOND.len()];
-                let mut index = 0;
-                while index < all.len() {
-                    all[index] = Self {
-                        $first: FIRST[index / SECOND.len()],
-                        $second: SECOND[index % SECOND.len()],
-                    };
-                    index += 1;
-                }
-                all
-            };
-
-            fn index(self) -> u32 {
-                let width = u32::try_from(<$second_type as Flag>::ALL.len()).unwrap_or(u32::MAX);
-                self.$first.index() * width + self.$second.index()
-            }
-        }
-    };
 }
 
 product_flag!(LayerShape {

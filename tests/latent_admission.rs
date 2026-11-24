@@ -22,7 +22,7 @@ fn binds_a_latent_checkpoint_and_admits_it_on_cuda() -> Result<()> {
     let architecture = metal
         .checks
         .iter()
-        .find(|check| check.kind == AdmissionCheckKind::Architecture)
+        .find(|check| check.kind() == AdmissionCheckKind::Architecture)
         .map(|check| check.detail.as_str())
         .unwrap_or_default();
     assert!(architecture.contains("multi-head latent attention"), "{metal:#?}");

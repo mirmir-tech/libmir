@@ -35,7 +35,8 @@ fn builds_the_same_typed_contract_from_remote_headers() -> Result<()> {
     let cuda = contract.admission(BackendTarget::Cuda);
     assert_eq!(cuda.status, AdmissionStatus::Supported);
     assert!(cuda.checks.iter().any(|check| {
-        check.kind == AdmissionCheckKind::Architecture && check.status == AdmissionStatus::Supported
+        check.kind() == AdmissionCheckKind::Architecture
+            && check.status() == AdmissionStatus::Supported
     }));
     Ok(())
 }
@@ -52,8 +53,8 @@ fn admits_dense_decoder_storage_converted_by_cuda_on_load() -> Result<()> {
         let cuda = contract.admission(BackendTarget::Cuda);
         assert_eq!(cuda.status, AdmissionStatus::Supported);
         assert!(cuda.checks.iter().any(|check| {
-            check.kind == AdmissionCheckKind::Encoding(EncodingKind::Dense)
-                && check.status == AdmissionStatus::Supported
+            check.kind() == AdmissionCheckKind::Encoding(EncodingKind::Dense)
+                && check.status() == AdmissionStatus::Supported
                 && check.detail.contains("converts dense storage")
         }));
     }

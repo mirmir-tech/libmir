@@ -17,8 +17,8 @@ mod tests;
 
 pub use kind::EncodingKind;
 pub use types::{
-    AdmissionCheck, AdmissionCheckKind, AdmissionStatus, BackendAdmissionReport,
-    CheckpointEncoding, WeightEncoding,
+    AdmissionCheck, AdmissionCheckKind, AdmissionStatus, ArchitectureOutcome,
+    BackendAdmissionReport, CheckSubject, CheckpointEncoding, WeightEncoding,
 };
 
 /// Schema version of the checked-in physical model-format capability registry.
@@ -70,8 +70,8 @@ pub(super) fn inspect(
 
 fn resolve_dense_check(checks: &mut Vec<AdmissionCheck>, resolved: AdmissionCheck) {
     checks.retain(|check| {
-        check.kind != AdmissionCheckKind::Encoding(EncodingKind::Dense)
-            || check.status != AdmissionStatus::Partial
+        check.kind() != AdmissionCheckKind::Encoding(EncodingKind::Dense)
+            || check.status() != AdmissionStatus::Partial
     });
     checks.push(resolved);
 }
@@ -133,10 +133,8 @@ fn vision_check(
         ),
     };
     AdmissionCheck {
-        kind: AdmissionCheckKind::Vision,
-        status,
+        subject: CheckSubject::Vision(status),
         detail,
-        refusal: None,
     }
 }
 
@@ -160,13 +158,11 @@ impl BackendAdmissionReport {
             .map(|encoding| registry::assess(&backend, encoding))
             .collect::<Vec<_>>();
         if !checks.is_empty()
-            && checks.iter().all(|check| check.status != AdmissionStatus::Unsupported)
+            && checks.iter().all(|check| check.status() != AdmissionStatus::Unsupported)
         {
             checks.push(architecture_check.unwrap_or_else(|| AdmissionCheck {
-                kind: AdmissionCheckKind::Architecture,
-                status: AdmissionStatus::Partial,
+                subject: CheckSubject::Architecture(ArchitectureOutcome::Pending),
                 detail: "backend architecture admission is pending".into(),
-                refusal: None,
             }));
         }
         let status = aggregate(&checks);
@@ -191,10 +187,8 @@ fn assess_architecture(
         },
         BackendTarget::Cuda => admission_result("CUDA", architecture::cuda::admit(task, semantic)),
         BackendTarget::CpuReference => AdmissionCheck {
-            kind: AdmissionCheckKind::Architecture,
-            status: AdmissionStatus::Unsupported,
+            subject: CheckSubject::Architecture(ArchitectureOutcome::NotExecuted),
             detail: "the CPU reference backend does not execute product models".into(),
-            refusal: None,
         },
     }
 }
@@ -202,16 +196,12 @@ fn assess_architecture(
 fn admission_result<T>(backend: &str, result: architecture::Result<T>) -> AdmissionCheck {
     match result {
         Ok(_) => AdmissionCheck {
-            kind: AdmissionCheckKind::Architecture,
-            status: AdmissionStatus::Supported,
+            subject: CheckSubject::Architecture(ArchitectureOutcome::Admitted),
             detail: format!("{backend} admits the complete task and decoder composition"),
-            refusal: None,
         },
         Err(error) => AdmissionCheck {
-            kind: AdmissionCheckKind::Architecture,
-            status: AdmissionStatus::Unsupported,
             detail: format!("{backend}: {error}"),
-            refusal: Some(error),
+            subject: CheckSubject::Architecture(ArchitectureOutcome::Refused(error)),
         },
     }
 }
@@ -220,13 +210,13 @@ fn aggregate(checks: &[AdmissionCheck]) -> AdmissionStatus {
     if checks.is_empty() {
         return AdmissionStatus::Unknown;
     }
-    if checks.iter().any(|check| check.status == AdmissionStatus::Unsupported) {
+    if checks.iter().any(|check| check.status() == AdmissionStatus::Unsupported) {
         return AdmissionStatus::Unsupported;
     }
-    if checks.iter().any(|check| check.status == AdmissionStatus::Unknown) {
+    if checks.iter().any(|check| check.status() == AdmissionStatus::Unknown) {
         return AdmissionStatus::Unknown;
     }
-    if checks.iter().any(|check| check.status == AdmissionStatus::Partial) {
+    if checks.iter().any(|check| check.status() == AdmissionStatus::Partial) {
         return AdmissionStatus::Partial;
     }
     AdmissionStatus::Supported

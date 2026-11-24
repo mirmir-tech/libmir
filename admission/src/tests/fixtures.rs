@@ -62,6 +62,20 @@ pub(super) fn clamped_routed(mut semantic: SemanticModelSpec) -> SemanticModelSp
             continue;
         };
         attention.sinks = true;
+        // gpt-oss: biased projections and full YaRN in every layer.
+        attention.projection_bias = true;
+        if let models::semantic::PositionEncodingSpec::Rotary(rotary) = &mut attention.position {
+            rotary.layout = models::semantic::RotaryLayoutSpec::Standard;
+            rotary.partial_factor = 1.0;
+            rotary.scaling = Some(models::semantic::RopeScalingSpec::Yarn {
+                factor: 32.0,
+                beta_fast: 32.0,
+                beta_slow: 1.0,
+                original_context_len: 4096,
+                attention_factor: 1.0,
+                truncate: false,
+            });
+        }
         layer.feed_forward = FeedForwardSpec::Routed {
             routed: routed(ActivationSpec::ClampedSwiGlu { alpha: 1.702, limit: 7.0 }),
             shared: None,

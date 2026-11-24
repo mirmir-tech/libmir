@@ -3,7 +3,7 @@
 mod lowering;
 mod runtime;
 
-pub use lowering::{CudaDecoderPlan, CudaLayer};
+pub use lowering::{CudaDecoderPlan, CudaLayer, RepeatedLayer, YarnRotary};
 use models::{
     execution::TaskExecutionPlan,
     layout::{EncoderConfig, EncoderPositionEmbedding, EncoderRopeScaling, NormKind},

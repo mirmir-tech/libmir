@@ -36,7 +36,7 @@ fn admits_complete_remote_spatial_vision_contract() -> Result<()> {
     assert!(vision.processor().is_some());
     assert_eq!(contract.checkpoint_encoding().label(), "Dense BF16 + Dense F16");
     assert!(contract.admission(BackendTarget::Metal).checks.iter().any(|check| {
-        check.kind == AdmissionCheckKind::Vision && check.status == AdmissionStatus::Supported
+        check.kind() == AdmissionCheckKind::Vision && check.status() == AdmissionStatus::Supported
     }));
     assert_eq!(contract.admission(BackendTarget::Cuda).status, AdmissionStatus::Supported);
     Ok(())
@@ -50,7 +50,7 @@ fn rejects_remote_vision_without_processor() -> Result<()> {
     )?;
 
     assert!(contract.admission(BackendTarget::Cuda).checks.iter().any(|check| {
-        check.kind == AdmissionCheckKind::Vision && check.status == AdmissionStatus::Unsupported
+        check.kind() == AdmissionCheckKind::Vision && check.status() == AdmissionStatus::Unsupported
     }));
     Ok(())
 }

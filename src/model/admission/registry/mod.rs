@@ -5,7 +5,7 @@ use models::weights::{
     GptqScaleDType, GroupedAffineQuantization,
 };
 
-use super::{AdmissionCheck, AdmissionCheckKind, AdmissionStatus, WeightEncoding};
+use super::{AdmissionCheck, AdmissionStatus, CheckSubject, WeightEncoding};
 
 mod bitsandbytes;
 mod float8;
@@ -19,7 +19,7 @@ use crate::EncodingKind;
 pub(super) fn assess(backend: &BackendTarget, encoding: &WeightEncoding) -> AdmissionCheck {
     let (kind, status, detail) = match (backend, encoding) {
         (BackendTarget::CpuReference, _) => (
-            AdmissionCheckKind::Encoding(encoding.kind()),
+            encoding.kind(),
             AdmissionStatus::Unsupported,
             "the CPU reference backend does not execute product models".into(),
         ),
@@ -35,7 +35,7 @@ pub(super) fn assess(backend: &BackendTarget, encoding: &WeightEncoding) -> Admi
         (BackendTarget::Metal, WeightEncoding::PackedInteger { format }) => packed_metal(*format),
         (BackendTarget::Cuda, WeightEncoding::PackedInteger { format }) => packed_cuda(*format),
         (BackendTarget::Metal, WeightEncoding::Awq { format }) => (
-            AdmissionCheckKind::Encoding(EncodingKind::Awq),
+            EncodingKind::Awq,
             if format.is_gemm_w4a16() {
                 AdmissionStatus::Partial
             } else {
@@ -47,7 +47,7 @@ pub(super) fn assess(backend: &BackendTarget, encoding: &WeightEncoding) -> Admi
             ),
         ),
         (BackendTarget::Cuda, WeightEncoding::Awq { format }) => (
-            AdmissionCheckKind::Encoding(EncodingKind::Awq),
+            EncodingKind::Awq,
             if format.is_gemm_w4a16() {
                 AdmissionStatus::Partial
             } else {
@@ -67,12 +67,12 @@ pub(super) fn assess(backend: &BackendTarget, encoding: &WeightEncoding) -> Admi
         (BackendTarget::Metal, WeightEncoding::Float8 { format }) => float8_metal(*format),
         (BackendTarget::Cuda, WeightEncoding::Float8 { format }) => float8_cuda(*format),
         (BackendTarget::Metal | BackendTarget::Cuda, WeightEncoding::MxFp4 { .. }) => (
-            AdmissionCheckKind::Encoding(EncodingKind::MxFp4),
+            EncodingKind::MxFp4,
             AdmissionStatus::Partial,
             "MXFP4 is implemented only for selected model compositions".into(),
         ),
         (BackendTarget::Metal, WeightEncoding::MxFp8 { format }) => (
-            AdmissionCheckKind::Encoding(EncodingKind::MxFp8),
+            EncodingKind::MxFp8,
             if *format == models::weights::BlockQuantization::MXFP8 {
                 AdmissionStatus::Partial
             } else {
@@ -81,7 +81,7 @@ pub(super) fn assess(backend: &BackendTarget, encoding: &WeightEncoding) -> Admi
             "Metal supports native weight-only MXFP8 for separate dense projections".into(),
         ),
         (BackendTarget::Cuda, WeightEncoding::MxFp8 { format }) => (
-            AdmissionCheckKind::Encoding(EncodingKind::MxFp8),
+            EncodingKind::MxFp8,
             if *format == models::weights::BlockQuantization::MXFP8 {
                 AdmissionStatus::Partial
             } else {
@@ -90,7 +90,7 @@ pub(super) fn assess(backend: &BackendTarget, encoding: &WeightEncoding) -> Admi
             "CUDA supports native weight-only MXFP8 for separate dense projections".into(),
         ),
         (BackendTarget::Metal, WeightEncoding::NvFp4 { format }) => (
-            AdmissionCheckKind::Encoding(EncodingKind::NvFp4),
+            EncodingKind::NvFp4,
             if *format == models::weights::BlockQuantization::NVFP4 {
                 AdmissionStatus::Partial
             } else {
@@ -101,19 +101,22 @@ pub(super) fn assess(backend: &BackendTarget, encoding: &WeightEncoding) -> Admi
                 .into(),
         ),
         (BackendTarget::Cuda, WeightEncoding::NvFp4 { .. }) => (
-            AdmissionCheckKind::Encoding(EncodingKind::NvFp4),
+            EncodingKind::NvFp4,
             AdmissionStatus::Partial,
             "CUDA supports NVFP4 in admitted dense and routed-MoE compositions".into(),
         ),
     };
-    AdmissionCheck { kind, status, detail, refusal: None }
+    AdmissionCheck {
+        subject: CheckSubject::Encoding { kind, status },
+        detail,
+    }
 }
 
 fn gptq(
     backend: &str,
     format: GptqQuantization,
     allow_activation_order: bool,
-) -> (AdmissionCheckKind, AdmissionStatus, String) {
+) -> (EncodingKind, AdmissionStatus, String) {
     let admitted = format.bits == GptqBits::Four
         && format.scale_dtype == GptqScaleDType::F16
         && format.symmetric
@@ -125,7 +128,7 @@ fn gptq(
         AdmissionStatus::Unsupported
     };
     (
-        AdmissionCheckKind::Encoding(EncodingKind::Gptq),
+        EncodingKind::Gptq,
         status,
         format!(
             "{backend} requires symmetric GPTQ W4A16 input packing; activation ordering: {}: {:?} G{}",
@@ -143,9 +146,7 @@ fn gptq(
 /// Metal reinterprets the packed words as MLX affine storage, which shares
 /// the dense little-endian bitstream for every admitted width, and converts
 /// F16/F32 scales to BF16.
-fn packed_metal(
-    format: CompressedIntegerQuantization,
-) -> (AdmissionCheckKind, AdmissionStatus, String) {
+fn packed_metal(format: CompressedIntegerQuantization) -> (EncodingKind, AdmissionStatus, String) {
     let grouped = format.is_symmetric_group()
         && matches!(
             format.scale_strategy,
@@ -157,7 +158,7 @@ fn packed_metal(
         AdmissionStatus::Unsupported
     };
     (
-        AdmissionCheckKind::Encoding(EncodingKind::PackedInteger),
+        EncodingKind::PackedInteger,
         status,
         format!(
             "Metal requires symmetric offset-binary integers in dense I32 packing: per-channel \
@@ -168,9 +169,7 @@ fn packed_metal(
     )
 }
 
-fn packed_cuda(
-    format: CompressedIntegerQuantization,
-) -> (AdmissionCheckKind, AdmissionStatus, String) {
+fn packed_cuda(format: CompressedIntegerQuantization) -> (EncodingKind, AdmissionStatus, String) {
     let status = if (format.is_symmetric_channel_int8() || format.is_symmetric_group_int4())
         && format.scale_dtype == CompressedIntegerScaleDType::BF16
     {
@@ -179,7 +178,7 @@ fn packed_cuda(
         AdmissionStatus::Unsupported
     };
     (
-        AdmissionCheckKind::Encoding(EncodingKind::PackedInteger),
+        EncodingKind::PackedInteger,
         status,
         format!(
             "CUDA requires symmetric offset-binary per-channel INT8 or grouped INT4 in dense I32 \
@@ -191,18 +190,16 @@ fn packed_cuda(
     )
 }
 
-fn dense(dtype: &str, detail: &str) -> (AdmissionCheckKind, AdmissionStatus, String) {
+fn dense(dtype: &str, detail: &str) -> (EncodingKind, AdmissionStatus, String) {
     let status = if matches!(dtype.to_ascii_uppercase().as_str(), "BF16" | "F16" | "F32") {
         AdmissionStatus::Partial
     } else {
         AdmissionStatus::Unsupported
     };
-    (AdmissionCheckKind::Encoding(EncodingKind::Dense), status, detail.into())
+    (EncodingKind::Dense, status, detail.into())
 }
 
-fn affine_metal(
-    format: GroupedAffineQuantization,
-) -> (AdmissionCheckKind, AdmissionStatus, String) {
+fn affine_metal(format: GroupedAffineQuantization) -> (EncodingKind, AdmissionStatus, String) {
     let native = native_mlx(format)
         && format.storage_dtype == AffineStorageDType::U32
         && matches!(
@@ -215,13 +212,13 @@ fn affine_metal(
         AdmissionStatus::Unsupported
     };
     (
-        AdmissionCheckKind::Encoding(EncodingKind::Affine),
+        EncodingKind::Affine,
         status,
         "Metal requires unsigned input-grouped MLX U32 packing with additive biases".into(),
     )
 }
 
-fn affine_cuda(format: GroupedAffineQuantization) -> (AdmissionCheckKind, AdmissionStatus, String) {
+fn affine_cuda(format: GroupedAffineQuantization) -> (EncodingKind, AdmissionStatus, String) {
     let native = native_mlx(format)
         && format.storage_dtype == AffineStorageDType::U32
         && format.scale_dtype == AffineParameterDType::BF16;
@@ -231,7 +228,7 @@ fn affine_cuda(format: GroupedAffineQuantization) -> (AdmissionCheckKind, Admiss
         AdmissionStatus::Unsupported
     };
     (
-        AdmissionCheckKind::Encoding(EncodingKind::Affine),
+        EncodingKind::Affine,
         status,
         "CUDA requires BF16-parameter unsigned MLX affine U32 packing with additive biases".into(),
     )

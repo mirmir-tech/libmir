@@ -1,3 +1,4 @@
+mod display;
 mod fixtures;
 mod golden;
 mod latent;

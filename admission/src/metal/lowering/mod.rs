@@ -6,7 +6,7 @@ use models::semantic::{
 };
 
 use crate::{
-    ArchitectureError, Result, Unlowerable,
+    ArchitectureError, Constant, Result, Unlowerable,
     capability::Operations,
     decoder::{DecoderFeatures, lower_features},
     lowering::{FeedForwardLowering, MixerLowering, lower_feed_forward},
@@ -81,7 +81,9 @@ fn lower_normalization(
         NormalizationKind::Rms if offset.to_bits() == 1.0_f64.to_bits() => {
             Ok(NormalizationLowering::RmsUnitOffset)
         },
-        NormalizationKind::Rms => refuse(Unlowerable::NormWeightOffset { offset }),
+        NormalizationKind::Rms => {
+            refuse(Unlowerable::NormWeightOffset { offset: Constant(offset) })
+        },
         NormalizationKind::Layer if offset.to_bits() == 0.0_f64.to_bits() => {
             Ok(NormalizationLowering::Layer)
         },

@@ -6,13 +6,17 @@ use models::semantic::{
 };
 
 use crate::{
-    ArchitectureError, Result, Unlowerable,
+    ArchitectureError, Constant, Result, Unlowerable,
     capability::Operations,
-    decoder::{DecoderFeatures, lower_features},
+    decoder::{DecoderFeatures, Feature, lower_features},
     lowering::{
         Activation, FeedForwardLowering, LatentGeometry, MixerLowering, lower_feed_forward,
     },
 };
+
+mod repeated;
+
+pub use repeated::{RepeatedLayer, YarnRotary};
 
 /// Static shared memory of the latent attention kernel: eight query rows and
 /// a 32-row tile of cache rows, each padded by one BF16 pair.
@@ -38,17 +42,35 @@ pub struct CudaDecoderPlan {
     /// runtime.
     prediction: Vec<CudaLayer>,
     features: DecoderFeatures,
+    /// Boxed: most plans have none, and the plan travels inside the
+    /// admitted architecture.
+    repeated: Option<Box<RepeatedLayer>>,
 }
 
 impl CudaDecoderPlan {
     /// Lowers every layer; `declared_attention_scale` is the configuration's.
     pub fn lower(spec: &SemanticModelSpec, declared_attention_scale: Option<f64>) -> Result<Self> {
         let decoder = &spec.decoder;
+        let layers = decoder.layers.iter().map(lower_layer).collect::<Result<Vec<_>>>()?;
+        let repeated = RepeatedLayer::of(spec, &layers).map(Box::new);
+        let mut features = lower_features(spec, declared_attention_scale)?;
+        if repeated.is_none() {
+            features.flags.insert(Feature::NoRepeatedLayer);
+        }
         Ok(Self {
-            layers: decoder.layers.iter().map(lower_layer).collect::<Result<_>>()?,
+            layers,
             prediction: decoder.prediction_layers.iter().map(lower_layer).collect::<Result<_>>()?,
-            features: lower_features(spec, declared_attention_scale)?,
+            features,
+            repeated,
         })
+    }
+
+    /// The layer every layer repeats, which a runtime built around one
+    /// layer reads instead of the spec; `None` with
+    /// [`Feature::NoRepeatedLayer`].
+    #[must_use]
+    pub fn repeated(&self) -> Option<&RepeatedLayer> {
+        self.repeated.as_deref()
     }
 
     #[must_use]
@@ -116,7 +138,7 @@ fn router_kernel(feed_forward: &FeedForwardLowering) -> std::result::Result<(), 
     if let Activation::SwiGlu { clamp: Some(clamp) } = experts.activation
         && (clamp.alpha - CLAMP_ALPHA).abs() > 1e-6
     {
-        return Err(Unlowerable::ClampAlpha { alpha: clamp.alpha });
+        return Err(Unlowerable::ClampAlpha { alpha: Constant(clamp.alpha) });
     }
     if experts.count > ROUTER_EXPERTS {
         return Err(Unlowerable::ExpertCount {

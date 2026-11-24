@@ -2,10 +2,9 @@ use models::semantic::{ActivationSpec, FeedForwardSpec, MixerSpec, QkNormalizati
 
 use super::fixtures::{AnyResult, dense_and_routed, dense_contract};
 use crate::{
-    ArchitectureError, Runtime, Unlowerable,
-    capability::Requirement,
+    ArchitectureError, Constant, Runtime, Unlowerable,
+    capability::{AttentionScale, AttentionScaleValue, Requirement, ScaleSource},
     cuda,
-    decoder::Feature,
     metal::{self, MetalDecoderRuntime},
 };
 
@@ -43,14 +42,17 @@ fn rejects_unimplemented_norm_offset_scale_and_value_normalization() -> AnyResul
         metal::admit(&task, Some(&offset)).err(),
         Some(ArchitectureError::Unlowerable {
             layer: Some(0),
-            feature: Unlowerable::NormWeightOffset { offset: 0.5 },
+            feature: Unlowerable::NormWeightOffset { offset: Constant(0.5) },
         })
     );
     let mut scale = spec.clone();
     if let MixerSpec::SoftmaxAttention(attention) = &mut scale.decoder.layers[0].mixer {
         attention.scale = 0.75;
     }
-    let undeclared = Requirement::Feature(Feature::AttentionScaleUndeclared);
+    let undeclared = Requirement::AttentionScale(AttentionScale {
+        value: AttentionScaleValue::Other,
+        source: ScaleSource::Override,
+    });
     assert!(lacks(metal::admit(&task, Some(&scale)).err(), dense, undeclared));
     let mut normalization = spec;
     if let MixerSpec::SoftmaxAttention(attention) = &mut normalization.decoder.layers[0].mixer {

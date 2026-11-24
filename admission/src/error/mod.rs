@@ -1,13 +1,15 @@
 //! Why a backend refuses a model's architecture, typed so that callers and
 //! tests can tell what is missing; `Display` is for logs.
 
+mod display;
+
 use std::fmt;
 
 use crate::{capability::Requirement, cuda::CudaDecoderRuntime, metal::MetalDecoderRuntime};
 
 pub type Result<T> = std::result::Result<T, ArchitectureError>;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ArchitectureError {
     /// A generation task reached admission without its semantic spec.
     MissingSemanticContract,
@@ -25,7 +27,7 @@ pub enum ArchitectureError {
 }
 
 /// What a backend's lowering cannot express.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Unlowerable {
     /// An activation the semantic spec kept only by name.
     Activation { name: String },
@@ -39,17 +41,36 @@ pub enum Unlowerable {
     /// Latent routed experts without a projected latent space.
     LatentExpertsWithoutLatentSize,
     /// A clamped `SwiGLU` slope other than the one the kernel computes.
-    ClampAlpha { alpha: f64 },
+    ClampAlpha { alpha: Constant },
     /// More experts than the router kernel ranks.
     ExpertCount { experts: usize, max: usize },
     /// More expert groups than the router kernel ranks.
     ExpertGroups { groups: usize, max: usize },
     /// A norm weight offset other than none or Gemma's unit offset.
-    NormWeightOffset { offset: f64 },
+    NormWeightOffset { offset: Constant },
     /// A `LayerNorm` with a weight offset.
     LayerNormWeightOffset,
     /// A dimension beyond what the backend's kernels index.
     Dimension { what: &'static str, value: usize },
+}
+
+/// A model constant quoted by a refusal, compared by its bits so that the
+/// refusal stays `Eq`.
+#[derive(Clone, Copy, Debug)]
+pub struct Constant(pub f64);
+
+impl PartialEq for Constant {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.to_bits() == other.0.to_bits()
+    }
+}
+
+impl Eq for Constant {}
+
+impl fmt::Display for Constant {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
 }
 
 /// A task the backend does not run.
@@ -89,11 +110,11 @@ impl fmt::Display for ArchitectureError {
             Self::NoRuntime { rejections } => {
                 formatter.write_str("no runtime executes the decoder")?;
                 for rejection in rejections {
-                    write!(formatter, "; {:?} lacks {:?}", rejection.runtime, rejection.missing)?;
+                    write!(formatter, "; {rejection}")?;
                 }
                 Ok(())
             },
-            Self::Task(refusal) => write!(formatter, "{refusal:?}"),
+            Self::Task(refusal) => write!(formatter, "{refusal}"),
         }
     }
 }

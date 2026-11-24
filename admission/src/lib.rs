@@ -14,7 +14,9 @@ pub mod ggml;
 pub mod lowering;
 pub mod metal;
 
-pub use error::{ArchitectureError, Rejection, Result, Runtime, TaskRefusal, Unlowerable};
+pub use error::{
+    ArchitectureError, Constant, Rejection, Result, Runtime, TaskRefusal, Unlowerable,
+};
 pub use set::{Flag, Set};
 
 #[cfg(test)]
