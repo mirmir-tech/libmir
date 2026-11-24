@@ -27,3 +27,27 @@ fn later_shards_map_by_the_first_shards_metadata() -> Result<()> {
     assert!(catalog.get("backbone.layers.0.mixer.D").is_some());
     Ok(())
 }
+
+/// Headers fetched elsewhere, such as by range requests, build the same model
+/// as the files they came from; out-of-order shards are refused.
+#[test]
+fn headers_from_elsewhere_build_the_same_model() -> Result<()> {
+    let first = shard(0, Writer::new().text("general.architecture", "nemotron_h")?)
+        .kv("split.tensors.count", 4, 2_u32.to_le_bytes().to_vec())
+        .tensor("blk.0.ssm_d", &[1, 4], GgmlType::F32)?
+        .bytes()?;
+    let second = shard(1, Writer::new()).tensor("blk.1.ssm_a", &[1, 4], GgmlType::F32)?.bytes()?;
+    let header = |bytes: &[u8]| {
+        crate::gguf::GgufHeader::parse(bytes, None)
+            .map_err(|_| crate::error::ModelsError::InvalidGguf("unparsed test header".into()))
+    };
+    let paths =
+        [1, 2].map(|number| std::path::PathBuf::from(format!("m-{number:05}-of-00002.gguf")));
+    let shards = vec![(paths[0].clone(), header(&first)?), (paths[1].clone(), header(&second)?)];
+    let catalog = GgufModel::from_headers(shards.clone())?.mapped_catalog()?;
+    assert!(catalog.get("backbone.layers.1.mixer.A_log").is_some());
+    let reversed = shards.into_iter().rev().collect::<Vec<_>>();
+    assert!(GgufModel::from_headers(reversed).is_err());
+    assert!(GgufModel::from_headers(Vec::new()).is_err());
+    Ok(())
+}

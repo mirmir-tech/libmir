@@ -28,6 +28,17 @@ impl GgufModel {
         Ok(model)
     }
 
+    /// A model from headers read elsewhere, such as range requests against a
+    /// remote file: every shard's header, in order, named by its file.
+    pub fn from_headers(shards: Vec<(PathBuf, GgufHeader)>) -> Result<Self> {
+        if shards.is_empty() {
+            return Err(ModelsError::InvalidGguf("a GGUF model needs one header".into()));
+        }
+        let model = Self { shards };
+        model.validate()?;
+        Ok(model)
+    }
+
     /// The header with the model metadata: the only file, or shard 1.
     #[must_use]
     pub fn header(&self) -> &GgufHeader {

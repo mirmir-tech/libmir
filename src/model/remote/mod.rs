@@ -106,6 +106,13 @@ impl RemoteModelContract {
         generation_contract(config, catalog, vision)
     }
 
+    /// Builds a generation contract from the headers of a GGUF model's
+    /// shards, derived as a local import derives its configuration.
+    pub fn inspect_gguf(model: &models::gguf::GgufModel) -> Result<Self> {
+        let config = models::gguf::Import::derive(model)?.config;
+        generation_contract(&config, &model.mapped_catalog()?, None)
+    }
+
     /// The container of the model's text weights, from the inspected
     /// headers' files.
     #[must_use]
