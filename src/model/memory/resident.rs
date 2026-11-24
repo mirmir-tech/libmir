@@ -45,6 +45,7 @@ pub fn unloaded(
             | LogicalTensorRole::FinalNorm
             | LogicalTensorRole::Output
             | LogicalTensorRole::VisionProjection
+            | LogicalTensorRole::PerLayerEmbedding { .. }
             | LogicalTensorRole::Layer { .. } => false,
         })
         .flat_map(|binding| {

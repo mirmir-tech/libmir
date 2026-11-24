@@ -18,7 +18,7 @@ pub(super) fn dense_expert(
     else {
         return false;
     };
-    matches!(routed.activation, ActivationSpec::SwiGlu { clamp: Some(_), .. })
+    matches!(routed.activation, ActivationSpec::ClampedSwiGlu { .. })
         && (source.ends_with("mlp.experts.gate_up_proj")
             || source.ends_with("mlp.experts.down_proj"))
 }

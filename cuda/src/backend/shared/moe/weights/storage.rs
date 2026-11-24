@@ -1,7 +1,20 @@
-use models::weights::{BlockQuantization, RoutedExpertBindings, TensorBinding, TensorStorage};
+use models::weights::{
+    BlockQuantization, ExpertProjectionRole, RoutedExpertBindings, TensorBinding, TensorStorage,
+};
 
+/// Stacked or per-expert (`mlp.experts.N.*`) BF16 projections; the dense
+/// expert loader stacks the per-expert ones.
 pub(super) fn routed_is_dense(bindings: RoutedExpertBindings<'_>) -> bool {
-    all(bindings, |binding| matches!(binding.storage, TensorStorage::Dense { .. }))
+    let dense = |binding: &TensorBinding| matches!(binding.storage, TensorStorage::Dense { .. });
+    if let RoutedExpertBindings::Individual { .. } = bindings {
+        return [ExpertProjectionRole::Gate, ExpertProjectionRole::Up, ExpertProjectionRole::Down]
+            .into_iter()
+            .all(|projection| {
+                let experts = bindings.individual(projection);
+                !experts.is_empty() && experts.into_iter().all(dense)
+            });
+    }
+    all(bindings, dense)
 }
 
 pub(super) fn routed_is_mxfp4(bindings: RoutedExpertBindings<'_>) -> bool {

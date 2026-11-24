@@ -22,14 +22,14 @@ pub(super) fn execute_gate_up(
     operations: &[MxFp4Bf16Linear; 2],
     input: &DeviceBuffer<bf16>,
     input_norm: &RmsNormBf16,
-    norm_weight: &CudaTensor,
+    norm_weight: Option<&CudaTensor>,
     weights: DenseGateUpWeights<'_>,
     buffers: &mut GateUpBuffers<'_>,
 ) -> Result<bool> {
     let DenseGateUpWeights::MxFp4 { gate, up } = weights else {
         return Err(Error::InvalidExecutionPlan("MXFP4 gate/up operation received other weights"));
     };
-    input_norm.execute(input, norm_weight, buffers.normalized)?;
+    input_norm.apply(input, norm_weight, buffers.normalized)?;
     for ((operation, weight), output) in
         operations.iter().zip([gate, up]).zip(buffers.separate.iter_mut())
     {

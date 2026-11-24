@@ -42,6 +42,7 @@ impl CudaEngine {
                 CudaDecoderRuntime::SharedRouted
                     | CudaDecoderRuntime::DenseMixed
                     | CudaDecoderRuntime::StateSpaceHybrid
+                    | CudaDecoderRuntime::LatentAttention
             )
         ))
     }

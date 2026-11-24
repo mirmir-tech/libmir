@@ -26,6 +26,7 @@ impl HybridMoeModel {
         let started = Instant::now();
         let hidden = self.embedding.lookup(token_ids, stream)?;
         let hidden = hidden.multiply_scalar(self.embed_scale, stream)?;
+        self.prepare_step(token_ids, &hidden, stream)?;
         emit_batch_profile(&hidden, stream, "embedding", started, profile)?;
         let hidden = forward_packed_layers(&self.layers, hidden, caches, positions, stream)?;
         let started = Instant::now();
@@ -49,6 +50,7 @@ impl HybridMoeModel {
     ) -> Result<Array> {
         let mut hidden = self.embedding.lookup(token_ids, stream)?;
         hidden = hidden.multiply_scalar(self.embed_scale, stream)?;
+        self.prepare_step(token_ids, &hidden, stream)?;
         let shape = token_ids.shape()?;
         let position = positions.iter().copied().min().map_or(Ok(0), usize::try_from)?;
         let evaluation_step = crate::engine::decoder::prefill_evaluation_step(
@@ -207,6 +209,7 @@ impl HybridMoeLayer {
             self.config.rms_norm_eps,
             stream,
         )?;
-        input.add(&feed_forward, stream)?.multiply(&self.weights.layer_scalar, stream)
+        self.gate_per_layer_input(input.add(&feed_forward, stream)?, stream)?
+            .multiply(&self.weights.layer_scalar, stream)
     }
 }

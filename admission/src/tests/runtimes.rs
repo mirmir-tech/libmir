@@ -2,6 +2,7 @@ use models::semantic::{KeyValueRelation, MixerSpec, QkNormalization};
 
 use super::fixtures::{
     AnyResult, clamped_routed, dense_and_routed, dense_contract, mixed_unsupported, shared_routed,
+    unshared_routed,
 };
 use crate::{cuda, metal};
 
@@ -45,17 +46,38 @@ fn admits_every_generation_runtime_without_a_device() -> AnyResult<()> {
 }
 
 #[test]
-fn preserves_backend_specific_window_admission() -> AnyResult<()> {
+fn admits_windowed_dense_layers_on_both_backends() -> AnyResult<()> {
     let (task, mut semantic) = dense_contract()?;
     if let MixerSpec::SoftmaxAttention(attention) = &mut semantic.decoder.layers[0].mixer {
-        attention.window = Some(128);
+        attention.window =
+            std::num::NonZeroUsize::new(128).map(models::semantic::AttentionWindow::Sliding);
     }
 
-    assert!(metal::admit(&task, Some(&semantic)).is_err());
+    assert_eq!(
+        metal::admit(&task, Some(&semantic))?,
+        metal::MetalArchitecture::Generation(metal::MetalDecoderRuntime::Dense)
+    );
     assert_eq!(
         cuda::admit(&task, Some(&semantic))?,
         cuda::CudaArchitecture::Generation(cuda::CudaDecoderRuntime::Dense)
     );
+    Ok(())
+}
+
+#[test]
+fn admits_unshared_routed_experts_to_the_cuda_dense_runtime() -> AnyResult<()> {
+    let (task, dense) = dense_contract()?;
+    let semantic = unshared_routed(dense);
+    assert_eq!(
+        cuda::admit(&task, Some(&semantic))?,
+        cuda::CudaArchitecture::Generation(cuda::CudaDecoderRuntime::Dense)
+    );
+    // Sinks still need the clamped-routed runtime's attention.
+    let mut sinks = semantic;
+    if let MixerSpec::SoftmaxAttention(attention) = &mut sinks.decoder.layers[0].mixer {
+        attention.sinks = true;
+    }
+    assert!(cuda::admit(&task, Some(&sinks)).is_err());
     Ok(())
 }
 
@@ -94,26 +116,22 @@ fn admits_dense_mixed_attention_on_both_backends() -> AnyResult<()> {
 }
 
 #[test]
-fn graph_normalization_ignores_shared_key_value_layers() -> AnyResult<()> {
+fn graph_decoder_keeps_each_layer_normalization() -> AnyResult<()> {
     let (task, mut semantic) = dense_contract()?;
     for (index, layer) in semantic.decoder.layers.iter_mut().enumerate() {
         if let MixerSpec::SoftmaxAttention(attention) = &mut layer.mixer {
-            attention.qk_normalization = QkNormalization::QueryKeyValueRms;
-            if index == 0 {
+            attention.qk_normalization = if index == 0 {
                 attention.key_value_relation = KeyValueRelation::KeyEqualsValue;
-            }
+                QkNormalization::QueryKeyRms
+            } else {
+                QkNormalization::QueryKeyValueRms
+            };
         }
     }
-    let plan = cuda::CudaDecoderPlan::lower(&semantic);
-
-    assert_eq!(cuda::graph_normalization(&plan)?, cuda::CudaQkvNormalization::All);
+    cuda::require_graph_attention(&cuda::CudaDecoderPlan::lower(&semantic))?;
     assert_eq!(
         cuda::admit(&task, Some(&semantic))?,
         cuda::CudaArchitecture::Generation(cuda::CudaDecoderRuntime::Dense)
     );
-    if let MixerSpec::SoftmaxAttention(attention) = &mut semantic.decoder.layers[0].mixer {
-        attention.qk_normalization = QkNormalization::QueryKeyRms;
-    }
-    assert!(cuda::graph_normalization(&cuda::CudaDecoderPlan::lower(&semantic)).is_err());
     Ok(())
 }

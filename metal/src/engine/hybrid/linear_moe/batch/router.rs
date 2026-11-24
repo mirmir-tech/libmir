@@ -23,6 +23,7 @@ fn compares_router_precision_across_layers() -> std::result::Result<(), Box<dyn 
     let model = HybridLinearMoeModel::load(
         &tensors,
         &decoder,
+        &contract.semantic.decoder,
         &contract.bindings,
         lowering.layers(),
         256,

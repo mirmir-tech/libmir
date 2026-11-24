@@ -1,4 +1,5 @@
 use mirtal::{DType, Graph, Shape};
+use models::semantic::{AttentionSpec, PositionEncodingSpec, RopeScalingSpec, RotarySpec};
 
 use super::super::{Array, Error, Result, Stream};
 
@@ -31,132 +32,37 @@ impl Array {
         Self::from_native(graph.multiply(&frequencies, &scalar(graph, correction)?)?)
     }
 
-    pub(crate) fn proportional_rope_frequencies(
-        head_dim: i32,
-        rope_dimensions: i32,
-        base: f32,
-        stream: &Stream,
-    ) -> Result<Self> {
-        dimensions(head_dim)?;
-        dimensions(rope_dimensions)?;
-        if rope_dimensions > head_dim {
-            return Err(invalid("RoPE dimensions exceed head dimensions"));
+    /// MLX `freqs` (periods, the reciprocal inverse frequencies) of the
+    /// attention's pairing width, from the semantic spec's scaling; pairs past
+    /// the rotated ones get an infinite period and pass through (proportional
+    /// `RoPE`). `None` when the fused kernel generates them from its `base`
+    /// and `rope_position_scale`, as MLX-LM's `nn.RoPE` does for unscaled and
+    /// linearly scaled rotations. The kernel rotates
+    /// `RotarySpec::pairing_dimensions` dimensions.
+    pub(crate) fn rope_periods(attention: &AttentionSpec) -> Result<Option<Self>> {
+        let PositionEncodingSpec::Rotary(rotary) = &attention.position else {
+            return Ok(None);
+        };
+        let rotated = rotary.rotated_dimensions(attention.head_dim)?;
+        let pairing = rotary.pairing_dimensions(attention.head_dim)?;
+        if fused(rotary, attention.head_dim)? {
+            return Ok(None);
         }
-        positive(base, "base")?;
-        let graph = stream.native().graph();
-        let exponents = graph.arange(0.0, as_f32(rope_dimensions)?, 2.0, DType::Float32)?;
-        let exponents = graph.divide(&exponents, &scalar(graph, as_f32(head_dim)?)?)?;
-        let frequencies = graph.power(&scalar(graph, base)?, &exponents)?;
-        let remaining = usize::try_from(head_dim / 2 - rope_dimensions / 2)?;
-        if remaining == 0 {
-            return Self::from_native(frequencies);
-        }
-        let tail = graph.full(&Shape::new([remaining])?, f32::INFINITY, DType::Float32)?;
-        Self::from_native(graph.concatenate(&[&frequencies, &tail], 0)?)
-    }
-
-    pub(crate) fn piecewise_rope_frequencies(
-        rotary_dimensions: i32,
-        base: f32,
-        factor: f32,
-        low_frequency_factor: f32,
-        high_frequency_factor: f32,
-        original_context_len: i32,
-        stream: &Stream,
-    ) -> Result<Self> {
-        dimensions(rotary_dimensions)?;
-        for (value, name) in [
-            (base, "base"),
-            (factor, "factor"),
-            (low_frequency_factor, "low frequency factor"),
-            (high_frequency_factor, "high frequency factor"),
-        ] {
-            positive(value, name)?;
-        }
-        if high_frequency_factor <= low_frequency_factor || original_context_len <= 0 {
-            return Err(invalid("invalid piecewise RoPE interpolation range"));
-        }
-        let graph = stream.native().graph();
-        let exponents = graph.arange(0.0, as_f32(rotary_dimensions)?, 2.0, DType::Float32)?;
-        let exponents = graph.divide(&exponents, &scalar(graph, as_f32(rotary_dimensions)?)?)?;
-        let frequencies = graph.power(&scalar(graph, base)?, &exponents)?;
-        let inverse = graph.reciprocal(&frequencies)?;
-        let wavelength = graph.multiply(&scalar(graph, std::f32::consts::TAU)?, &frequencies)?;
-        let ratio = graph.divide(&scalar(graph, as_f32(original_context_len)?)?, &wavelength)?;
-        let smooth = graph.subtract(&ratio, &scalar(graph, low_frequency_factor)?)?;
-        let smooth =
-            graph.divide(&smooth, &scalar(graph, high_frequency_factor - low_frequency_factor)?)?;
-        let smooth = graph.maximum(&smooth, &scalar(graph, 0.0)?)?;
-        let smooth = graph.minimum(&smooth, &scalar(graph, 1.0)?)?;
-        let slowed = graph.divide(&inverse, &scalar(graph, factor)?)?;
-        let inverse_smooth = graph.subtract(&scalar(graph, 1.0)?, &smooth)?;
-        let adjusted = graph
-            .add(&graph.multiply(&slowed, &inverse_smooth)?, &graph.multiply(&inverse, &smooth)?)?;
-        Self::from_native(graph.reciprocal(&adjusted)?)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn yarn_rope_frequencies(
-        rotary_dimensions: i32,
-        base: f32,
-        factor: f32,
-        beta_fast: f32,
-        beta_slow: f32,
-        original_context_len: i32,
-        truncate: bool,
-        stream: &Stream,
-    ) -> Result<Self> {
-        dimensions(rotary_dimensions)?;
-        for (value, name) in [
-            (base, "base"),
-            (factor, "factor"),
-            (beta_fast, "YaRN beta_fast"),
-            (beta_slow, "YaRN beta_slow"),
-        ] {
-            positive(value, name)?;
-        }
-        if beta_fast <= beta_slow || original_context_len <= 0 {
-            return Err(invalid("invalid YaRN interpolation range"));
-        }
-        let graph = stream.native().graph();
-        let dimensions = as_f32(rotary_dimensions)?;
-        let half = dimensions / 2.0;
-        let exponents = graph.arange(0.0, dimensions, 2.0, DType::Float32)?;
-        let exponents = graph.divide(&exponents, &scalar(graph, dimensions)?)?;
-        let frequencies = graph.power(&scalar(graph, base)?, &exponents)?;
-        let inverse = graph.reciprocal(&frequencies)?;
-        let original = f32::from(u16::try_from(original_context_len)?);
-        let low = half * (original / (beta_fast * std::f32::consts::TAU)).ln() / base.ln();
-        let high = half * (original / (beta_slow * std::f32::consts::TAU)).ln() / base.ln();
-        let low = if truncate {
-            low.floor()
-        } else {
-            low
-        }
-        .max(0.0);
-        let mut high = if truncate {
-            high.ceil()
-        } else {
-            high
-        }
-        .min(dimensions - 1.0);
-        if low.to_bits() == high.to_bits() {
-            high += 0.001;
-        }
-        let indices = graph.arange(0.0, half, 1.0, DType::Float32)?;
-        let ramp = graph.divide(
-            &graph.subtract(&indices, &scalar(graph, low)?)?,
-            &scalar(graph, high - low)?,
-        )?;
-        let ramp = graph.maximum(&ramp, &scalar(graph, 0.0)?)?;
-        let ramp = graph.minimum(&ramp, &scalar(graph, 1.0)?)?;
-        let mask = graph.subtract(&scalar(graph, 1.0)?, &ramp)?;
-        let interpolated = graph.divide(&inverse, &scalar(graph, factor)?)?;
-        let adjusted = graph.add(
-            &graph.multiply(&interpolated, &graph.subtract(&scalar(graph, 1.0)?, &mask)?)?,
-            &graph.multiply(&inverse, &mask)?,
-        )?;
-        Self::from_native(graph.reciprocal(&adjusted)?)
+        let Some((inverse, _)) = attention.position.inverse_frequencies(pairing)? else {
+            return Ok(None);
+        };
+        let periods = inverse
+            .iter()
+            .enumerate()
+            .map(|(pair, frequency)| {
+                if pair < rotated / 2 {
+                    Ok(frequency.recip().to_string().parse::<f32>()?)
+                } else {
+                    Ok(f32::INFINITY)
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Self::from_f32(&periods, &[i32::try_from(periods.len())?]).map(Some)
     }
 
     pub fn rope(&self, options: RopeOptions, stream: &Stream) -> Result<Self> {
@@ -191,6 +97,28 @@ impl Array {
         )?)?
         .astype_like(self, stream)
     }
+}
+
+/// The fused kernel's position scale: `1 / factor` under linear scaling when
+/// it generates the frequencies itself, else 1.
+pub fn rope_position_scale(attention: &AttentionSpec) -> Result<f32> {
+    match &attention.position {
+        PositionEncodingSpec::Rotary(rotary) if fused(rotary, attention.head_dim)? => {
+            match rotary.scaling {
+                Some(RopeScalingSpec::Linear { factor }) => {
+                    Ok(factor.recip().to_string().parse()?)
+                },
+                _ => Ok(1.0),
+            }
+        },
+        PositionEncodingSpec::Rotary(_) | PositionEncodingSpec::None => Ok(1.0),
+    }
+}
+
+/// Whether the fused kernel's `base` and position scale express the rotation.
+fn fused(rotary: &RotarySpec, head_dim: usize) -> Result<bool> {
+    Ok(matches!(rotary.scaling, None | Some(RopeScalingSpec::Linear { .. }))
+        && rotary.pairing_dimensions(head_dim)? == rotary.rotated_dimensions(head_dim)?)
 }
 
 fn scalar(graph: Graph<'_>, value: f32) -> Result<mirtal::Array> {

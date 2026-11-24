@@ -102,6 +102,7 @@ pub(in crate::backend) struct Geometry {
     pub(in crate::backend) scale: f32,
     pub(in crate::backend) split_threshold: u32,
     pub(in crate::backend) theta: f32,
+    pub(in crate::backend) rope_scaling: crate::kernels::RotaryScaling,
     pub(in crate::backend) epsilon: f32,
     pub(in crate::backend) normalization: crate::kernels::QkvNormalization,
     pub(in crate::backend) separate_qkv: bool,
@@ -139,7 +140,7 @@ impl DecodeAttentionBf16 {
         let geometry = Geometry::new(&self)?;
         let dynamic = Dynamic::new(write_plan, table, geometry)?;
         self.attention.prepare_table(table)?;
-        let kernels = Kernels::new(&self);
+        let kernels = Kernels::new(&self)?;
         let configs = Configs::new(&self)?;
         let stream = self.stream.clone();
         let resources = Resources {

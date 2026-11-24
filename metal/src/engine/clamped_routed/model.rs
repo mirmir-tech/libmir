@@ -1,4 +1,4 @@
-use models::{layout::DecoderConfig, weights::WeightBindingPlan};
+use models::{semantic::DecoderSpec, weights::WeightBindingPlan};
 
 use super::{
     config::ClampedRoutedConfig,
@@ -16,7 +16,7 @@ pub struct ClampedRoutedModel {
     pub(super) layers: Vec<ClampedRoutedLayer>,
     windows: Vec<Option<usize>>,
     cache_step: usize,
-    pub(super) config: ClampedRoutedConfig,
+    pub(super) final_norm_eps: f32,
     pub(super) embedding: BoundEmbedding,
     pub(super) final_norm: NormWeight,
     pub(super) output: BoundLinear,
@@ -25,20 +25,19 @@ pub struct ClampedRoutedModel {
 impl ClampedRoutedModel {
     #[cfg(test)]
     pub(crate) fn project_prefill_output(&self, hidden: &Array, stream: &Stream) -> Result<Array> {
-        let hidden = self.final_norm.apply(hidden, self.config.epsilon, stream)?;
+        let hidden = self.final_norm.apply(hidden, self.final_norm_eps, stream)?;
         self.output.forward(&hidden, stream)
     }
 
     pub fn load(
         tensors: &ModelTensors,
-        decoder: &DecoderConfig,
+        spec: &DecoderSpec,
         bindings: &WeightBindingPlan,
         lowering: &[LayerLowering],
         cache_step: usize,
         stream: &Stream,
     ) -> Result<Self> {
-        let config = ClampedRoutedConfig::from_decoder(decoder)?;
-        let compatible = lowering.len() == decoder.num_hidden_layers
+        let compatible = lowering.len() == spec.layers.len()
             && lowering.iter().all(|layer| {
                 layer.feed_forward == FeedForwardLowering::ClampedRouted
                     && matches!(layer.mixer, MixerLowering::Softmax { sinks: true, .. })
@@ -48,12 +47,16 @@ impl ClampedRoutedModel {
                 "clamped-routed loader requires attention sinks on every layer".into(),
             ));
         }
-        let layers = (0..decoder.num_hidden_layers)
-            .map(|index| {
+        let layers = spec
+            .layers
+            .iter()
+            .enumerate()
+            .map(|(index, layer)| {
                 ClampedRoutedLayer::load(
                     tensors,
                     bindings.routed_decoder_layer(index)?,
-                    config,
+                    layer,
+                    ClampedRoutedConfig::from_spec(spec, layer)?,
                     stream,
                 )
             })
@@ -62,8 +65,10 @@ impl ClampedRoutedModel {
         let windows = lowering
             .iter()
             .map(|layer| match layer.mixer {
-                MixerLowering::Softmax { window, .. } => window,
-                MixerLowering::Linear | MixerLowering::StateSpace => {
+                MixerLowering::Softmax { window, .. } => {
+                    window.and_then(models::semantic::AttentionWindow::sliding)
+                },
+                MixerLowering::Linear | MixerLowering::StateSpace | MixerLowering::Latent => {
                     unreachable!("validated sink-attention mixer")
                 },
             })
@@ -72,7 +77,7 @@ impl ClampedRoutedModel {
             layers,
             windows,
             cache_step,
-            config,
+            final_norm_eps: spec.final_norm.epsilon.to_string().parse()?,
             embedding: BoundEmbedding::load(tensors, boundary.embedding, stream)?,
             final_norm: NormWeight::load_name(tensors, &boundary.final_norm.source)?,
             output: BoundLinear::load(tensors, boundary.output, stream)?,
@@ -99,7 +104,7 @@ impl ClampedRoutedModel {
         stream: &Stream,
     ) -> Result<Array> {
         let hidden = self.forward_state(token_ids, cache, position, causal, stream)?;
-        let hidden = self.final_norm.apply(&hidden, self.config.epsilon, stream)?;
+        let hidden = self.final_norm.apply(&hidden, self.final_norm_eps, stream)?;
         let logits = self.output.forward(&hidden, stream)?;
         if !causal {
             decode::graph::export_once(&logits, stream)?;

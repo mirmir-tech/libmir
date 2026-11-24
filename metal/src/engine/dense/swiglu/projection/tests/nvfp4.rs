@@ -78,7 +78,7 @@ fn composes_individual_nvfp4_experts_on_device() -> Result<()> {
     let stream = Stream::new_gpu()?;
     let bindings = [individual_binding(0), individual_binding(1)];
     let refs = bindings.iter().collect::<Vec<_>>();
-    let linear = BoundLinear::load_nvfp4_bank(&tensors, &refs, &stream)?;
+    let linear = BoundLinear::load_individual_bank(&tensors, &refs, &stream)?;
     let input = Array::from_f32(&[1.0; 64], &[2, 1, 32])?
         .astype(crate::engine::Dtype::Bfloat16, &stream)?;
     let indices = Array::from_u32(&[0, 1], &[2])?;

@@ -1,14 +1,15 @@
 use foundation::model::BackendTarget;
 use models::weights::{
     AffineParameterDType, AffineStorageDType, CompressedIntegerQuantization,
-    CompressedIntegerScaleDType, GptqBits, GptqQuantization, GptqScaleDType,
-    GroupedAffineQuantization,
+    CompressedIntegerScaleDType, CompressedIntegerScaleStrategy, GptqBits, GptqQuantization,
+    GptqScaleDType, GroupedAffineQuantization,
 };
 
 use super::{AdmissionCheck, AdmissionCheckKind, AdmissionStatus, WeightEncoding};
 
 mod bitsandbytes;
 mod float8;
+mod ggml;
 mod kind;
 
 use bitsandbytes::assess as bitsandbytes;
@@ -28,20 +29,11 @@ pub(super) fn assess(backend: &BackendTarget, encoding: &WeightEncoding) -> Admi
         (BackendTarget::Cuda, WeightEncoding::Dense { dtype }) => {
             dense(dtype, "CUDA execution depends on the admitted architecture")
         },
+        (_, WeightEncoding::Ggml { format }) => ggml::assess(backend, *format),
         (BackendTarget::Metal, WeightEncoding::Affine { format }) => affine_metal(*format),
         (BackendTarget::Cuda, WeightEncoding::Affine { format }) => affine_cuda(*format),
-        (BackendTarget::Metal, WeightEncoding::PackedInt8 { format }) => {
-            packed_int8("Metal", *format)
-        },
-        (BackendTarget::Cuda, WeightEncoding::PackedInt8 { format }) => {
-            packed_int8("CUDA", *format)
-        },
-        (BackendTarget::Metal, WeightEncoding::PackedInt4 { format }) => {
-            packed_int4("Metal", *format)
-        },
-        (BackendTarget::Cuda, WeightEncoding::PackedInt4 { format }) => {
-            packed_int4("CUDA", *format)
-        },
+        (BackendTarget::Metal, WeightEncoding::PackedInteger { format }) => packed_metal(*format),
+        (BackendTarget::Cuda, WeightEncoding::PackedInteger { format }) => packed_cuda(*format),
         (BackendTarget::Metal, WeightEncoding::Awq { format }) => (
             AdmissionCheckKind::Awq,
             if format.is_gemm_w4a16() {
@@ -148,32 +140,38 @@ fn gptq(
     )
 }
 
-fn packed_int8(
-    backend: &str,
+/// Metal reinterprets the packed words as MLX affine storage, which shares
+/// the dense little-endian bitstream for every admitted width, and converts
+/// F16/F32 scales to BF16.
+fn packed_metal(
     format: CompressedIntegerQuantization,
 ) -> (AdmissionCheckKind, AdmissionStatus, String) {
-    let status = if format.is_symmetric_channel_int8()
-        && format.scale_dtype == CompressedIntegerScaleDType::BF16
-    {
+    let grouped = format.is_symmetric_group()
+        && matches!(
+            format.scale_strategy,
+            CompressedIntegerScaleStrategy::Group { group_size: 32 | 64 | 128 }
+        );
+    let status = if format.is_symmetric_channel_int8() || grouped {
         AdmissionStatus::Partial
     } else {
         AdmissionStatus::Unsupported
     };
     (
-        AdmissionCheckKind::PackedInt8,
+        AdmissionCheckKind::PackedInteger,
         status,
         format!(
-            "{backend} requires symmetric per-channel offset-binary INT8 in dense I32 packing with \
-             BF16 scales"
+            "Metal requires symmetric offset-binary integers in dense I32 packing: per-channel \
+             INT8, or INT2/3/4/8 in groups of 32, 64 or 128; INT{} {:?}",
+            format.bits.get(),
+            format.scale_strategy
         ),
     )
 }
 
-fn packed_int4(
-    backend: &str,
+fn packed_cuda(
     format: CompressedIntegerQuantization,
 ) -> (AdmissionCheckKind, AdmissionStatus, String) {
-    let status = if format.is_symmetric_group_int4()
+    let status = if (format.is_symmetric_channel_int8() || format.is_symmetric_group_int4())
         && format.scale_dtype == CompressedIntegerScaleDType::BF16
     {
         AdmissionStatus::Partial
@@ -181,11 +179,14 @@ fn packed_int4(
         AdmissionStatus::Unsupported
     };
     (
-        AdmissionCheckKind::PackedInt4,
+        AdmissionCheckKind::PackedInteger,
         status,
         format!(
-            "{backend} requires symmetric grouped offset-binary INT4 in dense I32 packing with \
-             BF16 scales"
+            "CUDA requires symmetric offset-binary per-channel INT8 or grouped INT4 in dense I32 \
+             packing with BF16 scales; INT{} {:?} {:?}",
+            format.bits.get(),
+            format.scale_strategy,
+            format.scale_dtype
         ),
     )
 }

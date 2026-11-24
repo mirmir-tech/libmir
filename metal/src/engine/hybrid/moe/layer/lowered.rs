@@ -19,13 +19,13 @@ impl LoweredLayer for HybridMoeLayer {
     ) -> Result<Array> {
         let mask = context
             .image
-            .filter(|_| self.config.max_context.is_some())
+            .filter(|_| self.config.sliding_window.is_some())
             .map(|image| {
                 let sequence = input.shape()?.get(1).copied().ok_or(Error::ShapeOverflow)?;
                 prefix_attention_mask(
                     usize::try_from(sequence)?,
                     image,
-                    self.config.max_context,
+                    self.config.max_context(),
                     context.stream,
                 )
             })

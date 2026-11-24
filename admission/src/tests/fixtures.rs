@@ -63,11 +63,7 @@ pub(super) fn clamped_routed(mut semantic: SemanticModelSpec) -> SemanticModelSp
         };
         attention.sinks = true;
         layer.feed_forward = FeedForwardSpec::Routed {
-            routed: routed(ActivationSpec::SwiGlu {
-                alpha: 1.0,
-                clamp: Some(7.0),
-                up_shift: 1.0,
-            }),
+            routed: routed(ActivationSpec::ClampedSwiGlu { alpha: 1.0, limit: 7.0 }),
             shared: None,
         };
     }
@@ -101,6 +97,18 @@ pub(super) fn shared_routed(mut semantic: SemanticModelSpec) -> SemanticModelSpe
     semantic
 }
 
+/// Routed experts without a shared expert or clamp, with Q/K norms and no
+/// sinks (Qwen3-MoE).
+pub(super) fn unshared_routed(mut semantic: SemanticModelSpec) -> SemanticModelSpec {
+    for layer in &mut semantic.decoder.layers {
+        if let MixerSpec::SoftmaxAttention(attention) = &mut layer.mixer {
+            attention.qk_normalization = models::semantic::QkNormalization::QueryKeyRms;
+        }
+        layer.feed_forward = FeedForwardSpec::Routed { routed: routed(swiglu()), shared: None };
+    }
+    semantic
+}
+
 pub(super) fn mixed_unsupported(mut semantic: SemanticModelSpec) -> SemanticModelSpec {
     semantic.decoder.layers[1].feed_forward = FeedForwardSpec::DenseAndRouted {
         dense_intermediate_size: 16,
@@ -117,9 +125,11 @@ fn routed(activation: ActivationSpec) -> RoutedExpertsSpec {
         intermediate_size: 16,
         activation,
         router_normalization: RouterNormalization::SoftmaxTopK,
+        group_limit: None,
+        output_scale: 1.0,
     }
 }
 
 fn swiglu() -> ActivationSpec {
-    ActivationSpec::SwiGlu { alpha: 1.0, clamp: None, up_shift: 0.0 }
+    ActivationSpec::SwiGlu
 }

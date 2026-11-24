@@ -26,11 +26,15 @@ pub enum MetalDecoderRuntime {
     ClampedRouted,
     /// Mamba-2 and attention mixers with sigmoid-routed experts (Nemotron-H).
     StateSpaceHybrid,
+    /// Multi-head latent attention with leading dense layers, then routed
+    /// plus shared experts (`DeepSeek-V2/V3`, Kimi, Moonlight).
+    LatentAttention,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MetalDecoderPlan {
     layers: Vec<LayerLowering>,
+    final_norm: NormalizationLowering,
     runtime: MetalDecoderRuntime,
 }
 
@@ -38,6 +42,11 @@ impl MetalDecoderPlan {
     #[must_use]
     pub fn layers(&self) -> &[LayerLowering] {
         &self.layers
+    }
+
+    #[must_use]
+    pub const fn final_norm(&self) -> NormalizationLowering {
+        self.final_norm
     }
 
     #[must_use]
@@ -74,6 +83,7 @@ pub fn admit(
             let semantic = semantic.ok_or_else(|| {
                 ArchitectureError::invalid("Metal generation semantic contract is missing")
             })?;
+            crate::activation::require_resolved(semantic)?;
             let runtime = plan(semantic)?.runtime();
             semantics::validate(decoder, semantic, runtime)?;
             Ok(MetalArchitecture::Generation(runtime))
@@ -110,14 +120,43 @@ fn sequence_scoring(config: &EncoderConfig) -> Result<MetalArchitecture> {
 
 pub fn plan(spec: &SemanticModelSpec) -> Result<MetalDecoderPlan> {
     let layers = spec.decoder.layers.iter().map(lower_layer).collect::<Result<Vec<_>>>()?;
+    let final_norm = operations::lower_normalization(
+        spec.decoder.layers.len(),
+        "final",
+        spec.decoder.final_norm,
+    )?;
     let runtime = select_runtime(&layers)?;
-    Ok(MetalDecoderPlan { layers, runtime })
+    Ok(MetalDecoderPlan { layers, final_norm, runtime })
 }
 
 fn select_runtime(layers: &[LayerLowering]) -> Result<MetalDecoderRuntime> {
-    if layers.iter().all(|layer| {
-        layer.feed_forward == FeedForwardLowering::Dense
-            && matches!(layer.mixer, MixerLowering::Softmax { window: None, .. })
+    if layers.iter().any(|layer| layer.mixer == MixerLowering::Latent) {
+        let supported = layers.iter().all(|layer| {
+            layer.mixer == MixerLowering::Latent
+                && matches!(
+                    layer.feed_forward,
+                    FeedForwardLowering::Dense | FeedForwardLowering::SharedRouted
+                )
+        });
+        return if supported {
+            Ok(MetalDecoderRuntime::LatentAttention)
+        } else {
+            Err(ArchitectureError::invalid(
+                "Metal latent attention requires latent attention in every layer with dense or shared-routed feed-forwards",
+            ))
+        };
+    }
+    if layers.iter().all(|layer| match (layer.feed_forward, layer.mixer) {
+        (FeedForwardLowering::Dense, MixerLowering::Softmax { .. }) => true,
+        (
+            FeedForwardLowering::Routed | FeedForwardLowering::SharedRouted,
+            MixerLowering::Softmax {
+                window: None | Some(models::semantic::AttentionWindow::Chunked { .. }),
+                sinks,
+                ..
+            },
+        ) => !sinks,
+        _ => false,
     }) {
         return Ok(MetalDecoderRuntime::Dense);
     }
@@ -156,7 +195,9 @@ fn select_runtime(layers: &[LayerLowering]) -> Result<MetalDecoderRuntime> {
         && layers.iter().all(|layer| {
             matches!(
                 layer.feed_forward,
-                FeedForwardLowering::LatentRouted | FeedForwardLowering::None
+                FeedForwardLowering::LatentRouted
+                    | FeedForwardLowering::UngatedDense
+                    | FeedForwardLowering::None
             ) && matches!(
                 layer.mixer,
                 MixerLowering::StateSpace

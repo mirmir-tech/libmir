@@ -14,13 +14,13 @@ mod retention;
 
 #[test]
 fn indexes_storage_efficient_complete_blocks_and_the_exact_prompt() {
-    let indexed = indexed_prefixes("model", &[1, 2, 3, 4, 5], Some(2));
+    let indexed = indexed_prefixes("model", &[1, 2, 3, 4, 5], Some(2), 0);
     assert_eq!(indexed.iter().map(|(_, position)| *position).collect::<Vec<_>>(), [4, 5]);
 }
 
 #[test]
 fn indexes_only_the_exact_prompt_without_block_prefixes() {
-    let indexed = indexed_prefixes("model", &[1, 2, 3], None);
+    let indexed = indexed_prefixes("model", &[1, 2, 3], None, 0);
     assert_eq!(indexed.iter().map(|(_, position)| *position).collect::<Vec<_>>(), [3]);
 }
 

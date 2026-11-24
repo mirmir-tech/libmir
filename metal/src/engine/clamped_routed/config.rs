@@ -1,6 +1,11 @@
-use models::layout::DecoderConfig;
+use models::semantic::{
+    ActivationSpec, AttentionSpec, DecoderLayerSpec, DecoderSpec, PositionEncodingSpec,
+};
 
 use crate::engine::{Error, Result};
+
+/// GPT-OSS's `x · σ(1.702 x)` gate, which the kernels fix.
+const GATE_ALPHA: f64 = 1.702;
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ClampedRoutedConfig {
@@ -12,61 +17,42 @@ pub(super) struct ClampedRoutedConfig {
     pub top_k: i32,
     pub epsilon: f32,
     pub scale: f32,
-    pub rope_base: f32,
-    pub rope_factor: f32,
-    pub beta_fast: f32,
-    pub beta_slow: f32,
-    pub original_context: i32,
+    /// `YaRN`'s factor on the rotated cosine and sine.
     pub rope_concentration: f32,
-    pub rope_truncate: bool,
     pub swiglu_limit: f32,
 }
 
 impl ClampedRoutedConfig {
-    pub fn from_decoder(decoder: &DecoderConfig) -> Result<Self> {
-        let (factor, beta_fast, beta_slow, original, attention_factor, truncate) = decoder
-            .rope_scaling
-            .and_then(models::layout::RopeScaling::yarn)
-            .ok_or_else(|| {
-                Error::InvalidModel("clamped-routed execution requires YaRN configuration".into())
-            })?;
-        let head_dim = decoder.head_dim.to_string().parse::<f32>()?;
-        let factor_f32 = factor.to_string().parse::<f32>()?;
+    pub fn from_spec(decoder: &DecoderSpec, layer: &DecoderLayerSpec) -> Result<Self> {
+        let attention = attention(layer)?;
+        let routed = layer.feed_forward.routed().ok_or_else(|| {
+            Error::InvalidModel("clamped-routed layers need routed experts".into())
+        })?;
+        let ActivationSpec::ClampedSwiGlu { alpha, limit } = routed.activation else {
+            return Err(Error::InvalidModel("clamped-routed experts need a clamped SwiGLU".into()));
+        };
+        if alpha.to_bits() != GATE_ALPHA.to_bits() {
+            return Err(Error::InvalidModel("unsupported clamped SwiGLU constants".into()));
+        }
         let config = Self {
             hidden: i32::try_from(decoder.hidden_size)?,
-            intermediate: i32::try_from(decoder.intermediate_size)?,
-            heads: i32::try_from(decoder.num_attention_heads)?,
-            kv_heads: i32::try_from(decoder.num_key_value_heads)?,
-            head_dim: i32::try_from(decoder.head_dim)?,
-            top_k: i32::try_from(decoder.top_k_experts.unwrap_or_default())?,
-            epsilon: decoder.rms_norm_eps.to_string().parse()?,
-            scale: match decoder.attention_scale {
-                Some(value) => value.to_string().parse()?,
-                None => 1.0 / head_dim.sqrt(),
-            },
-            rope_base: decoder.rope_theta.unwrap_or(150_000.0).to_string().parse()?,
-            rope_factor: factor_f32,
-            beta_fast: beta_fast.to_string().parse()?,
-            beta_slow: beta_slow.to_string().parse()?,
-            original_context: i32::try_from(original)?,
-            rope_concentration: attention_factor.to_string().parse()?,
-            rope_truncate: truncate,
-            swiglu_limit: decoder.swiglu_limit.unwrap_or(7.0).to_string().parse()?,
+            intermediate: i32::try_from(routed.intermediate_size)?,
+            heads: i32::try_from(attention.query_heads)?,
+            kv_heads: i32::try_from(attention.key_value_heads)?,
+            head_dim: i32::try_from(attention.head_dim)?,
+            top_k: i32::try_from(routed.top_k)?,
+            epsilon: decimal(layer.input_norm.epsilon)?,
+            scale: decimal(attention.scale)?,
+            rope_concentration: decimal(concentration(attention)?)?,
+            swiglu_limit: decimal(limit)?,
         };
         config.validate()?;
         Ok(config)
     }
 
     fn validate(self) -> Result<()> {
-        let dimensions = [
-            self.hidden,
-            self.intermediate,
-            self.heads,
-            self.kv_heads,
-            self.head_dim,
-            self.top_k,
-            self.original_context,
-        ];
+        let dimensions =
+            [self.hidden, self.intermediate, self.heads, self.kv_heads, self.head_dim, self.top_k];
         if dimensions.into_iter().any(|value| value <= 0)
             || self.hidden % 32 != 0
             || self.intermediate % 32 != 0
@@ -79,4 +65,34 @@ impl ClampedRoutedConfig {
             Ok(())
         }
     }
+}
+
+pub(super) fn attention(layer: &DecoderLayerSpec) -> Result<&AttentionSpec> {
+    layer.mixer.softmax_attention().ok_or_else(|| {
+        Error::InvalidModel(format!("clamped-routed layer {} needs softmax attention", layer.index))
+    })
+}
+
+/// The rotation's `YaRN` attention factor; the encoding must rotate whole
+/// heads with scaled frequencies.
+fn concentration(attention: &AttentionSpec) -> Result<f64> {
+    let PositionEncodingSpec::Rotary(rotary) = &attention.position else {
+        return Err(Error::InvalidModel("clamped-routed attention needs RoPE".into()));
+    };
+    if rotary.scaling.is_none()
+        || rotary.rotated_dimensions(attention.head_dim)? != attention.head_dim
+    {
+        return Err(Error::InvalidModel(
+            "clamped-routed execution requires full-head scaled RoPE".into(),
+        ));
+    }
+    let (_, factor) = attention
+        .position
+        .inverse_frequencies(attention.head_dim)?
+        .ok_or_else(|| Error::InvalidModel("clamped-routed attention needs RoPE".into()))?;
+    Ok(factor)
+}
+
+fn decimal(value: f64) -> Result<f32> {
+    Ok(value.to_string().parse()?)
 }

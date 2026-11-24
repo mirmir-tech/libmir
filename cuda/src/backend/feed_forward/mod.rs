@@ -1,6 +1,8 @@
 mod dense;
+mod load;
 
 pub(super) use dense::{DenseFeedForward, scratch::DenseScratchPool};
+pub(super) use load::load;
 use mircuda::{DeviceBuffer, bf16};
 
 use crate::{

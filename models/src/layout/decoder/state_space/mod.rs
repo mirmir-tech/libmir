@@ -11,7 +11,9 @@ use std::num::NonZeroUsize;
 mod blocks;
 mod parse;
 
-pub use blocks::{HybridBlockKind, HybridBlockPattern, HybridLayer, HybridLayerBlock};
+pub use blocks::{
+    HybridBlockKind, HybridBlockPattern, HybridFeedForward, HybridLayer, HybridLayerBlock,
+};
 pub(super) use parse::state_space_hybrid;
 
 /// Complete configuration of a state-space hybrid decoder.
@@ -21,8 +23,10 @@ pub struct StateSpaceHybridConfig {
     pub blocks: HybridBlockPattern,
     /// Mamba-2 mixer geometry shared by every state-space block.
     pub mamba: Mamba2Config,
-    /// Routed-expert geometry shared by every routed block.
-    pub routed: LatentRoutedConfig,
+    /// Routed-expert geometry shared by every routed block; absent when the
+    /// pattern has none (dense Nemotron-H, whose MLP blocks take the
+    /// decoder's `intermediate_size`).
+    pub routed: Option<LatentRoutedConfig>,
     /// Multi-token prediction modules, when the checkpoint declares them.
     pub prediction: Option<PredictionModules>,
 }
@@ -62,6 +66,21 @@ pub struct Mamba2Config {
     pub time_step_limit: TimeStepLimit,
     /// Element type of the persistent recurrent state.
     pub state_dtype: StateSpaceStateDType,
+    /// How the checkpoint stores the decay.
+    pub layout: StateSpaceLayout,
+}
+
+/// The `config.json` key GGUF imports write for llama.cpp's Mamba-2 layout.
+pub const STATE_SPACE_LAYOUT: &str = "mir_state_space_layout";
+pub const STATE_SPACE_LAYOUT_LLAMA_CPP: &str = "llama_cpp";
+
+/// How a Mamba-2 checkpoint stores its decay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StateSpaceLayout {
+    /// `A_log`, as Hugging Face checkpoints do.
+    Checkpoint,
+    /// `A = -exp(A_log)`, as llama.cpp's converter writes it.
+    LlamaCpp,
 }
 
 /// Lower and upper clamp of the discretization time step.

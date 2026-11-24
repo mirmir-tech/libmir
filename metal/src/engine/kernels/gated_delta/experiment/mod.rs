@@ -28,7 +28,7 @@ mirtal::metal_kernel! {
         name: "mirmir_gdn_explicit",
         templates: [
             InT: dtype = bf16, StT: dtype = f32, DK: int = 128, DV: int = 128,
-            HK: int = 8, HV: int = 16, STEPS: int = 4,
+            HK: int = 8, HV: int = 16, STEPS: int = 4, TRAIL: bool = false, STATES: int = 16,
         ],
         inputs: [query: InT, key: InT, value: InT, decay: f32, update: f32, state: StT],
         outputs: [output: InT, next_state: StT],
@@ -43,7 +43,7 @@ mirtal::metal_kernel! {
         name: "mirmir_gdn_packed",
         templates: [
             InT: dtype = bf16, StT: dtype = f32, DK: int = 128, DV: int = 128,
-            HK: int = 8, HV: int = 16, STEPS: int = 4,
+            HK: int = 8, HV: int = 16, STEPS: int = 4, TRAIL: bool = false, STATES: int = 16,
         ],
         inputs: [query: InT, key: InT, value: InT, decay: f32, update: f32, state: StT],
         outputs: [output: InT, next_state: StT],
@@ -127,6 +127,8 @@ impl Recurrence {
                 template("HK", q[2])?,
                 template("HV", v[2])?,
                 template("STEPS", v[1])?,
+                TemplateArg::bool("TRAIL", false),
+                template("STATES", v[0] * v[2])?,
             ]),
         )?)
     }

@@ -11,7 +11,12 @@ use libmir::{
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let library = Library::new(RuntimeConfig::default());
+    let mut runtime = RuntimeConfig::default();
+    // The platform reserve, as a percentage of memory; mirmir defaults to 1.
+    if let Ok(percent) = env::var("MIRMIR_MEMORY_RESERVE_PERCENT") {
+        runtime.memory.reserve_percent = Some(percent.parse()?);
+    }
+    let library = Library::new(runtime);
     let model = library.load(model_path()?, GenerationOverrides::default(), &mut |_| {})?;
     let request = request();
     let mut stdout = io::stdout().lock();

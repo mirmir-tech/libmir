@@ -3,6 +3,7 @@ use mircuda::{DeviceBuffer, bf16};
 use super::{
     AffineGatedDeltaLayerConfig, AffineGatedDeltaLayerWeights, CudaGatedDeltaState,
     gates::{DenseAlphaBeta, prepare_dense_alpha_beta},
+    llama_cpp::TiledOutput,
     require_exact,
     scratch::{GatedDeltaScratch, GatedDeltaScratchKey},
 };
@@ -29,6 +30,8 @@ pub struct CudaAffineGatedDeltaExecution {
     pub(super) dense_alpha_beta: Option<DenseAlphaBeta>,
     pub(super) output: CheckpointProjection,
     pub(super) transforms: GatedDeltaTransforms,
+    /// llama.cpp layouts tile the output back for their output projection.
+    pub(super) tiled_output: Option<TiledOutput>,
     pub(super) weights: AffineGatedDeltaLayerWeights,
     pub(super) scratch: SharedScratch<GatedDeltaScratch>,
     pub(super) batch_state: Option<SharedScratch<CudaGatedDeltaBatchState>>,
@@ -107,6 +110,7 @@ impl CudaAffineGatedDeltaExecution {
                 DenseRole::AttentionOutput,
                 &weights.output,
             )?,
+            tiled_output: TiledOutput::new(backend, config, tokens)?,
             transforms: GatedDeltaTransforms::compile(
                 &backend.inner.compiler,
                 GatedDeltaTransformSpec {

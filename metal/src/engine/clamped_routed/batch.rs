@@ -17,7 +17,7 @@ impl ClampedRoutedModel {
         stream: &Stream,
     ) -> Result<Array> {
         let hidden = self.forward_packed_state(token_ids, caches, positions, false, stream)?;
-        let hidden = self.final_norm.apply(&hidden, self.config.epsilon, stream)?;
+        let hidden = self.final_norm.apply(&hidden, self.final_norm_eps, stream)?;
         let logits = self.output.forward(&hidden, stream)?;
         decode::graph::export_once(&logits, stream)?;
         Ok(logits)

@@ -1,7 +1,7 @@
 use super::super::{CudaSharedRoutedLayerState, CudaSharedRoutedModelSession};
 use crate::{
     CudaAffineGatedFullAttentionState, CudaGatedDeltaState, CudaMamba2State, DecodeAttentionBf16,
-    Error, Result,
+    Error, LatentAttentionState, Result,
 };
 
 /// Every session's state of layer `index`, which must be of the kind
@@ -46,6 +46,16 @@ pub(super) fn mamba_states<'a>(
 ) -> Result<Vec<&'a mut CudaMamba2State>> {
     layer_states(sessions, index, |state| match state {
         CudaSharedRoutedLayerState::Mamba2(state) => Some(state),
+        _ => None,
+    })
+}
+
+pub(super) fn latent_states<'a>(
+    sessions: &'a mut [&mut CudaSharedRoutedModelSession],
+    index: usize,
+) -> Result<Vec<&'a mut LatentAttentionState>> {
+    layer_states(sessions, index, |state| match state {
+        CudaSharedRoutedLayerState::Latent(state) => Some(state.as_mut()),
         _ => None,
     })
 }

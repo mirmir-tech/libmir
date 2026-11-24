@@ -29,7 +29,7 @@ For Apple Metal:
 
 ```toml
 [dependencies]
-libmir = { version = "0.6.2", features = ["metal"] }
+libmir = { version = "0.7.0", features = ["metal"] }
 ```
 
 With `metal` alone, device telemetry reads GPU utilization from public `IOKit`
@@ -41,7 +41,7 @@ For NVIDIA CUDA:
 
 ```toml
 [dependencies]
-libmir = { version = "0.6.2", default-features = false, features = ["cuda"] }
+libmir = { version = "0.7.0", default-features = false, features = ["cuda"] }
 ```
 
 ## Generate from a local checkpoint

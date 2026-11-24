@@ -26,7 +26,9 @@ impl ClampedRoutedCapabilityPlan {
             ClampedRoutedLayout::Native | ClampedRoutedLayout::Dense => {
                 ClampedRoutedQkvLowering::PackedFused
             },
-            ClampedRoutedLayout::Mlx => ClampedRoutedQkvLowering::SeparateComposed,
+            ClampedRoutedLayout::Mlx | ClampedRoutedLayout::Ggml => {
+                ClampedRoutedQkvLowering::SeparateComposed
+            },
         };
         tracing::debug!(
             target: "libmir::cuda::lowering",

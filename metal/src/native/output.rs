@@ -23,7 +23,7 @@ pub(super) fn materialize(
                 "schema masking requires full device logits".into(),
             ));
         },
-        (NativeOutput::Greedy(next_token), _) => {
+        (NativeOutput::Greedy(next_token) | NativeOutput::Verified { next: next_token, .. }, _) => {
             return Ok(SamplingOutput {
                 next_token: Some(next_token),
                 logits: None,

@@ -1,7 +1,7 @@
 use models::layout::{DecoderConfig, ModelLayout};
 
 use super::*;
-use crate::engine::hybrid::moe::{HybridMoeLayer, HybridMoeLayerConfig, HybridMoeModel};
+use crate::engine::hybrid::moe::{CheckpointLayer, HybridMoeLayer, HybridMoeModel};
 
 #[test]
 #[ignore = "loads all model layers; set MIRMIR_BENCH_MODEL or MODEL"]
@@ -47,8 +47,8 @@ fn compares_real_gemma_first_layer_from_embedding() -> Result<()> {
     let load_stream = Stream::new_cpu()?;
     let tensors = ModelTensors::load(&root, &load_stream)?;
     let stream = Stream::new_gpu()?;
-    let config = HybridMoeLayerConfig::from_decoder(0, &decoder, 64)?;
-    let layer = HybridMoeLayer::load(&tensors, config, &stream)?;
+    let config = CheckpointLayer::discover(&decoder, 0, 64)?;
+    let layer = HybridMoeLayer::load(&tensors, &config, &stream)?;
     let embedding = QuantizedEmbedding::load(&tensors, "language_model.model.embed_tokens", 64)?;
     let ids = Array::from_u32(&[1], &[1, 1])?;
     let input = embedding
@@ -81,9 +81,9 @@ fn matches_mlx_lm_two_token_prefill_after_layer_one() -> Result<()> {
     hidden =
         hidden.multiply_scalar(decoder.hidden_size.to_string().parse::<f32>()?.sqrt(), &stream)?;
     for index in 0..=1 {
-        let config = HybridMoeLayerConfig::from_decoder(index, &decoder, 64)?;
-        let layer = HybridMoeLayer::load(&tensors, config, &stream)?;
-        let mut cache = KvCache::new_with_window(16, config.max_context)?;
+        let config = CheckpointLayer::discover(&decoder, index, 64)?;
+        let layer = HybridMoeLayer::load(&tensors, &config, &stream)?;
+        let mut cache = KvCache::new_with_window(16, config.config.max_context())?;
         hidden = layer.forward_decode(&hidden, Some(&mut cache), 0, true, &stream)?;
     }
     hidden.async_eval(&stream)?;
@@ -111,9 +111,9 @@ fn matches_mlx_lm_two_token_prefill_after_last_sliding_layer() -> Result<()> {
     hidden =
         hidden.multiply_scalar(decoder.hidden_size.to_string().parse::<f32>()?.sqrt(), &stream)?;
     for index in 0..=4 {
-        let config = HybridMoeLayerConfig::from_decoder(index, &decoder, 64)?;
-        let layer = HybridMoeLayer::load(&tensors, config, &stream)?;
-        let mut cache = KvCache::new_with_window(16, config.max_context)?;
+        let config = CheckpointLayer::discover(&decoder, index, 64)?;
+        let layer = HybridMoeLayer::load(&tensors, &config, &stream)?;
+        let mut cache = KvCache::new_with_window(16, config.config.max_context())?;
         hidden = layer.forward_decode(&hidden, Some(&mut cache), 0, true, &stream)?;
     }
     hidden.async_eval(&stream)?;
@@ -141,9 +141,9 @@ fn matches_mlx_lm_two_token_prefill_after_first_global_attention() -> Result<()>
     hidden =
         hidden.multiply_scalar(decoder.hidden_size.to_string().parse::<f32>()?.sqrt(), &stream)?;
     for index in 0..=5 {
-        let config = HybridMoeLayerConfig::from_decoder(index, &decoder, 64)?;
-        let layer = HybridMoeLayer::load(&tensors, config, &stream)?;
-        let mut cache = KvCache::new_with_window(16, config.max_context)?;
+        let config = CheckpointLayer::discover(&decoder, index, 64)?;
+        let layer = HybridMoeLayer::load(&tensors, &config, &stream)?;
+        let mut cache = KvCache::new_with_window(16, config.config.max_context())?;
         hidden = layer.forward_decode(&hidden, Some(&mut cache), 0, true, &stream)?;
     }
     hidden.async_eval(&stream)?;

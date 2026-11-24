@@ -1,24 +1,24 @@
-use models::weights::DenseDecoderLayerBindings;
-
 use super::super::super::super::{
-    CudaBackend, CudaTensorSet, DenseDownSource, DenseGateUpSource, DenseOutputSource,
-    DenseQkvSource, DenseSwiGluLayerTemplate, MxFp8CheckpointWeight, Result,
+    CudaBackend, CudaTensorSet, DenseDownSource, DenseFeedForwardSource, DenseGateUpSource,
+    DenseOutputSource, DenseQkvSource, DenseSwiGluLayerTemplate, MxFp8CheckpointWeight, Result,
 };
+use crate::checkpoint::dense::DenseLayerBindings;
 
 pub(super) fn load(
     backend: &CudaBackend,
     block: crate::DenseSwiGluConfig,
     tensors: &CudaTensorSet,
-    bindings: DenseDecoderLayerBindings<'_>,
+    bindings: DenseLayerBindings<'_>,
 ) -> Result<DenseSwiGluLayerTemplate> {
+    let feed_forward = bindings.feed_forward.gated()?;
     let weight = |binding| MxFp8CheckpointWeight::load_binding(tensors, binding);
     let q = weight(bindings.attention.query)?;
     let k = weight(bindings.attention.key)?;
     let v = weight(bindings.attention.value)?;
     let output = weight(bindings.attention.output)?;
-    let gate = weight(bindings.gate)?;
-    let up = weight(bindings.up)?;
-    let down = weight(bindings.down)?;
+    let gate = weight(feed_forward.gate)?;
+    let up = weight(feed_forward.up)?;
+    let down = weight(feed_forward.down)?;
     backend.prepare_dense_swiglu_layer_template(
         block,
         super::common_source(
@@ -26,8 +26,10 @@ pub(super) fn load(
             bindings,
             DenseQkvSource::MxFp8([&q, &k, &v]),
             DenseOutputSource::MxFp8(&output),
-            DenseGateUpSource::MxFp8 { gate: &gate, up: &up },
-            DenseDownSource::MxFp8(&down),
+            DenseFeedForwardSource::Gated {
+                gate_up: DenseGateUpSource::MxFp8 { gate: &gate, up: &up },
+                down: DenseDownSource::MxFp8(&down),
+            },
         )?,
     )
 }

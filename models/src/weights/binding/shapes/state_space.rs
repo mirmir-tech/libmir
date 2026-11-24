@@ -1,7 +1,7 @@
 //! Logical shapes of state-space mixer and latent routed-expert tensors.
 
 use super::{LatentProjectionRole, StateSpaceTensorRole, feed_forward::routed};
-use crate::semantic::{FeedForwardSpec, MixerSpec};
+use crate::semantic::{FeedForwardSpec, MixerSpec, RouterNormalization};
 
 pub(super) fn mixer(
     mixer: &MixerSpec,
@@ -40,9 +40,11 @@ pub(super) fn latent(
     })
 }
 
+/// One bias per expert for latent experts and for sigmoid routers that
+/// select by a corrected score.
 pub(super) fn correction_bias(feed_forward: &FeedForwardSpec) -> Option<Vec<usize>> {
-    let FeedForwardSpec::LatentRouted { .. } = feed_forward else {
-        return None;
-    };
-    routed(feed_forward).map(|routed| vec![routed.expert_count])
+    let routed = routed(feed_forward)?;
+    (matches!(feed_forward, FeedForwardSpec::LatentRouted { .. })
+        || routed.router_normalization == RouterNormalization::SigmoidBiasedTopK)
+        .then(|| vec![routed.expert_count])
 }

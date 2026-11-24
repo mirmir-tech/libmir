@@ -10,7 +10,10 @@ mod rows;
 mod validation;
 mod write;
 
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{
+    Arc, Mutex, MutexGuard,
+    atomic::{AtomicU64, Ordering},
+};
 
 use pool::Arena;
 pub use pool::PagedArenaPool;
@@ -45,7 +48,11 @@ struct Storage {
     page_ids: Vec<u32>,
     reserved_page_ids: Vec<u32>,
     table_capacity: usize,
-    identity: bool,
+    /// The logical pages occupy one run of physical pages, so the context
+    /// is a slice of the arena; the run may start at any page.
+    contiguous: bool,
+    /// Identifies the storage as a page writer; see [`Arena::writers`].
+    id: u64,
 }
 
 impl PagedStore {
@@ -78,7 +85,7 @@ impl PagedStore {
     }
 
     pub(super) fn fragmented(&self) -> bool {
-        self.storage.as_ref().is_some_and(|storage| !storage.identity)
+        self.storage.as_ref().is_some_and(|storage| !storage.contiguous)
     }
 
     pub(super) fn reserve(&mut self, tokens: usize) {
@@ -121,10 +128,8 @@ impl PagedStore {
                     input_dtype: storage.input_dtype,
                     arena: Arc::clone(&storage.arena),
                     table: Array::from_native(storage.table.native().clone())?,
-                    identity: page_ids
-                        .iter()
-                        .enumerate()
-                        .all(|(index, page)| usize::try_from(*page) == Ok(index)),
+                    contiguous: single_run(&page_ids),
+                    id: next_storage_id(),
                     page_ids,
                     reserved_page_ids: Vec::new(),
                     table_capacity: storage.table_capacity,
@@ -199,4 +204,16 @@ fn lock(arena: &Arc<Mutex<Arena>>) -> Result<MutexGuard<'_, Arena>> {
     arena
         .lock()
         .map_or_else(|_| Err(Error::InvalidModel("paged arena lock was poisoned".into())), Ok)
+}
+
+/// Whether `page_ids` name consecutive physical pages.
+fn single_run(page_ids: &[u32]) -> bool {
+    page_ids.windows(2).all(|pair| pair[0].checked_add(1) == Some(pair[1]))
+}
+
+/// A fresh storage identity; zero is never issued, so it marks an unwritten
+/// page.
+fn next_storage_id() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }

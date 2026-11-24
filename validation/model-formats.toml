@@ -89,3 +89,105 @@ cuda = "partial"
 id = "nvfp4"
 metal = "partial"
 cuda = "partial"
+
+# GGML blocks read in place from GGUF files (MF-200). Unsupported until the G2
+# kernels pass V1–V4; rows move to "partial" with them.
+[[format]]
+id = "ggml_q8_0"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "ggml_q4_k"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "ggml_q6_k"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "ggml_q4_0"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "ggml_q4_1"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "ggml_q5_0"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "ggml_q5_1"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "ggml_q5_k"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "ggml_q3_k"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "ggml_q2_k"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "ggml_iq4_nl"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "ggml_iq4_xs"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "ggml_iq2_xxs"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "ggml_iq2_xs"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "ggml_iq2_s"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "ggml_iq3_xxs"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "ggml_iq3_s"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "ggml_iq1_s"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "ggml_iq1_m"
+metal = "partial"
+cuda = "partial"
+
+[[format]]
+id = "ggml_mxfp4"
+metal = "partial"
+cuda = "partial"

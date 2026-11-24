@@ -25,10 +25,10 @@ impl GatedDeltaLayer {
             let reference = Array::concatenate(&rows.iter().collect::<Vec<_>>(), 0, stream)?;
             report(name, &packed, &reference, stream)?;
             if matches!(name, Component::Gate) {
-                let output = self.out_proj.forward(&packed, stream)?;
+                let output = self.project_output(&packed, stream)?;
                 let outputs = rows
                     .iter()
-                    .map(|row| self.out_proj.forward(row, stream))
+                    .map(|row| self.project_output(row, stream))
                     .collect::<Result<Vec<_>>>()?;
                 let expected = Array::concatenate(&outputs.iter().collect::<Vec<_>>(), 0, stream)?;
                 report(Component::OutputProjection, &output, &expected, stream)?;

@@ -5,11 +5,13 @@ use mircuda::{
 use runtime::kv::KvCacheDType;
 
 use crate::{CudaBackend, Error, Result};
+mod decode;
 mod execution;
 mod fmha;
 mod split;
 #[cfg(test)]
 mod tests;
+pub use decode::ClampedRoutedFmhaWorkspace;
 use execution::narrow;
 use fmha::ClampedRoutedFmha;
 pub use split::{ClampedRoutedBatchSplitDecode, ClampedRoutedSplitDecode};

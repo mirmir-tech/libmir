@@ -10,21 +10,35 @@ pub enum HybridBlockKind {
     Attention,
     /// Routed-expert feed-forward.
     Moe,
+    /// Dense ungated feed-forward (Nemotron-H's `relu²` MLP).
+    Mlp,
 }
 
 /// One logical decoder layer composed from adjacent physical blocks.
 ///
-/// A routed block always directly follows the mixer it is paired with, so its
-/// physical index is `block + 1`. Pairings without a checkpoint fixture, such
-/// as attention without a routed block, are not representable.
+/// A feed-forward block always directly follows the mixer it is paired with,
+/// so its physical index is `block + 1`. Pairings without a checkpoint
+/// fixture, such as attention without a feed-forward block, are not
+/// representable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HybridLayer {
-    /// A Mamba-2 block followed by a block that is not routed.
+    /// A Mamba-2 block followed by another mixer.
     Mamba { block: usize },
     /// A Mamba-2 block followed by its routed-expert block.
     MambaWithMoe { block: usize },
+    /// A Mamba-2 block followed by its dense MLP block.
+    MambaWithMlp { block: usize },
     /// An attention block followed by its routed-expert block.
     AttentionWithMoe { block: usize },
+    /// An attention block followed by its dense MLP block.
+    AttentionWithMlp { block: usize },
+}
+
+/// The feed-forward block of a hybrid layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HybridFeedForward {
+    Moe,
+    Mlp,
 }
 
 /// Position of a physical block inside its logical layer.
@@ -50,23 +64,39 @@ impl HybridLayer {
         match self {
             Self::Mamba { block }
             | Self::MambaWithMoe { block }
-            | Self::AttentionWithMoe { block } => block,
+            | Self::MambaWithMlp { block }
+            | Self::AttentionWithMoe { block }
+            | Self::AttentionWithMlp { block } => block,
         }
     }
 
-    /// Physical index of the routed block, when the layer has one.
+    /// Physical index of the feed-forward block, when the layer has one.
     #[must_use]
     pub const fn feed_forward_block(self) -> Option<usize> {
+        match self.feed_forward() {
+            Some(_) => Some(self.mixer_block() + 1),
+            None => None,
+        }
+    }
+
+    /// The layer's feed-forward block, when it has one.
+    #[must_use]
+    pub const fn feed_forward(self) -> Option<HybridFeedForward> {
         match self {
             Self::Mamba { .. } => None,
-            Self::MambaWithMoe { block } | Self::AttentionWithMoe { block } => Some(block + 1),
+            Self::MambaWithMoe { .. } | Self::AttentionWithMoe { .. } => {
+                Some(HybridFeedForward::Moe)
+            },
+            Self::MambaWithMlp { .. } | Self::AttentionWithMlp { .. } => {
+                Some(HybridFeedForward::Mlp)
+            },
         }
     }
 
     /// Whether the layer's mixer is a state-space block.
     #[must_use]
     pub const fn is_state_space(self) -> bool {
-        matches!(self, Self::Mamba { .. } | Self::MambaWithMoe { .. })
+        matches!(self, Self::Mamba { .. } | Self::MambaWithMoe { .. } | Self::MambaWithMlp { .. })
     }
 }
 
@@ -76,19 +106,29 @@ impl HybridBlockPattern {
         let mut layers = Vec::new();
         let mut block = 0;
         while let Some(kind) = physical.get(block).copied() {
-            let followed_by_moe = physical.get(block + 1) == Some(&HybridBlockKind::Moe);
-            let layer = match (kind, followed_by_moe) {
-                (HybridBlockKind::Mamba, true) => HybridLayer::MambaWithMoe { block },
-                (HybridBlockKind::Mamba, false) => HybridLayer::Mamba { block },
-                (HybridBlockKind::Attention, true) => HybridLayer::AttentionWithMoe { block },
-                (HybridBlockKind::Attention, false) => {
+            let next = physical.get(block + 1).copied();
+            let layer = match (kind, next) {
+                (HybridBlockKind::Mamba, Some(HybridBlockKind::Moe)) => {
+                    HybridLayer::MambaWithMoe { block }
+                },
+                (HybridBlockKind::Mamba, Some(HybridBlockKind::Mlp)) => {
+                    HybridLayer::MambaWithMlp { block }
+                },
+                (HybridBlockKind::Mamba, _) => HybridLayer::Mamba { block },
+                (HybridBlockKind::Attention, Some(HybridBlockKind::Moe)) => {
+                    HybridLayer::AttentionWithMoe { block }
+                },
+                (HybridBlockKind::Attention, Some(HybridBlockKind::Mlp)) => {
+                    HybridLayer::AttentionWithMlp { block }
+                },
+                (HybridBlockKind::Attention, _) => {
                     return Err(invalid(format!(
-                        "attention block {block} is not followed by a routed-expert block"
+                        "attention block {block} is not followed by a feed-forward block"
                     )));
                 },
-                (HybridBlockKind::Moe, _) => {
+                (HybridBlockKind::Moe | HybridBlockKind::Mlp, _) => {
                     return Err(invalid(format!(
-                        "routed-expert block {block} does not follow a mixer block"
+                        "feed-forward block {block} does not follow a mixer block"
                     )));
                 },
             };

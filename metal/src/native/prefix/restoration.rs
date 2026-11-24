@@ -19,7 +19,12 @@ impl PrefixCache {
                         group.checkpoints.get(&entry.position).or(group.terminal.as_ref())
                     })
                     .is_some_and(|snapshot| {
-                        snapshot.logits.is_some() || snapshot.state.cache.supports_prefix_offsets()
+                        snapshot.logits.is_some()
+                            || snapshot
+                                .state
+                                .cache
+                                .prefix_floor()
+                                .is_ok_and(|floor| floor <= entry.completion_position)
                     })
         }) else {
             return Ok(None);

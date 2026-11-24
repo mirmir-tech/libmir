@@ -117,7 +117,7 @@ impl SharedExpertMoe {
             self.routed_mlp(&grouped.input, &grouped.indices, true, false, stream)?
         };
         let output = plan.restore(&grouped, &output, &routing.weights, stream)?;
-        output.add(&self.shared(input, stream)?, stream)
+        output.add(&self.shared_expert()?.forward(input, stream)?, stream)
     }
 }
 

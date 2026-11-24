@@ -38,7 +38,8 @@ fn derives_deduplicated_requirements_from_semantics_and_task() -> crate::Result<
     let layer = &mut semantic.decoder.layers[0];
     if let MixerSpec::SoftmaxAttention(attention) = &mut layer.mixer {
         attention.sinks = true;
-        attention.window = Some(128);
+        attention.window =
+            std::num::NonZeroUsize::new(128).map(crate::semantic::AttentionWindow::Sliding);
         attention.qk_normalization = QkNormalization::QueryKeyRms;
         attention.output = AttentionOutputSpec::Gated;
         if let PositionEncodingSpec::Rotary(rotary) = &mut attention.position {
@@ -60,12 +61,10 @@ fn derives_deduplicated_requirements_from_semantics_and_task() -> crate::Result<
             expert_count: 8,
             top_k: 2,
             intermediate_size: 16,
-            activation: ActivationSpec::SwiGlu {
-                alpha: 1.0,
-                clamp: Some(7.0),
-                up_shift: 1.0,
-            },
-            router_normalization: RouterNormalization::UnitTopK,
+            activation: ActivationSpec::ClampedSwiGlu { alpha: 1.0, limit: 7.0 },
+            router_normalization: RouterNormalization::SoftmaxTopK,
+            group_limit: None,
+            output_scale: 1.0,
         },
     };
     semantic.decoder.final_norm.kind = NormalizationKind::Layer;
@@ -84,7 +83,7 @@ fn derives_deduplicated_requirements_from_semantics_and_task() -> crate::Result<
         ArchitectureCapability::RoutedExperts,
         ArchitectureCapability::ClampedSwiGlu,
         ArchitectureCapability::GeluTanh,
-        ArchitectureCapability::UnitTopKRouter,
+        ArchitectureCapability::SoftmaxTopKRouter,
     ] {
         assert!(requirements.capabilities.contains(&capability), "missing {capability:?}");
     }

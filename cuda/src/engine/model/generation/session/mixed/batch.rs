@@ -110,10 +110,7 @@ fn prefill_rows(
     chunks
         .iter()
         .map(|chunk| {
-            if chunk.offset == 0 {
-                let session = execution.template.instantiate_with_caches(&execution.caches)?;
-                execution.sessions.insert(chunk.request.session_id, session);
-            }
+            execution.open_session(chunk.request.session_id, chunk.offset)?;
             execution.arm_terminal_checkpoint(chunk.request, chunk.offset, chunk.tokens.len())?;
             let session = required(&mut execution.sessions, chunk.request.session_id)?;
             session.prefill(chunk.request.session_id, chunk.tokens, chunk.table)?;
@@ -147,10 +144,7 @@ fn prefill_packed(
     chunks: &[PrefillChunk<'_>],
 ) -> Result<Vec<Option<Output>>> {
     for chunk in chunks {
-        if chunk.offset == 0 {
-            let session = execution.template.instantiate_with_caches(&execution.caches)?;
-            execution.sessions.insert(chunk.request.session_id, session);
-        }
+        execution.open_session(chunk.request.session_id, chunk.offset)?;
         execution.arm_terminal_checkpoint(chunk.request, chunk.offset, chunk.tokens.len())?;
     }
     let ids = chunks.iter().map(|chunk| chunk.request.session_id).collect::<Vec<_>>();

@@ -37,7 +37,7 @@ impl SharedExpertMoe {
             timer.record(Stage::Down, &[&output], stream)?;
             let routed = grouped.restore_weighted(&output, &routing.weights, stream)?;
             timer.record(Stage::Restore, &[&routed], stream)?;
-            let shared = self.shared(input, stream)?;
+            let shared = self.shared_expert()?.forward(input, stream)?;
             timer.record(Stage::Shared, &[&shared], stream)?;
             let output = routed.add(&shared, stream)?;
             timer.record(Stage::Add, &[&output], stream)?;

@@ -1,4 +1,4 @@
-use models::{layout::DecoderConfig, weights::WeightBindingPlan};
+use models::{layout::DecoderConfig, semantic::DecoderSpec, weights::WeightBindingPlan};
 
 use super::layer::StateSpaceHybridLayer;
 use crate::engine::{
@@ -24,6 +24,7 @@ impl StateSpaceHybridModel {
     pub fn load(
         tensors: &ModelTensors,
         decoder: &DecoderConfig,
+        spec: &DecoderSpec,
         bindings: &WeightBindingPlan,
         lowering: &[LayerLowering],
         cache_step: usize,
@@ -40,7 +41,7 @@ impl StateSpaceHybridModel {
                 StateSpaceHybridLayer::load(
                     tensors,
                     decoder,
-                    index,
+                    spec.layer(index)?,
                     bindings.state_space_hybrid_layer(index)?,
                     epsilon,
                     stream,

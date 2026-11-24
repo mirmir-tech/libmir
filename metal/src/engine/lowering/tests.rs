@@ -22,6 +22,7 @@ fn materializes_dense_layers_without_model_identity() -> Result<()> {
             index: 0,
             input_norm: NormalizationLowering::Rms,
             post_attention_norm: NormalizationLowering::Rms,
+            norm_placement: models::semantic::NormPlacement::Pre,
             mixer: MixerLowering::Softmax {
                 normalization: models::semantic::QkNormalization::None,
                 sinks: false,
@@ -45,10 +46,11 @@ fn materializes_dense_layers_without_model_identity() -> Result<()> {
 fn rejects_an_unavailable_normalization_independently() -> Result<()> {
     let mut spec = dense_spec()?;
     spec.decoder.layers[0].input_norm.kind = NormalizationKind::Layer;
+    spec.decoder.layers[0].input_norm.weight_offset = 1.0;
 
     let error = lower_layer(&spec.decoder.layers[0])
         .err()
-        .ok_or_else(|| Error::InvalidModel("layer normalization was admitted".into()))?;
+        .ok_or_else(|| Error::InvalidModel("offset layer normalization was admitted".into()))?;
 
     assert!(error.to_string().contains("input layer normalization"));
     Ok(())
@@ -72,10 +74,11 @@ fn admits_linear_attention_through_the_dense_mixed_runtime() -> Result<()> {
 }
 
 #[test]
-fn preserves_windows_and_rejects_them_from_the_dense_runtime() -> Result<()> {
+fn preserves_windows_for_the_dense_runtime() -> Result<()> {
     let mut spec = dense_spec()?;
     if let MixerSpec::SoftmaxAttention(attention) = &mut spec.decoder.layers[0].mixer {
-        attention.window = Some(128);
+        attention.window =
+            std::num::NonZeroUsize::new(128).map(models::semantic::AttentionWindow::Sliding);
     }
 
     assert_eq!(
@@ -83,25 +86,36 @@ fn preserves_windows_and_rejects_them_from_the_dense_runtime() -> Result<()> {
         MixerLowering::Softmax {
             normalization: models::semantic::QkNormalization::None,
             sinks: false,
-            window: Some(128)
+            window: std::num::NonZeroUsize::new(128)
+                .map(models::semantic::AttentionWindow::Sliding)
         }
     );
-    assert!(plan(&spec).is_err());
+    // The dense runtime runs sliding layers (Gemma 3) with the cache's mask.
+    assert_eq!(plan(&spec)?.runtime(), DecoderRuntime::Dense);
     Ok(())
 }
 
 #[test]
 fn rejects_an_activation_the_dense_operator_does_not_implement() -> Result<()> {
     let mut spec = dense_spec()?;
+    // Tanh GELU (Gemma's GeGLU) lowers; an ungated activation lowers to the
+    // hybrid MLP, which no softmax-only runtime executes.
+    if let FeedForwardSpec::Dense { activation, .. } = &mut spec.decoder.layers[0].feed_forward {
+        *activation = ActivationSpec::GeluTanh;
+    }
+    assert!(lower_layer(&spec.decoder.layers[0]).is_ok());
     if let FeedForwardSpec::Dense { activation, .. } = &mut spec.decoder.layers[0].feed_forward {
         *activation = ActivationSpec::ReluSquared;
     }
 
-    let error = lower_layer(&spec.decoder.layers[0])
+    assert_eq!(
+        lower_layer(&spec.decoder.layers[0])?.feed_forward,
+        FeedForwardLowering::UngatedDense
+    );
+    let error = plan(&spec)
         .err()
         .ok_or_else(|| Error::InvalidModel("dense relu-squared was admitted".into()))?;
-
-    assert!(error.to_string().contains("feed-forward activation composition"));
+    assert!(error.to_string().contains("no runtime"));
     Ok(())
 }
 

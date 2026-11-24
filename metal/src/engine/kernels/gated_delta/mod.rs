@@ -25,6 +25,26 @@ pub(in crate::engine) fn new_gated_delta_decode_kernel() -> Result<mirtal::Metal
     Ok(super::gated_delta_decode()?)
 }
 
+/// The recurrent states a recurrence returns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecurrenceStates {
+    /// The state after the last step, shaped like the input state.
+    Final,
+    /// The state after every step, `[steps, ..state]`.
+    Trail,
+}
+
+impl RecurrenceStates {
+    fn shape(self, state: mirtal::Shape, steps: usize) -> Result<mirtal::Shape> {
+        Ok(match self {
+            Self::Final => state,
+            Self::Trail => mirtal::Shape::new(
+                std::iter::once(steps).chain(state.dimensions().iter().copied()),
+            )?,
+        })
+    }
+}
+
 impl Kernels {
     pub(crate) fn gated_delta_gates(
         &self,
@@ -57,6 +77,7 @@ impl Kernels {
         &self,
         stream: &mirtal::Stream,
         inputs: [&mirtal::Array; 6],
+        states: RecurrenceStates,
     ) -> Result<[mirtal::Array; 2]> {
         let [query, key, value, .., state] = inputs;
         let key_shape = key.shape()?;
@@ -69,7 +90,10 @@ impl Kernels {
             inputs,
             &[
                 mirtal::OutputSpec::new(value_shape, query.dtype()?),
-                mirtal::OutputSpec::new(state.shape()?, state.dtype()?),
+                mirtal::OutputSpec::new(
+                    states.shape(state.shape()?, value_dimensions[1])?,
+                    state.dtype()?,
+                ),
             ],
             &mirtal::Dispatch::new(
                 [32, value_dimensions[3], value_dimensions[0] * value_dimensions[2]],
@@ -83,6 +107,8 @@ impl Kernels {
                 template("HK", key_dimensions[2])?,
                 template("HV", value_dimensions[2])?,
                 template("STEPS", value_dimensions[1])?,
+                mirtal::TemplateArg::bool("TRAIL", states == RecurrenceStates::Trail),
+                template("STATES", value_dimensions[0] * value_dimensions[2])?,
             ]),
         )?)
     }

@@ -47,6 +47,7 @@ pub use models::{
         ModelTask, PoolingMode, TaskExecutionPlan,
     },
     generation::{GenerationChannel, GenerationOverrides, GenerationSettings, GenerationToken},
+    gguf,
     tokenizer::{TokenizerAssets, TokenizerKind},
     weights::{TensorCatalog, TensorInfo, safetensors_header_len},
 };

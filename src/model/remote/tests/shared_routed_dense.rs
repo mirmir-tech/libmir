@@ -62,10 +62,11 @@ fn catalog() -> TensorCatalog {
         (format!("{layer}.linear_attn.A_log"), vec![1]),
         (format!("{layer}.linear_attn.dt_bias"), vec![1]),
     ];
-    TensorCatalog {
-        tensors: specs
+    // Sorted, as checkpoint catalogs are, so name lookups find every tensor.
+    TensorCatalog::new(
+        specs
             .into_iter()
             .map(|(name, shape)| tensor_with_dtype(&name, shape, "F32"))
             .collect(),
-    }
+    )
 }

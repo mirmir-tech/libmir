@@ -79,7 +79,7 @@ fn execute_dense_clamped_routed_model(
     let mut stream = Stream::new_gpu_with_config(std::sync::Arc::new(config))?;
     let model = ClampedRoutedModel::load(
         &tensors,
-        &decoder,
+        &contract.semantic.decoder,
         &contract.bindings,
         lowering.layers(),
         16,

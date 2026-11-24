@@ -18,6 +18,7 @@ impl CudaSharedRoutedModelTemplate {
                 self.decoder.layer_head_dim(index),
             )),
             SharedRoutedLayerTemplate::Attention(layer) => Some(layer.storage(self.cache)),
+            SharedRoutedLayerTemplate::Latent(layer) => Some(layer.storage(self.cache)),
         }
     }
 
@@ -67,6 +68,20 @@ impl CudaSharedRoutedModelTemplate {
             .transpose()
     }
 
+    /// Whether every layer keeps its sequence state in the shared K/V pages
+    /// (attention and latent attention, no recurrence or prediction module),
+    /// so a session continues a cached prefix from its pages alone.
+    #[must_use]
+    pub(crate) fn pages_hold_state(&self) -> bool {
+        self.prediction.is_none()
+            && self.layers.iter().all(|layer| {
+                matches!(
+                    layer,
+                    SharedRoutedLayerTemplate::Full(_) | SharedRoutedLayerTemplate::Latent(_)
+                )
+            })
+    }
+
     pub(super) fn prepare_states(
         &self,
         caches: &[Option<PagedKvCache>],
@@ -95,6 +110,11 @@ impl CudaSharedRoutedModelTemplate {
                     },
                     SharedRoutedLayerTemplate::Attention(layer) => {
                         CudaSharedRoutedLayerState::Attention(Box::new(
+                            layer.prepare_state_with_cache(cache.clone().ok_or_else(missing)?)?,
+                        ))
+                    },
+                    SharedRoutedLayerTemplate::Latent(layer) => {
+                        CudaSharedRoutedLayerState::Latent(Box::new(
                             layer.prepare_state_with_cache(cache.clone().ok_or_else(missing)?)?,
                         ))
                     },

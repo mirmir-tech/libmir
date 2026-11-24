@@ -64,6 +64,7 @@ pub(super) fn run_budget_with_decode(
                 session: finished.request.session_id,
                 token: greedy_token(&finished.native.output)?,
                 sampling: SamplingLogits::None,
+                speculation: None,
             })
         })
         .collect::<Result<Vec<_>>>()?;

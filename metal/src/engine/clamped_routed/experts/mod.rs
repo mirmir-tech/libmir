@@ -10,6 +10,7 @@ use super::{
 };
 use crate::engine::{Array, ModelTensors, Result, RouterOutput, Stream, kernels::MxFp4Shape};
 
+mod ggml;
 mod native;
 use native::native_layout;
 
@@ -77,6 +78,11 @@ impl ClampedRoutedExperts {
                 } else {
                     native_layout(tensors, gate_up, down, config)?
                 }
+            },
+            RoutedExpertBindings::SeparateGateUp { gate, up, down }
+                if ggml::is_ggml_mxfp4([gate, up, down]) =>
+            {
+                ggml::ggml_layout(tensors, [gate, up, down], config, stream)?
             },
             RoutedExpertBindings::SeparateGateUp { gate, up, down } => {
                 if matches!(

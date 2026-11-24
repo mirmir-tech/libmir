@@ -15,8 +15,8 @@ pub(in crate::engine::hybrid::moe) fn experts(
     let hidden = weights.routed()?.pre_expert_norm.apply(input, config.rms_norm_eps, stream)?;
     let (group_size, bits) = weights.routed()?.experts.tuning_format();
     let spec = RoutingSpec {
-        experts: config.expert_count,
-        intermediate: config.expert_intermediate,
+        experts: config.experts()?.count,
+        intermediate: config.experts()?.intermediate,
         group_size,
         bits,
         activation: ExpertActivation::GeluApprox,
@@ -39,7 +39,8 @@ pub(in crate::engine::hybrid::moe) fn experts(
                 sorted.restore_weighted(&output, &routing.weights, stream)
             },
             |indices| {
-                let grouped = hidden.group_expert_inputs(indices, config.expert_count, stream)?;
+                let grouped =
+                    hidden.group_expert_inputs(indices, config.experts()?.count, stream)?;
                 let output = expert_mlp(&grouped.input, &grouped.indices, weights, true, stream)?;
                 grouped.restore_weighted(&output, &routing.weights, stream)
             },

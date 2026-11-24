@@ -31,6 +31,7 @@ fn executes_a_complete_dense_shared_routed_model() -> Result<()> {
     let model = HybridLinearMoeModel::load(
         &tensors,
         &decoder,
+        &contract.semantic.decoder,
         &contract.bindings,
         lowering.layers(),
         16,
@@ -65,6 +66,7 @@ fn packed_prefill_matches_independent_rows() -> Result<()> {
     let model = HybridLinearMoeModel::load(
         &tensors,
         &decoder,
+        &contract.semantic.decoder,
         &contract.bindings,
         lowering.layers(),
         16,

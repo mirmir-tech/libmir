@@ -36,6 +36,7 @@ fn spec(
     let norm = NormalizationSpec {
         kind: NormalizationKind::Rms,
         epsilon: 1.0e-5,
+        weight_offset: 0.0,
     };
     SemanticModelSpec {
         schema_version: 1,
@@ -45,10 +46,13 @@ fn spec(
             tie_word_embeddings: false,
             final_norm: norm,
             embedding_multiplier: 1.0,
+            residual_multiplier: 1.0,
+            logit_divisor: 1.0,
             layers: vec![DecoderLayerSpec {
                 index: 0,
                 input_norm: norm,
                 post_attention_norm: norm,
+                norm_placement: models::semantic::NormPlacement::Pre,
                 mixer: MixerSpec::SoftmaxAttention(AttentionSpec {
                     query_heads,
                     key_value_heads,
@@ -59,12 +63,13 @@ fn spec(
                     output: AttentionOutputSpec::Direct,
                     sinks: true,
                     scale: 0.25,
-                    window: Some(32),
+                    window: std::num::NonZeroUsize::new(32)
+                        .map(models::semantic::AttentionWindow::Sliding),
                     position: PositionEncodingSpec::Rotary(RotarySpec {
                         theta: 150_000.0,
                         partial_factor: 1.0,
                         layout: RotaryLayoutSpec::Standard,
-                        algorithm: None,
+                        algorithm: models::semantic::RotaryAlgorithm::Default,
                         scaling: Some(RopeScalingSpec::Yarn {
                             factor: 32.0,
                             beta_fast: 32.0,
@@ -74,24 +79,26 @@ fn spec(
                             truncate: false,
                         }),
                     }),
+                    logit_softcap: None,
+                    query_temperature: None,
+                    key_value_source: None,
                 }),
                 feed_forward: FeedForwardSpec::Routed {
                     routed: RoutedExpertsSpec {
                         expert_count: 8,
                         top_k: 2,
                         intermediate_size: intermediate,
-                        activation: ActivationSpec::SwiGlu {
-                            alpha: 1.702,
-                            clamp: Some(7.0),
-                            up_shift: 1.0,
-                        },
-                        router_normalization: RouterNormalization::UnitTopK,
+                        activation: ActivationSpec::ClampedSwiGlu { alpha: 1.702, limit: 7.0 },
+                        router_normalization: RouterNormalization::SoftmaxTopK,
+                        group_limit: None,
+                        output_scale: 1.0,
                     },
                     shared: None,
                 },
             }],
             block_layout: BlockLayoutSpec::Unified,
             prediction_layers: Vec::new(),
+            per_layer_input: None,
         },
     }
 }

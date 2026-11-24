@@ -94,9 +94,15 @@ impl WeightBindingPlan {
     }
 }
 
-impl HybridMoeLayerBindings<'_> {
+impl<'a> HybridMoeLayerBindings<'a> {
     #[must_use]
-    pub fn physical_sources(&self) -> Vec<&str> {
+    pub fn physical_sources(&self) -> Vec<&'a str> {
+        self.bindings().into_iter().flat_map(TensorBinding::physical_sources).collect()
+    }
+
+    /// Every binding of the layer.
+    #[must_use]
+    pub fn bindings(&self) -> Vec<&'a TensorBinding> {
         let mut bindings = vec![
             self.input_norm,
             self.attention.query,
@@ -132,7 +138,7 @@ impl HybridMoeLayerBindings<'_> {
                 bindings.extend(down);
             },
         }
-        bindings.into_iter().flat_map(TensorBinding::physical_sources).collect()
+        bindings
     }
 }
 

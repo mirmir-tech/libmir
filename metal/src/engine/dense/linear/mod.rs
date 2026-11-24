@@ -19,6 +19,32 @@ struct LinearClipping {
 }
 
 impl DenseLinear {
+    /// The `[output, input]` weight, for consumers that read it directly.
+    pub(in crate::engine) fn weight(&self, stream: &Stream) -> Result<Array> {
+        if self.bias.is_some() || self.clipping.is_some() {
+            return Err(Error::InvalidModel(
+                "a biased or clipped projection has no plain weight".into(),
+            ));
+        }
+        self.transposed_weight.transpose(&[1, 0], stream)
+    }
+
+    /// The projection whose output `i` is this one's output `rows[i]`.
+    pub(in crate::engine) fn take_output_rows(
+        &self,
+        rows: &Array,
+        stream: &Stream,
+    ) -> Result<Self> {
+        if self.clipping.is_some() {
+            return Err(Error::InvalidModel("clipped projections keep their row order".into()));
+        }
+        Ok(Self {
+            transposed_weight: self.transposed_weight.take(rows, 1, stream)?,
+            bias: self.bias.as_ref().map(|bias| bias.take(rows, 0, stream)).transpose()?,
+            clipping: None,
+        })
+    }
+
     pub fn load(tensors: &ModelTensors, prefix: &str, stream: &Stream) -> Result<Self> {
         Self::load_names(
             tensors,

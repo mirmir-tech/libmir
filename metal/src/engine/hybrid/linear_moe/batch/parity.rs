@@ -85,6 +85,7 @@ fn diagnose(probe: Probe) -> std::result::Result<(), Box<dyn std::error::Error>>
     let model = HybridLinearMoeModel::load(
         &tensors,
         &decoder,
+        &contract.semantic.decoder,
         &contract.bindings,
         lowering.layers(),
         256,

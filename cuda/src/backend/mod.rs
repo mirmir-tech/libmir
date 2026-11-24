@@ -14,6 +14,7 @@ mod latent_moe;
 mod layer_scratch;
 mod linear;
 mod mamba2;
+mod mla;
 mod model;
 mod output;
 mod planning;
@@ -48,9 +49,11 @@ pub use block::{
 pub use clamped_routed::{CudaClampedRoutedModelSession, CudaClampedRoutedModelTemplate};
 pub use decoder::{RmsNormBf16, RopeBf16};
 pub use dense::{
-    DecodeDenseSwiGlu, DenseDownSource, DenseDownWeight, DenseGateUpSource, DenseGateUpWeights,
-    DenseOutputSource, DenseQkvSource, DenseSandwichWeights, DenseSwiGluConfig,
-    DenseSwiGluLayerTemplate, DenseSwiGluWeights, DenseWeightSource, PrefillDenseSwiGlu,
+    DecodeDenseSwiGlu, DenseDownSource, DenseDownWeight, DenseFeedForwardSource,
+    DenseFeedForwardWeights, DenseGateUpSource, DenseGateUpWeights, DenseOutputSource,
+    DenseQkvSource, DenseRoutedExperts, DenseSandwichWeights, DenseSwiGluConfig,
+    DenseSwiGluLayerTemplate, DenseSwiGluWeights, DenseWeightSource, FeedForwardInput,
+    PrefillDenseSwiGlu, RoutedExpertWeights, RoutedExpertsConfig,
 };
 pub use embedding::{AffineQuantizedEmbedding, Bf16Embedding};
 use gated_delta::workspace::CudaGatedDeltaWorkspace;
@@ -80,12 +83,13 @@ pub use linear::{
     Bf16VectorLinear, Bf16VendorLinear, BlockFp8LinearWeight, BucketedNvFp4MoeBf16,
     CheckpointProjectionWeight, CompressedInt8Bf16Linear, CompressedInt8Weight, DenseExpertWeights,
     DirectFp8Bf16Linear, DirectFp8CheckpointWeight, DirectFp8EmbeddingLookup, DirectNvFp4MoeBf16,
-    Fp8ResidualLinearWeight, GatedActivation, GroupedNvFp4MoeBf16, HybridNvFp4MoeBf16,
-    MxFp4Bf16Linear, MxFp4CheckpointWeight, MxFp4EmbeddingLookup, MxFp4ExpertWeights,
-    MxFp4GatheredBf16Linear, MxFp4GatheredMoeBf16, MxFp8Bf16Linear, MxFp8CheckpointWeight,
-    MxFp8EmbeddingLookup, MxFp8ExpertWeights, MxFp8GatheredBf16Linear, MxFp8GatheredMoeBf16,
-    NvFp4Bf16Linear, NvFp4Bf16Pack, NvFp4Config, NvFp4ExpertBank, NvFp4ExpertBankConfig,
-    NvFp4ExpertSource, NvFp4LinearWeight, NvFp4ScaleMode, NvFp4Tensors, NvFp4WeightOnlyBf16Linear,
+    Fp8ResidualLinearWeight, GatedActivation, GgmlBf16Linear, GgmlCheckpointWeight,
+    GgmlEmbeddingLookup, GroupedNvFp4MoeBf16, HybridNvFp4MoeBf16, MxFp4Bf16Linear,
+    MxFp4CheckpointWeight, MxFp4EmbeddingLookup, MxFp4ExpertWeights, MxFp4GatheredBf16Linear,
+    MxFp4GatheredMoeBf16, MxFp8Bf16Linear, MxFp8CheckpointWeight, MxFp8EmbeddingLookup,
+    MxFp8ExpertWeights, MxFp8GatheredBf16Linear, MxFp8GatheredMoeBf16, NvFp4Bf16Linear,
+    NvFp4Bf16Pack, NvFp4Config, NvFp4ExpertBank, NvFp4ExpertBankConfig, NvFp4ExpertSource,
+    NvFp4LinearWeight, NvFp4ScaleMode, NvFp4Tensors, NvFp4WeightOnlyBf16Linear,
     NvFp4WeightOnlyWeight, PackedIntegerBf16Linear, PackedIntegerWeight, ProjectionFormat,
     SelectedAffineGatedBf16Linear, SelectedAffinePairBf16Linear, SelectedAffineReduceBf16Linear,
     SelectedNvFp4LinearBf16, SelectedNvFp4MoeBf16, SelectedNvFp4TensorCoreMoeBf16,
@@ -98,6 +102,7 @@ pub use mamba2::{
     Mamba2ScanPath, Mamba2Workspace,
 };
 use mircuda::{Compiler, Context, DeviceInfo, MemoryPool, Stream};
+pub use mla::{CudaLatentAttentionExecution, CudaLatentAttentionLayer, LatentAttentionState};
 pub use model::{
     CudaDecodeBatch, CudaModelSessionConfig, CudaMoeModelSession, CudaMoeModelTemplate,
     DEFAULT_PREFILL_CHUNK_TOKENS, RETAINED_CHUNK_SLACK_TOKENS, SMALL_PLAN_TOKENS,
@@ -162,6 +167,7 @@ struct CudaRuntime {
     >,
     latent_moe_scratch:
         scratch_pool::ScratchPool<latent_moe::LatentMoeScratchKey, latent_moe::LatentMoeScratch>,
+    latent_attention_scratch: scratch_pool::ScratchPool<mla::LatentScratchKey, mla::LatentScratch>,
     mamba2_scratch: scratch_pool::ScratchPool<
         state_space_hybrid::MixerScratchKey,
         state_space_hybrid::MixerScratch,
@@ -183,9 +189,16 @@ struct CudaRuntime {
     nvfp4_marlin_scratch:
         Mutex<HashMap<MarlinNvFp4ScratchConfig, std::sync::Weak<Mutex<MarlinNvFp4Scratch>>>>,
     gated_delta_workspace: Mutex<Option<CudaGatedDeltaWorkspace>>,
+    ggml_scratch:
+        Mutex<HashMap<usize, std::sync::Weak<Mutex<mircuda::DeviceBuffer<mircuda::bf16>>>>>,
+    ggml_activations: GgmlActivationCache,
     planner: CudaExecutionPlanner,
     tuner: tuning::CudaAutoTuner,
 }
+
+/// Shared quantized decode activations by batch and input width.
+type GgmlActivationCache =
+    Mutex<HashMap<(usize, usize), std::sync::Weak<Mutex<crate::kernels::GgmlActivations>>>>;
 
 impl CudaBackend {
     fn mxfp8_tensor_core_scratch(

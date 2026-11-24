@@ -67,6 +67,14 @@ impl CudaTensor {
         }
     }
 
+    pub(crate) fn from_u8(name: String, shape: Vec<usize>, buffer: DeviceBuffer<u8>) -> Self {
+        Self {
+            name,
+            shape,
+            storage: TensorStorage::U8(buffer),
+        }
+    }
+
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name

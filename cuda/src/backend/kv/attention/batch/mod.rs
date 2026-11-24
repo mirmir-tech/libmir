@@ -1,20 +1,22 @@
 use mircuda::{DeviceBuffer, Stream, bf16};
+use models::semantic::AttentionWindow;
 use runtime::kv::KvStorageSpec;
 
 use super::super::{PagedDecodeBatch, PagedKvCache};
 use crate::{
-    AttentionExecution, AttentionPlan, AttentionPlanRequest, CudaBackend, Error, PlanSource,
-    Result,
+    AttentionExecution, AttentionPlanRequest, CudaBackend, Error, PlanSource, Result,
     kernels::{
         BatchedPagedAttention, BatchedSplitAttentionWorkspace, BatchedSplitPagedAttention,
-        PagedAttentionSpec,
+        ScoreSoftcap,
     },
 };
 
 mod capture;
+mod compile;
 mod fmha;
 mod tuning;
 
+use compile::compile_operations;
 use fmha::PagedFmhaDecode;
 
 #[derive(Debug)]
@@ -43,7 +45,8 @@ impl BatchedPagedAttentionBf16 {
         max_blocks: usize,
         max_batch: usize,
     ) -> Result<Self> {
-        Self::new_with_workspace(backend, cache, query_heads, max_blocks, max_batch, None)
+        let (heads, workspace) = ((query_heads, max_blocks, max_batch), None);
+        Self::new_with_workspace(backend, cache, heads, workspace, None)
     }
 
     /// Follows a K/V resize: `block_count` bounds page indices only, the
@@ -75,8 +78,8 @@ impl BatchedPagedAttentionBf16 {
         max_blocks: usize,
         max_batch: usize,
     ) -> Result<(usize, usize)> {
-        let (_, split, _, _) =
-            compile_operations(backend, storage, query_heads, max_blocks, max_batch)?;
+        let geometry = (query_heads, max_blocks, max_batch);
+        let (_, split, _, _) = compile_operations(backend, storage, geometry, None)?;
         let partition = super::autotune::candidate_partitions(split.partition_tokens())
             .into_iter()
             .min()
@@ -93,17 +96,25 @@ impl BatchedPagedAttentionBf16 {
     pub(in crate::backend) fn new_with_workspace(
         backend: &CudaBackend,
         cache: &PagedKvCache,
-        query_heads: usize,
-        max_blocks: usize,
-        max_batch: usize,
+        (query_heads, max_blocks, max_batch): (usize, usize, usize),
         workspace: Option<BatchedSplitAttentionWorkspace>,
+        score_softcap: Option<ScoreSoftcap>,
     ) -> Result<Self> {
         let storage = cache.storage_spec();
-        let (operation, split, plan_request, plan) =
-            compile_operations(backend, storage, query_heads, max_blocks, max_batch)?;
+        let (operation, split, plan_request, plan) = compile_operations(
+            backend,
+            storage,
+            (query_heads, max_blocks, max_batch),
+            score_softcap,
+        )?;
         let split_threshold = threshold(plan.execution(), plan_request.max_context_tokens);
         let split_workspace = workspace.map_or_else(|| allocate_workspace(backend, &split), Ok)?;
-        let fmha = PagedFmhaDecode::prepare(backend, storage, query_heads, max_blocks, max_batch)?;
+        // `FlashAttention` here has no score cap; capped layers keep the paged
+        // kernels.
+        let fmha = match score_softcap {
+            Some(_) => None,
+            None => PagedFmhaDecode::prepare(backend, storage, query_heads, max_blocks, max_batch)?,
+        };
         Ok(Self {
             operation,
             split,
@@ -129,7 +140,7 @@ impl BatchedPagedAttentionBf16 {
         cache: &PagedKvCache,
         batch: &PagedDecodeBatch,
         output: &mut DeviceBuffer<bf16>,
-        window: Option<usize>,
+        window: Option<AttentionWindow>,
         scale: f32,
     ) -> Result<()> {
         if cache.storage_spec() != self.storage
@@ -139,10 +150,10 @@ impl BatchedPagedAttentionBf16 {
         {
             return Err(Error::InvalidPagedKv("batched attention metadata geometry differs"));
         }
-        if window.is_none()
-            && let Some(fmha) = &mut self.fmha
+        if let Some(fmha) = &mut self.fmha
+            && crate::kernels::attention_window::flash_masks(window)
         {
-            return fmha.execute(query, cache, batch, output, scale);
+            return fmha.execute(query, cache, batch, output, window, scale);
         }
         self.ensure_tuned(query, cache, batch, output, window, scale);
         self.operation.execute(
@@ -176,55 +187,6 @@ impl BatchedPagedAttentionBf16 {
             batch.maximum_tokens(),
         )
     }
-}
-
-fn compile_operations(
-    backend: &CudaBackend,
-    storage: KvStorageSpec,
-    query_heads: usize,
-    max_blocks: usize,
-    max_batch: usize,
-) -> Result<(
-    BatchedPagedAttention,
-    BatchedSplitPagedAttention,
-    AttentionPlanRequest,
-    AttentionPlan,
-)> {
-    let max_context_tokens = max_blocks
-        .checked_mul(storage.cache.block_size)
-        .ok_or(Error::InvalidExecutionPlan("attention context capacity overflow"))?;
-    let request = AttentionPlanRequest {
-        max_context_tokens,
-        query_heads,
-        kv_heads: storage.kv_heads,
-        head_dim: storage.key_head_dim,
-        value_head_dim: storage.value_head_dim,
-    };
-    let plan = backend.execution_planner().plan_attention(request)?;
-    let partition_tokens = match plan.execution() {
-        AttentionExecution::Direct => 256,
-        AttentionExecution::SplitKv { partition_tokens, .. } => partition_tokens,
-    };
-    let spec = PagedAttentionSpec {
-        block_size: storage.cache.block_size,
-        max_blocks,
-        query_heads,
-        kv_heads: storage.kv_heads,
-        head_dim: storage.key_head_dim,
-        value_head_dim: storage.value_head_dim,
-        dtype: storage.cache.dtype,
-    };
-    Ok((
-        BatchedPagedAttention::compile(&backend.inner.compiler, spec, max_batch)?,
-        BatchedSplitPagedAttention::compile(
-            &backend.inner.compiler,
-            spec,
-            max_batch,
-            partition_tokens,
-        )?,
-        request,
-        plan,
-    ))
 }
 
 const fn threshold(execution: AttentionExecution, max_context_tokens: usize) -> usize {

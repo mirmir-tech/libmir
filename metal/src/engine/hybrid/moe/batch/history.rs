@@ -62,8 +62,8 @@ fn rotate(input: &Array, context: AttentionRows<'_>) -> Result<Array> {
             input.native(),
             frequencies.native(),
             mirtal::FrequencyRopeOptions {
-                dimensions: usize::try_from(config.head_dim)?,
-                traditional: false,
+                dimensions: usize::try_from(config.rope_dimensions)?,
+                traditional: config.rope_traditional,
                 offset: &offsets,
             },
         )?,
@@ -71,9 +71,9 @@ fn rotate(input: &Array, context: AttentionRows<'_>) -> Result<Array> {
             input.native(),
             mirtal::RopeOptions {
                 dimensions: usize::try_from(config.rope_dimensions)?,
-                traditional: false,
+                traditional: config.rope_traditional,
                 base: Some(config.rope_base),
-                scale: 1.0,
+                scale: config.rope_position_scale,
                 offset: &offsets,
             },
         )?,

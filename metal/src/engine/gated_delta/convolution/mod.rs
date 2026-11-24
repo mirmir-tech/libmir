@@ -34,6 +34,7 @@ pub(super) fn convolve(
         },
     };
     let combined = graph.concatenate(&[history.native(), input.native()], 1)?;
+    state.record_history(&combined)?;
     let start = [0, input_dimensions[1], 0];
     let stop =
         [input_dimensions[0], input_dimensions[1] + weight_dimensions[1] - 1, input_dimensions[2]];

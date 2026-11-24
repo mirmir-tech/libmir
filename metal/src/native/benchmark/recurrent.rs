@@ -53,6 +53,7 @@ fn compares_complete_decode_with_reused_and_concatenated_gdn_state() -> Result<(
                 session,
                 token: greedy_token(&output.output)?,
                 sampling: SamplingLogits::None,
+                speculation: None,
             });
         }
     }

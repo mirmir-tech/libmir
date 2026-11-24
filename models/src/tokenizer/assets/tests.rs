@@ -8,6 +8,9 @@ fn discovers_every_supported_tokenizer_layout() -> Result<()> {
     let sentencepiece = TokenizerAssets::discover(&BTreeMap::from([(TOKENIZER_MODEL.into(), 20)]))?;
     assert_eq!(sentencepiece.kind, TokenizerKind::SentencePieceModel);
 
+    let tiktoken = TokenizerAssets::discover(&BTreeMap::from([(TIKTOKEN_MODEL.into(), 20)]))?;
+    assert_eq!(tiktoken.kind, TokenizerKind::TikToken);
+
     let bpe = TokenizerAssets::discover(&BTreeMap::from([
         (VOCAB.into(), 30),
         (MERGES.into(), 40),

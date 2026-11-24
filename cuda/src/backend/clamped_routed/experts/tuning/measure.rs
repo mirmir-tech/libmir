@@ -9,6 +9,10 @@ use crate::{
     kernels::{RoutePattern, RoutePatternGenerator, RoutePatternSpec},
 };
 
+/// A candidate whose probe exceeds the best probe this many times is not
+/// measured further.
+const HOPELESS_FACTOR: u32 = 8;
+
 struct RoutePatterns {
     balanced: DeviceBuffer<u32>,
     hot_set: DeviceBuffer<u32>,
@@ -37,8 +41,29 @@ impl AutoClampedExperts {
         let mut timings = vec![Vec::with_capacity(route_sets.len()); self.candidates.len()];
         let mut elapsed = Duration::ZERO;
         for (distribution, routes) in route_sets {
+            // One timed probe per candidate first: a candidate far slower than
+            // the best probe cannot win, so it keeps its probe time instead of
+            // a full measurement (the unfused gpt-oss prefill paths ran ~200x
+            // slower than Marlin and dominated startup tuning).
+            let mut probes = Vec::with_capacity(self.candidates.len());
+            for candidate in &self.candidates {
+                let run = || {
+                    candidate.execute(
+                        self.backend.stream(),
+                        weights,
+                        input,
+                        routes,
+                        routing,
+                        activated,
+                        partial,
+                        output,
+                    )
+                };
+                probes.push(self.time(1, run)?);
+            }
+            let best = probes.iter().copied().min().unwrap_or(Duration::ZERO);
             for (index, candidate) in self.candidates.iter().enumerate() {
-                for _ in 0..warmup {
+                let mut run = || {
                     candidate.execute(
                         self.backend.stream(),
                         weights,
@@ -48,28 +73,16 @@ impl AutoClampedExperts {
                         activated,
                         partial,
                         output,
-                    )?;
-                }
-                let started = self.backend.context().create_event(true)?;
-                let completed = self.backend.context().create_event(true)?;
-                started.record(self.backend.stream())?;
-                for _ in 0..iterations {
-                    candidate.execute(
-                        self.backend.stream(),
-                        weights,
-                        input,
-                        routes,
-                        routing,
-                        activated,
-                        partial,
-                        output,
-                    )?;
-                }
-                completed.record(self.backend.stream())?;
-                completed.synchronize()?;
-                let average = Duration::from_secs_f32(
-                    started.elapsed_ms(&completed)? / (iterations as f32 * 1_000.0),
-                );
+                    )
+                };
+                let average = if probes[index] > best.saturating_mul(HOPELESS_FACTOR) {
+                    probes[index]
+                } else {
+                    for _ in 0..warmup {
+                        run()?;
+                    }
+                    self.time(iterations, run)?
+                };
                 tracing::debug!(
                     target: "libmir::cuda::tuning",
                     distribution,
@@ -105,6 +118,22 @@ impl AutoClampedExperts {
         };
         let total = timings[winner].iter().copied().fold(Duration::ZERO, Duration::saturating_add);
         Ok((winner, total / u32::try_from(timings[winner].len())?, elapsed))
+    }
+
+    /// Mean device time of `iterations` runs.
+    #[allow(clippy::cast_precision_loss)]
+    fn time(&self, iterations: u32, mut run: impl FnMut() -> Result<()>) -> Result<Duration> {
+        let started = self.backend.context().create_event(true)?;
+        let completed = self.backend.context().create_event(true)?;
+        started.record(self.backend.stream())?;
+        for _ in 0..iterations {
+            run()?;
+        }
+        completed.record(self.backend.stream())?;
+        completed.synchronize()?;
+        Ok(Duration::from_secs_f32(
+            started.elapsed_ms(&completed)? / (iterations as f32 * 1_000.0),
+        ))
     }
 
     fn route_patterns(&self) -> Result<RoutePatterns> {

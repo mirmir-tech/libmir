@@ -6,7 +6,9 @@ pub use batch::{
 mod convolution;
 pub use convolution::{GatedDeltaConvolution, GatedDeltaConvolutionSpec};
 mod gates;
+mod llama_cpp;
 pub use gates::{GatedDeltaAlphaBeta, GatedDeltaAlphaBetaSplit};
+pub use llama_cpp::{GatedDeltaLlamaCpp, GatedDeltaTiledValues};
 mod recurrence;
 pub use recurrence::{
     GatedDeltaChunked, GatedDeltaChunkedScratch, GatedDeltaInputs, GatedDeltaLaunch,

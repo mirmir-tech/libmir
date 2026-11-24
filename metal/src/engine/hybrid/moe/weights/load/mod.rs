@@ -6,8 +6,8 @@ use models::weights::{
 #[cfg(test)]
 use self::legacy::{legacy_attention, legacy_dense, legacy_norm, legacy_router};
 use super::{
-    AttentionWeights, DenseWeights, ExpertGateUpWeights, ExpertWeights, LayerWeights,
-    RoutedWeights, RouterWeights,
+    AttentionWeights, DenseWeights, ExpertGateUpWeights, ExpertWeights, KeyValueWeights,
+    LayerWeights, ProjectedKeyValues, Publish, RoutedWeights, RouterWeights,
 };
 use crate::engine::{
     Array, Error, ModelTensors, NormWeight, Result, Stream, binding::BoundLinear,
@@ -16,11 +16,13 @@ use crate::engine::{
 
 #[cfg(test)]
 mod legacy;
+mod shared;
 
 impl LayerWeights {
     pub(in crate::engine::hybrid::moe) fn load_bindings(
         tensors: &ModelTensors,
         bindings: &HybridMoeLayerBindings<'_>,
+        rope_frequencies: Option<Array>,
         config: HybridMoeLayerConfig,
         stream: &Stream,
     ) -> Result<Self> {
@@ -30,7 +32,14 @@ impl LayerWeights {
             pre_dense_norm: norm(tensors, bindings.pre_dense_norm)?,
             post_feed_forward_norm: norm(tensors, bindings.post_feed_forward_norm)?,
             layer_scalar: tensors.get(&bindings.layer_scale.source)?,
-            attention: attention(tensors, bindings.attention, config, stream)?,
+            attention: attention(
+                tensors,
+                bindings.attention,
+                rope_frequencies,
+                None,
+                config,
+                stream,
+            )?,
             dense: dense(tensors, bindings.dense, stream)?,
             routed: Some(RoutedWeights {
                 post_dense_norm: norm(tensors, bindings.post_dense_norm)?,
@@ -45,6 +54,8 @@ impl LayerWeights {
     pub(in crate::engine::hybrid::moe) fn load_dense_bindings(
         tensors: &ModelTensors,
         bindings: &DenseDecoderLayerBindings<'_>,
+        rope_frequencies: Option<Array>,
+        publish: Option<Publish>,
         config: HybridMoeLayerConfig,
         stream: &Stream,
     ) -> Result<Self> {
@@ -56,6 +67,10 @@ impl LayerWeights {
                 Error::InvalidModel("dense GELU attention needs query and key norms".into())
             })
         };
+        let layer_scale = sandwich
+            .layer_scale
+            .ok_or_else(|| Error::InvalidModel("dense GELU layer needs a layer scale".into()))?;
+        let mlp = bindings.feed_forward.gated()?;
         let query_norm = attention_norm(bindings.attention.query_norm)?;
         let key_norm = attention_norm(bindings.attention.key_norm)?;
         Ok(Self {
@@ -63,7 +78,7 @@ impl LayerWeights {
             post_attention_norm: norm(tensors, sandwich.attention_output_norm)?,
             pre_dense_norm: norm(tensors, bindings.post_attention_norm)?,
             post_feed_forward_norm: norm(tensors, sandwich.feed_forward_output_norm)?,
-            layer_scalar: tensors.get(&sandwich.layer_scale.source)?,
+            layer_scalar: tensors.get(&layer_scale.source)?,
             attention: attention(
                 tensors,
                 HybridMoeAttentionBindings {
@@ -74,15 +89,17 @@ impl LayerWeights {
                     query_norm: &query_norm,
                     key_norm: &key_norm,
                 },
+                rope_frequencies,
+                publish,
                 config,
                 stream,
             )?,
             dense: dense(
                 tensors,
                 HybridMoeDenseBindings {
-                    gate: bindings.gate,
-                    up: bindings.up,
-                    down: bindings.down,
+                    gate: mlp.gate,
+                    up: mlp.up,
+                    down: mlp.down,
                 },
                 stream,
             )?,
@@ -93,6 +110,7 @@ impl LayerWeights {
     #[cfg(test)]
     pub(in crate::engine::hybrid::moe) fn load(
         tensors: &ModelTensors,
+        rope_frequencies: Option<Array>,
         config: HybridMoeLayerConfig,
         stream: &Stream,
     ) -> Result<Self> {
@@ -103,7 +121,12 @@ impl LayerWeights {
             pre_dense_norm: legacy_norm(tensors, &layer, "pre_feedforward_layernorm")?,
             post_feed_forward_norm: legacy_norm(tensors, &layer, "post_feedforward_layernorm")?,
             layer_scalar: tensors.get(&format!("{layer}.layer_scalar"))?,
-            attention: legacy_attention(tensors, &format!("{layer}.self_attn"), config, stream)?,
+            attention: legacy_attention(
+                tensors,
+                &format!("{layer}.self_attn"),
+                rope_frequencies,
+                config,
+            )?,
             dense: legacy_dense(tensors, &format!("{layer}.mlp"), config.group_size)?,
             routed: Some(RoutedWeights {
                 post_dense_norm: legacy_norm(tensors, &layer, "post_feedforward_layernorm_1")?,
@@ -124,6 +147,8 @@ impl LayerWeights {
 fn attention(
     tensors: &ModelTensors,
     bindings: HybridMoeAttentionBindings<'_>,
+    rope_frequencies: Option<Array>,
+    publish: Option<Publish>,
     config: HybridMoeLayerConfig,
     stream: &Stream,
 ) -> Result<AttentionWeights> {
@@ -137,15 +162,15 @@ fn attention(
     };
     Ok(AttentionWeights {
         query: BoundLinear::load(tensors, bindings.query, stream)?,
-        key: BoundLinear::load(tensors, bindings.key, stream)?,
-        value,
+        key_values: KeyValueWeights::Projected(Box::new(ProjectedKeyValues {
+            key: BoundLinear::load(tensors, bindings.key, stream)?,
+            value,
+            norm: norm(tensors, bindings.key_norm)?,
+            publish,
+        })),
         output: BoundLinear::load(tensors, bindings.output, stream)?,
         query_norm: norm(tensors, bindings.query_norm)?,
-        key_norm: norm(tensors, bindings.key_norm)?,
-        rope_frequencies: config
-            .proportional_rope
-            .then(|| rope_frequencies(config, stream))
-            .transpose()?,
+        rope_frequencies,
     })
 }
 
@@ -204,32 +229,14 @@ fn experts(
         },
         HybridMoeExpertBindings::Individual { gate, up, down } => Ok(ExpertWeights {
             gate_up: ExpertGateUpWeights::Separate {
-                gate: BoundLinear::load_nvfp4_bank(tensors, gate, stream)?,
-                up: BoundLinear::load_nvfp4_bank(tensors, up, stream)?,
+                gate: BoundLinear::load_individual_bank(tensors, gate, stream)?,
+                up: BoundLinear::load_individual_bank(tensors, up, stream)?,
             },
-            down: BoundLinear::load_nvfp4_bank(tensors, down, stream)?,
+            down: BoundLinear::load_individual_bank(tensors, down, stream)?,
         }),
     }
 }
 
 fn norm(tensors: &ModelTensors, binding: &TensorBinding) -> Result<NormWeight> {
     NormWeight::load_name(tensors, &binding.source)
-}
-
-pub(super) fn rope_frequencies(config: HybridMoeLayerConfig, stream: &Stream) -> Result<Array> {
-    Array::proportional_rope_frequencies(
-        config.head_dim,
-        config.rope_dimensions,
-        config.rope_base,
-        stream,
-    )
-}
-
-impl From<DenseWeights> for ExpertWeights {
-    fn from(weights: DenseWeights) -> Self {
-        Self {
-            gate_up: ExpertGateUpWeights::Separate { gate: weights.gate, up: weights.up },
-            down: weights.down,
-        }
-    }
 }

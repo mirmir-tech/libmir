@@ -15,13 +15,13 @@ fn binds_compressed_tensors_packed_int8_weight() -> Result<()> {
 
     let bindings = WeightBindingPlan::discover(&spec, &catalog)?;
 
-    assert!(bindings.uses_packed_int8());
+    assert!(bindings.uses_packed_integer());
     assert_eq!(bindings.tensors.len(), 1);
     let binding = &bindings.tensors[0];
     assert_eq!(binding.source, "model.layers.0.self_attn.q_proj.weight_packed");
     assert_eq!(binding.shape, [32, 8]);
     assert_eq!(binding.logical_shape.as_deref(), Some([32, 32].as_slice()));
-    let TensorStorage::PackedInt8 {
+    let TensorStorage::PackedInteger {
         format,
         scales,
         shape,
@@ -54,9 +54,8 @@ fn binds_symmetric_grouped_compressed_tensors_int4_weight() -> Result<()> {
 
     let bindings = WeightBindingPlan::discover(&spec, &catalog)?;
 
-    assert!(bindings.uses_packed_int4());
-    assert!(!bindings.uses_packed_int8());
-    let TensorStorage::PackedInt4 {
+    assert!(bindings.uses_packed_integer());
+    let TensorStorage::PackedInteger {
         format,
         scales,
         zero_points,
@@ -71,6 +70,44 @@ fn binds_symmetric_grouped_compressed_tensors_int4_weight() -> Result<()> {
     assert_eq!(scales, "model.layers.0.self_attn.q_proj.weight_scale");
     assert!(zero_points.is_none());
     assert!(group_indices.is_none());
+    Ok(())
+}
+
+#[test]
+fn binds_gsq_three_bit_and_grouped_int8_with_f32_scales() -> Result<()> {
+    // GSQ checkpoints: 3-bit group-128 MLPs, 8-bit group-128 attention with
+    // F32 scales; 32 inputs x 3 bits = 3 words, x 8 bits = 8 words.
+    let catalog = TensorCatalog {
+        tensors: vec![
+            tensor("model.layers.0.self_attn.k_proj.weight_packed", "I32", vec![16, 3]),
+            tensor("model.layers.0.self_attn.k_proj.weight_scale", "BF16", vec![16, 2]),
+            tensor("model.layers.0.self_attn.k_proj.weight_shape", "I64", vec![2]),
+            tensor("model.layers.0.self_attn.q_proj.weight_packed", "I32", vec![32, 8]),
+            tensor("model.layers.0.self_attn.q_proj.weight_scale", "F32", vec![32, 2]),
+            tensor("model.layers.0.self_attn.q_proj.weight_shape", "I64", vec![2]),
+        ],
+    };
+    let spec = SemanticModelSpec::discover(&decoder()?, &catalog)?;
+    let bindings = WeightBindingPlan::discover(&spec, &catalog)?;
+    let format = |projection: &str| {
+        let source = format!("model.layers.0.self_attn.{projection}.weight_packed");
+        match bindings.tensors.iter().find(|binding| binding.source == source) {
+            Some(TensorBinding {
+                storage: TensorStorage::PackedInteger { format, .. },
+                ..
+            }) => Ok(*format),
+            _ => Err(ModelsError::InvalidConfig(format!("{source} is not packed integer"))),
+        }
+    };
+    let (query, key) = (format("q_proj")?, format("k_proj")?);
+    assert_eq!(query.bits, CompressedIntegerBits::Eight);
+    assert_eq!(query.scale_dtype, CompressedIntegerScaleDType::F32);
+    assert_eq!(key.bits, CompressedIntegerBits::Three);
+    for format in [query, key] {
+        assert!(format.is_symmetric_group());
+        assert_eq!(format.scale_strategy, CompressedIntegerScaleStrategy::Group { group_size: 16 });
+    }
+    assert!(!key.is_symmetric_group_int4());
     Ok(())
 }
 

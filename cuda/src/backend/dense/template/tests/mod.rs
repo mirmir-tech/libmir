@@ -64,7 +64,7 @@ fn qwen2_stack_matches_dynamic_fp8_activation_reference() -> TestResult<()> {
             &spec,
             &catalog,
             index,
-            bindings.dense_decoder_layer(index)?,
+            bindings.dense_decoder_layer(index)?.into(),
             load,
         )?;
         let cache = backend.prepare_paged_kv(index, template.config().attention.cache)?;

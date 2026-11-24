@@ -100,9 +100,11 @@ fn unrotated_attention_matches_the_reference_on_a_real_layer() -> Result<()> {
     let output_weight = load(output_weight)?;
     let unused_norm = copy(&backend, &vec![bf16::ZERO; config.cache.key_head_dim])?;
     let weights = DecodeAttentionWeights {
-        input_norm: tensors
-            .get(&bindings.input_norm.source)
-            .ok_or_else(|| Error::MissingTensor(bindings.input_norm.source.clone()))?,
+        input_norm: Some(
+            tensors
+                .get(&bindings.input_norm.source)
+                .ok_or_else(|| Error::MissingTensor(bindings.input_norm.source.clone()))?,
+        ),
         qkv: DecodeQkvWeights::DirectFp8([&query, &key, &value]),
         query_norm: &unused_norm,
         key_norm: &unused_norm,

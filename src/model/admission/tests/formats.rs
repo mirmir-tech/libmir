@@ -27,22 +27,22 @@ fn current_format_matrix_is_explicit() {
         ),
         (
             BackendTarget::Metal,
-            WeightEncoding::PackedInt8 { format: packed_int8() },
+            WeightEncoding::PackedInteger { format: packed_int8() },
             AdmissionStatus::Partial,
         ),
         (
             BackendTarget::Cuda,
-            WeightEncoding::PackedInt8 { format: packed_int8() },
+            WeightEncoding::PackedInteger { format: packed_int8() },
             AdmissionStatus::Partial,
         ),
         (
             BackendTarget::Metal,
-            WeightEncoding::PackedInt4 { format: packed_int4() },
+            WeightEncoding::PackedInteger { format: packed_int4() },
             AdmissionStatus::Partial,
         ),
         (
             BackendTarget::Cuda,
-            WeightEncoding::PackedInt4 { format: packed_int4() },
+            WeightEncoding::PackedInteger { format: packed_int4() },
             AdmissionStatus::Partial,
         ),
         (

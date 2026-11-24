@@ -10,24 +10,17 @@ pub(super) fn validate(
     storage: &TensorStorage,
     catalog: &TensorCatalog,
 ) -> Result<()> {
-    let (TensorStorage::PackedInt8 {
+    let TensorStorage::PackedInteger {
         format,
         scales,
         shape: shape_tensor,
         zero_points,
         group_indices,
-    }
-    | TensorStorage::PackedInt4 {
-        format,
-        scales,
-        shape: shape_tensor,
-        zero_points,
-        group_indices,
-    }) = storage
+    } = storage
     else {
         return Err(invalid(&binding.source, "storage kind changed during validation"));
     };
-    if !(format.is_symmetric_channel_int8() || format.is_symmetric_group_int4())
+    if !(format.is_symmetric_channel_int8() || format.is_symmetric_group())
         || zero_points.is_some()
         || group_indices.is_some()
     {

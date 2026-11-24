@@ -115,7 +115,18 @@ fn execute_split(
     scale: f32,
 ) -> Result<()> {
     let active = operation.execute_partitions(
-        stream, query, key_pages, value_pages, table, workspace, output, tokens, blocks, window,
+        stream,
+        query,
+        key_pages,
+        value_pages,
+        table,
+        workspace,
+        output,
+        tokens,
+        blocks,
+        window
+            .and_then(std::num::NonZeroUsize::new)
+            .map(models::semantic::AttentionWindow::Sliding),
         scale,
     )?;
     let query_heads = sinks.len();

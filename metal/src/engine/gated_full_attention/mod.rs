@@ -1,27 +1,16 @@
 mod batch;
+mod config;
 mod load;
 mod position;
 mod projection;
 
-use models::layout::{AttentionOutput, DecoderConfig, RotaryEmbeddingLayout};
+pub use config::GatedFullAttentionConfig;
 use position::rope;
 
 use super::{
     Array, Error, KvCache, NormWeight, PagedContextMode, Result, Stream, binding::BoundLinear,
     fused::gate_up::split_last, native_paged_attention_mode,
 };
-
-#[derive(Debug, Clone)]
-pub struct GatedFullAttentionConfig {
-    attention_heads: i32,
-    key_value_heads: i32,
-    head_dim: i32,
-    rope_dimensions: i32,
-    rope_base: f32,
-    attention_scale: f32,
-    rms_norm_eps: f32,
-    rope_layout: RotaryEmbeddingLayout,
-}
 
 #[derive(Debug)]
 pub struct GatedFullAttention {
@@ -34,48 +23,6 @@ pub struct GatedFullAttention {
     output: BoundLinear,
     query_norm: NormWeight,
     key_norm: NormWeight,
-}
-
-impl GatedFullAttentionConfig {
-    pub fn from_decoder(decoder: &DecoderConfig) -> Result<Self> {
-        if decoder.attention_output != AttentionOutput::Gated {
-            return Err(Error::InvalidModel("gated full attention requires an output gate".into()));
-        }
-        let head_dim = i32::try_from(decoder.head_dim)?;
-        let partial = decoder.partial_rotary_factor.unwrap_or(1.0);
-        let rope_dimensions: i32 = (f64::from(head_dim) * partial).round().to_string().parse()?;
-        let config = Self {
-            attention_heads: i32::try_from(decoder.num_attention_heads)?,
-            key_value_heads: i32::try_from(decoder.num_key_value_heads)?,
-            head_dim,
-            rope_dimensions,
-            rope_base: decoder.rope_theta.unwrap_or(10_000.0).to_string().parse()?,
-            attention_scale: head_dim.to_string().parse::<f32>()?.sqrt().recip(),
-            rms_norm_eps: decoder.rms_norm_eps.to_string().parse()?,
-            rope_layout: decoder.rope_layout.clone(),
-        };
-        config.validate()?;
-        Ok(config)
-    }
-
-    fn validate(&self) -> Result<()> {
-        if self.attention_heads <= 0
-            || self.key_value_heads <= 0
-            || self.head_dim <= 0
-            || self.attention_heads % self.key_value_heads != 0
-            || self.rope_dimensions <= 0
-            || self.rope_dimensions > self.head_dim
-            || self.rope_dimensions % 2 != 0
-            || !self.rope_base.is_finite()
-            || !self.attention_scale.is_finite()
-            || !self.rms_norm_eps.is_finite()
-        {
-            return Err(Error::InvalidModel(format!(
-                "invalid gated full attention configuration: {self:?}"
-            )));
-        }
-        Ok(())
-    }
 }
 
 impl GatedFullAttention {

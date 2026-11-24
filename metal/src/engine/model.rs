@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{collections::BTreeSet, path::Path};
 
 use models::{layout::ModelLayout, weights::alternate_model_tensor_name};
 
@@ -25,7 +25,7 @@ impl ModelTensors {
         stream: &Stream,
         progress: impl FnMut(u64, u64, String),
     ) -> Result<Self> {
-        Self::load_layout_inner(layout, stream, false, progress)
+        Self::load_layout_inner(layout, &BTreeSet::new(), stream, false, progress)
     }
 
     pub fn load_layout_materialized_with_progress(
@@ -33,11 +33,23 @@ impl ModelTensors {
         stream: &Stream,
         progress: impl FnMut(u64, u64, String),
     ) -> Result<Self> {
-        Self::load_layout_inner(layout, stream, true, progress)
+        Self::load_layout_inner(layout, &BTreeSet::new(), stream, true, progress)
+    }
+
+    /// [`Self::load_layout_materialized_with_progress`] keeping the GGUF
+    /// float tensors in `full_precision` in their stored type.
+    pub fn load_layout_materialized_keeping(
+        layout: &ModelLayout,
+        full_precision: &BTreeSet<String>,
+        stream: &Stream,
+        progress: impl FnMut(u64, u64, String),
+    ) -> Result<Self> {
+        Self::load_layout_inner(layout, full_precision, stream, true, progress)
     }
 
     fn load_layout_inner(
         layout: &ModelLayout,
+        full_precision: &BTreeSet<String>,
         stream: &Stream,
         materialize: bool,
         mut progress: impl FnMut(u64, u64, String),
@@ -57,7 +69,7 @@ impl ModelTensors {
         };
         for (index, weight) in layout.weights.iter().enumerate() {
             progress(loaded, total, shard_detail(starting, index, shards, &weight.path));
-            let file = TensorFile::load(&weight.path, stream)?;
+            let file = TensorFile::load_keeping(&weight.path, full_precision, stream)?;
             tensors += file.len()?;
             if materialize {
                 file.evaluate()?;

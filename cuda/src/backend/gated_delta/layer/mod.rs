@@ -3,6 +3,7 @@ mod convolution;
 mod execution;
 mod finish;
 mod gates;
+mod llama_cpp;
 mod ragged;
 mod scratch;
 pub(in crate::backend) use scratch::{GatedDeltaScratch, GatedDeltaScratchKey};
@@ -12,7 +13,7 @@ mod tests;
 mod weights;
 
 pub use execution::CudaAffineGatedDeltaExecution;
-use models::layout::LinearAttentionConfig;
+use models::layout::{LinearAttentionConfig, LinearAttentionLayout};
 pub use weights::AffineGatedDeltaLayerWeights;
 
 use super::{CudaGatedDeltaState, GatedDeltaStateConfig};
@@ -30,6 +31,7 @@ pub struct AffineGatedDeltaLayerConfig {
     pub bits: usize,
     pub rms_norm_epsilon: f32,
     pub norm_weight_shift: f32,
+    pub layout: LinearAttentionLayout,
 }
 
 impl AffineGatedDeltaLayerConfig {
@@ -52,6 +54,7 @@ impl AffineGatedDeltaLayerConfig {
             bits,
             rms_norm_epsilon: rms_norm_epsilon.to_string().parse()?,
             norm_weight_shift,
+            layout: linear.layout,
         };
         config.validate()?;
         Ok(config)
@@ -66,6 +69,21 @@ impl AffineGatedDeltaLayerConfig {
             value_dim: self.value_dim,
             convolution_kernel_size: self.convolution_kernel_size,
         })
+    }
+
+    /// Value heads stored tiled across key heads: llama.cpp's layout with
+    /// more value than key heads.
+    pub(super) const fn tiled_values(self) -> Option<crate::kernels::GatedDeltaTiledValues> {
+        match self.layout {
+            LinearAttentionLayout::LlamaCpp if self.value_heads > self.key_heads => {
+                Some(crate::kernels::GatedDeltaTiledValues {
+                    key_heads: self.key_heads,
+                    per_key: self.value_heads / self.key_heads,
+                    head_dim: self.value_dim,
+                })
+            },
+            _ => None,
+        }
     }
 
     pub(super) fn key_width(self) -> Result<usize> {

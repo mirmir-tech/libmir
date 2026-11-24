@@ -55,7 +55,7 @@ fn dense_gemma_layers_match_reference() -> TestResult<()> {
             &spec,
             &catalog,
             layer,
-            bindings.dense_decoder_layer(layer)?,
+            bindings.dense_decoder_layer(layer)?.into(),
             load,
         )?;
         let config = template.config();

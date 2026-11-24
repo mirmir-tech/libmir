@@ -1,4 +1,5 @@
 use mircuda::{DeviceBuffer, KernelNode, LaunchConfig, Stream, TypedKernel, bf16};
+use models::semantic::AttentionWindow;
 
 use super::{
     MergeAttentionKernel, SplitAttentionKernel, SplitAttentionWorkspace, SplitPagedAttention,
@@ -75,7 +76,7 @@ impl SplitPagedAttention {
         output: &mut DeviceBuffer<bf16>,
         token_count: usize,
         block_count: usize,
-        window: Option<usize>,
+        window: Option<AttentionWindow>,
         scale: f32,
         minimum_tokens: usize,
     ) -> Result<SplitAttentionNodes> {
@@ -97,7 +98,7 @@ impl SplitPagedAttention {
             self.merge_arguments(
                 workspace,
                 output,
-                window.map_or(token_count, |limit| token_count.min(limit)),
+                crate::kernels::paged::window::visible(token_count, window),
                 active,
                 minimum_tokens,
             )?,
@@ -128,11 +129,7 @@ impl SplitPagedAttention {
     }
 
     pub(crate) fn active_partitions(&self, token_count: u32, window: u32) -> Result<u32> {
-        let visible = if window == 0 {
-            token_count
-        } else {
-            token_count.min(window)
-        };
+        let visible = crate::kernels::paged::window::visible_argument(token_count, window);
         Ok(visible.div_ceil(u32::try_from(self.partition_tokens)?))
     }
 
@@ -146,7 +143,7 @@ impl SplitPagedAttention {
         workspace: &'a mut SplitAttentionWorkspace,
         token_count: usize,
         block_count: usize,
-        window: Option<usize>,
+        window: Option<AttentionWindow>,
         scale: f32,
         active: usize,
         minimum_tokens: usize,
@@ -166,7 +163,7 @@ impl SplitPagedAttention {
             narrow(self.spec.kv_heads)?,
             narrow(self.spec.head_dim)?,
             narrow(self.spec.value_head_dim)?,
-            narrow(window.unwrap_or(0))?,
+            crate::kernels::paged::window::argument(window)?,
             scale,
             narrow(self.partition_tokens)?,
             narrow(active)?,

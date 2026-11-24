@@ -3,10 +3,10 @@ use mircuda::{DeviceBuffer, bf16};
 use super::{CudaMamba2HybridLayer, MixerScratch, MixerWeights, bf16 as bf16_tensor};
 use crate::{
     CudaBackend, CudaMamba2BatchState, CudaMamba2State, CudaMamba2VerifyState, CudaTensor,
-    DirectFp8Bf16Linear, DirectFp8CheckpointWeight, Error, ExecutionPhase, Result,
+    DenseRole, Error, ExecutionPhase, Result,
     backend::{
-        layer_scratch::SharedLayerScratch, scratch_pool::SharedScratch,
-        state_space_hybrid::tail::TailExecution,
+        layer_scratch::SharedLayerScratch, linear::CheckpointProjection,
+        scratch_pool::SharedScratch, state_space_hybrid::tail::TailExecution,
     },
     kernels::{Mamba2Geometry, ShiftedRmsNorm},
 };
@@ -20,8 +20,8 @@ pub struct CudaMamba2HybridExecution {
     tokens: usize,
     input_norm: ShiftedRmsNorm,
     input_norm_weight: CudaTensor,
-    input_projection: (DirectFp8Bf16Linear, DirectFp8CheckpointWeight),
-    output_projection: (DirectFp8Bf16Linear, DirectFp8CheckpointWeight),
+    input_projection: CheckpointProjection,
+    output_projection: CheckpointProjection,
     mixer: MixerWeights,
     tail: TailExecution,
     scratch: SharedLayerScratch,
@@ -51,14 +51,22 @@ impl CudaMamba2HybridExecution {
                 layer.norm.norm_weight_shift,
             )?,
             input_norm_weight: layer.input_norm.clone(),
-            input_projection: (
-                layer.input_projection.prepare(backend, tokens)?,
-                layer.input_projection.clone(),
-            ),
-            output_projection: (
-                layer.output_projection.prepare(backend, tokens)?,
-                layer.output_projection.clone(),
-            ),
+            input_projection: CheckpointProjection::new(
+                backend,
+                tokens,
+                layer.norm.hidden_size,
+                geometry.projection_width()?,
+                DenseRole::AttentionQkv,
+                &layer.input_projection,
+            )?,
+            output_projection: CheckpointProjection::new(
+                backend,
+                tokens,
+                geometry.inner()?,
+                layer.norm.hidden_size,
+                DenseRole::AttentionOutput,
+                &layer.output_projection,
+            )?,
             mixer: layer.mixer.clone(),
             tail: TailExecution::new(
                 backend,
@@ -205,7 +213,7 @@ impl CudaMamba2HybridExecution {
 
     // The guards are used by the last statement; the lint cannot see it.
     #[allow(clippy::significant_drop_tightening)]
-    fn project_input(&self, input: &DeviceBuffer<bf16>) -> Result<()> {
+    fn project_input(&mut self, input: &DeviceBuffer<bf16>) -> Result<()> {
         let mut scratch = self.scratch.lock()?;
         let mut rows = self.rows.lock()?;
         if input.len() != scratch.normalized.len() {
@@ -217,8 +225,7 @@ impl CudaMamba2HybridExecution {
             bf16_tensor(&self.input_norm_weight)?,
             &mut scratch.normalized,
         )?;
-        let (operation, weight) = &self.input_projection;
-        operation.execute(&scratch.normalized, weight, &mut rows.projection)
+        self.input_projection.execute(&scratch.normalized, &mut rows.projection)
     }
 
     // The scratch guard is used by the last statement; the lint cannot see it.
@@ -230,8 +237,8 @@ impl CudaMamba2HybridExecution {
     ) -> Result<()> {
         let mut guard = self.scratch.lock()?;
         let scratch = &mut *guard;
-        let (operation, weight) = &self.output_projection;
-        operation.execute(&self.rows.lock()?.mixed, weight, &mut scratch.attention)?;
+        self.output_projection
+            .execute(&self.rows.lock()?.mixed, &mut scratch.attention)?;
         self.tail.execute(input, scratch, output)
     }
 }

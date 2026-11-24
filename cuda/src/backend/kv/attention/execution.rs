@@ -1,4 +1,5 @@
-use mircuda::{DeviceBuffer, FmhaCausalWindow, bf16};
+use mircuda::{DeviceBuffer, bf16};
+use models::semantic::AttentionWindow;
 use runtime::kv::BlockTable;
 
 use super::{PagedAttentionBf16, pages::contiguous_page_token};
@@ -15,7 +16,7 @@ impl PagedAttentionBf16 {
         output: &mut DeviceBuffer<bf16>,
         query_tokens: usize,
         start_position: usize,
-        window: Option<usize>,
+        window: Option<AttentionWindow>,
         scale: f32,
     ) -> Result<()> {
         self.execute_prefill_masked(
@@ -33,7 +34,7 @@ impl PagedAttentionBf16 {
         output: &mut DeviceBuffer<bf16>,
         query_tokens: usize,
         start_position: usize,
-        window: Option<usize>,
+        window: Option<AttentionWindow>,
         scale: f32,
         image: Option<(usize, usize)>,
     ) -> Result<()> {
@@ -44,9 +45,9 @@ impl PagedAttentionBf16 {
             .ok_or(crate::Error::InvalidPagedKv("prefill attention context overflow"))?;
         // Paged FlashAttention skips the key blocks a sliding window hides.
         if image.is_none()
+            && let Some(window) = crate::kernels::attention_window::flash(window)?
             && let Some(fmha) = &mut self.paged_fmha
         {
-            let window = window.map_or(Ok(FmhaCausalWindow::Full), FmhaCausalWindow::sliding)?;
             return fmha.execute(
                 query,
                 cache.key_pages(),
@@ -110,12 +111,12 @@ impl PagedAttentionBf16 {
         cache: &PagedKvCache,
         table: &BlockTable,
         output: &mut DeviceBuffer<bf16>,
-        window: Option<usize>,
+        window: Option<AttentionWindow>,
         scale: f32,
     ) -> Result<()> {
         self.ensure_tuned(query, cache, table, output, window, scale);
         let token_count = table.token_len();
-        let visible = window.map_or(token_count, |limit| token_count.min(limit));
+        let visible = crate::kernels::attention_window::visible(token_count, window);
         if visible >= usize::try_from(self.split_threshold)? {
             return self.execute_split(query, cache, table, output, window, scale);
         }
@@ -129,7 +130,7 @@ impl PagedAttentionBf16 {
         cache: &PagedKvCache,
         table: &BlockTable,
         output: &mut DeviceBuffer<bf16>,
-        window: Option<usize>,
+        window: Option<AttentionWindow>,
         scale: f32,
     ) -> Result<()> {
         self.validate(cache, table)?;
@@ -155,7 +156,7 @@ impl PagedAttentionBf16 {
         cache: &PagedKvCache,
         table: &BlockTable,
         output: &mut DeviceBuffer<bf16>,
-        window: Option<usize>,
+        window: Option<AttentionWindow>,
         scale: f32,
     ) -> Result<()> {
         self.validate(cache, table)?;

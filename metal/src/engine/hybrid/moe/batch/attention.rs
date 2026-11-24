@@ -23,15 +23,14 @@ pub(super) fn packed_attention(
         .shape()?
         .get(1)
         .ok_or_else(|| Error::InvalidModel("packed input has no sequence axis".into()))?;
-    let (queries, raw_keys, raw_values) =
-        projections(input, weights, fused_attention, fused_key_value, stream)?;
-    let queries =
-        queries.reshape(&[batch, sequence, config.attention_heads, config.head_dim], stream)?;
-    let queries = weights.query_norm.apply(&queries, config.rms_norm_eps, stream)?;
-    let raw_keys =
-        raw_keys.reshape(&[batch, sequence, config.kv_heads, config.head_dim], stream)?;
-    let values = values(&raw_keys, raw_values, batch, sequence, config, stream)?;
-    let keys = weights.key_norm.apply(&raw_keys, config.rms_norm_eps, stream)?;
+    let attention::Projected { queries, keys, values } = attention::project(
+        input,
+        weights,
+        config,
+        (fused_attention, fused_key_value),
+        [batch, sequence],
+        stream,
+    )?;
     let context = AttentionRows {
         weights,
         config,
@@ -46,48 +45,6 @@ pub(super) fn packed_attention(
     let rows = rows.iter().collect::<Vec<_>>();
     let output = Array::concatenate(&rows, 0, stream)?;
     history::project(&output, weights, config, [batch, sequence], stream)
-}
-fn projections(
-    input: &Array,
-    weights: &AttentionWeights,
-    fused_attention: Option<&FusedAttention>,
-    fused_key_value: Option<&FusedKeyValue>,
-    stream: &Stream,
-) -> Result<(Array, Array, Option<Array>)> {
-    if let Some(fused) = fused_attention {
-        let output = fused.forward(input, stream)?;
-        return Ok((output.query, output.key, output.value));
-    }
-    let (keys, values) = match fused_key_value {
-        Some(fused) => {
-            let (key, value) = fused.forward(input, stream)?;
-            (key, Some(value))
-        },
-        None => (
-            weights.key.forward(input, stream)?,
-            weights.value.as_ref().map(|value| value.forward(input, stream)).transpose()?,
-        ),
-    };
-    Ok((weights.query.forward(input, stream)?, keys, values))
-}
-
-fn values(
-    raw_keys: &Array,
-    raw_values: Option<Array>,
-    batch: i32,
-    sequence: i32,
-    config: HybridMoeLayerConfig,
-    stream: &Stream,
-) -> Result<Array> {
-    let values = if config.use_k_eq_v {
-        raw_keys.rms_norm_unit(config.rms_norm_eps, stream)?
-    } else {
-        raw_values
-            .ok_or_else(|| Error::InvalidModel("missing hybrid MoE value projection".into()))?
-            .reshape(&[batch, sequence, config.kv_heads, config.head_dim], stream)?
-            .rms_norm_unit(config.rms_norm_eps, stream)?
-    };
-    values.transpose(&[0, 2, 1, 3], stream)
 }
 fn attention_rows(
     queries: &Array,

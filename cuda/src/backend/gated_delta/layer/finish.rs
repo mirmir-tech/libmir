@@ -1,6 +1,8 @@
 use mircuda::{DeviceBuffer, bf16};
 
-use super::{CudaAffineGatedDeltaExecution, execution::bf16, scratch::GatedDeltaScratch};
+use super::{
+    CudaAffineGatedDeltaExecution, execution::bf16, llama_cpp, scratch::GatedDeltaScratch,
+};
 use crate::{Error, Result};
 
 impl CudaAffineGatedDeltaExecution {
@@ -23,7 +25,9 @@ impl CudaAffineGatedDeltaExecution {
         } else {
             (&scratch.gate, self.config.value_width()?, 0)
         };
+        // The fused norm-gate projection reads grouped values.
         if self.config.value_dim == 128
+            && self.tiled_output.is_none()
             && self.output.execute_norm_gate(
                 &scratch.recurrent,
                 gate,
@@ -60,6 +64,8 @@ impl CudaAffineGatedDeltaExecution {
                 &mut scratch.gated,
             )?;
         }
-        self.output.execute(&scratch.gated, output)
+        let tiled = self.tiled_output.as_ref();
+        let values = (&scratch.gated, &mut scratch.recurrent);
+        llama_cpp::project(tiled, stream, &mut self.output, values, output)
     }
 }

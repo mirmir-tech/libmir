@@ -9,6 +9,8 @@ pub(super) struct Weights {
     pub(super) beta: GraphLinear,
     pub(super) alpha: GraphLinear,
     pub(super) output: GraphLinear,
+    /// llama.cpp's tiled value order of the output projection's columns.
+    pub(super) tiled: Option<super::super::llama_cpp::TiledValues>,
     pub(super) convolution: Array,
     pub(super) norm: Array,
     pub(super) a_log: Array,
@@ -38,6 +40,7 @@ impl Weights {
             beta,
             alpha,
             output,
+            tiled: layer.tiled_output,
             convolution: layer.conv_weight.native().clone(),
             norm: layer.norm_weight.native_clone(),
             a_log: layer.a_log.native().clone(),

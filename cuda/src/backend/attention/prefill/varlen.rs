@@ -10,7 +10,9 @@ pub(super) fn prepare_varlen_fmha(
 ) -> Result<Option<FmhaBf16Plan>> {
     let supported = matches!(config.cache.cache.dtype, KvCacheDType::Auto | KvCacheDType::BFloat16)
         && matches!(config.cache.key_head_dim, 64 | 128 | 256)
-        && config.cache.value_head_dim == config.cache.key_head_dim;
+        && config.cache.value_head_dim == config.cache.key_head_dim
+        // The fused plans have no score cap (Gemma 2).
+        && config.score_softcap.is_none();
     if !supported {
         return Ok(None);
     }

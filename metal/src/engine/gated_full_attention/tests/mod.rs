@@ -45,7 +45,7 @@ fn fixture(stream: &Stream) -> Result<GatedFullAttention> {
         rope_base: 10_000.0,
         attention_scale: 0.125,
         rms_norm_eps: 1.0e-6,
-        rope_layout: RotaryEmbeddingLayout::Standard,
+        rope_layout: models::semantic::RotaryLayoutSpec::Standard,
     };
     Ok(GatedFullAttention {
         key_value_join: None,

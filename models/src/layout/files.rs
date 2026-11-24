@@ -52,6 +52,7 @@ impl ModelLayout {
         let vocab_path = optional(root.join("vocab.json"));
         let tokenizer_path = optional(root.join("tokenizer.json"))
             .or_else(|| optional(root.join("tokenizer.model")))
+            .or_else(|| optional(root.join("tiktoken.model")))
             .or_else(|| vocab_path.clone());
         let merges_path = optional(root.join("merges.txt"));
         let added_tokens_path = optional(root.join("added_tokens.json"));
@@ -135,6 +136,13 @@ fn read_safetensor_names(root: &Path) -> Result<BTreeSet<String>> {
         if path.extension().is_some_and(|ext| ext == "safetensors")
             && let Some(name) = path.file_name().and_then(|name| name.to_str())
         {
+            let _inserted = names.insert(name.to_owned());
+        }
+    }
+    // A GGUF import directory links its shards, beside the few tensors a
+    // vision import assembles as `SafeTensors`.
+    for path in crate::gguf::files_in(root)? {
+        if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
             let _inserted = names.insert(name.to_owned());
         }
     }

@@ -117,6 +117,29 @@ pub trait DecoderExecution: Debug + Send {
         Err(unsupported("embedded multimodal prefill"))
     }
 
+    /// The K/V cache of a loaded multi-token prediction module.
+    fn new_prediction_cache(&self, _stream: &Stream) -> Result<Option<DecoderCache>> {
+        Ok(None)
+    }
+
+    /// The prediction module's normalized rows over normalized rows and the
+    /// tokens that follow them.
+    fn forward_prediction(
+        &self,
+        _hidden: &Array,
+        _next_tokens: &Array,
+        _cache: &mut DecoderCache,
+        _position: i32,
+        _stream: &Stream,
+    ) -> Result<Array> {
+        Err(unsupported("multi-token prediction"))
+    }
+
+    /// Logits of normalized hidden rows, as the output head forms them.
+    fn project_hidden(&self, _hidden: &Array, _stream: &Stream) -> Result<Array> {
+        Err(unsupported("hidden-row projection"))
+    }
+
     fn fusion_summary(&self) -> (usize, usize, usize, usize);
     fn expert_fusion_summary(&self) -> String;
 }

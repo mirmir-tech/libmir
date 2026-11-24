@@ -4,9 +4,56 @@ mod probe;
 mod tests;
 
 use super::BoundLinear;
-use crate::engine::{Array, Result, RouterOutput, Stream};
+use crate::engine::{Array, Error, Result, RouterOutput, Stream};
 
 impl BoundLinear {
+    pub(in crate::engine) fn route(
+        &self,
+        input: &Array,
+        norm_scale: &Array,
+        expert_scale: &Array,
+        eps: f32,
+        top_k: i32,
+        stream: &Stream,
+    ) -> Result<RouterOutput> {
+        match self {
+            Self::Affine(linear) => {
+                linear.route(input, norm_scale, expert_scale, eps, top_k, stream)
+            },
+            Self::Dense(linear) => {
+                let normalized = input.rms_norm(norm_scale, eps, stream)?;
+                linear.forward(&normalized, stream)?.router_top_k(expert_scale, top_k, stream)
+            },
+            Self::Float8(linear) => {
+                let normalized = input.rms_norm(norm_scale, eps, stream)?;
+                linear.forward(&normalized, stream)?.router_top_k(expert_scale, top_k, stream)
+            },
+            Self::Gptq(linear) => {
+                let normalized = input.rms_norm(norm_scale, eps, stream)?;
+                linear.forward(&normalized, stream)?.router_top_k(expert_scale, top_k, stream)
+            },
+            Self::BitsAndBytes4Bit(linear) => {
+                let normalized = input.rms_norm(norm_scale, eps, stream)?;
+                linear.forward(&normalized, stream)?.router_top_k(expert_scale, top_k, stream)
+            },
+            Self::MxFp4(linear) => {
+                let normalized = input.rms_norm(norm_scale, eps, stream)?;
+                linear.forward(&normalized, stream)?.router_top_k(expert_scale, top_k, stream)
+            },
+            Self::MxFp8(linear) => {
+                let normalized = input.rms_norm(norm_scale, eps, stream)?;
+                linear.forward(&normalized, stream)?.router_top_k(expert_scale, top_k, stream)
+            },
+            Self::Ggml(linear) => {
+                let normalized = input.rms_norm(norm_scale, eps, stream)?;
+                linear.forward(&normalized, stream)?.router_top_k(expert_scale, top_k, stream)
+            },
+            Self::NvFp4(_) => Err(Error::InvalidQuantization(
+                "gathered NVFP4 matrix bank cannot be used as a router".into(),
+            )),
+        }
+    }
+
     pub(in crate::engine) fn route_unit(
         &self,
         input: &Array,

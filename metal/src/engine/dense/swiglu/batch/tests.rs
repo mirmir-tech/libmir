@@ -56,8 +56,10 @@ fn decode(root: &Path, dense_history: DenseHistoryMode, lead: u32) -> Result<Vec
     let model = DenseSwiGluModel::load(
         &tensors,
         &decoder,
+        &contract.semantic.decoder,
         &contract.bindings,
         lowering.layers(),
+        lowering.final_norm(),
         16,
         &stream,
     )?;

@@ -6,6 +6,8 @@ pub(super) struct SessionState {
     pub(super) position: usize,
     pub(super) rope_position_delta: i32,
     pub(super) pending: Option<PendingDecode>,
+    /// Multi-token prediction rows and K/V of a speculating session.
+    pub(super) speculation: Option<super::speculation::SpeculativeState>,
 }
 
 impl SessionState {
@@ -15,6 +17,7 @@ impl SessionState {
             position: 0,
             rope_position_delta: 0,
             pending: None,
+            speculation: None,
         }
     }
 
@@ -24,6 +27,7 @@ impl SessionState {
             position,
             rope_position_delta: 0,
             pending: None,
+            speculation: None,
         }
     }
 
@@ -39,6 +43,11 @@ impl SessionState {
             position: self.position,
             rope_position_delta: self.rope_position_delta,
             pending: self.pending.as_ref().map(PendingDecode::snapshot).transpose()?,
+            speculation: self
+                .speculation
+                .as_ref()
+                .map(super::speculation::SpeculativeState::snapshot)
+                .transpose()?,
         })
     }
 }

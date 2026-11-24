@@ -102,22 +102,29 @@ fn affine_admission_uses_the_complete_physical_contract() {
 }
 
 #[test]
-fn packed_int8_admission_requires_native_bf16_scales() {
-    let mut format = packed_int8();
-    format.scale_dtype = CompressedIntegerScaleDType::F16;
-    for backend in [BackendTarget::Metal, BackendTarget::Cuda] {
-        assert_eq!(
-            registry::assess(&backend, &WeightEncoding::PackedInt8 { format }).status,
-            AdmissionStatus::Unsupported
-        );
+fn packed_integer_admission_is_backend_specific() {
+    let assess = |backend, format| {
+        registry::assess(&backend, &WeightEncoding::PackedInteger { format }).status
+    };
+    // Metal converts F16/F32 scales; CUDA kernels read BF16 scales only.
+    for scale_dtype in [CompressedIntegerScaleDType::F16, CompressedIntegerScaleDType::F32] {
+        let format = CompressedIntegerQuantization { scale_dtype, ..packed_int8() };
+        assert_eq!(assess(BackendTarget::Metal, format), AdmissionStatus::Partial);
+        assert_eq!(assess(BackendTarget::Cuda, format), AdmissionStatus::Unsupported);
     }
-    format.scale_dtype = CompressedIntegerScaleDType::F32;
-    for backend in [BackendTarget::Metal, BackendTarget::Cuda] {
-        assert_eq!(
-            registry::assess(&backend, &WeightEncoding::PackedInt8 { format }).status,
-            AdmissionStatus::Unsupported
-        );
+    // GSQ widths: Metal's affine kernels take 2/3/8-bit groups, CUDA does not.
+    for bits in
+        [CompressedIntegerBits::Two, CompressedIntegerBits::Three, CompressedIntegerBits::Eight]
+    {
+        let format = CompressedIntegerQuantization { bits, ..packed_int4() };
+        assert_eq!(assess(BackendTarget::Metal, format), AdmissionStatus::Partial);
+        assert_eq!(assess(BackendTarget::Cuda, format), AdmissionStatus::Unsupported);
     }
+    let unaligned = CompressedIntegerQuantization {
+        scale_strategy: CompressedIntegerScaleStrategy::Group { group_size: 16 },
+        ..packed_int4()
+    };
+    assert_eq!(assess(BackendTarget::Metal, unaligned), AdmissionStatus::Unsupported);
 }
 
 #[test]

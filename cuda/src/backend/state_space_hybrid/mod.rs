@@ -10,4 +10,4 @@ mod tail;
 pub use attention::{CudaAttentionHybridExecution, CudaAttentionHybridLayer};
 pub use mamba::{CudaMamba2HybridExecution, CudaMamba2HybridLayer};
 pub(in crate::backend) use mamba::{MixerScratch, MixerScratchKey};
-pub(in crate::backend) use tail::NormedFeedForward;
+pub(in crate::backend) use tail::{NormedFeedForward, TailExecution};

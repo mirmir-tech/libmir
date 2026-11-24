@@ -4,8 +4,8 @@ use crate::{
     AffineQuantizedWeight, Bf16LinearPackWeights, BlockFp8LinearWeight, CudaBackend, CudaTensor,
     DecodeAttentionOutputWeight, DecodeAttentionWeights, DecodeQkvWeights, DenseExecution,
     DensePlanRequest, DenseRole, DirectFp8CheckpointWeight, Error, ExecutionPhase,
-    Fp8ResidualLinearWeight, MxFp4CheckpointWeight, MxFp8CheckpointWeight, NvFp4LinearWeight,
-    PackedIntegerWeight, Result,
+    Fp8ResidualLinearWeight, GgmlCheckpointWeight, MxFp4CheckpointWeight, MxFp8CheckpointWeight,
+    NvFp4LinearWeight, PackedIntegerWeight, Result,
 };
 
 #[derive(Clone)]
@@ -14,6 +14,7 @@ enum CapturedOutputWeight {
     Bf16(CudaTensor),
     DirectFp8(DirectFp8CheckpointWeight),
     MxFp4(MxFp4CheckpointWeight),
+    Ggml(GgmlCheckpointWeight),
     MxFp8(MxFp8CheckpointWeight),
     PackedInteger(PackedIntegerWeight),
     NvFp4(NvFp4LinearWeight),
@@ -33,6 +34,7 @@ enum CapturedQkvWeights {
     Bf16(Bf16LinearPackWeights<3>),
     DirectFp8(Box<[DirectFp8CheckpointWeight; 3]>),
     MxFp4(Box<[MxFp4CheckpointWeight; 3]>),
+    Ggml(Box<[GgmlCheckpointWeight; 3]>),
     MxFp8(Box<[MxFp8CheckpointWeight; 3]>),
     PackedInteger(Box<[PackedIntegerWeight; 3]>),
     NvFp4([NvFp4LinearWeight; 3]),
@@ -40,7 +42,7 @@ enum CapturedQkvWeights {
 
 #[derive(Clone)]
 pub(in crate::backend) struct CapturedAttentionWeights {
-    input_norm: CudaTensor,
+    input_norm: Option<CudaTensor>,
     qkv: CapturedQkvWeights,
     query_norm: DeviceBuffer<bf16>,
     key_norm: DeviceBuffer<bf16>,
@@ -87,7 +89,7 @@ impl CapturedAttentionWeights {
             },
         };
         Ok(Self {
-            input_norm: weights.input_norm.clone(),
+            input_norm: weights.input_norm.cloned(),
             qkv: CapturedQkvWeights::from(weights.qkv),
             query_norm: weights.query_norm.clone(),
             key_norm: weights.key_norm.clone(),
@@ -97,7 +99,7 @@ impl CapturedAttentionWeights {
 
     pub(in crate::backend) fn borrow(&self) -> DecodeAttentionWeights<'_> {
         DecodeAttentionWeights {
-            input_norm: &self.input_norm,
+            input_norm: self.input_norm.as_ref(),
             qkv: self.qkv.borrow(),
             query_norm: &self.query_norm,
             key_norm: &self.key_norm,
@@ -108,6 +110,7 @@ impl CapturedAttentionWeights {
                     DecodeAttentionOutputWeight::DirectFp8(weight)
                 },
                 CapturedOutputWeight::MxFp4(weight) => DecodeAttentionOutputWeight::MxFp4(weight),
+                CapturedOutputWeight::Ggml(weight) => DecodeAttentionOutputWeight::Ggml(weight),
                 CapturedOutputWeight::MxFp8(weight) => DecodeAttentionOutputWeight::MxFp8(weight),
                 CapturedOutputWeight::PackedInteger(weight) => {
                     DecodeAttentionOutputWeight::PackedInteger(weight)
@@ -127,7 +130,7 @@ impl CapturedAttentionWeights {
 impl From<DecodeAttentionWeights<'_>> for CapturedAttentionWeights {
     fn from(weights: DecodeAttentionWeights<'_>) -> Self {
         Self {
-            input_norm: weights.input_norm.clone(),
+            input_norm: weights.input_norm.cloned(),
             qkv: CapturedQkvWeights::from(weights.qkv),
             query_norm: weights.query_norm.clone(),
             key_norm: weights.key_norm.clone(),
@@ -145,6 +148,7 @@ impl From<DecodeQkvWeights<'_>> for CapturedQkvWeights {
                 Self::DirectFp8(Box::new(weights.map(Clone::clone)))
             },
             DecodeQkvWeights::MxFp4(weights) => Self::MxFp4(Box::new(weights.map(Clone::clone))),
+            DecodeQkvWeights::Ggml(weights) => Self::Ggml(Box::new(weights.map(Clone::clone))),
             DecodeQkvWeights::MxFp8(weights) => Self::MxFp8(Box::new(weights.map(Clone::clone))),
             DecodeQkvWeights::PackedInteger(weights) => {
                 Self::PackedInteger(Box::new(weights.map(Clone::clone)))
@@ -167,6 +171,7 @@ impl CapturedQkvWeights {
             Self::MxFp4(weights) => {
                 DecodeQkvWeights::MxFp4([&weights[0], &weights[1], &weights[2]])
             },
+            Self::Ggml(weights) => DecodeQkvWeights::Ggml([&weights[0], &weights[1], &weights[2]]),
             Self::MxFp8(weights) => {
                 DecodeQkvWeights::MxFp8([&weights[0], &weights[1], &weights[2]])
             },
@@ -187,6 +192,7 @@ impl From<DecodeAttentionOutputWeight<'_>> for CapturedOutputWeight {
             DecodeAttentionOutputWeight::Bf16(weight) => Self::Bf16(weight.clone()),
             DecodeAttentionOutputWeight::DirectFp8(weight) => Self::DirectFp8(weight.clone()),
             DecodeAttentionOutputWeight::MxFp4(weight) => Self::MxFp4(weight.clone()),
+            DecodeAttentionOutputWeight::Ggml(weight) => Self::Ggml(weight.clone()),
             DecodeAttentionOutputWeight::MxFp8(weight) => Self::MxFp8(weight.clone()),
             DecodeAttentionOutputWeight::PackedInteger(weight) => {
                 Self::PackedInteger(weight.clone())

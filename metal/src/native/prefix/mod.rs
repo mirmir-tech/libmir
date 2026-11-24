@@ -81,25 +81,11 @@ impl PrefixCache {
             state.position,
             Some(logits.snapshot()?),
         )?;
-        let block_size =
-            block_size.filter(|size| *size > 0 && state.cache.supports_prefix_offsets());
-        for (key, position) in indexed_prefixes(model, tokens, block_size) {
-            let continuation_position = block_size
-                .filter(|size| *size > 0)
-                .map_or(position, |size| position / size * size);
-            let completion_position = block_size.filter(|size| *size > 0).map_or_else(
-                || position.saturating_sub(1),
-                |size| position.saturating_sub(1) / size * size,
-            );
-            self.entries.insert(
-                key,
-                PrefixEntry {
-                    memory_group,
-                    position,
-                    continuation_position,
-                    completion_position,
-                },
-            );
+        let floor = state.cache.prefix_floor()?;
+        let block_size = block_size.filter(|size| *size > 0);
+        for (key, position) in indexed_prefixes(model, tokens, block_size, floor) {
+            self.entries
+                .insert(key, PrefixEntry::new(memory_group, position, block_size, floor));
         }
         let group = self.groups.entry(memory_group).or_default();
         group.terminal = Some(snapshot);
@@ -124,30 +110,15 @@ impl PrefixCache {
         }
         let memory_group = self.pending_group(model, tokens).unwrap_or_else(|| self.new_group());
         let position = tokens.len();
-        let continuation_position = if block_size > 0 && state.cache.supports_prefix_offsets() {
-            position / block_size * block_size
-        } else {
-            position
-        };
-        let completion_position = if block_size > 0 && state.cache.supports_prefix_offsets() {
-            position.saturating_sub(1) / block_size * block_size
-        } else {
-            position.saturating_sub(1)
-        };
+        let floor = state.cache.prefix_floor()?;
         let snapshot = PrefixSnapshot::new(state.cache.snapshot_at(position)?, position, None)?;
-        let key = indexed_prefixes(model, tokens, None)
+        let key = indexed_prefixes(model, tokens, None, position)
             .pop()
             .map(|(key, _)| key)
             .ok_or_else(|| Error::InvalidPrefillBatch("prefix checkpoint has no key".into()))?;
-        self.entries.insert(
-            key,
-            PrefixEntry {
-                memory_group,
-                position,
-                continuation_position,
-                completion_position,
-            },
-        );
+        let block_size = Some(block_size).filter(|size| *size > 0);
+        self.entries
+            .insert(key, PrefixEntry::new(memory_group, position, block_size, floor));
         let group = self.groups.entry(memory_group).or_default();
         group.checkpoints.insert(position, snapshot);
         group.bytes = group.bytes.max(bytes);

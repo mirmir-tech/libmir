@@ -22,6 +22,7 @@ mod gated_full_attention;
 mod graph;
 mod kernels;
 mod kv;
+mod latent_attention;
 mod layer_norm;
 mod linear;
 pub mod lowering;
@@ -84,7 +85,9 @@ pub(crate) use sampling::{
     DeviceSampling, MaskedSampling, TokenAllowlist, sample, sample_rows, sample_u32,
 };
 pub use sequence_scoring::SequenceScoringModel;
-pub use shared_expert_moe::{SharedExpertMoe, SharedExpertMoeConfig};
+pub use shared_expert_moe::{
+    ExpertRouter, ScoredRouter, ScoredRouting, SharedExpertMoe, SharedExpertMoeConfig,
+};
 pub use stream::Stream;
 pub use tensors::TensorFile;
 pub use text_embedding::TextEmbeddingModel;

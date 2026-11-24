@@ -9,8 +9,8 @@ use crate::{
     Error, Result,
     kernels::{
         AttentionKernel, PagedAttention, PagedAttentionSpec, PagedKvGather, PagedPrefillAttention,
-        SplitAttentionConfigs, SplitAttentionKernels, SplitAttentionNodes, SplitAttentionWorkspace,
-        SplitPagedAttention,
+        ScoreSoftcap, SplitAttentionConfigs, SplitAttentionKernels, SplitAttentionNodes,
+        SplitAttentionWorkspace, SplitPagedAttention,
     },
 };
 
@@ -74,6 +74,7 @@ impl PagedAttentionBf16 {
         cache: &PagedKvCache,
         query_heads: usize,
         max_blocks: usize,
+        score_softcap: Option<ScoreSoftcap>,
     ) -> Result<Self> {
         let storage = cache.storage_spec();
         let max_context_tokens = max_blocks
@@ -100,6 +101,7 @@ impl PagedAttentionBf16 {
             head_dim: storage.key_head_dim,
             value_head_dim: storage.value_head_dim,
             dtype: storage.cache.dtype,
+            score_softcap,
         };
         let operation = PagedAttention::compile(&backend.inner.compiler, spec)?;
         let split = SplitPagedAttention::compile(&backend.inner.compiler, spec, partition_tokens)?;
@@ -110,8 +112,12 @@ impl PagedAttentionBf16 {
             backend.inner.pool.allocate::<f32>(&backend.inner.stream, partial_statistics)?,
         );
         let prefill = PagedPrefillAttention::compile(&backend.inner.compiler, spec)?;
-        let (fmha_supported, fmha, paged_fmha) =
-            fmha::prepare(backend, storage, query_heads, max_blocks)?;
+        // The fused attention plans have no score cap; capped layers keep the
+        // paged kernels.
+        let (fmha_supported, fmha, paged_fmha) = match score_softcap {
+            Some(_) => (false, None, None),
+            None => fmha::prepare(backend, storage, query_heads, max_blocks)?,
+        };
         let gather = fmha_supported
             .then(|| PagedKvGather::compile(&backend.inner.compiler, spec))
             .transpose()?;

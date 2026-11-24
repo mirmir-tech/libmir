@@ -53,6 +53,7 @@ fn harness(latent: Option<usize>) -> Result<Harness> {
     let model = StateSpaceHybridModel::load(
         &tensors,
         &decoder,
+        &contract.semantic.decoder,
         &contract.bindings,
         lowering.layers(),
         16,

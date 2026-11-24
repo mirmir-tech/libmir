@@ -1,8 +1,9 @@
 use mircuda::{
-    DeviceBuffer, LaunchConfig, Stream, TypedKernel, bf16, cuda_export, cuda_kernel_file,
+    DeviceBuffer, LaunchConfig, Stream, TypedKernel, bf16, cuda_export, cuda_kernel_files,
 };
+use models::semantic::AttentionWindow;
 
-use super::{PagedAttentionSpec, compile_options, validate_attention};
+use super::{PagedAttentionSpec, validate_attention};
 use crate::{
     Error, Result,
     kernels::geometry::{narrow, product, require},
@@ -68,8 +69,12 @@ impl SplitPagedAttention {
             && spec.head_dim <= 128
             && spec.value_head_dim <= 128;
         let tensor_queries = tensor_queries(spec, query_group, grouped_queries);
-        let source = cuda_kernel_file!("../../../../kernels/paged_attention_split_bf16.cu");
-        let mut options = compile_options(spec.dtype)?;
+        let source = cuda_kernel_files!(
+            "paged_attention_split_bf16.cu";
+            "../../../../kernels/attention_window_bf16.cu",
+            "../../../../kernels/paged_attention_split_bf16.cu",
+        );
+        let mut options = super::attention_compile_options(spec)?;
         if grouped_queries {
             options.extra_options.push("-DLIBMIR_SPLIT_GQA=1".into());
             if tensor_queries {
@@ -104,7 +109,7 @@ impl SplitPagedAttention {
         output: &mut DeviceBuffer<bf16>,
         token_count: usize,
         block_count: usize,
-        window: Option<usize>,
+        window: Option<AttentionWindow>,
         scale: f32,
     ) -> Result<()> {
         let active = self.validate(
@@ -126,14 +131,15 @@ impl SplitPagedAttention {
                 &mut workspace.values,
                 &mut workspace.maxima,
                 &mut workspace.denominators,
-                narrow(window.map_or(token_count, |limit| token_count.min(limit)))?,
+                // The kernel finds the window's first key from the full count.
+                narrow(token_count)?,
                 narrow(block_count)?,
                 narrow(self.spec.block_size)?,
                 narrow(self.spec.query_heads)?,
                 narrow(self.spec.kv_heads)?,
                 narrow(self.spec.head_dim)?,
                 narrow(self.spec.value_head_dim)?,
-                narrow(window.unwrap_or(0))?,
+                crate::kernels::paged::window::argument(window)?,
                 scale,
                 narrow(self.partition_tokens)?,
                 narrow(active)?,
@@ -185,7 +191,7 @@ impl SplitPagedAttention {
         output: &DeviceBuffer<bf16>,
         token_count: usize,
         block_count: usize,
-        window: Option<usize>,
+        window: Option<AttentionWindow>,
         scale: f32,
     ) -> Result<usize> {
         require("split attention query", self.spec.query_heads * self.spec.head_dim, query.len())?;
@@ -208,7 +214,7 @@ impl SplitPagedAttention {
         {
             return Err(Error::InvalidPagedKv("invalid split attention execution geometry"));
         }
-        let visible = window.map_or(token_count, |limit| token_count.min(limit));
+        let visible = crate::kernels::paged::window::visible(token_count, window);
         Ok(visible.div_ceil(self.partition_tokens))
     }
 }

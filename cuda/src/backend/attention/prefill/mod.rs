@@ -71,6 +71,7 @@ impl PrefillAttentionBf16 {
             rotary: config.rotary,
             epsilon,
             normalization: config.qkv_normalization,
+            temperature: config.query_temperature,
         };
         let fmha = prepare_varlen_fmha(backend, config)?;
         let output_request = DensePlanRequest {
@@ -83,6 +84,7 @@ impl PrefillAttentionBf16 {
         let output_projection = match config.projection_format {
             ProjectionFormat::Affine
             | ProjectionFormat::DirectFp8
+            | ProjectionFormat::Ggml
             | ProjectionFormat::MxFp4
             | ProjectionFormat::MxFp8 => AttentionOutputProjection::new(
                 backend,
@@ -119,7 +121,7 @@ impl PrefillAttentionBf16 {
             },
         };
         Ok(Self {
-            input_norm: RmsNormBf16::new(backend, tokens, hidden, epsilon)?,
+            input_norm: RmsNormBf16::for_stream(backend, tokens, &config)?,
             qkv: AttentionQkvProjection::new(
                 backend,
                 config,
@@ -226,7 +228,7 @@ impl PrefillAttentionBf16 {
         state
             .cache
             .store(write_plan, &self.scratch.key_rope, &self.scratch.value_norm)?;
-        let image = self.config.sliding_window.and(image);
+        let image = image.filter(|_| self.config.opens_image_blocks());
         state.attention.execute_prefill_masked(
             &self.scratch.query_rope,
             &state.cache,
@@ -234,7 +236,7 @@ impl PrefillAttentionBf16 {
             &mut self.scratch.attention,
             self.tokens,
             start_position,
-            self.config.sliding_window,
+            self.config.window,
             self.config.attention_scale,
             image.map(|span| (span.start, span.end)),
         )?;

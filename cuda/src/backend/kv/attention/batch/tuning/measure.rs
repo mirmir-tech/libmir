@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
 use mircuda::{DeviceBuffer, bf16};
+use models::semantic::AttentionWindow;
 
 use super::super::{BatchedPagedAttentionBf16, allocate_workspace};
 use crate::{
@@ -16,11 +17,11 @@ pub(super) fn measure(
     cache: &PagedKvCache,
     batch: &PagedDecodeBatch,
     output: &mut DeviceBuffer<bf16>,
-    window: Option<usize>,
+    window: Option<AttentionWindow>,
     scale: f32,
 ) -> Result<(AttentionExecution, Duration, Duration)> {
     let tokens = batch.maximum_tokens();
-    let visible = window.map_or(tokens, |limit| tokens.min(limit));
+    let visible = crate::kernels::attention_window::visible_bound(tokens, window);
     let started = Instant::now();
     let contexts = autotune::sample_contexts(visible, batch.cache_config().block_size);
     let samples = contexts
@@ -58,7 +59,7 @@ fn measure_direct(
     cache: &PagedKvCache,
     batches: &[PagedDecodeBatch],
     output: &mut DeviceBuffer<bf16>,
-    window: Option<usize>,
+    window: Option<AttentionWindow>,
     scale: f32,
 ) -> Result<Vec<Duration>> {
     batches
@@ -93,7 +94,7 @@ fn measure_split(
     cache: &PagedKvCache,
     batches: &[PagedDecodeBatch],
     output: &mut DeviceBuffer<bf16>,
-    window: Option<usize>,
+    window: Option<AttentionWindow>,
     scale: f32,
 ) -> Result<Vec<Duration>> {
     let split = BatchedSplitPagedAttention::compile(

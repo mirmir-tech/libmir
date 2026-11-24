@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use models::semantic::AttentionWindow;
+
 use crate::engine::{
     Error, GatedDeltaState, KvCache, KvPageFormat, PagedArenaPool, Result, Stream,
     lowering::MixerLowering, state_space_hybrid::StateSpaceState,
@@ -29,7 +31,12 @@ pub(super) fn new(
             MixerLowering::StateSpace => {
                 Ok(HybridLinearLayerCache::StateSpace(StateSpaceState::new()))
             },
-            MixerLowering::Softmax { window: None, .. } => KvCache::new_paged_with_pool_capacity(
+            // A latent row is one paged head (`LatentAttention`).
+            MixerLowering::Softmax {
+                window: None | Some(AttentionWindow::Chunked { .. }),
+                ..
+            }
+            | MixerLowering::Latent => KvCache::new_paged_with_pool_capacity(
                 step,
                 page_size,
                 format,
@@ -38,8 +45,11 @@ pub(super) fn new(
                 layer,
             )
             .map(HybridLinearLayerCache::Full),
-            MixerLowering::Softmax { window: Some(window), .. } => {
-                KvCache::new_with_window(step, Some(*window)).map(HybridLinearLayerCache::Full)
+            MixerLowering::Softmax {
+                window: Some(AttentionWindow::Sliding(window)),
+                ..
+            } => {
+                KvCache::new_with_window(step, Some(window.get())).map(HybridLinearLayerCache::Full)
             },
         })
         .collect()

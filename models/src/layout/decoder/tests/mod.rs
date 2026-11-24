@@ -1,11 +1,16 @@
 use serde_json::json;
 
 use super::*;
-use crate::error::Result;
+use crate::{error::Result, semantic::RotaryAlgorithm};
 
+mod glm;
 mod gpt_oss;
+mod latent;
+mod llama4;
 mod mistral;
+mod phimoe;
 mod rope;
+mod sharing;
 
 #[test]
 fn reads_common_decoder_fields() -> Result<()> {
@@ -77,8 +82,8 @@ fn reads_nested_text_config() -> Result<()> {
     assert_eq!(config.num_global_key_value_heads, Some(2));
     assert_eq!(config.sliding_attention_rope_theta, Some(10_000.0));
     assert_eq!(config.full_attention_rope_theta, Some(1_000_000.0));
-    assert_eq!(config.full_attention_rope_type.as_deref(), Some("proportional"));
-    assert_eq!(config.sliding_attention_rope_type.as_deref(), Some("default"));
+    assert_eq!(config.full_attention_rope_type, Some(RotaryAlgorithm::Proportional));
+    assert_eq!(config.sliding_attention_rope_type, Some(RotaryAlgorithm::Default));
     assert_eq!(config.full_attention_partial_rotary_factor, Some(0.25));
     assert_eq!(config.rope_theta_for_layer(0), Some(10_000.0));
     assert_eq!(config.rope_theta_for_layer(1), Some(1_000_000.0));
@@ -214,15 +219,8 @@ fn reads_hybrid_linear_moe_features() -> Result<()> {
             value_heads: 8,
             key_head_dim: 4,
             value_head_dim: 4,
+            layout: LinearAttentionLayout::Checkpoint,
         })
     );
     Ok(())
-}
-
-#[test]
-fn rejects_shared_key_value_layers_with_a_clear_error() {
-    let error = DecoderConfig::from_value(&json!({ "num_kv_shared_layers": 18 }))
-        .err()
-        .map(|error| error.to_string());
-    assert!(error.is_some_and(|error| error.contains("shared K/V layers")));
 }

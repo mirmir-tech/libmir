@@ -2,6 +2,14 @@
 #include <cuda_fp8.h>
 #include <mma.h>
 
+// Gemma 2 caps attention scores as `cap * tanh(score / cap)` when the module
+// is compiled with `LIBMIR_SCORE_SOFTCAP`; otherwise scores pass unchanged.
+#ifdef LIBMIR_SCORE_SOFTCAP
+#define SCORE_CAP(score) (LIBMIR_SCORE_SOFTCAP * tanhf((score) / LIBMIR_SCORE_SOFTCAP))
+#else
+#define SCORE_CAP(score) (score)
+#endif
+
 #define LIBMIR_NEGATIVE_FLOAT_MAX -3.402823466e+38F
 #ifndef LIBMIR_QUERY_GROUP
 #define LIBMIR_QUERY_GROUP 1
@@ -43,7 +51,7 @@ extern "C" __global__ void libmir_cuda_paged_attention_split_bf16(
 #ifdef LIBMIR_SPLIT_GQA_WMMA
   using namespace nvcuda;
   const unsigned int visible_tokens =
-      window > 0 ? min(token_count, window) : token_count;
+      token_count - libmir_window_first(token_count, window);
   if (visible_tokens < minimum_tokens) return;
   const unsigned int partition = blockIdx.x / kv_heads;
   const unsigned int kv_head = blockIdx.x % kv_heads;
@@ -52,7 +60,7 @@ extern "C" __global__ void libmir_cuda_paged_attention_split_bf16(
   const unsigned int warp = lane / 32u;
   const unsigned int first_query_head = kv_head * LIBMIR_QUERY_GROUP;
   const unsigned int first =
-      window > 0 && token_count > window ? token_count - window : 0;
+      libmir_window_first(token_count, window);
   const unsigned int begin = first + partition * partition_tokens;
   const unsigned int end = min(begin + partition_tokens, token_count);
   constexpr unsigned int token_tile = 16u;
@@ -153,7 +161,7 @@ extern "C" __global__ void libmir_cuda_paged_attention_split_bf16(
       for (unsigned int token = 0; token < token_tile; ++token) {
         if (page_tokens[token] != 0xffffffffu) {
           tile_maximum =
-              fmaxf(tile_maximum, scores[head][token] * scale);
+              fmaxf(tile_maximum, SCORE_CAP(scores[head][token] * scale));
         }
       }
       const float next_maximum = fmaxf(maxima[head], tile_maximum);
@@ -162,7 +170,7 @@ extern "C" __global__ void libmir_cuda_paged_attention_split_bf16(
       for (unsigned int token = 0; token < token_tile; ++token) {
         const float weight = page_tokens[token] == 0xffffffffu
             ? 0.0f
-            : __expf(scores[head][token] * scale - next_maximum);
+            : __expf(SCORE_CAP(scores[head][token] * scale) - next_maximum);
         weights[head][token] = __float2bfloat16_rn(weight);
         denominator += weight;
       }
@@ -226,7 +234,7 @@ extern "C" __global__ void libmir_cuda_paged_attention_split_bf16(
   }
 #elif defined(LIBMIR_SPLIT_GQA)
   const unsigned int visible_tokens =
-      window > 0 ? min(token_count, window) : token_count;
+      token_count - libmir_window_first(token_count, window);
   if (visible_tokens < minimum_tokens) return;
   const unsigned int partition = blockIdx.x / kv_heads;
   const unsigned int kv_head = blockIdx.x % kv_heads;
@@ -235,7 +243,7 @@ extern "C" __global__ void libmir_cuda_paged_attention_split_bf16(
   const unsigned int warp = lane / 32u;
   const unsigned int warp_lane = lane & 31u;
   const unsigned int first =
-      window > 0 && token_count > window ? token_count - window : 0;
+      libmir_window_first(token_count, window);
   const unsigned int begin = first + partition * partition_tokens;
   const unsigned int end = min(begin + partition_tokens, token_count);
   constexpr unsigned int token_tile = 16u;
@@ -298,7 +306,7 @@ extern "C" __global__ void libmir_cuda_paged_attention_split_bf16(
       float alpha = 0.0f;
       float beta = 0.0f;
       if (warp_lane == 0u) {
-        const float score = dot * scale;
+        const float score = SCORE_CAP(dot * scale);
         if (score > maximum) {
           alpha = __expf(maximum - score);
           beta = 1.0f;
@@ -340,16 +348,14 @@ extern "C" __global__ void libmir_cuda_paged_attention_split_bf16(
     partial_denominators[partial] = denominator;
   }
 #else
-  const unsigned int visible_tokens = window > 0
-      ? min(token_count, window) : token_count;
+  const unsigned int visible_tokens = token_count - libmir_window_first(token_count, window);
   if (visible_tokens < minimum_tokens) return;
   const unsigned int partition = blockIdx.x / query_heads;
   const unsigned int query_head = blockIdx.x % query_heads;
   if (query_head >= query_heads || token_count == 0) return;
   const unsigned int lane = threadIdx.x;
   const unsigned int kv_head = query_head / (query_heads / kv_heads);
-  const unsigned int first = window > 0 && token_count > window
-      ? token_count - window : 0;
+  const unsigned int first = libmir_window_first(token_count, window);
   const unsigned int begin = first + partition * partition_tokens;
   const unsigned int end = min(begin + partition_tokens, token_count);
   const unsigned int partial = query_head * max_partitions + partition;
@@ -391,7 +397,7 @@ extern "C" __global__ void libmir_cuda_paged_attention_split_bf16(
         sum += __shfl_down_sync(0xffffffffu, sum, offset);
       }
       if (lane == 0u) {
-        const float score = sum * scale;
+        const float score = SCORE_CAP(sum * scale);
         const float next_maximum = fmaxf(maximum, score);
         alpha = expf(maximum - next_maximum);
         beta = expf(score - next_maximum);

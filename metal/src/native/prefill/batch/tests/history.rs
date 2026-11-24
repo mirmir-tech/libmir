@@ -10,7 +10,7 @@ use crate::{
 
 fn token(model: &LoadedModel, output: NativeOutput) -> Result<u32> {
     match output {
-        NativeOutput::Greedy(token) => Ok(token),
+        NativeOutput::Greedy(token) | NativeOutput::Verified { next: token, .. } => Ok(token),
         NativeOutput::Logits(logits) => Ok(logits.argmax_u32(model.stream())?),
     }
 }
@@ -34,6 +34,7 @@ fn pressure_releases_optional_history_and_preserves_nonempty_prefix_cache() -> R
                     session,
                     token: next,
                     sampling: SamplingLogits::None,
+                    speculation: None,
                 });
             }
         }

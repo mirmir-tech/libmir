@@ -53,20 +53,35 @@ fn tile_mxfp4_matches_grouped_mlx_with_signed_weights_and_partial_groups() -> Re
             .collect::<Result<Vec<_>>>()?;
         let input = Array::from_f32(&input, &[i32::try_from(routes)?, 1, i32::try_from(k)?])?
             .astype(Dtype::Bfloat16, &stream)?;
-        let packed = (0..8 * n * k / 8)
+        let values = input.to_vec_f32(&stream)?;
+        // MLX 0.32.4's sorted gather reads one scale group past an expert at
+        // K=32, so its operands carry a ninth, never-routed expert with valid
+        // scales; the tile kernel reads the exact eight.
+        let packed = (0..9 * n * k / 8)
             .map(|i| Ok(u32::try_from(i)?.wrapping_mul(0x91a5_372d).wrapping_add(0xfedc_ba98)))
             .collect::<Result<Vec<_>>>()?;
-        let weight = Array::from_u32(&packed, &[8, i32::try_from(n)?, i32::try_from(k / 8)?])?;
-        let scales = (0..8 * n * k / 32)
+        let scale_bytes = (0..9 * n * k / 32)
             .map(|i| Ok(123 + u32::try_from(i % 6)?))
             .collect::<Result<Vec<_>>>()?;
-        let scales = Array::from_u32(&scales, &[8, i32::try_from(n)?, i32::try_from(k / 32)?])?
+        let experts = |count: i32| -> Result<(Array, Array)> {
+            let experts = usize::try_from(count)?;
+            let (n, k) = (i32::try_from(n)?, i32::try_from(k)?);
+            let weight =
+                Array::from_u32(&packed[..experts * packed.len() / 9], &[count, n, k / 8])?;
+            let scales = Array::from_u32(
+                &scale_bytes[..experts * scale_bytes.len() / 9],
+                &[count, n, k / 32],
+            )?
             .astype(Dtype::Uint8, &stream)?;
+            Ok((weight, scales))
+        };
+        let (weight, scales) = experts(8)?;
+        let (padded_weight, padded_scales) = experts(9)?;
         let expected = stream.native().graph().gather_mxfp4_with_indices(
             input.native(),
             mirtal::MxFp4 {
-                weight: weight.native(),
-                scales: scales.native(),
+                weight: padded_weight.native(),
+                scales: padded_scales.native(),
             },
             mirtal::GatherIndices { lhs: None, rhs: Some(indices.native()) },
             mirtal::GatherQmmOptions { transpose: true, sorted_indices: true },
@@ -80,10 +95,69 @@ fn tile_mxfp4_matches_grouped_mlx_with_signed_weights_and_partial_groups() -> Re
                 continue;
             }
             let actual = output?.to_vec_f32(&stream)?;
-            let differences =
-                actual.iter().zip(&expected).filter(|(a, b)| a.to_bits() != b.to_bits()).count();
-            assert_eq!(differences, 0, "K={k}, N={n}, columns={columns:?}");
+            let reference = Reference {
+                input: &values,
+                packed: &packed,
+                ids: &ids,
+                k,
+                n,
+            };
+            // The reference rounds to MLX's output within half a bf16 ulp.
+            for index in (0..expected.len()).step_by(97) {
+                let value = f64::from(expected[index]);
+                let exact = reference.output(index / n, index % n);
+                assert!((value - exact).abs() <= value.abs() / 256.0 + 1.0e-30, "index={index}");
+            }
+            for (index, (a, b)) in actual.iter().zip(&expected).enumerate() {
+                if a.to_bits() == b.to_bits() {
+                    continue;
+                }
+                // f32 accumulation order may round a bf16 tie differently;
+                // the tile kernel must then be at least as close as MLX.
+                let exact = reference.output(index / n, index % n);
+                assert!(
+                    one_ulp_apart(*a, *b)
+                        && (f64::from(*a) - exact).abs() <= (f64::from(*b) - exact).abs(),
+                    "K={k}, N={n}, columns={columns:?}, index={index}: {a} vs MLX {b}, exact {exact}"
+                );
+            }
         }
     }
     Ok(())
+}
+
+/// The float64 output of the test's MXFP4 experts: E2M1 nibbles from the low
+/// bits, scaled per 32 inputs by `2^(scale - 127)` with scales `123 + i % 6`.
+struct Reference<'a> {
+    input: &'a [f32],
+    packed: &'a [u32],
+    ids: &'a [u32],
+    k: usize,
+    n: usize,
+}
+
+impl Reference<'_> {
+    fn output(&self, route: usize, column: usize) -> f64 {
+        const E2M1: [f64; 8] = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0];
+        let row = self.ids[route] as usize * self.n + column;
+        (0..self.k)
+            .map(|index| {
+                let nibble = (self.packed[row * self.k / 8 + index / 8] >> (4 * (index % 8))) & 0xf;
+                let magnitude = E2M1[(nibble & 7) as usize];
+                let weight = if nibble & 8 == 0 {
+                    magnitude
+                } else {
+                    -magnitude
+                };
+                let group = row * self.k / 32 + index / 32;
+                let exponent = 123 + i32::try_from(group % 6).unwrap_or(0) - 127;
+                f64::from(self.input[route * self.k + index]) * weight * 2.0_f64.powi(exponent)
+            })
+            .sum()
+    }
+}
+
+/// Whether two bf16 values stored as f32 are adjacent.
+fn one_ulp_apart(a: f32, b: f32) -> bool {
+    ((a.to_bits() >> 16).abs_diff(b.to_bits() >> 16)) == 1
 }

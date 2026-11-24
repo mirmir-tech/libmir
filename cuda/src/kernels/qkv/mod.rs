@@ -8,12 +8,16 @@ use crate::{Error, Result};
 
 mod batch;
 mod launch;
+mod normalization;
 mod rotary;
+mod temperature;
 #[cfg(test)]
 mod tests;
 
 pub use batch::BatchedQkvPostprocess;
-pub use rotary::RotaryEmbedding;
+pub use normalization::{QkNormWeights, QkvNormalization};
+pub use rotary::{RotaryEmbedding, RotaryPeriods, RotaryScaling};
+pub use temperature::QueryTemperatureScale;
 
 cuda_export!(
     pub QkvPostprocessKernel = "libmir_cuda_qkv_postprocess_bf16"(
@@ -34,6 +38,9 @@ cuda_export!(
         pairing_dim: u32,
         start_position: u32,
         theta: f32,
+        rope_factor: f32,
+        rope_slope: f32,
+        rope_offset: f32,
         epsilon: f32,
         separate_inputs: u32,
         normalize_query: u32,
@@ -61,24 +68,14 @@ pub type QkvPostprocessArguments<'a> = (
     u32,
     f32,
     f32,
+    f32,
+    f32,
+    f32,
     u32,
     u32,
     u32,
     u32,
 );
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct QkvNormalization {
-    pub query: bool,
-    pub key: bool,
-    pub value: bool,
-}
-
-impl QkvNormalization {
-    pub const ALL: Self = Self { query: true, key: true, value: true };
-    pub const NONE: Self = Self { query: false, key: false, value: false };
-    pub const QUERY_KEY: Self = Self { query: true, key: true, value: false };
-}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct QkvPostprocessSpec {
@@ -90,6 +87,8 @@ pub struct QkvPostprocessSpec {
     pub(crate) rotary: Option<RotaryEmbedding>,
     pub(crate) epsilon: f32,
     pub(crate) normalization: QkvNormalization,
+    /// Llama 4's position-dependent query scale.
+    pub(crate) temperature: Option<QueryTemperatureScale>,
 }
 
 #[derive(Clone, Debug)]
@@ -102,7 +101,7 @@ impl QkvPostprocess {
     pub(crate) fn compile(compiler: &Compiler, spec: QkvPostprocessSpec) -> Result<Self> {
         validate(spec)?;
         let source = cuda_kernel_file!("../../../kernels/qkv_postprocess_bf16.cu");
-        let module = compiler.compile(source, &CompileOptions::default())?;
+        let module = compiler.compile(source, &compile_options(spec))?;
         Ok(Self { kernel: module.kernel()?, spec })
     }
 
@@ -211,6 +210,19 @@ impl QkvPostprocess {
             shared_memory_bytes: 0,
         })
     }
+}
+
+/// Compile options selecting the kernel variant of `spec`.
+fn compile_options(spec: QkvPostprocessSpec) -> CompileOptions {
+    let mut options = CompileOptions::default();
+    spec.normalization.define_macros(&mut options);
+    if let Some(periods) = spec.rotary.and_then(|rotary| rotary.scaling.periods) {
+        periods.define_macros(&mut options);
+    }
+    if let Some(temperature) = spec.temperature {
+        temperature.define_macros(&mut options);
+    }
+    options
 }
 
 fn validate(spec: QkvPostprocessSpec) -> Result<()> {

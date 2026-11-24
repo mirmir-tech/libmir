@@ -1,7 +1,7 @@
 use models::layout::{DecoderConfig, ModelLayout};
 
 use super::*;
-use crate::engine::hybrid::moe::{HybridMoeLayer, HybridMoeLayerConfig};
+use crate::engine::hybrid::moe::{CheckpointLayer, HybridMoeLayer};
 
 const PREFIX_TOKENS: usize = 2_047;
 const LAYER_ZERO_DECODE: [f32; 8] = [
@@ -53,15 +53,15 @@ fn matches_mlx_lm_at_long_prefill_entry_layers() -> Result<()> {
     let embedding = QuantizedEmbedding::load(&tensors, "language_model.model.embed_tokens", 64)?;
     let scale = decoder.hidden_size.to_string().parse::<f32>()?.sqrt();
     let configs = (0..2)
-        .map(|index| HybridMoeLayerConfig::from_decoder(index, &decoder, 64))
+        .map(|index| CheckpointLayer::discover(&decoder, index, 64))
         .collect::<Result<Vec<_>>>()?;
     let layers = configs
         .iter()
-        .map(|config| HybridMoeLayer::load(&tensors, *config, &stream))
+        .map(|config| HybridMoeLayer::load(&tensors, config, &stream))
         .collect::<Result<Vec<_>>>()?;
     let mut caches = configs
         .iter()
-        .map(|config| KvCache::new_with_window(16, config.max_context))
+        .map(|config| KvCache::new_with_window(16, config.config.max_context()))
         .collect::<Result<Vec<_>>>()?;
     let prefix = (0..PREFIX_TOKENS)
         .map(|token| u32::try_from(token + 1_000))

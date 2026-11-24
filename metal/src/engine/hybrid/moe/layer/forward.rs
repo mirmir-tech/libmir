@@ -78,8 +78,9 @@ impl HybridMoeLayer {
             self.config.rms_norm_eps,
             stream,
         )?;
-        let output =
-            input.add(&feed_forward, stream)?.multiply(&self.weights.layer_scalar, stream)?;
+        let output = self
+            .gate_per_layer_input(input.add(&feed_forward, stream)?, stream)?
+            .multiply(&self.weights.layer_scalar, stream)?;
         if profile {
             emit_profile(&output, stream, self.config.layer_index, "feed_forward", started)?;
         }

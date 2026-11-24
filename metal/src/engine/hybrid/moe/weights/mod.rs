@@ -1,3 +1,6 @@
+use std::sync::Arc;
+
+use super::sharing::StepShare;
 use crate::engine::{
     Array, Error, NormWeight, Result, Stream,
     binding::BoundLinear,
@@ -9,12 +12,46 @@ mod load;
 #[derive(Debug)]
 pub(super) struct AttentionWeights {
     pub(super) query: BoundLinear,
-    pub(super) key: BoundLinear,
-    pub(super) value: Option<BoundLinear>,
+    pub(super) key_values: KeyValueWeights,
     pub(super) output: BoundLinear,
     pub(super) query_norm: NormWeight,
-    pub(super) key_norm: NormWeight,
     pub(super) rope_frequencies: Option<Array>,
+}
+
+/// Where a layer's keys and values come from.
+#[derive(Debug)]
+pub(super) enum KeyValueWeights {
+    /// Projected from the layer's input.
+    Projected(Box<ProjectedKeyValues>),
+    /// An earlier layer's, from the current step (Gemma 4's E models).
+    Shared { step: Arc<StepShare>, source: usize },
+}
+
+/// A layer's own key and value projections; `value` is absent where keys
+/// double as values. `publish` hands them to the later layers that share them.
+#[derive(Debug)]
+pub(super) struct ProjectedKeyValues {
+    pub(super) key: BoundLinear,
+    pub(super) value: Option<BoundLinear>,
+    pub(super) norm: NormWeight,
+    pub(super) publish: Option<Publish>,
+}
+
+/// A source layer's slot in the step it shares its keys and values through.
+#[derive(Debug)]
+pub(super) struct Publish {
+    pub(super) step: Arc<StepShare>,
+    pub(super) layer: usize,
+}
+
+impl KeyValueWeights {
+    /// The key and value projections of a layer that computes its own.
+    pub(super) const fn projections(&self) -> Option<(&BoundLinear, Option<&BoundLinear>)> {
+        match self {
+            Self::Projected(projected) => Some((&projected.key, projected.value.as_ref())),
+            Self::Shared { .. } => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -131,5 +168,14 @@ impl LayerWeights {
         self.routed
             .as_ref()
             .ok_or_else(|| Error::InvalidModel("dense GELU layer has no expert branch".into()))
+    }
+}
+
+impl From<DenseWeights> for ExpertWeights {
+    fn from(weights: DenseWeights) -> Self {
+        Self {
+            gate_up: ExpertGateUpWeights::Separate { gate: weights.gate, up: weights.up },
+            down: weights.down,
+        }
     }
 }

@@ -37,13 +37,14 @@ impl SharedExpertMoe {
                 stream,
             )?;
             rows.push(
-                self.shared_gate
+                self.shared_expert()?
+                    .gate
                     .forward(&input, stream)?
-                    .silu_mul(&self.shared_up.forward(&input, stream)?, stream)?,
+                    .silu_mul(&self.shared_expert()?.up.forward(&input, stream)?, stream)?,
             );
         }
         let activation = Array::concatenate(&rows.iter().collect::<Vec<_>>(), 0, stream)?;
-        probe(&self.shared_down, &activation, "shared.down", stream)?;
+        probe(&self.shared_expert()?.down, &activation, "shared.down", stream)?;
         Ok(())
     }
 
@@ -56,8 +57,8 @@ impl SharedExpertMoe {
         for sequence in [8, 128] {
             let input =
                 input.slice(&[0, 0, 0], &[5, sequence, usize::try_from(shape[2])?], stream)?;
-            self.shared_gate.probe_mxfp4_accuracy(&input, "shared.gate", stream)?;
-            self.shared_up.probe_mxfp4_accuracy(&input, "shared.up", stream)?;
+            self.shared_expert()?.gate.probe_mxfp4_accuracy(&input, "shared.gate", stream)?;
+            self.shared_expert()?.up.probe_mxfp4_accuracy(&input, "shared.up", stream)?;
             let mut activated = Vec::new();
             for row in 0..5 {
                 let input = input.slice(
@@ -66,13 +67,16 @@ impl SharedExpertMoe {
                     stream,
                 )?;
                 activated.push(
-                    self.shared_gate
+                    self.shared_expert()?
+                        .gate
                         .forward(&input, stream)?
-                        .silu_mul(&self.shared_up.forward(&input, stream)?, stream)?,
+                        .silu_mul(&self.shared_expert()?.up.forward(&input, stream)?, stream)?,
                 );
             }
             let activated = Array::concatenate(&activated.iter().collect::<Vec<_>>(), 0, stream)?;
-            self.shared_down.probe_mxfp4_accuracy(&activated, "shared.down", stream)?;
+            self.shared_expert()?
+                .down
+                .probe_mxfp4_accuracy(&activated, "shared.down", stream)?;
         }
         Ok(())
     }
@@ -132,12 +136,19 @@ impl SharedExpertMoe {
     fn effective_components(&self, input: &Array, stream: &Stream) -> Result<[Array; 9]> {
         let routing = self.router.route_unit(input, i32::try_from(self.config.top_k)?, stream)?;
         let routed = self.routed(input, &routing.indices, &routing.weights, stream)?;
-        let shared = self.shared(input, stream)?;
-        let gate = self.shared_gate.forward(input, stream)?;
-        let up = self.shared_up.forward(input, stream)?;
+        let shared = self.shared_expert()?.forward(input, stream)?;
+        let gate = self.shared_expert()?.gate.forward(input, stream)?;
+        let up = self.shared_expert()?.up.forward(input, stream)?;
         let activation = gate.silu_mul(&up, stream)?;
-        let down = self.shared_down.forward(&activation, stream)?;
-        let output_gate = self.shared_output_gate.forward(input, stream)?;
+        let down = self.shared_expert()?.down.forward(&activation, stream)?;
+        let output_gate = self
+            .shared_expert()?
+            .output_gate
+            .as_ref()
+            .ok_or_else(|| {
+                crate::engine::Error::InvalidModel("probe needs a gated shared expert".into())
+            })?
+            .forward(input, stream)?;
         let composed = output_gate.sigmoid_mul(&down, stream)?;
         assert_eq!(
             composed.to_vec_f32(stream)?,

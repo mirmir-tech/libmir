@@ -34,6 +34,7 @@ fn records_greedy_tokens_for_the_mlx_lm_oracle() -> TestResult<()> {
     let model = StateSpaceHybridModel::load(
         &tensors,
         &decoder,
+        &contract.semantic.decoder,
         &contract.bindings,
         lowering.layers(),
         256,

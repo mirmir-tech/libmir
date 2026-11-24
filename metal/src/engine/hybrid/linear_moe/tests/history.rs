@@ -53,6 +53,7 @@ fn decode(root: &Path, dense_history: DenseHistoryMode, lead: u32) -> Result<Vec
     let model = HybridLinearMoeModel::load(
         &tensors,
         &decoder,
+        &contract.semantic.decoder,
         &contract.bindings,
         lowering.layers(),
         16,

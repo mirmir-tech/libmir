@@ -1,7 +1,8 @@
 use mircuda::{
     CompileOptions, Compiler, DeviceBuffer, Stream, TypedKernel, bf16, cuda_export,
-    cuda_kernel_file,
+    cuda_kernel_file, cuda_kernel_files,
 };
+use models::semantic::AttentionWindow;
 use runtime::kv::KvCacheDType;
 
 use super::geometry::product;
@@ -11,9 +12,12 @@ mod batch;
 mod gather;
 mod graph;
 mod prefill;
+mod score;
+pub use score::{ScoreSoftcap, attention_compile_options};
 mod split;
 #[cfg(test)]
 mod tests;
+pub mod window;
 
 pub use batch::{
     BatchedPagedAttention, BatchedSplitAttentionWorkspace, BatchedSplitPagedAttention,
@@ -83,6 +87,8 @@ pub struct PagedAttentionSpec {
     pub head_dim: usize,
     pub value_head_dim: usize,
     pub dtype: KvCacheDType,
+    /// Gemma 2's attention score cap, `cap * tanh(score / cap)`.
+    pub score_softcap: Option<ScoreSoftcap>,
 }
 
 #[derive(Clone, Debug)]
@@ -148,8 +154,12 @@ impl PagedKvStore {
 impl PagedAttention {
     pub fn compile(compiler: &Compiler, spec: PagedAttentionSpec) -> Result<Self> {
         validate_attention(spec)?;
-        let source = cuda_kernel_file!("../../../kernels/paged_attention_bf16.cu");
-        let module = compiler.compile(source, &compile_options(spec.dtype)?)?;
+        let source = cuda_kernel_files!(
+            "paged_attention_bf16.cu";
+            "../../../kernels/attention_window_bf16.cu",
+            "../../../kernels/paged_attention_bf16.cu",
+        );
+        let module = compiler.compile(source, &attention_compile_options(spec)?)?;
         Ok(Self { kernel: module.kernel()?, spec })
     }
 
@@ -164,7 +174,7 @@ impl PagedAttention {
         output: &mut DeviceBuffer<bf16>,
         token_count: usize,
         block_count: usize,
-        window: Option<usize>,
+        window: Option<AttentionWindow>,
         scale: f32,
     ) -> Result<()> {
         let (config, arguments) = self.launch(

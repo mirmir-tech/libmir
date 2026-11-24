@@ -1,8 +1,8 @@
 use models::weights::{TensorBinding, TensorStorage};
 
 use super::{
-    float8::Float8Embedding, mxfp4::MxFp4Embedding, mxfp8::MxFp8Embedding, native_affine,
-    unsupported,
+    float8::Float8Embedding, ggml::GgmlEmbedding, mxfp4::MxFp4Embedding, mxfp8::MxFp8Embedding,
+    native_affine, unsupported,
 };
 use crate::engine::{
     Array, DenseEmbedding, DenseLinear, ModelTensors, QuantizedEmbedding, Result, Stream,
@@ -18,6 +18,7 @@ pub(in crate::engine) enum BoundEmbedding {
     Float8(Float8Embedding),
     MxFp4(MxFp4Embedding),
     MxFp8(MxFp8Embedding),
+    Ggml(GgmlEmbedding),
 }
 
 impl BoundEmbedding {
@@ -43,7 +44,7 @@ impl BoundEmbedding {
                 )
                 .map(Self::Affine)
             },
-            TensorStorage::PackedInt8 { .. } | TensorStorage::PackedInt4 { .. } => {
+            TensorStorage::PackedInteger { .. } => {
                 super::packed_integer::embedding(tensors, binding, stream).map(Self::Affine)
             },
             TensorStorage::Float8 { .. } => {
@@ -57,6 +58,9 @@ impl BoundEmbedding {
             {
                 super::mxfp8::embedding(tensors, binding).map(Self::MxFp8)
             },
+            TensorStorage::Ggml { .. } => {
+                super::ggml::embedding(tensors, binding, stream).map(Self::Ggml)
+            },
             _ => Err(unsupported("embedding", binding)),
         }
     }
@@ -68,6 +72,7 @@ impl BoundEmbedding {
             Self::Float8(embedding) => embedding.lookup(indices, stream),
             Self::MxFp4(embedding) => embedding.lookup(indices, stream),
             Self::MxFp8(embedding) => embedding.lookup(indices, stream),
+            Self::Ggml(embedding) => embedding.lookup(indices, stream),
         }
     }
 
@@ -78,6 +83,7 @@ impl BoundEmbedding {
             Self::Float8(embedding) => embedding.project(input, stream),
             Self::MxFp4(embedding) => embedding.project(input, stream),
             Self::MxFp8(embedding) => embedding.project(input, stream),
+            Self::Ggml(embedding) => embedding.project(input, stream),
         }
     }
 }

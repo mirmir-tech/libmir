@@ -3,6 +3,7 @@ use mircuda::{DeviceBuffer, KernelNode, LaunchConfig, Stream, bf16};
 use self::runtime::Runtime;
 use super::*;
 
+mod layer_norm;
 mod nvfp4;
 mod runtime;
 

@@ -92,4 +92,16 @@ impl Array {
     pub fn argmax(&self, stream: &Stream) -> Result<Self> {
         Self::from_native(graph::argmax(stream.native().graph(), self.native())?)
     }
+
+    /// The argmax of every row along the last axis, as `u32` ids on device.
+    pub fn argmax_rows(&self, stream: &Stream) -> Result<Self> {
+        let graph = stream.native().graph();
+        let indices = graph.argmax_axis(self.native(), -1, false)?;
+        Self::from_native(graph.astype(&indices, mirtal::DType::Uint32)?)
+    }
+
+    /// The argmax of every row along the last axis, read back.
+    pub fn argmax_rows_u32(&self, stream: &Stream) -> Result<Vec<u32>> {
+        self.argmax_rows(stream)?.to_vec_u32(stream)
+    }
 }

@@ -49,7 +49,7 @@ impl CapturedModelLayer {
         }
     }
 
-    pub fn kernels(&self) -> Kernels {
+    pub fn kernels(&self) -> Result<Kernels> {
         match self {
             Self::Moe(layer) => layer.kernels(),
             Self::Dense(layer) => layer.kernels(),

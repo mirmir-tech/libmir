@@ -76,6 +76,7 @@ impl ClampedRoutedSplitDecode {
             head_dim: storage.key_head_dim,
             value_head_dim: storage.value_head_dim,
             dtype: storage.cache.dtype,
+            score_softcap: None,
         };
         let operation = SplitPagedAttention::compile(backend.compiler(), spec, partition_tokens)?;
         let (values, statistics) = operation.workspace_lengths();
@@ -138,7 +139,10 @@ impl ClampedRoutedSplitDecode {
             output,
             tokens,
             blocks,
-            window,
+            // gpt-oss windows slide; the layers hold nonzero spans.
+            window
+                .and_then(std::num::NonZeroUsize::new)
+                .map(models::semantic::AttentionWindow::Sliding),
             scale,
         )?;
         let query_heads = sinks.len();

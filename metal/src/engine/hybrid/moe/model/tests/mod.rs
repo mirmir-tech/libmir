@@ -37,6 +37,7 @@ fn execute_model(fused_experts: bool) -> Result<()> {
     let model = HybridMoeModel::load_bindings(
         &tensors,
         &decoder,
+        &contract.semantic.decoder,
         &contract.bindings,
         lowering.layers(),
         16,

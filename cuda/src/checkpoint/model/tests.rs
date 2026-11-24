@@ -5,7 +5,7 @@ use models::weights::{
     CompressedIntegerZeroPointMode, LogicalTensorRole, TensorBinding, TensorStorage,
 };
 
-use super::{packed_shape_source, runtime_raw_sources};
+use super::source::{packed_shape_source, runtime_raw_sources};
 
 #[test]
 fn packed_int8_boundary_upload_excludes_shape_metadata() {
@@ -15,7 +15,7 @@ fn packed_int8_boundary_upload_excludes_shape_metadata() {
         shape: vec![2, 4],
         logical_shape: Some(vec![2, 16]),
         transforms: Vec::<BindingTransform>::new(),
-        storage: TensorStorage::PackedInt8 {
+        storage: TensorStorage::PackedInteger {
             format: CompressedIntegerQuantization {
                 bits: CompressedIntegerBits::Eight,
                 scale_strategy: CompressedIntegerScaleStrategy::Channel,

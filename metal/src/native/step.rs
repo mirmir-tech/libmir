@@ -29,6 +29,12 @@ pub(super) fn forward_token(
     position: usize,
     greedy: bool,
 ) -> Result<Array> {
+    // A speculating session keeps every row's hidden state for the module.
+    if state.speculation.is_some() {
+        let hidden =
+            super::speculation::step::forward_rows(model, stream, state, &[token], position)?;
+        return Ok(model.project_hidden(&hidden, stream)?);
+    }
     let token_ids = Array::from_u32(&[token], &[1, 1])?;
     forward_ids(model, stream, state, &token_ids, position, greedy)
 }
@@ -40,6 +46,11 @@ pub(super) fn forward_prefill_state(
     tokens: &[u32],
     position: usize,
 ) -> Result<Array> {
+    if super::speculation::attach(model, stream, &mut state.speculation)? {
+        return measure(Stage::Forward, || {
+            super::speculation::step::forward_rows(model, stream, state, tokens, position)
+        });
+    }
     let length = i32::try_from(tokens.len())?;
     let token_ids = Array::from_u32(tokens, &[1, length])?;
     let position = i32::try_from(position)?;
@@ -95,7 +106,8 @@ pub(super) fn output(
     if matches!(sampling, SamplingLogits::Masked { .. }) {
         return Err(Error::InvalidDecodeBatch("schema masking requires full device logits".into()));
     }
-    if !supports_device_token(sampling) {
+    // Speculating sessions feed each token themselves.
+    if !supports_device_token(sampling) || state.speculation.is_some() {
         return Ok(NativeOutput::Logits(logits));
     }
     let deferred = deferred_token(model, stream, state, &logits, sampling)?;

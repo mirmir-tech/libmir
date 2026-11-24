@@ -51,7 +51,13 @@ fn tensor(name: &str) -> TensorInfo {
         name: name.into(),
         file: PathBuf::new(),
         dtype: "BF16".into(),
-        shape: vec![8],
+        // Per-head Q/K norms span one head; a query norm across the whole
+        // projection would declare OLMo 2's norms across heads.
+        shape: if name.ends_with("q_norm.weight") || name.ends_with("k_norm.weight") {
+            vec![4]
+        } else {
+            vec![8]
+        },
         data_start: 0,
         data_offsets: [0, 0],
     }

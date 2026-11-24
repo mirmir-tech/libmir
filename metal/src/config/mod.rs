@@ -24,6 +24,9 @@ pub struct MetalConfig {
     pub tuning: MetalTuningConfig,
     pub(crate) expert_fusion_reserve_bytes: Option<usize>,
     max_batch_requests: usize,
+    /// Speculative decoding with a checkpoint's prediction modules; `None`
+    /// leaves them unloaded.
+    speculation: Option<runtime::speculation::Speculation>,
 }
 
 impl Default for MetalConfig {
@@ -37,6 +40,7 @@ impl Default for MetalConfig {
             tuning: MetalTuningConfig::default(),
             expert_fusion_reserve_bytes: None,
             max_batch_requests: runtime::scheduler::SchedulerConfig::default().max_batch_requests,
+            speculation: None,
         }
     }
 }
@@ -48,6 +52,17 @@ impl MetalConfig {
 
     pub(crate) const fn max_batch_requests(&self) -> usize {
         self.max_batch_requests
+    }
+
+    pub const fn set_speculation(
+        &mut self,
+        speculation: Option<runtime::speculation::Speculation>,
+    ) {
+        self.speculation = speculation;
+    }
+
+    pub(crate) const fn speculation(&self) -> Option<runtime::speculation::Speculation> {
+        self.speculation
     }
 }
 pub use batch::{DenseBatchMode, DenseHistoryMode, MetalBatchConfig};

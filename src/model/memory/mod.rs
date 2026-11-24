@@ -3,7 +3,8 @@ pub(super) mod policy;
 use foundation::model::BackendTarget;
 use models::{
     execution::{DecoderExecutionContract, TaskExecutionPlan},
-    layout::{AttentionLayerType, DecoderConfig},
+    layout::DecoderConfig,
+    semantic::{DecoderSpec, LayerCacheShape},
     weights::{
         BlockActivationMode, BlockFormat, LayerTensorRole, LogicalTensorRole, TensorStorage,
     },
@@ -13,7 +14,8 @@ use runtime::kv::{CacheConfig, KvStorageSpec};
 use super::ModelDescriptor;
 use crate::{ModelMemoryEstimate, RuntimeConfig};
 
-mod prediction;
+mod conversion;
+pub(super) mod prediction;
 mod resident;
 mod session;
 
@@ -39,9 +41,16 @@ impl ModelDescriptor {
         config: &RuntimeConfig,
         target: &BackendTarget,
     ) -> ModelMemoryEstimate {
-        let speculation = *target == BackendTarget::Cuda && config.scheduler.speculation.is_some();
+        let speculation = config.scheduler.speculation.is_some_and(|speculation| {
+            prediction::backend_drafts(target, speculation.draft_tokens.get()).is_some()
+        });
         let weight_bytes =
-            resident::weight_bytes(&self.layout, self.unloaded.as_ref(), speculation);
+            resident::weight_bytes(&self.layout, self.unloaded.as_ref(), speculation)
+                .saturating_add(if *target == BackendTarget::Metal {
+                    conversion::metal_affine_growth(self.execution.as_ref(), speculation)
+                } else {
+                    0
+                });
         let generation_decoder = match &self.task_plan {
             TaskExecutionPlan::Generation { decoder }
             | TaskExecutionPlan::CausalScoring { decoder, .. } => Some(decoder),
@@ -51,8 +60,10 @@ impl ModelDescriptor {
             u64::from(config.kv_cache.block_count)
                 .saturating_mul(u64::try_from(config.kv_cache.block_size).unwrap_or(u64::MAX))
         });
-        let (kv_bytes_per_token, kv_cache_bytes) = generation_decoder.map_or((0, 0), |decoder| {
-            let (per_token, total) = kv_budget(decoder, config, target);
+        let decoder_spec = self.execution.as_ref().map(|execution| &execution.semantic.decoder);
+        let generation = generation_decoder.zip(decoder_spec);
+        let (kv_bytes_per_token, kv_cache_bytes) = generation.map_or((0, 0), |(decoder, spec)| {
+            let (per_token, total) = kv_budget(decoder, spec, config, target);
             let (prediction_per_token, prediction) =
                 prediction::kv_budget(self.execution.as_ref(), config, target);
             (per_token.saturating_add(prediction_per_token), total.saturating_add(prediction))
@@ -85,37 +96,24 @@ impl ModelDescriptor {
 
 fn kv_budget(
     decoder: &DecoderConfig,
+    spec: &DecoderSpec,
     config: &RuntimeConfig,
     target: &BackendTarget,
 ) -> (u64, u64) {
-    decoder
-        .layer_types
+    spec.layers
         .iter()
-        .enumerate()
-        .filter(|(_, layer)| {
-            matches!(layer, AttentionLayerType::Full | AttentionLayerType::Sliding)
-        })
-        .fold((0_u64, 0_u64), |(per_token, total), (index, layer)| {
-            let cache = if *layer == AttentionLayerType::Sliding && bounded_sliding(decoder, target)
-            {
-                sliding_cache(decoder, config, target)
-            } else {
-                config.kv_cache
-            };
-            let budget = KvStorageSpec::new(
-                cache,
-                decoder.layer_key_value_heads(index),
-                decoder.layer_head_dim(index),
-            )
-            .memory_budget();
+        .filter_map(|layer| layer.cache_shape().map(|shape| (layer, shape)))
+        .fold((0_u64, 0_u64), |(per_token, total), (layer, shape)| {
+            let span = layer.attention_span().filter(|_| bounded_sliding(decoder, target));
+            let cache = span.map_or(config.kv_cache, |span| sliding_cache(span, config, target));
+            let budget = layer_storage(shape, cache).memory_budget();
             let data = u64::try_from(budget.data_bytes_per_token).unwrap_or(u64::MAX);
             let scales = u64::try_from(budget.scale_bytes_per_token).unwrap_or(u64::MAX);
-            let growing =
-                if *layer != AttentionLayerType::Sliding || !bounded_sliding(decoder, target) {
-                    data.saturating_add(scales)
-                } else {
-                    0
-                };
+            let growing = if span.is_none() {
+                data.saturating_add(scales)
+            } else {
+                0
+            };
             (
                 per_token.saturating_add(growing),
                 total.saturating_add(u64::try_from(budget.total_bytes).unwrap_or(u64::MAX)),
@@ -123,12 +121,17 @@ fn kv_budget(
         })
 }
 
-fn sliding_cache(
-    decoder: &DecoderConfig,
-    config: &RuntimeConfig,
-    target: &BackendTarget,
-) -> CacheConfig {
-    let window = decoder.sliding_window.unwrap_or(config.kv_cache.block_size);
+/// A layer's K/V storage of `shape` under `cache`.
+fn layer_storage(shape: LayerCacheShape, cache: CacheConfig) -> KvStorageSpec {
+    KvStorageSpec {
+        key_head_dim: shape.key_width,
+        value_head_dim: shape.value_width,
+        ..KvStorageSpec::new(cache, shape.heads, shape.key_width)
+    }
+}
+
+/// The ring a bounded layer of `window` recent tokens keeps per session.
+fn sliding_cache(window: usize, config: &RuntimeConfig, target: &BackendTarget) -> CacheConfig {
     let ring_blocks = window
         .saturating_add(config.kv_cache.block_size.saturating_sub(1))
         .div_ceil(config.kv_cache.block_size);
@@ -145,8 +148,8 @@ fn sliding_cache(
     }
 }
 
-/// Metal keeps every sliding layer in a bounded ring outside the block pool;
-/// CUDA bounds only the clamped-routed sliding layers.
+/// Metal keeps every sliding or chunked layer in a bounded ring outside the
+/// block pool; CUDA bounds only the clamped-routed sliding layers.
 fn bounded_sliding(decoder: &DecoderConfig, target: &BackendTarget) -> bool {
     *target == BackendTarget::Metal
         || (decoder.swiglu_limit.is_some() && decoder.num_experts.is_some())

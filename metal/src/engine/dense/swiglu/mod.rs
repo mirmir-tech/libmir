@@ -3,7 +3,10 @@ mod batch;
 mod config;
 mod layer;
 mod model;
+mod positional;
 mod projection;
+mod residual;
+mod softcap;
 mod weights;
 
 #[cfg(test)]

@@ -1,4 +1,7 @@
-use super::{HybridMoeLayerConfig, weights::AttentionWeights};
+use super::{
+    HybridMoeLayerConfig,
+    weights::{AttentionWeights, KeyValueWeights, ProjectedKeyValues},
+};
 use crate::engine::{
     Array, FusedAttention, FusedKeyValue, KvCache, Result, RopeOptions, Stream,
     native_paged_attention_mode, paged_attention_min_context,
@@ -24,49 +27,15 @@ pub(super) fn forward_decode(
     let sequence = input.shape()?.get(1).copied().ok_or_else(|| {
         crate::engine::Error::InvalidModel("attention input has no sequence axis".into())
     })?;
-    let fused_attention = (sequence == 1)
-        .then_some(fused_attention)
-        .flatten()
-        .map(|fused| fused.forward(input, stream))
-        .transpose()?;
-    let (queries, raw_keys, raw_values) = if let Some(output) = fused_attention {
-        (output.query, output.key, output.value)
+    let fused = if sequence == 1 {
+        (fused_attention, fused_key_value)
     } else {
-        let fused_key_value = (sequence == 1)
-            .then_some(fused_key_value)
-            .flatten()
-            .map(|fused| fused.forward(input, stream))
-            .transpose()?;
-        let (raw_keys, raw_values) = match fused_key_value {
-            Some((key, value)) => (key, Some(value)),
-            None => (
-                weights.key.forward(input, stream)?,
-                weights.value.as_ref().map(|value| value.forward(input, stream)).transpose()?,
-            ),
-        };
-        (weights.query.forward(input, stream)?, raw_keys, raw_values)
+        (None, None)
     };
-    let queries =
-        queries.reshape(&[1, sequence, config.attention_heads, config.head_dim], stream)?;
-    let queries = weights.query_norm.apply(&queries, config.rms_norm_eps, stream)?;
+    let Projected { queries, keys, values } =
+        project(input, weights, config, fused, [1, sequence], stream)?;
     let queries =
         rope_layout(&queries, weights.rope_frequencies.as_ref(), config, position, stream)?;
-
-    let raw_keys = raw_keys.reshape(&[1, sequence, config.kv_heads, config.head_dim], stream)?;
-    let values = if config.use_k_eq_v {
-        raw_keys
-            .rms_norm_unit(config.rms_norm_eps, stream)?
-            .transpose(&[0, 2, 1, 3], stream)?
-    } else {
-        let raw_values = raw_values.ok_or_else(|| {
-            crate::engine::Error::InvalidModel("missing hybrid MoE value projection".into())
-        })?;
-        raw_values
-            .reshape(&[1, sequence, config.kv_heads, config.head_dim], stream)?
-            .rms_norm_unit(config.rms_norm_eps, stream)?
-            .transpose(&[0, 2, 1, 3], stream)?
-    };
-    let keys = weights.key_norm.apply(&raw_keys, config.rms_norm_eps, stream)?;
     let keys = rope_layout(&keys, weights.rope_frequencies.as_ref(), config, position, stream)?;
     let output = match cache {
         Some(cache) => {
@@ -122,6 +91,72 @@ pub(super) fn forward_decode(
     weights.output.forward(&output, stream)
 }
 
+/// Normalized, unrotated `[B, S, heads, D]` queries and `[B, S, kv_heads,
+/// D]` keys, and `[B, kv_heads, S, D]` values.
+pub(super) struct Projected {
+    pub(super) queries: Array,
+    pub(super) keys: Array,
+    pub(super) values: Array,
+}
+
+/// The layer's queries, and its keys and values: projected (and published
+/// to the layers sharing them), or the earlier layer's of the same step.
+pub(super) fn project(
+    input: &Array,
+    weights: &AttentionWeights,
+    config: HybridMoeLayerConfig,
+    (fused_attention, fused_key_value): (Option<&FusedAttention>, Option<&FusedKeyValue>),
+    [batch, sequence]: [i32; 2],
+    stream: &Stream,
+) -> Result<Projected> {
+    let shape = |heads| [batch, sequence, heads, config.head_dim];
+    let (queries, keys, values) = match &weights.key_values {
+        KeyValueWeights::Shared { step, source } => {
+            let (keys, values) = step.key_values(*source)?;
+            (weights.query.forward(input, stream)?, keys, values)
+        },
+        KeyValueWeights::Projected(projected) => {
+            let ProjectedKeyValues { key, value, norm, publish } = projected.as_ref();
+            let (queries, raw_keys, raw_values) = match (fused_attention, fused_key_value) {
+                (Some(fused), _) => {
+                    let output = fused.forward(input, stream)?;
+                    (output.query, output.key, output.value)
+                },
+                (None, Some(fused)) => {
+                    let (key, value) = fused.forward(input, stream)?;
+                    (weights.query.forward(input, stream)?, key, Some(value))
+                },
+                (None, None) => (
+                    weights.query.forward(input, stream)?,
+                    key.forward(input, stream)?,
+                    value.as_ref().map(|value| value.forward(input, stream)).transpose()?,
+                ),
+            };
+            let raw_keys = raw_keys.reshape(&shape(config.kv_heads), stream)?;
+            let values = match raw_values {
+                _ if config.use_k_eq_v => raw_keys.rms_norm_unit(config.rms_norm_eps, stream)?,
+                Some(values) => values
+                    .reshape(&shape(config.kv_heads), stream)?
+                    .rms_norm_unit(config.rms_norm_eps, stream)?,
+                None => {
+                    return Err(crate::engine::Error::InvalidModel(
+                        "missing hybrid MoE value projection".into(),
+                    ));
+                },
+            }
+            .transpose(&[0, 2, 1, 3], stream)?;
+            let keys = norm.apply(&raw_keys, config.rms_norm_eps, stream)?;
+            if let Some(publish) = publish {
+                publish.step.publish(publish.layer, &keys, &values)?;
+            }
+            (queries, keys, values)
+        },
+    };
+    let queries = queries.reshape(&shape(config.attention_heads), stream)?;
+    let queries = weights.query_norm.apply(&queries, config.rms_norm_eps, stream)?;
+    Ok(Projected { queries, keys, values })
+}
+
 pub(super) fn rope_layout(
     input: &Array,
     frequencies: Option<&Array>,
@@ -135,16 +170,22 @@ pub(super) fn rope_layout(
             input.rope(
                 RopeOptions {
                     dimensions: config.rope_dimensions,
-                    traditional: false,
+                    traditional: config.rope_traditional,
                     base: Some(config.rope_base),
-                    scale: 1.0,
+                    scale: config.rope_position_scale,
                     offset: position,
                 },
                 stream,
             )
         },
         |frequencies| {
-            input.rope_with_frequencies(config.head_dim, false, frequencies, position, stream)
+            input.rope_with_frequencies(
+                config.rope_dimensions,
+                config.rope_traditional,
+                frequencies,
+                position,
+                stream,
+            )
         },
     )
 }

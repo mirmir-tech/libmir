@@ -46,6 +46,7 @@ pub(super) fn execute_loaded_decode(
             session: sequence.session_id,
             token: sequence.token_id,
             sampling: execution_sampling(sequence.sampling_logits.clone(), device_pipeline),
+            speculation: sequence.speculation.clone(),
         })
         .collect::<Vec<_>>();
     let native = loaded.decode_grouped(&inputs)?;
@@ -57,9 +58,13 @@ pub(super) fn execute_loaded_decode(
         .into_iter()
         .zip(sequences)
         .map(|((native, execution), sequence)| {
+            let accepted = match &native {
+                crate::native::model::NativeOutput::Verified { accepted, .. } => accepted.clone(),
+                _ => Vec::new(),
+            };
             let output = output::materialize(loaded, native, &sequence.sampling_logits)?;
             Ok(DecodeOutput {
-                accepted: Vec::new(),
+                accepted,
                 drafts: Vec::new(),
                 event: TokenEvent {
                     token_id: output.next_token,

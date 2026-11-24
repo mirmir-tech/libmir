@@ -4,7 +4,7 @@ use foundation::model::ModelManifest;
 use models::{
     execution::TaskExecutionPlan,
     layout::{ModelLayout, ModelMetadata, VisionConfig},
-    weights::{TensorCatalog, TensorReadiness, VisionTensorSchema},
+    weights::{TensorBinding, TensorCatalog, TensorReadiness, VisionTensorSchema},
 };
 
 use super::{
@@ -92,8 +92,15 @@ impl LoadedModel {
             .as_ref()
             .map(|config| VisionTensorSchema::discover(config).readiness(&catalog));
         let load_stream = Stream::new_cpu()?;
-        let tensors = ModelTensors::load_layout_materialized_with_progress(
+        let full_precision = contract
+            .iter()
+            .flat_map(|contract| &contract.bindings.tensors)
+            .flat_map(TensorBinding::full_precision_sources)
+            .map(str::to_owned)
+            .collect();
+        let tensors = ModelTensors::load_layout_materialized_keeping(
             &layout,
+            &full_precision,
             &load_stream,
             |loaded, total, detail| {
                 progress(MetalProgressEvent::load_weights(loaded, total, detail));
@@ -127,6 +134,7 @@ impl LoadedModel {
                     lowering,
                     &tensors,
                     decoder,
+                    &contract.semantic.decoder,
                     &contract.bindings,
                     &stream,
                 )?)
@@ -153,7 +161,7 @@ impl LoadedModel {
         let prefix_cache_bytes =
             prefix_cache_budget(metal_memory, stream.config().cache.prefix_cache_bytes);
         let model_prefill_step = contract.as_ref().map_or(0, |contract| {
-            prefill_step(&contract.semantic, stream.config().cache.prefill_step)
+            prefill_step(&contract.semantic, &contract.bindings, stream.config().cache.prefill_step)
         });
         Ok(Self {
             info: ModelInfo {

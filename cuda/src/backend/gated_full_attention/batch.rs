@@ -109,10 +109,9 @@ impl GatedFullAttentionBatch {
             attention: BatchedPagedAttentionBf16::new_with_workspace(
                 backend,
                 &state.cache,
-                config.query_heads,
-                paging.max_blocks(),
-                rows,
+                (config.query_heads, paging.max_blocks(), rows),
                 workspace,
+                None,
             )?,
             rows,
         })

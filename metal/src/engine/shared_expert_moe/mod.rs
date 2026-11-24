@@ -1,15 +1,11 @@
 //! Shared routed feed-forward execution and projection fusion.
 
-use models::weights::SharedRoutedFeedForwardBindings;
-
 use super::{
     Array, Error, FusedExpertGateUp, FusedGateUp, ModelTensors, Result, Stream,
     binding::BoundLinear,
-    fusion_planner::FusionPlanner,
     lowering::FeedForwardLowering,
     route_tuning::{self, ExpertActivation, RoutingSpec},
 };
-use crate::FusionMode;
 
 #[cfg(test)]
 mod aligned;
@@ -18,10 +14,13 @@ mod diagnosis;
 mod load;
 mod plan;
 mod routed;
+mod router;
 #[cfg(test)]
 mod tiles;
-use load::{linear, projection_biases};
+use load::linear;
+use plan::SharedExpert;
 use routed::RoutedGateUp;
+pub use router::{ExpertRouter, ScoredRouter, ScoredRouting};
 
 #[derive(Debug, Clone, Copy)]
 pub struct SharedExpertMoeConfig {
@@ -36,12 +35,9 @@ pub struct SharedExpertMoe {
     router: BoundLinear,
     routed_gate_up: RoutedGateUp,
     routed_down: BoundLinear,
-    shared_gate: BoundLinear,
-    shared_up: BoundLinear,
-    fused_shared_gate_up: Option<FusedGateUp>,
-    shared_down: BoundLinear,
-    shared_output_gate: BoundLinear,
-    shared_gate_up_mode: FusionMode,
+    /// `None` for routed experts alone (Qwen3-MoE, Mixtral, Phi-3.5-MoE).
+    shared: Option<SharedExpert>,
+    routing: ExpertRouter,
 }
 
 impl SharedExpertMoeConfig {
@@ -63,73 +59,49 @@ impl SharedExpertMoe {
         group_size: i32,
         stream: &Stream,
     ) -> Result<Self> {
-        let routed_gate = linear(tensors, prefix, "switch_mlp.gate_proj", group_size)?;
-        let routed_up = linear(tensors, prefix, "switch_mlp.up_proj", group_size)?;
-        let shared_gate = linear(tensors, prefix, "shared_expert.gate_proj", group_size)?;
-        let shared_up = linear(tensors, prefix, "shared_expert.up_proj", group_size)?;
-        let planner = FusionPlanner::new(stream);
-        let fusion = planner.projections(
+        let shared = SharedExpert::new(
+            [
+                linear(tensors, prefix, "shared_expert.gate_proj", group_size)?,
+                linear(tensors, prefix, "shared_expert.up_proj", group_size)?,
+                linear(tensors, prefix, "shared_expert.down_proj", group_size)?,
+            ],
+            Some(linear(tensors, prefix, "shared_expert_gate", group_size)?),
             FeedForwardLowering::SharedRouted,
-            projection_biases(&shared_gate, &shared_up),
+            stream,
         );
         Ok(Self {
             config,
             router: linear(tensors, prefix, "gate", group_size)?,
             routed_gate_up: RoutedGateUp::Separate {
-                gate: routed_gate,
-                up: routed_up,
+                gate: linear(tensors, prefix, "switch_mlp.gate_proj", group_size)?,
+                up: linear(tensors, prefix, "switch_mlp.up_proj", group_size)?,
                 fused: None,
             },
             routed_down: linear(tensors, prefix, "switch_mlp.down_proj", group_size)?,
-            shared_gate,
-            shared_up,
-            fused_shared_gate_up: None,
-            shared_down: linear(tensors, prefix, "shared_expert.down_proj", group_size)?,
-            shared_output_gate: linear(tensors, prefix, "shared_expert_gate", group_size)?,
-            shared_gate_up_mode: if fusion.gate_up {
-                planner.shared_dense_gate_up_mode()
-            } else {
-                FusionMode::Disabled
-            },
-        })
-    }
-
-    pub fn load_bindings(
-        tensors: &ModelTensors,
-        bindings: SharedRoutedFeedForwardBindings<'_>,
-        config: SharedExpertMoeConfig,
-        lowering: FeedForwardLowering,
-        stream: &Stream,
-    ) -> Result<Self> {
-        let (routed_gate_up, routed_down) = RoutedGateUp::load(tensors, bindings.routed, stream)?;
-        let shared_gate = BoundLinear::load(tensors, bindings.shared_gate, stream)?;
-        let shared_up = BoundLinear::load(tensors, bindings.shared_up, stream)?;
-        let planner = FusionPlanner::new(stream);
-        let fusion = planner.projections(lowering, projection_biases(&shared_gate, &shared_up));
-        Ok(Self {
-            config,
-            router: BoundLinear::load(tensors, bindings.router, stream)?,
-            routed_gate_up,
-            routed_down,
-            shared_gate,
-            shared_up,
-            fused_shared_gate_up: None,
-            shared_down: BoundLinear::load(tensors, bindings.shared_down, stream)?,
-            shared_output_gate: BoundLinear::load(tensors, bindings.shared_output_gate, stream)?,
-            shared_gate_up_mode: if fusion.gate_up {
-                planner.shared_dense_gate_up_mode()
-            } else {
-                FusionMode::Disabled
-            },
+            shared: Some(shared),
+            routing: ExpertRouter::Unit,
         })
     }
 
     pub fn forward(&self, input: &Array, stream: &Stream) -> Result<Array> {
-        let routing = self.router.route_unit(input, i32::try_from(self.config.top_k)?, stream)?;
+        let routing = self.routing.route(&self.router, input, self.config.top_k, stream)?;
         #[cfg(test)]
         crate::engine::probe::routing::record(&routing.indices)?;
-        let routed = self.routed(input, &routing.indices, &routing.weights, stream)?;
-        routed.add(&self.shared(input, stream)?, stream)
+        let routed = match self.routing {
+            // One selected expert reads its input scaled by its score.
+            ExpertRouter::SigmoidInputScaled => {
+                let scaled = input.multiply(&routing.weights, stream)?;
+                let ones = routing.weights.multiply_scalar(0.0, stream)?.add_scalar(1.0, stream)?;
+                self.routed(&scaled, &routing.indices, &ones, stream)?
+            },
+            ExpertRouter::Unit | ExpertRouter::Scored(_) | ExpertRouter::SparseMixer { .. } => {
+                self.routed(input, &routing.indices, &routing.weights, stream)?
+            },
+        };
+        match &self.shared {
+            Some(shared) => routed.add(&shared.forward(input, stream)?, stream),
+            None => Ok(routed),
+        }
     }
 
     pub(crate) fn enable_routed_gate_up(&mut self, stream: &Stream) -> Result<bool> {
@@ -141,6 +113,14 @@ impl SharedExpertMoe {
 
     pub(crate) fn fused_routed_gate_up_bytes(&self) -> Result<Option<usize>> {
         self.routed_gate_up.fused_bytes()
+    }
+
+    /// The shared expert, for diagnostics of layers that have one.
+    #[cfg(test)]
+    fn shared_expert(&self) -> Result<&SharedExpert> {
+        self.shared
+            .as_ref()
+            .ok_or_else(|| Error::InvalidModel("no shared expert".into()))
     }
 
     pub(crate) const fn has_fused_routed_gate_up(&self) -> bool {

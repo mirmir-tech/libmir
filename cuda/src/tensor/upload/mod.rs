@@ -5,7 +5,7 @@ use std::{
 };
 
 use mircuda::{Context, DeviceElement, MemoryPool, Stream, bf16, f16};
-use models::weights::TensorInfo;
+use models::{gguf::GgmlType, weights::TensorInfo};
 
 use self::pending::{PendingBuffer, PendingStorage, PendingTensor};
 use super::storage::{CudaTensor, CudaTensorDType, CudaTensorSet};
@@ -89,8 +89,9 @@ impl TensorUploadBatch {
         info: &TensorInfo,
         cast: &DenseCast,
     ) -> Result<()> {
-        match CudaTensorDType::parse(&info.dtype)? {
-            CudaTensorDType::F16 | CudaTensorDType::Bf16 | CudaTensorDType::F32 => {
+        // GGML block names are not CUDA dtypes; `enqueue` uploads them raw.
+        match CudaTensorDType::parse(&info.dtype) {
+            Ok(CudaTensorDType::F16 | CudaTensorDType::Bf16 | CudaTensorDType::F32) => {
                 self.enqueue_as_bf16(info, cast)
             },
             _ => self.enqueue(info),
@@ -181,6 +182,11 @@ fn release_file_cache(file: &File, offset: u64, length: usize) {
 fn release_file_cache(_file: &File, _offset: u64, _length: usize) {}
 
 fn metadata(info: &TensorInfo) -> Result<(CudaTensorDType, usize)> {
+    if let Some(ggml_type) =
+        GgmlType::from_name(&info.dtype).filter(|ggml_type| !ggml_type.is_dense())
+    {
+        return ggml_metadata(info, ggml_type);
+    }
     let dtype = CudaTensorDType::parse(&info.dtype)?;
     let elements = element_count(&info.shape, &info.name)?;
     let actual = info.payload_bytes()?;
@@ -197,6 +203,28 @@ fn metadata(info: &TensorInfo) -> Result<(CudaTensorDType, usize)> {
         });
     }
     Ok((dtype, elements))
+}
+
+/// GGML blocks upload as raw bytes; the binding keeps their type and the
+/// tensor keeps its logical `[rows, input]` shape.
+fn ggml_metadata(info: &TensorInfo, ggml_type: GgmlType) -> Result<(CudaTensorDType, usize)> {
+    let actual = info.payload_bytes()?;
+    let invalid = || Error::InvalidTensorSize {
+        name: info.name.clone(),
+        expected: usize::MAX,
+        actual,
+    };
+    let (&input, rows) = info.shape.split_last().ok_or_else(invalid)?;
+    let row_bytes = usize::try_from(ggml_type.row_bytes(u64::try_from(input)?)?)?;
+    let expected = element_count(rows, &info.name)?.checked_mul(row_bytes).ok_or_else(invalid)?;
+    if expected != actual {
+        return Err(Error::InvalidTensorSize {
+            name: info.name.clone(),
+            expected,
+            actual,
+        });
+    }
+    Ok((CudaTensorDType::U8, actual))
 }
 
 fn element_count(shape: &[usize], name: &str) -> Result<usize> {

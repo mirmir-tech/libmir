@@ -3,8 +3,8 @@ use mircuda::{DeviceBuffer, Stream, bf16};
 use super::super::{CudaBackend, DenseDownWeight, DenseSwiGluConfig};
 use crate::{
     Bf16Projection, DenseExecution, DensePlanRequest, DenseRole, DirectFp8Bf16Linear, Error,
-    ExecutionPhase, MxFp4Bf16Linear, MxFp8Bf16Linear, NvFp4Bf16Linear, PackedIntegerBf16Linear,
-    ProjectionFormat, Result, backend::linear::AffineProjection,
+    ExecutionPhase, GgmlBf16Linear, MxFp4Bf16Linear, MxFp8Bf16Linear, NvFp4Bf16Linear,
+    PackedIntegerBf16Linear, ProjectionFormat, Result, backend::linear::AffineProjection,
 };
 
 pub(in crate::backend::dense) enum DownProjection {
@@ -12,6 +12,7 @@ pub(in crate::backend::dense) enum DownProjection {
     Bf16(Bf16Projection),
     DirectFp8(DirectFp8Bf16Linear),
     MxFp4(MxFp4Bf16Linear),
+    Ggml(GgmlBf16Linear),
     MxFp8(MxFp8Bf16Linear),
     PackedInteger(PackedIntegerBf16Linear),
     NvFp4(NvFp4Bf16Linear),
@@ -81,6 +82,16 @@ impl DownProjection {
                     ));
                 };
                 Ok(Self::MxFp4(weight.prepare(backend, tokens)?))
+            },
+            ProjectionFormat::Ggml => {
+                let DenseDownWeight::Ggml(weight) =
+                    weight.ok_or(Error::InvalidExecutionPlan("GGML MLP requires down weight"))?
+                else {
+                    return Err(Error::InvalidExecutionPlan(
+                        "GGML MLP received another down weight",
+                    ));
+                };
+                Ok(Self::Ggml(weight.prepare(backend, tokens, DenseRole::DenseDown)?))
             },
             ProjectionFormat::PackedInteger => {
                 let DenseDownWeight::PackedInteger(weight) = weight.ok_or(
@@ -173,6 +184,12 @@ impl DownProjection {
                     Err(Error::InvalidExecutionPlan("MXFP4 down operation received another weight"))
                 },
             },
+            Self::Ggml(operation) => match weight {
+                DenseDownWeight::Ggml(weight) => operation.execute(input, weight, output),
+                _ => {
+                    Err(Error::InvalidExecutionPlan("GGML down operation received another weight"))
+                },
+            },
             Self::PackedInteger(operation) => match weight {
                 DenseDownWeight::PackedInteger(weight) => operation.execute(input, weight, output),
                 _ => Err(Error::InvalidExecutionPlan(
@@ -213,6 +230,7 @@ impl DownProjection {
             | (Self::Bf16(_), DenseDownWeight::Bf16(_))
             | (Self::DirectFp8(_), DenseDownWeight::DirectFp8(_))
             | (Self::MxFp4(_), DenseDownWeight::MxFp4(_))
+            | (Self::Ggml(_), DenseDownWeight::Ggml(_))
             | (Self::MxFp8(_), DenseDownWeight::MxFp8(_))
             | (Self::PackedInteger(_), DenseDownWeight::PackedInteger(_))
             | (Self::BlockFp8, DenseDownWeight::BlockFp8 { .. })

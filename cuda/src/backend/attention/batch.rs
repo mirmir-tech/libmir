@@ -91,13 +91,13 @@ impl BatchedDecodeAttentionBf16 {
         if cache.layer() != config.layer || cache.storage_spec() != config.cache {
             return Err(Error::InvalidPagedKv("shared cache differs from batched attention"));
         }
+        let geometry = (config.query_heads, config.max_sequence_blocks, batch_size);
         let attention = BatchedPagedAttentionBf16::new_with_workspace(
             backend,
             &cache,
-            config.query_heads,
-            config.max_sequence_blocks,
-            batch_size,
+            geometry,
             workspace,
+            config.score_softcap,
         )?;
         let qkv_spec = QkvPostprocessSpec {
             tokens: batch_size,
@@ -108,14 +108,10 @@ impl BatchedDecodeAttentionBf16 {
             rotary: config.rotary,
             epsilon: config.rms_norm_epsilon,
             normalization: config.qkv_normalization,
+            temperature: config.query_temperature,
         };
         Ok(Self {
-            input_norm: RmsNormBf16::new(
-                backend,
-                batch_size,
-                config.hidden_size,
-                config.rms_norm_epsilon,
-            )?,
+            input_norm: RmsNormBf16::for_stream(backend, batch_size, &config)?,
             qkv: AttentionQkvProjection::new(
                 backend,
                 config,
@@ -187,7 +183,7 @@ impl BatchedDecodeAttentionBf16 {
             &self.cache,
             batch,
             &mut self.scratch.attention,
-            self.config.sliding_window,
+            self.config.window,
             self.config.attention_scale,
         )?;
         self.output_projection.execute(

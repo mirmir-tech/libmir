@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use super::parse::{optional_usize, require_usize};
+use super::parse::{invalid, optional_string, optional_usize, require_usize};
 use crate::error::Result;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,7 +16,24 @@ pub struct LinearAttentionConfig {
     pub value_heads: usize,
     pub key_head_dim: usize,
     pub value_head_dim: usize,
+    pub layout: LinearAttentionLayout,
 }
+
+/// How the stored `DeltaNet` tensors relate to the Hugging Face modules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinearAttentionLayout {
+    /// A Hugging Face checkpoint or its MLX conversion.
+    Checkpoint,
+    /// llama.cpp's GGUF conversion: `ssm_a = -exp(A_log)`, a `[channels,
+    /// kernel]` convolution, unit offsets folded into every norm except the
+    /// gated output norm, and value heads tiled across key heads
+    /// (`[K0, K1, .., K0, K1, ..]`) when there are more value than key heads.
+    LlamaCpp,
+}
+
+/// The `config.json` key GGUF imports write for llama.cpp's layout.
+pub const LINEAR_ATTENTION_LAYOUT: &str = "mir_linear_attention_layout";
+pub const LINEAR_ATTENTION_LAYOUT_LLAMA_CPP: &str = "llama_cpp";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RotaryEmbeddingLayout {
@@ -35,6 +52,13 @@ pub(super) fn linear_attention(value: &Value) -> Result<Option<LinearAttentionCo
         value_heads: require_usize(value, &["linear_num_value_heads"])?,
         key_head_dim: require_usize(value, &["linear_key_head_dim"])?,
         value_head_dim: require_usize(value, &["linear_value_head_dim"])?,
+        layout: match optional_string(value, LINEAR_ATTENTION_LAYOUT)?.as_deref() {
+            None => LinearAttentionLayout::Checkpoint,
+            Some(LINEAR_ATTENTION_LAYOUT_LLAMA_CPP) => LinearAttentionLayout::LlamaCpp,
+            Some(other) => {
+                return Err(invalid(format!("unknown {LINEAR_ATTENTION_LAYOUT} `{other}`")));
+            },
+        },
     }))
 }
 
@@ -53,7 +77,7 @@ pub(super) fn rope_layout(value: &Value) -> Result<RotaryEmbeddingLayout> {
         (None, false) => Ok(RotaryEmbeddingLayout::Standard),
         (Some(sections), false) => Ok(RotaryEmbeddingLayout::MultiSection(sections)),
         (Some(sections), true) => Ok(RotaryEmbeddingLayout::InterleavedMultiSection(sections)),
-        (None, true) => Err(super::parse::invalid("mrope_interleaved requires mrope_section")),
+        (None, true) => Err(invalid("mrope_interleaved requires mrope_section")),
     }
 }
 
@@ -65,14 +89,14 @@ fn rope_sections(value: &Value) -> Result<Option<Vec<usize>>> {
         return Ok(None);
     };
     let Some(items) = raw.as_array() else {
-        return Err(super::parse::invalid("mrope_section must be an array"));
+        return Err(invalid("mrope_section must be an array"));
     };
     let sections = items
         .iter()
         .map(|item| {
-            let number = item.as_u64().ok_or_else(|| {
-                super::parse::invalid("mrope_section entries must be unsigned integers")
-            })?;
+            let number = item
+                .as_u64()
+                .ok_or_else(|| invalid("mrope_section entries must be unsigned integers"))?;
             Ok(usize::try_from(number)?)
         })
         .collect::<Result<Vec<_>>>()?;
@@ -86,8 +110,7 @@ fn rope_interleaved(value: &Value) -> Result<bool> {
     else {
         return Ok(false);
     };
-    raw.as_bool()
-        .ok_or_else(|| super::parse::invalid("mrope_interleaved must be a boolean"))
+    raw.as_bool().ok_or_else(|| invalid("mrope_interleaved must be a boolean"))
 }
 
 fn optional_bool(value: &Value, key: &str) -> Result<Option<bool>> {
@@ -99,5 +122,24 @@ fn optional_bool(value: &Value, key: &str) -> Result<Option<bool>> {
     }
     raw.as_bool()
         .map(Some)
-        .ok_or_else(|| super::parse::invalid(format!("{key} must be a boolean")))
+        .ok_or_else(|| invalid(format!("{key} must be a boolean")))
+}
+
+/// Per-layer input embeddings (Gemma 4's E models): every layer reads a
+/// `width`-wide input from its own token embedding and a projection of the
+/// token embeddings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PerLayerInputConfig {
+    pub width: usize,
+    pub vocab_size: usize,
+}
+
+pub(super) fn per_layer_input(value: &Value) -> Result<Option<PerLayerInputConfig>> {
+    let Some(width) = optional_usize(value, &["hidden_size_per_layer_input"])?.filter(|&w| w > 0)
+    else {
+        return Ok(None);
+    };
+    let vocab_size = optional_usize(value, &["vocab_size_per_layer_input"])?
+        .map_or_else(|| require_usize(value, &["vocab_size"]), Ok)?;
+    Ok(Some(PerLayerInputConfig { width, vocab_size }))
 }

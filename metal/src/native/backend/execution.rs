@@ -138,11 +138,7 @@ pub(super) fn execute_decode(
     let native = loaded.decode(session_id, token_id, execution_sampling.clone())?;
     let output = output::materialize(loaded, native, sampling_logits);
     let output = loaded.finish_decode(
-        &[crate::native::model::DecodeInput {
-            session: session_id,
-            token: token_id,
-            sampling: execution_sampling,
-        }],
+        &[crate::native::model::DecodeInput::single(session_id, token_id, execution_sampling)],
         output,
     )?;
     let cached_tokens = loaded.session_cached_tokens(session_id)?;

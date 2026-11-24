@@ -145,7 +145,7 @@ fn terminal_prefill_restores_recurrent_checkpoint_and_continues() -> Result<()> 
 
 fn greedy_token(output: &NativeOutput) -> Result<u32> {
     match output {
-        NativeOutput::Greedy(token) => Ok(*token),
+        NativeOutput::Greedy(token) | NativeOutput::Verified { next: token, .. } => Ok(*token),
         NativeOutput::Logits(_) => Err(Error::InvalidPrefillBatch("expected greedy output".into())),
     }
 }
