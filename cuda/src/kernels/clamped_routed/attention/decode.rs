@@ -144,9 +144,9 @@ impl ClampedRoutedAttention {
     }
 
     /// Enough KV splits to fill the device twice over, at most one per
-    /// `FlashAttention` key tile of the visible context. Full decode shares
-    /// each K/V head across its query group (one block per K/V head); a
-    /// window keeps one block per query head.
+    /// `FlashAttention` key tile of the visible context. Decode, full or
+    /// windowed, shares each K/V head across its query group (one block per
+    /// K/V head).
     fn splits(
         &self,
         window: FmhaCausalWindow,
@@ -154,9 +154,9 @@ impl ClampedRoutedAttention {
         rows: usize,
         multiprocessors: usize,
     ) -> usize {
-        let (visible, heads) = match window {
-            FmhaCausalWindow::Full => (context, self.kv_heads),
-            FmhaCausalWindow::Sliding(tokens) => (tokens.get().min(context), self.query_heads),
+        let visible = match window {
+            FmhaCausalWindow::Full => context,
+            FmhaCausalWindow::Sliding(tokens) => tokens.get().min(context),
         };
         // `run_mha_fwd_splitkv_dispatch` key tile: 256 keys for head_dim 64,
         // 128 up to 128, 64 beyond.
@@ -165,7 +165,7 @@ impl ClampedRoutedAttention {
             65..=128 => 128,
             _ => 64,
         };
-        let blocks = (rows * heads).max(1);
+        let blocks = (rows * self.kv_heads).max(1);
         visible
             .div_ceil(tile)
             .min((2 * multiprocessors).div_ceil(blocks))
