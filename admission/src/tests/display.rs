@@ -3,8 +3,8 @@
 use crate::{
     ArchitectureError, Rejection, Runtime, TaskRefusal,
     capability::{
-        AttentionScale, AttentionScaleValue, FeedForwardShape, LayerShape, MixerKind,
-        Requirement, ScaleSource,
+        AttentionScale, AttentionScaleValue, FeedForwardShape, LayerShape, MixerKind, Requirement,
+        ScaleSource,
     },
     cuda::CudaDecoderRuntime,
     decoder::Feature,
