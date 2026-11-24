@@ -51,6 +51,10 @@ flag_enum! {
         SharedLayerKeyValues,
         /// Softmax attention projecting without biases.
         UnbiasedAttention,
+        /// Softmax attention not rotating the whole head with a scaled
+        /// `RoPE` (`YaRN`, linear and the others): no rotation, a partial
+        /// one, or an unscaled one.
+        PartialOrUnscaledRope,
         /// Not one softmax-attention layer with routed experts and full
         /// `YaRN` rotation repeated in every layer (set by CUDA's plan,
         /// which lowers that layer for the runtimes built around it).
@@ -120,6 +124,16 @@ pub fn lower_features(
         };
         set(Feature::ScoreSoftcap, attention.logit_softcap.is_some());
         set(Feature::UnbiasedAttention, !attention.projection_bias);
+        let full_scaled = match &attention.position {
+            PositionEncodingSpec::Rotary(rotary) => {
+                rotary.scaling.is_some()
+                    && rotary
+                        .rotated_dimensions(attention.head_dim)
+                        .is_ok_and(|dimensions| dimensions == attention.head_dim)
+            },
+            PositionEncodingSpec::None => false,
+        };
+        set(Feature::PartialOrUnscaledRope, !full_scaled);
         set(Feature::SharedLayerKeyValues, attention.key_value_source.is_some());
         set(
             Feature::ChunkedAttention,

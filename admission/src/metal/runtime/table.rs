@@ -112,7 +112,8 @@ pub(super) fn capabilities(runtime: MetalDecoderRuntime) -> Operations {
             .activations(Expert, &[ClampedSwiGlu])
             .routers(&[Block::Routed], &RouterKind::TOP_K)
             .normalizations(&[QkNormalization::None])
-            .features_except(&refusing(&[])),
+            // Its attention rotates the whole head with the scaled periods.
+            .features_except(&refusing(&[Feature::PartialOrUnscaledRope])),
         MetalDecoderRuntime::StateSpaceHybrid => {
             let latent = [Block::LatentRouted, Block::SharedLatentRouted];
             declared_scales(none)

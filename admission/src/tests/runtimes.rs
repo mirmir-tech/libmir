@@ -1,10 +1,14 @@
 use models::semantic::{KeyValueRelation, MixerSpec, QkNormalization};
 
-use super::fixtures::{AnyResult, dense_contract, mixed_unsupported, unshared_routed};
+use super::fixtures::{
+    AnyResult, clamped_routed, dense_contract, mixed_unsupported, unshared_routed,
+};
 use crate::{
     ArchitectureError, Runtime,
     capability::{FeedForwardShape, LayerShape, MixerKind, Requirement},
-    cuda, metal,
+    cuda,
+    decoder::Feature,
+    metal,
 };
 
 #[test]
@@ -97,5 +101,45 @@ fn graph_decoder_keeps_each_layer_normalization() -> AnyResult<()> {
         cuda::admit(&task, Some(&semantic))?.runtime(),
         Some(cuda::CudaDecoderRuntime::Dense)
     );
+    Ok(())
+}
+
+/// Metal's clamped attention rotates the whole head with scaled periods; a
+/// clamped decoder without that rotation has no Metal runtime.
+#[test]
+fn metal_clamped_attention_needs_a_full_head_scaled_rope() -> AnyResult<()> {
+    let (task, dense) = dense_contract()?;
+    let clamped = clamped_routed(dense);
+    assert_eq!(
+        metal::admit(&task, Some(&clamped))?.runtime(),
+        Some(metal::MetalDecoderRuntime::ClampedRouted)
+    );
+    for unscaled in [None, Some(0.5)] {
+        let mut changed = clamped.clone();
+        for layer in &mut changed.decoder.layers {
+            if let MixerSpec::SoftmaxAttention(attention) = &mut layer.mixer
+                && let models::semantic::PositionEncodingSpec::Rotary(rotary) =
+                    &mut attention.position
+            {
+                match unscaled {
+                    None => rotary.scaling = None,
+                    Some(factor) => rotary.partial_factor = factor,
+                }
+            }
+        }
+        let Some(ArchitectureError::NoRuntime { rejections }) =
+            metal::admit(&task, Some(&changed)).err()
+        else {
+            return Err("Metal admitted clamped attention without a full-head scaled RoPE".into());
+        };
+        let clamped_rejection = rejections.iter().find(|rejection| {
+            rejection.runtime == Runtime::Metal(metal::MetalDecoderRuntime::ClampedRouted)
+        });
+        assert!(clamped_rejection.is_some_and(|rejection| {
+            rejection
+                .missing
+                .contains(&Requirement::Feature(Feature::PartialOrUnscaledRope))
+        }));
+    }
     Ok(())
 }

@@ -186,6 +186,7 @@ const fn feature(feature: Feature) -> &'static str {
         Feature::PerLayerInput => "per-layer inputs",
         Feature::SharedLayerKeyValues => "layers sharing keys and values",
         Feature::UnbiasedAttention => "attention projections without biases",
+        Feature::PartialOrUnscaledRope => "attention without a full-head scaled RoPE",
         Feature::NoRepeatedLayer => {
             "layers other than one YaRN-rotated attention layer with routed experts repeated"
         },
