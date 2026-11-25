@@ -41,13 +41,16 @@ pub struct ImportedFile {
 
 /// How a file came to be in an import, so a later import of the same
 /// directory replaces or removes only what an import made.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FileOrigin {
     /// Written from the GGUF metadata.
     Derived,
-    /// A link the import made to a source elsewhere.
-    Linked,
+    /// A link the import made to the source at `source`, one the manifest
+    /// records, whatever name either has: the file `named`, the path the
+    /// import was given, resolved to when it was made. A `named` link since
+    /// turned to another file makes the import stale.
+    Linked { source: PathBuf, named: PathBuf },
     /// A source already in the directory under its name, which the import
     /// left as it was: never the import's to replace or remove.
     InPlace,
@@ -80,16 +83,25 @@ impl SourceFile {
     }
 
     /// Whether `path` is the link an import made to this source: a symlink
-    /// to its path, or a hard link to the very same file. A copy, even one of
-    /// the same size and time, is not.
+    /// to its path, or a hard link to the very same file elsewhere. A copy,
+    /// even one of the same size and time, is not, nor is the source itself
+    /// at its own path.
     pub(super) fn is_linked_at(&self, path: &Path) -> bool {
         match path.symlink_metadata() {
             Ok(link) if link.file_type().is_symlink() => {
                 fs::read_link(path).is_ok_and(|target| target == self.path)
             },
-            Ok(link) => fs::metadata(&self.path).is_ok_and(|source| same_file(&source, &link)),
+            Ok(link) => {
+                !self.is_at(path)
+                    && fs::metadata(&self.path).is_ok_and(|source| same_file(&source, &link))
+            },
             Err(_) => false,
         }
+    }
+
+    /// Whether `path` is this source at its own path, found in place.
+    pub(super) fn is_at(&self, path: &Path) -> bool {
+        fs::canonicalize(path).is_ok_and(|path| path == self.path)
     }
 
     /// Whether the file is still there with the same size and time.
@@ -119,18 +131,23 @@ impl ImportManifest {
         };
         let manifest = match serde_json::from_slice(&bytes) {
             Ok(manifest) => manifest,
-            Err(_) => match serde_json::from_slice::<legacy::Manifest>(&bytes) {
-                Ok(manifest) => manifest.typed(directory),
-                Err(_) => return Ok(None),
+            Err(_) => match legacy::read(&bytes, directory) {
+                Some(manifest) => manifest,
+                None => return Ok(None),
             },
         };
         Self::check(&manifest, &path)?;
         Ok(Some(manifest))
     }
 
-    /// Refuses a manifest whose file names are not single file names.
+    /// Refuses a manifest whose file names are not single file names, or
+    /// that links a file to a source it does not record.
     fn check(&self, path: &Path) -> Result<()> {
-        let invalid = self.files.iter().find(|file| !is_file_name(&file.name));
+        let invalid = self.files.iter().find(|file| {
+            !is_file_name(&file.name)
+                || matches!(&file.origin, FileOrigin::Linked { source, .. }
+                    if !self.sources().any(|recorded| recorded.path == *source))
+        });
         invalid.map_or(Ok(()), |file| {
             Err(ModelsError::InvalidImportEntry {
                 manifest: path.to_path_buf(),
@@ -150,24 +167,25 @@ impl ImportManifest {
 
     fn holds(&self, directory: &Path, file: &ImportedFile) -> bool {
         let path = directory.join(&file.name);
-        match file.origin {
+        match &file.origin {
             FileOrigin::Derived => path.is_file(),
-            FileOrigin::Linked => self
-                .linked(OsStr::new(&file.name))
-                .is_some_and(|source| source.is_linked_at(&path)),
-            FileOrigin::InPlace => fs::canonicalize(&path)
-                .is_ok_and(|path| self.sources().any(|source| source.path == path)),
+            FileOrigin::Linked { source, named } => {
+                self.linked(OsStr::new(&file.name))
+                    .is_some_and(|source| source.is_linked_at(&path))
+                    && fs::canonicalize(named).is_ok_and(|named| named == *source)
+            },
+            FileOrigin::InPlace => self.sources().any(|source| source.is_at(&path)),
         }
     }
 
     /// The source the import linked under `name`, if it made that link.
     #[must_use]
     pub fn linked(&self, name: &OsStr) -> Option<&SourceFile> {
-        self.files
-            .iter()
-            .any(|file| file.origin == FileOrigin::Linked && OsStr::new(&file.name) == name)
-            .then(|| self.sources().find(|source| source.path.file_name() == Some(name)))
-            .flatten()
+        let source = self.files.iter().find_map(|file| match &file.origin {
+            FileOrigin::Linked { source, .. } if OsStr::new(&file.name) == name => Some(source),
+            _ => None,
+        })?;
+        self.sources().find(|recorded| recorded.path == *source)
     }
 
     /// The files of `directory` the import made, derived or linked.

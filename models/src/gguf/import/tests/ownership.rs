@@ -38,7 +38,7 @@ fn a_source_found_in_place_is_never_replaced() -> TestResult {
     import(vec![first.clone()], 1).write(&directory)?;
     let manifest = ImportManifest::read(&directory).ok_or("no manifest")?;
     let origin = manifest.files.iter().find(|file| file.name == "model.gguf");
-    assert_eq!(origin.map(|file| file.origin), Some(FileOrigin::InPlace));
+    assert_eq!(origin.map(|file| file.origin.clone()), Some(FileOrigin::InPlace));
 
     let refused = conflict(&import(vec![second], 2).write(&directory));
     assert_eq!(refused, Some(ImportConflict::OccupiedLink));

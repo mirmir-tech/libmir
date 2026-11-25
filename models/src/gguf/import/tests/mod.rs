@@ -120,10 +120,19 @@ fn the_manifest_records_files_and_sources() -> TestResult {
     let manifest = ImportManifest::read(&output).ok_or("no manifest")?;
     assert_eq!(manifest.text.len(), 1);
     assert!(manifest.vision.is_empty());
-    let origin =
-        |name: &str| manifest.files.iter().find(|file| file.name == name).map(|file| file.origin);
+    let origin = |name: &str| {
+        manifest
+            .files
+            .iter()
+            .find(|file| file.name == name)
+            .map(|file| file.origin.clone())
+    };
     assert_eq!(origin("tokenizer.json"), Some(FileOrigin::Derived));
-    assert_eq!(origin("model.gguf"), Some(FileOrigin::Linked));
+    let linked = FileOrigin::Linked {
+        source: fs::canonicalize(&source)?,
+        named: std::path::absolute(&source)?,
+    };
+    assert_eq!(origin("model.gguf"), Some(linked));
     assert!(manifest.is_current(&output));
     fs::remove_file(output.join("tokenizer.json"))?;
     assert!(!manifest.is_current(&output));

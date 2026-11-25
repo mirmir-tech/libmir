@@ -33,6 +33,8 @@ struct Stale {
 /// A shard linked under its own name.
 struct Link {
     name: OsString,
+    /// The shard's path as the import was given it, absolute.
+    named: PathBuf,
     target: PathBuf,
     /// The shard itself is already there, under its name.
     present: bool,
@@ -63,7 +65,12 @@ impl Plan {
                 let owned = previous.as_ref().and_then(|manifest| manifest.linked(name));
                 let present = present(&directory.join(name), &target, owned)?;
                 recorded.push(SourceFile::of(&target)?);
-                links.push(Link { name: name.to_owned(), target, present });
+                links.push(Link {
+                    name: name.to_owned(),
+                    named: std::path::absolute(shard)?,
+                    target,
+                    present,
+                });
             }
         }
         // A link whose source the manifest no longer tells cannot be told
@@ -74,7 +81,9 @@ impl Plan {
             .filter(|(_, file)| !names.contains(&file.name.to_lowercase()))
             .filter_map(|(manifest, file)| {
                 let link = match file.origin {
-                    FileOrigin::Linked => Some(manifest.linked(OsStr::new(&file.name))?.clone()),
+                    FileOrigin::Linked { .. } => {
+                        Some(manifest.linked(OsStr::new(&file.name))?.clone())
+                    },
                     FileOrigin::Derived | FileOrigin::InPlace => None,
                 };
                 Some(Stale { name: file.name.clone(), link })
@@ -95,7 +104,10 @@ impl Plan {
                 let origin = if link.present {
                     FileOrigin::InPlace
                 } else {
-                    FileOrigin::Linked
+                    FileOrigin::Linked {
+                        source: link.target.clone(),
+                        named: link.named.clone(),
+                    }
                 };
                 Ok(ImportedFile { name, origin })
             }))
