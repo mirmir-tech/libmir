@@ -1,11 +1,16 @@
 mod gguf;
+#[cfg(test)]
+mod tests;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
 
-use models::{layout::WeightContainer, weights::TensorInfo};
+use models::{
+    layout::{WeightContainer, WeightFile},
+    weights::TensorInfo,
+};
 
 use super::{Array, Dtype, Result, Stream};
 
@@ -93,22 +98,33 @@ impl TensorFile {
     }
 }
 
-/// The tensors of each shard of a model's GGUF weights, from one mapped
-/// catalog built for the whole model; empty for other weights.
+/// The tensors of each GGUF file of a model's weights, from one mapped
+/// catalog per GGUF group: a text model and a separate projector are
+/// groups of their own, each mapped once across its shards. Empty for
+/// other weights.
 #[derive(Debug, Default)]
 pub struct GgufShards(BTreeMap<PathBuf, Vec<TensorInfo>>);
 
 impl GgufShards {
-    /// Maps the model of the first GGUF file in `paths`, once.
-    pub fn of<'a>(paths: impl IntoIterator<Item = &'a Path>) -> Result<Self> {
-        paths
-            .into_iter()
-            .find(|path| WeightContainer::of(path) == Some(WeightContainer::Gguf))
-            .map_or_else(|| Ok(Self::default()), |path| Ok(Self(gguf::shards(path)?)))
+    /// Maps every GGUF group among `weights`, whatever order they sort in.
+    pub fn of(weights: &[WeightFile]) -> Result<Self> {
+        let gguf = weights
+            .iter()
+            .filter(|weight| weight.container == WeightContainer::Gguf)
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut files = gguf
+            .iter()
+            .map(|weight| (weight.path.clone(), Vec::new()))
+            .collect::<BTreeMap<_, _>>();
+        for tensor in WeightContainer::Gguf.read_catalog(&gguf)? {
+            files.entry(tensor.file.clone()).or_default().push(tensor);
+        }
+        Ok(Self(files))
     }
 
-    /// Loads `path`: a shard by its share of the catalog, other weights
-    /// whole.
+    /// Loads `path`: a GGUF file by its share of its group's catalog, other
+    /// weights whole.
     pub fn load(
         &mut self,
         path: &Path,
@@ -120,7 +136,7 @@ impl GgufShards {
         }
         let tensors = self.0.remove(path).ok_or_else(|| {
             super::Error::InvalidModel(format!(
-                "{} is not a shard of the model's first GGUF file",
+                "{} is not a GGUF file of the model's weights",
                 path.display()
             ))
         })?;

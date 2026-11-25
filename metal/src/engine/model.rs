@@ -67,8 +67,8 @@ impl ModelTensors {
         } else {
             ("mapping", "mapped")
         };
-        // One mapped catalog for the model, each shard loading its share.
-        let mut gguf = GgufShards::of(layout.weights.iter().map(|weight| weight.path.as_path()))?;
+        // One mapped catalog per GGUF group, each file loading its share.
+        let mut gguf = GgufShards::of(&layout.weights)?;
         for (index, weight) in layout.weights.iter().enumerate() {
             progress(loaded, total, shard_detail(starting, index, shards, &weight.path));
             let file = gguf.load(&weight.path, full_precision, stream)?;
