@@ -2,7 +2,7 @@ use std::{fs, path::PathBuf};
 
 use serde_json::json;
 
-use super::{Import, ImportConflict, ImportManifest, publish};
+use super::{Import, ImportConflict, ImportManifest, files, publish};
 use crate::{error::ModelsError, gguf::tests::TestResult};
 
 fn root(label: &str) -> std::io::Result<PathBuf> {
@@ -93,12 +93,12 @@ fn a_failed_publish_keeps_the_last_good_import() -> TestResult {
     });
     assert!(failed.is_err());
     assert_eq!(fs::read_to_string(output.join("config.json"))?, "{\n  \"version\": 1\n}");
-    assert!(!publish::beside(&output, "staging")?.exists());
+    assert!(!files::beside(&output, "staging")?.exists());
     import(vec![source.clone()], 2).publish(&output)?;
     assert_eq!(fs::read_to_string(output.join("config.json"))?, "{\n  \"version\": 2\n}");
     assert_eq!(fs::read(output.join("model.gguf"))?, b"source bytes");
     assert!(!output.join("leftover").exists());
-    assert!(!publish::beside(&output, "previous")?.exists());
+    assert!(!files::beside(&output, "previous")?.exists());
     let inside = conflict(&import(vec![source.clone()], 3).publish(&root));
     assert_eq!(inside, Some(ImportConflict::SourceInside));
     assert_eq!(fs::read(&source)?, b"source bytes");
@@ -137,13 +137,13 @@ fn a_failed_retry_after_an_interrupted_swap_restores_the_import() -> TestResult 
     let (source, output) = (root.join("model.gguf"), root.join("imports/model"));
     fs::write(&source, b"source bytes")?;
     import(vec![source.clone()], 1).publish(&output)?;
-    fs::rename(&output, publish::beside(&output, "previous")?)?;
+    fs::rename(&output, files::beside(&output, "previous")?)?;
     let failed = publish::replace(&output, std::slice::from_ref(&source), |_| {
         Err(ModelsError::MissingFile(source.clone()))
     });
     assert!(failed.is_err());
     assert_eq!(fs::read_to_string(output.join("config.json"))?, "{\n  \"version\": 1\n}");
-    assert!(!publish::beside(&output, "previous")?.exists());
+    assert!(!files::beside(&output, "previous")?.exists());
     fs::remove_dir_all(root)?;
     Ok(())
 }
@@ -172,8 +172,42 @@ fn publishers_of_one_directory_take_turns() -> TestResult {
     let manifest = ImportManifest::read(&output).ok_or("no manifest")?;
     assert!(manifest.is_current(&output));
     for role in ["staging", "previous"] {
-        assert!(!publish::beside(&output, role)?.exists(), "{role} left behind");
+        assert!(!files::beside(&output, role)?.exists(), "{role} left behind");
     }
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+/// Where links are hard links, the previous import's link is a plain file;
+/// its manifest names it, so a refresh replaces it.
+#[test]
+fn a_previous_hard_link_is_replaced() -> TestResult {
+    let root = root("hard")?;
+    let (source, output) = (root.join("source/model.gguf"), root.join("output"));
+    fs::create_dir_all(source.parent().unwrap_or(&root))?;
+    fs::write(&source, b"source bytes")?;
+    import(vec![source.clone()], 1).write(&output)?;
+    fs::remove_file(output.join("model.gguf"))?;
+    fs::hard_link(&source, output.join("model.gguf"))?;
+    import(vec![source], 2).write(&output)?;
+    assert_eq!(fs::read(output.join("model.gguf"))?, b"source bytes");
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+/// A source inside the staging or backup directory, which publishing
+/// removes, is refused like one inside the published directory.
+#[test]
+fn a_source_inside_staging_is_refused() -> TestResult {
+    let root = root("staged")?;
+    let output = root.join("imports/model");
+    let staging = files::beside(&output, "staging")?;
+    fs::create_dir_all(&staging)?;
+    let source = staging.join("model.gguf");
+    fs::write(&source, b"source bytes")?;
+    let refused = conflict(&import(vec![source.clone()], 1).publish(&output));
+    assert_eq!(refused, Some(ImportConflict::SourceInside));
+    assert_eq!(fs::read(&source)?, b"source bytes");
     fs::remove_dir_all(root)?;
     Ok(())
 }

@@ -41,7 +41,9 @@ const BLOCK: [(&str, &str); 13] = [
 ];
 
 /// The scalar bounds a clipped linear clamps its input and output to.
-const CLIP_BOUNDS: [&str; 4] = ["input_min", "input_max", "output_min", "output_max"];
+/// The clip bound whose presence marks a clipped tower.
+const INPUT_MAX: &str = "input_max";
+const CLIP_BOUNDS: [&str; 4] = ["input_min", INPUT_MAX, "output_min", "output_max"];
 
 const GLOBAL: [(&str, &str); 4] = [
     (
@@ -82,10 +84,10 @@ pub(super) fn derive(
         })
     };
     let catalog = header.catalog(file)?;
-    let clipped = catalog
-        .tensors
-        .iter()
-        .any(|tensor| tensor.name.starts_with("v.blk.") && tensor.name.ends_with(".input_max"));
+    let clipped = catalog.tensors.iter().any(|tensor| {
+        tensor.name.starts_with("v.blk.")
+            && tensor.name.rsplit_once('.').is_some_and(|(_, leaf)| leaf == INPUT_MAX)
+    });
     let (hidden, heads) = (unsigned("embedding_length")?, unsigned("attention.head_count")?);
     let (patch, channels) = (unsigned("patch_size")?, 3_u64);
     let assembled = patch_projection(header, file, channels)?;

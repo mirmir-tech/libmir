@@ -40,7 +40,7 @@ pub(super) fn activation(architecture: &str) -> Option<&'static str> {
 /// Whether the import derives a configuration for `architecture`: those it
 /// knows the MLP activation of, and Nemotron-H, whose mixers declare theirs.
 pub(in crate::gguf) fn imports(architecture: &str) -> bool {
-    activation(architecture).is_some() || architecture == "nemotron_h"
+    activation(architecture).is_some() || architecture == super::state_space::NEMOTRON_H
 }
 
 /// Fields the architecture fixes in code rather than metadata.

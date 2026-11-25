@@ -1,10 +1,13 @@
-use models::semantic::{ActivationSpec, FeedForwardSpec, MixerSpec, QkNormalization};
+use models::semantic::{
+    ActivationSpec, FeedForwardSpec, MixerSpec, NormalizationKind, QkNormalization,
+};
 
-use super::fixtures::{AnyResult, dense_and_routed, dense_contract};
+use super::fixtures::{AnyResult, clamped_routed, dense_and_routed, dense_contract};
 use crate::{
     ArchitectureError, Constant, Runtime, Unlowerable,
     capability::{AttentionScale, AttentionScaleValue, Requirement, ScaleSource},
-    cuda,
+    cuda::{self, CudaDecoderRuntime},
+    decoder::Feature,
     metal::{self, MetalDecoderRuntime},
 };
 
@@ -91,5 +94,19 @@ fn both_backends_refuse_an_activation_known_only_by_name() -> AnyResult<()> {
     });
     assert_eq!(cuda::admit(&task, Some(&semantic)).err(), refusal);
     assert_eq!(metal::admit(&task, Some(&semantic)).err(), refusal);
+    Ok(())
+}
+
+/// A `LayerNorm` after attention alone needs `LayerNorm`, which CUDA's
+/// clamped-routed runtime lacks: it would otherwise run as RMS.
+#[test]
+fn a_post_attention_layer_norm_needs_layer_norm() -> AnyResult<()> {
+    let (task, spec) = dense_contract()?;
+    let mut routed = clamped_routed(spec);
+    assert!(cuda::admit(&task, Some(&routed)).is_ok());
+    routed.decoder.layers[0].post_attention_norm.kind = NormalizationKind::Layer;
+    let clamped = Runtime::Cuda(CudaDecoderRuntime::ClampedRouted);
+    let layer_norm = Requirement::Feature(Feature::LayerNorm);
+    assert!(lacks(cuda::admit(&task, Some(&routed)).err(), clamped, layer_norm));
     Ok(())
 }

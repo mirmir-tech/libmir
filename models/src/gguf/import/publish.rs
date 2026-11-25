@@ -5,12 +5,14 @@
 //! the directory gone while `.previous` remains restores it first.
 
 use std::{
-    ffi::OsString,
     fs,
     path::{Path, PathBuf},
 };
 
-use super::{ImportConflict, files::remove_stale};
+use super::{
+    ImportConflict,
+    files::{beside, remove_stale},
+};
 use crate::error::{ModelsError, Result};
 
 /// Replaces `directory` with what `fill` writes into a fresh directory. A
@@ -27,14 +29,18 @@ pub(super) fn replace(
     if directory.symlink_metadata().is_err() && previous.symlink_metadata().is_ok() {
         fs::rename(&previous, directory)?;
     }
-    if let Ok(published) = fs::canonicalize(directory) {
-        for source in sources {
-            if fs::canonicalize(source)?.starts_with(&published) {
-                return Err(ModelsError::ImportConflict {
-                    path: directory.to_path_buf(),
-                    conflict: ImportConflict::SourceInside,
-                });
-            }
+    // Publishing replaces or removes all three directories.
+    let replaced = [directory, &staging, &previous]
+        .into_iter()
+        .filter_map(|path| fs::canonicalize(path).ok())
+        .collect::<Vec<_>>();
+    for source in sources {
+        let source = fs::canonicalize(source)?;
+        if replaced.iter().any(|path| source.starts_with(path)) {
+            return Err(ModelsError::ImportConflict {
+                path: directory.to_path_buf(),
+                conflict: ImportConflict::SourceInside,
+            });
         }
     }
     remove_stale(&staging)?;
@@ -67,16 +73,4 @@ fn lock(directory: &Path) -> Result<fs::File> {
     let file = fs::File::options().create(true).truncate(false).write(true).open(path)?;
     file.lock()?;
     Ok(file)
-}
-
-/// `.<name>.<role>` beside `directory`.
-pub(super) fn beside(directory: &Path, role: &str) -> Result<PathBuf> {
-    let name = directory.file_name().ok_or_else(|| {
-        ModelsError::InvalidGguf(format!("{} has no directory name", directory.display()))
-    })?;
-    let mut sibling = OsString::from(".");
-    sibling.push(name);
-    sibling.push(".");
-    sibling.push(role);
-    Ok(directory.with_file_name(sibling))
 }

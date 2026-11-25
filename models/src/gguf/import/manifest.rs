@@ -75,6 +75,12 @@ impl ImportManifest {
             && self.sources().all(SourceFile::is_unchanged)
     }
 
+    /// Whether the import linked a source under `name`.
+    #[must_use]
+    pub fn links(&self, name: &std::ffi::OsStr) -> bool {
+        self.sources().any(|source| source.path.file_name() == Some(name))
+    }
+
     /// The text model's shards, then the vision tower's.
     pub fn sources(&self) -> impl Iterator<Item = &SourceFile> {
         self.text.iter().chain(&self.vision)

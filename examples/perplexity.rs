@@ -9,8 +9,9 @@
 //! [reserve=PERCENT] [bos=ID|none]`, where `prefill` sets the CUDA or Metal
 //! prefill chunk in tokens. A BOS token starts the text and replaces each
 //! chunk's first token, as `llama-perplexity` does for models whose
-//! vocabulary adds one: by default the model's `tokenizer_config.json`
-//! decides (`add_bos_token` and `bos_token`), and `bos` overrides it.
+//! vocabulary adds one: by default an explicit `add_bos_token` in
+//! `tokenizer_config.json` decides, else the token `tokenizer.json`'s
+//! post-processor puts before a text (Llama 3), and `bos` overrides both.
 #![allow(clippy::print_stdout)]
 
 use std::{env, fs, io::Write, path::PathBuf};
@@ -142,29 +143,43 @@ enum Bos {
     Disabled,
 }
 
-/// The BOS token the model's tokenizer adds in front of a text, if any:
-/// `add_bos_token` with `bos_token` given as a string or an added-token
-/// object.
+/// The BOS token the model's tokenizer adds in front of a text, if any, as
+/// Hugging Face's tokenizers decide: an explicit `add_bos_token` in
+/// `tokenizer_config.json` (with `bos_token` as a string or an added-token
+/// object), otherwise the one token `tokenizer.json`'s post-processor puts
+/// before the text. Llama 3 declares its BOS only there.
 fn configured_bos(
     model: &std::path::Path,
     tokenizer: &Tokenizer,
 ) -> Result<Option<u32>, Box<dyn std::error::Error + Send + Sync>> {
-    let Ok(text) = fs::read_to_string(model.join("tokenizer_config.json")) else {
-        return Ok(None);
-    };
-    let config: serde_json::Value = serde_json::from_str(&text)?;
-    if config.get("add_bos_token").and_then(serde_json::Value::as_bool) != Some(true) {
-        return Ok(None);
+    let config = fs::read_to_string(model.join("tokenizer_config.json"))
+        .ok()
+        .map(|text| serde_json::from_str::<serde_json::Value>(&text))
+        .transpose()?;
+    let declared = config.as_ref().and_then(|config| config.get("add_bos_token")?.as_bool());
+    match declared {
+        Some(false) => Ok(None),
+        Some(true) => {
+            let token = config.as_ref().and_then(|config| {
+                let token = config.get("bos_token")?;
+                token.as_str().or_else(|| token.get("content")?.as_str())
+            });
+            let token = token.ok_or("add_bos_token is set without a bos_token")?;
+            Ok(Some(
+                tokenizer
+                    .token_to_id(token)
+                    .ok_or_else(|| format!("{token} is not in the vocabulary"))?,
+            ))
+        },
+        None => {
+            let probe = "a";
+            let plain = tokenizer.encode(probe, false)?;
+            let special = tokenizer.encode(probe, true)?;
+            let (plain, special) = (plain.get_ids(), special.get_ids());
+            Ok(special
+                .split_first()
+                .filter(|(_, rest)| special.len() > plain.len() && rest.starts_with(plain))
+                .map(|(&bos, _)| bos))
+        },
     }
-    let token = config.get("bos_token").and_then(|token| {
-        token
-            .as_str()
-            .or_else(|| token.get("content").and_then(serde_json::Value::as_str))
-    });
-    let token = token.ok_or("add_bos_token is set without a bos_token")?;
-    Ok(Some(
-        tokenizer
-            .token_to_id(token)
-            .ok_or_else(|| format!("{token} is not in the vocabulary"))?,
-    ))
 }

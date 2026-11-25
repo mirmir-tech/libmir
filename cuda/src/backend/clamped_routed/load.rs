@@ -1,8 +1,7 @@
-use architecture::cuda::CudaDecoderPlan;
+use architecture::{cuda::CudaDecoderPlan, lowering::MixerLowering};
 use models::{
     execution::DecoderExecutionContract,
     layout::DecoderConfig,
-    semantic::MixerSpec,
     weights::{TensorCatalog, TensorInfo},
 };
 use runtime::kv::CacheConfig;
@@ -26,14 +25,15 @@ impl CudaBackend {
         ring_sessions: usize,
         progress: &mut dyn FnMut(u64, String),
     ) -> Result<CudaClampedRoutedModelTemplate> {
-        let semantic = &contract.semantic;
         let bindings = &contract.bindings;
-        if semantic.decoder.layers.len() != decoder.num_hidden_layers {
-            return Err(Error::UnsupportedDecoderLayer(
-                "clamped-routed semantic layer count differs from decoder geometry".into(),
-            ));
+        // Admission checked the spec; the loader reads the admitted plan.
+        if plan.layers().len() != decoder.num_hidden_layers {
+            return Err(Error::PlanLayerCount {
+                plan: plan.layers().len(),
+                decoder: decoder.num_hidden_layers,
+            });
         }
-        let config = ClampedRoutedConfig::from_admitted(plan, semantic)?;
+        let config = ClampedRoutedConfig::from_admitted(plan, &contract.semantic)?;
         let layout = ClampedRoutedLayout::discover(bindings)?;
         let capabilities = ClampedRoutedCapabilityPlan::lower(config, layout, cache.dtype)?;
         if ring_sessions == 0 {
@@ -47,11 +47,9 @@ impl CudaBackend {
         let mut completed = bytes_for_names(catalog, &boundary_names)?;
         progress(completed, "clamped-routed model boundary tensors".into());
         let mut layers = Vec::with_capacity(decoder.num_hidden_layers);
-        for (layer, semantic_layer) in semantic.decoder.layers.iter().enumerate() {
-            let MixerSpec::SoftmaxAttention(attention) = &semantic_layer.mixer else {
-                return Err(Error::UnsupportedDecoderLayer(format!(
-                    "clamped-routed layer {layer} requires softmax attention"
-                )));
+        for (layer, lowered) in plan.layers().iter().enumerate() {
+            let MixerLowering::Softmax { window, .. } = lowered.mixer else {
+                return Err(Error::PlanMixer { layer });
             };
             let layer_bindings = bindings.routed_decoder_layer(layer)?;
             let names = owned_names(layer_bindings.physical_sources());
@@ -64,7 +62,7 @@ impl CudaBackend {
                 config,
                 capabilities.qkv,
                 weights::layer(self, layout, config, &tensors, layer_bindings)?,
-                attention.window.and_then(models::semantic::AttentionWindow::sliding),
+                window.and_then(models::semantic::AttentionWindow::sliding),
             ));
             progress(
                 completed,

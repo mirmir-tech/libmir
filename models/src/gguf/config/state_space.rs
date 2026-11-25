@@ -13,6 +13,9 @@ use crate::{
     layout::{STATE_SPACE_LAYOUT, STATE_SPACE_LAYOUT_LLAMA_CPP},
 };
 
+/// llama.cpp's `general.architecture` for Nemotron-H.
+pub(in crate::gguf) const NEMOTRON_H: &str = "nemotron_h";
+
 /// Whether `architecture` is Nemotron-H; fills its keys.
 pub(super) fn nemotron_h(
     header: &GgufHeader,
@@ -20,7 +23,7 @@ pub(super) fn nemotron_h(
     has_convolution_bias: bool,
     config: &mut Map<String, Value>,
 ) -> Result<bool> {
-    if architecture != "nemotron_h" {
+    if architecture != NEMOTRON_H {
         return Ok(false);
     }
     let key = |name: &str| format!("{architecture}.{name}");

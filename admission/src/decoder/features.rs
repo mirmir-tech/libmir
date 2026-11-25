@@ -100,8 +100,9 @@ pub fn lower_features(
     );
     set(
         Feature::LayerNorm,
-        decoder.final_norm.kind == NormalizationKind::Layer
-            || layers.iter().any(|layer| layer.input_norm.kind == NormalizationKind::Layer),
+        std::iter::once(&decoder.final_norm)
+            .chain(layers.iter().flat_map(|layer| [&layer.input_norm, &layer.post_attention_norm]))
+            .any(|norm| norm.kind == NormalizationKind::Layer),
     );
     set(
         Feature::PostOrParallelNorm,

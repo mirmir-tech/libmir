@@ -31,35 +31,64 @@ impl fmt::Display for Rejection {
 
 impl fmt::Display for Runtime {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Cuda(runtime) => write!(formatter, "CUDA {}", cuda(*runtime)),
-            Self::Metal(runtime) => write!(formatter, "Metal {}", metal(*runtime)),
+        let (backend, family) = match self {
+            Self::Cuda(runtime) => ("CUDA", Family::of_cuda(*runtime)),
+            Self::Metal(runtime) => ("Metal", Family::of_metal(*runtime)),
+        };
+        write!(formatter, "{backend} {}", family.name())
+    }
+}
+
+/// The decoder shape a runtime of either backend executes, named once.
+#[derive(Clone, Copy)]
+enum Family {
+    Dense,
+    DenseGelu,
+    DenseAndRouted,
+    SharedRouted,
+    DenseMixed,
+    ClampedRouted,
+    StateSpaceHybrid,
+    LatentAttention,
+}
+
+impl Family {
+    const fn of_cuda(runtime: CudaDecoderRuntime) -> Self {
+        match runtime {
+            CudaDecoderRuntime::Dense => Self::Dense,
+            CudaDecoderRuntime::DenseAndRouted => Self::DenseAndRouted,
+            CudaDecoderRuntime::SharedRouted => Self::SharedRouted,
+            CudaDecoderRuntime::DenseMixed => Self::DenseMixed,
+            CudaDecoderRuntime::ClampedRouted => Self::ClampedRouted,
+            CudaDecoderRuntime::StateSpaceHybrid => Self::StateSpaceHybrid,
+            CudaDecoderRuntime::LatentAttention => Self::LatentAttention,
         }
     }
-}
 
-const fn cuda(runtime: CudaDecoderRuntime) -> &'static str {
-    match runtime {
-        CudaDecoderRuntime::Dense => "dense",
-        CudaDecoderRuntime::DenseAndRouted => "dense-and-routed",
-        CudaDecoderRuntime::SharedRouted => "shared-routed",
-        CudaDecoderRuntime::DenseMixed => "dense mixed-attention",
-        CudaDecoderRuntime::ClampedRouted => "clamped-routed",
-        CudaDecoderRuntime::StateSpaceHybrid => "state-space hybrid",
-        CudaDecoderRuntime::LatentAttention => "latent-attention",
+    const fn of_metal(runtime: MetalDecoderRuntime) -> Self {
+        match runtime {
+            MetalDecoderRuntime::Dense => Self::Dense,
+            MetalDecoderRuntime::DenseGelu => Self::DenseGelu,
+            MetalDecoderRuntime::DenseAndRouted => Self::DenseAndRouted,
+            MetalDecoderRuntime::SharedRouted => Self::SharedRouted,
+            MetalDecoderRuntime::DenseMixed => Self::DenseMixed,
+            MetalDecoderRuntime::ClampedRouted => Self::ClampedRouted,
+            MetalDecoderRuntime::StateSpaceHybrid => Self::StateSpaceHybrid,
+            MetalDecoderRuntime::LatentAttention => Self::LatentAttention,
+        }
     }
-}
 
-const fn metal(runtime: MetalDecoderRuntime) -> &'static str {
-    match runtime {
-        MetalDecoderRuntime::Dense => "dense",
-        MetalDecoderRuntime::DenseGelu => "dense GELU",
-        MetalDecoderRuntime::DenseAndRouted => "dense-and-routed",
-        MetalDecoderRuntime::SharedRouted => "shared-routed",
-        MetalDecoderRuntime::DenseMixed => "dense mixed-attention",
-        MetalDecoderRuntime::ClampedRouted => "clamped-routed",
-        MetalDecoderRuntime::StateSpaceHybrid => "state-space hybrid",
-        MetalDecoderRuntime::LatentAttention => "latent-attention",
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Dense => "dense",
+            Self::DenseGelu => "dense GELU",
+            Self::DenseAndRouted => "dense-and-routed",
+            Self::SharedRouted => "shared-routed",
+            Self::DenseMixed => "dense mixed-attention",
+            Self::ClampedRouted => "clamped-routed",
+            Self::StateSpaceHybrid => "state-space hybrid",
+            Self::LatentAttention => "latent-attention",
+        }
     }
 }
 

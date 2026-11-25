@@ -94,6 +94,12 @@ pub enum Error {
     /// or what each runtime lacks.
     #[error("CUDA admission refused the architecture: {0}")]
     Architecture(#[from] architecture::ArchitectureError),
+    /// The admitted plan has another layer count than the decoder geometry.
+    #[error("the admitted CUDA plan has {plan} layers; the decoder has {decoder}")]
+    PlanLayerCount { plan: usize, decoder: usize },
+    /// A runtime received an admitted layer whose mixer it does not run.
+    #[error("admitted CUDA layer {layer} is not softmax attention")]
+    PlanMixer { layer: usize },
     /// Checkpoint metadata describes a decoder layer outside the native CUDA
     /// capability set.
     #[error("unsupported CUDA decoder layer: {0}")]

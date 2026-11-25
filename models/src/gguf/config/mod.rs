@@ -19,6 +19,8 @@ mod llama4;
 mod long_rope;
 mod state_space;
 
+pub(in crate::gguf) use state_space::NEMOTRON_H;
+
 use super::{GgufModel, MetadataValue};
 use crate::error::{ModelsError, Result};
 

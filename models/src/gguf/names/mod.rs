@@ -40,10 +40,10 @@ const BLOCK: [(&str, &str); 45] = [
     ("ffn_down", "mlp.down_proj"),
     ("ffn_gate_inp", "mlp.gate"),
     ("post_attention_norm", "post_attention_layernorm"),
-    ("post_ffw_norm", "post_feedforward_layernorm"),
+    (POST_FEED_FORWARD_NORMS[0], "post_feedforward_layernorm"),
     // GLM-4 names the same sandwich norms after their sub-block.
     ("attn_post_norm", "post_attention_layernorm"),
-    ("ffn_post_norm", "post_feedforward_layernorm"),
+    (POST_FEED_FORWARD_NORMS[1], "post_feedforward_layernorm"),
     // Gemma 4's parallel dense and expert feed-forwards.
     ("pre_ffw_norm_2", "pre_feedforward_layernorm_2"),
     ("post_ffw_norm_1", "post_feedforward_layernorm_1"),
@@ -80,6 +80,9 @@ const BLOCK: [(&str, &str); 45] = [
     ("ssm_norm", "linear_attn.norm"),
     ("ssm_out", "linear_attn.out_proj"),
 ];
+
+/// The roles of the norm after a block's feed-forward: Gemma's, then GLM-4's.
+const POST_FEED_FORWARD_NORMS: [&str; 2] = ["post_ffw_norm", "ffn_post_norm"];
 
 /// In a block with both output norms (Gemma's sandwich), `ffn_norm` is the
 /// norm before the feed-forward rather than after attention.
@@ -119,7 +122,7 @@ pub fn safetensors_name(gguf: &str) -> Option<String> {
 /// by its projector's names, a text model by the role tables and the layout
 /// fixes below.
 pub(super) fn map(header: &GgufHeader, tensors: &mut [TensorInfo]) -> Result<()> {
-    if header.architecture() == Some("nemotron_h") {
+    if header.architecture() == Some(super::config::NEMOTRON_H) {
         state_space::map(tensors);
         return Ok(());
     }
@@ -137,14 +140,15 @@ pub(super) fn map(header: &GgufHeader, tensors: &mut [TensorInfo]) -> Result<()>
     let sandwiches = tensors
         .iter()
         .filter_map(|tensor| {
-            let name = tensor.name.as_str();
-            name.strip_suffix(".post_ffw_norm.weight")
-                .or_else(|| name.strip_suffix(".ffn_post_norm.weight"))
+            let (block, role) = tensor.name.strip_suffix(".weight")?.rsplit_once('.')?;
+            POST_FEED_FORWARD_NORMS.contains(&role).then(|| block.to_owned())
         })
-        .map(str::to_owned)
         .collect::<BTreeSet<_>>();
     let sandwich = |name: &str| {
-        let block = name.strip_suffix(".ffn_norm.weight")?;
+        let (block, role) = name.strip_suffix(".weight")?.rsplit_once('.')?;
+        if role != SANDWICH_FEED_FORWARD_NORM.0 {
+            return None;
+        }
         let layer = block.strip_prefix("blk.")?;
         sandwiches
             .contains(block)
