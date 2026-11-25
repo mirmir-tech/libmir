@@ -1,6 +1,6 @@
 //! Split models map their names by shard 1's metadata across every shard.
 
-use super::{GgmlType, GgufModel, Result, Writer};
+use super::{GgmlType, GgufModel, Result, ShardName, Writer};
 
 fn shard(number: u32, writer: Writer) -> Writer {
     let unsigned = |value: u32| value.to_le_bytes().to_vec();
@@ -50,4 +50,75 @@ fn headers_from_elsewhere_build_the_same_model() -> Result<()> {
     assert!(GgufModel::from_headers(reversed, []).is_err());
     assert!(GgufModel::from_headers(Vec::new(), []).is_err());
     Ok(())
+}
+
+/// Gemma's `ffn_norm` is the norm before the feed-forward wherever its block's
+/// `post_ffw_norm` is stored: in the same file, together in shard 2, or in
+/// the other shard.
+#[test]
+fn sandwich_norms_map_alike_however_the_shards_split_them() -> Result<()> {
+    let directory =
+        std::env::temp_dir().join(format!("libmir-gguf-sandwich-{}", std::process::id()));
+    std::fs::create_dir_all(&directory)?;
+    let norms = ["blk.0.attn_norm.weight", "blk.1.ffn_norm.weight", "blk.1.post_ffw_norm.weight"];
+    let mapped = |label: &str, split: &[&[&str]]| -> Result<Vec<String>> {
+        let count = u32::try_from(split.len())?;
+        let paths = (1..=count)
+            .map(|number| directory.join(format!("{label}-{number:05}-of-{count:05}.gguf")))
+            .collect::<Vec<_>>();
+        for (index, (path, names)) in paths.iter().zip(split).enumerate() {
+            let mut writer = Writer::new();
+            if index == 0 {
+                let total = u32::try_from(norms.len())?.to_le_bytes().to_vec();
+                writer = writer.text("general.architecture", "gemma2")?;
+                writer = writer.kv("split.tensors.count", 4, total);
+            }
+            let unsigned = |value: u32| value.to_le_bytes().to_vec();
+            writer = writer.kv("split.no", 4, unsigned(u32::try_from(index)?)).kv(
+                "split.count",
+                4,
+                unsigned(count),
+            );
+            for name in *names {
+                writer = writer.tensor(name, &[4], GgmlType::F32)?;
+            }
+            std::fs::write(path, writer.bytes()?)?;
+        }
+        let catalog = GgufModel::open(&paths[0])?.mapped_catalog()?;
+        let mut names = catalog.tensors.into_iter().map(|tensor| tensor.name).collect::<Vec<_>>();
+        names.sort();
+        Ok(names)
+    };
+    let one = mapped("one", &[&norms])?;
+    let together = mapped("together", &[&norms[..1], &norms[1..]])?;
+    let apart = mapped("apart", &[&norms[..2], &norms[2..]])?;
+    let reversed = mapped("reversed", &[&[norms[0], norms[2]], &[norms[1]]])?;
+    std::fs::remove_dir_all(&directory)?;
+    assert!(
+        one.contains(&"model.layers.1.pre_feedforward_layernorm.weight".to_owned()),
+        "{one:?}"
+    );
+    assert_eq!(together, one);
+    assert_eq!(apart, one);
+    assert_eq!(reversed, one);
+    Ok(())
+}
+
+/// Shard suffixes are read as ASCII bytes: accented and non-Latin stems stay
+/// whole, malformed suffixes are no shard, and a numbered shard parses.
+#[test]
+fn shard_names_parse_without_cutting_characters() {
+    let shard = |prefix, number, count| Some(ShardName { prefix, number, count });
+    assert_eq!(ShardName::parse("model-aaaaé12345678"), None);
+    assert_eq!(ShardName::parse("modèle-00002-of-00003"), shard("modèle", 2, 3));
+    assert_eq!(ShardName::parse("模型-量化-00001-OF-00002"), shard("模型-量化", 1, 2));
+    assert_eq!(ShardName::parse("-00001-of-00001"), shard("", 1, 1));
+    assert_eq!(ShardName::parse("Qwen3-8B-Q4_K_M"), None);
+    assert_eq!(ShardName::parse("m-0001-of-00002"), None);
+    assert_eq!(ShardName::parse("m-00003-of-00002"), None);
+    assert_eq!(ShardName::parse("m-00000-of-00002"), None);
+    assert_eq!(ShardName::parse("m-0000a-of-00002"), None);
+    assert_eq!(ShardName::parse("m-00001-on-00002"), None);
+    assert_eq!(ShardName::parse("m_00001-of-00002"), None);
+    assert_eq!(ShardName::parse("é-of-00002"), None);
 }

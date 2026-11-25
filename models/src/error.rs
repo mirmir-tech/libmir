@@ -15,6 +15,11 @@ pub enum ModelsError {
     UnsupportedGgmlType(u32),
     #[error("model file is missing: {0}")]
     MissingFile(PathBuf),
+    #[error("cannot import a GGUF model to {}: {conflict}", path.display())]
+    ImportConflict {
+        path: PathBuf,
+        conflict: crate::gguf::ImportConflict,
+    },
     #[error("invalid model config: {0}")]
     InvalidConfig(String),
     #[error("invalid safetensors payload range: {0}")]

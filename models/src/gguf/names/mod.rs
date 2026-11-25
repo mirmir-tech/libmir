@@ -131,20 +131,24 @@ pub(super) fn map(header: &GgufHeader, tensors: &mut [TensorInfo]) -> Result<()>
         }
         return Ok(());
     }
+    // The blocks with a norm after their feed-forward, indexed over the whole
+    // model before any tensor is renamed: a shard may hold a block's
+    // `ffn_norm` and another its companion.
+    let sandwiches = tensors
+        .iter()
+        .filter_map(|tensor| {
+            let name = tensor.name.as_str();
+            name.strip_suffix(".post_ffw_norm.weight")
+                .or_else(|| name.strip_suffix(".ffn_post_norm.weight"))
+        })
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
     let sandwich = |name: &str| {
         let block = name.strip_suffix(".ffn_norm.weight")?;
-        header
-            .tensors
-            .iter()
-            .any(|tensor| {
-                tensor.name == format!("{block}.post_ffw_norm.weight")
-                    || tensor.name == format!("{block}.ffn_post_norm.weight")
-            })
-            .then(|| {
-                let layer = block.strip_prefix("blk.")?;
-                Some(format!("model.layers.{layer}.{}.weight", SANDWICH_FEED_FORWARD_NORM.1))
-            })
-            .flatten()
+        let layer = block.strip_prefix("blk.")?;
+        sandwiches
+            .contains(block)
+            .then(|| format!("model.layers.{layer}.{}.weight", SANDWICH_FEED_FORWARD_NORM.1))
     };
     for tensor in tensors.iter_mut() {
         if let Some(name) = sandwich(&tensor.name).or_else(|| safetensors_name(&tensor.name)) {

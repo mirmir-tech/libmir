@@ -101,13 +101,20 @@ impl GgufModel {
 /// The files of the model `path` belongs to: every shard of a split model in
 /// order, or `path` alone.
 pub fn shard_paths(path: &Path) -> Result<Vec<PathBuf>> {
-    let Some((prefix, count)) = split_name(path) else {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return Ok(vec![path.to_path_buf()]);
+    };
+    let Some(split) = name
+        .strip_suffix(WeightContainer::Gguf.extension())
+        .and_then(|stem| stem.strip_suffix('.'))
+        .and_then(ShardName::parse)
+    else {
         return Ok(vec![path.to_path_buf()]);
     };
     let directory = path.parent().unwrap_or_else(|| Path::new("."));
-    (1..=count)
+    (1..=split.count)
         .map(|number| {
-            let shard = directory.join(format!("{prefix}-{number:05}-of-{count:05}.gguf"));
+            let shard = directory.join(split.renumbered(name, number));
             if shard.is_file() {
                 Ok(shard)
             } else {
@@ -117,18 +124,44 @@ pub fn shard_paths(path: &Path) -> Result<Vec<PathBuf>> {
         .collect()
 }
 
-/// `name-00002-of-00003.gguf` → (`name`, 3).
-fn split_name(path: &Path) -> Option<(String, u32)> {
-    let name = path.file_name()?.to_str()?;
-    let stem = name.strip_suffix(WeightContainer::Gguf.extension())?.strip_suffix('.')?;
-    let (rest, count) = stem.rsplit_once("-of-")?;
-    let (prefix, number) = rest.rsplit_once('-')?;
-    let valid =
-        |digits: &str| digits.len() == 5 && digits.bytes().all(|byte| byte.is_ascii_digit());
-    if !valid(number) || !valid(count) {
-        return None;
+/// A gguf-split file stem, `<prefix>-00002-of-00003`: shard `number` of
+/// `count`, numbered from 1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShardName<'a> {
+    pub prefix: &'a str,
+    pub number: u32,
+    pub count: u32,
+}
+
+impl<'a> ShardName<'a> {
+    /// The suffix after the prefix: `-NNNNN-of-NNNNN`.
+    const SUFFIX: usize = 15;
+
+    /// Parses a file stem, without its extension. The suffix is checked as
+    /// ASCII bytes before the stem is cut, so any UTF-8 prefix stays whole;
+    /// `-of-` matches in any case.
+    #[must_use]
+    pub fn parse(stem: &'a str) -> Option<Self> {
+        let start = stem.len().checked_sub(Self::SUFFIX)?;
+        let suffix = &stem.as_bytes()[start..];
+        let digits = |bytes: &[u8]| {
+            bytes.iter().try_fold(0_u32, |value, &byte| {
+                byte.is_ascii_digit().then(|| value * 10 + u32::from(byte - b'0'))
+            })
+        };
+        if suffix[0] != b'-' || !suffix[6..10].eq_ignore_ascii_case(b"-of-") {
+            return None;
+        }
+        let (number, count) = (digits(&suffix[1..6])?, digits(&suffix[10..])?);
+        // `start` holds the ASCII `-`, so it is a character boundary.
+        let prefix = stem.get(..start)?;
+        (1..=count).contains(&number).then_some(Self { prefix, number, count })
     }
-    let count: u32 = count.parse().ok()?;
-    let number: u32 = number.parse().ok()?;
-    (number >= 1 && number <= count).then(|| (prefix.to_owned(), count))
+
+    /// `name`, the file this stem was parsed from, numbered `number` instead:
+    /// its prefix, separator and extension are kept as they are spelled.
+    fn renumbered(self, name: &str, number: u32) -> String {
+        let head = self.prefix.len() + 1;
+        format!("{}{number:05}{}", &name[..head], &name[head + 5..])
+    }
 }

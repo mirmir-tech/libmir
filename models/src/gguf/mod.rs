@@ -29,10 +29,10 @@ use std::{
 pub use config::imports_architecture;
 pub use dequantize::dequantize;
 pub use header::GgufHeader;
-pub use import::Import;
+pub use import::{Import, ImportConflict};
 pub use names::safetensors_name;
 pub use reader::ParseError;
-pub use split::{GgufModel, shard_paths};
+pub use split::{GgufModel, ShardName, shard_paths};
 pub use tensor::GgufTensor;
 pub use tiled::TiledValueHeads;
 pub use types::{Affine32, GgmlType};

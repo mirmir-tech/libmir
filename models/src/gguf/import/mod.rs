@@ -3,12 +3,15 @@
 //! `tokenizer_config.json` derived from the metadata, plus links to the GGUF
 //! files, whose tensors the catalog reads in place.
 
+mod files;
+mod publish;
+
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
 use super::{GgufModel, VisionImport, config, tokenizer};
-use crate::error::{ModelsError, Result};
+use crate::error::Result;
 
 /// The derived files of one GGUF model, before they are written.
 #[derive(Debug, Clone)]
@@ -56,46 +59,55 @@ impl Import {
     }
 
     /// Writes the import into `directory`, which then loads like a
-    /// `SafeTensors` checkpoint directory. Shards are linked, not copied.
+    /// `SafeTensors` checkpoint directory. Shards are linked, not copied; a
+    /// shard already in `directory`, such as when it is the source's own
+    /// directory, stays as it is. Every path is resolved and checked before
+    /// the first write, and `config.json` is written last.
     pub fn write(&self, directory: &Path) -> Result<()> {
+        let plan = files::Plan::new(self, directory)?;
         std::fs::create_dir_all(directory)?;
+        plan.write(directory)
+    }
+
+    /// Publishes the import as `directory` in one step: it is written beside
+    /// it and replaces the previous import only once complete, so a failure
+    /// leaves the last good import in place. No source may live inside
+    /// `directory`, which is replaced whole.
+    pub fn publish(&self, directory: &Path) -> Result<()> {
+        publish::replace(directory, &self.shards, |staging| self.write(staging))
+    }
+
+    /// The derived files, `(name, contents)`, with `config.json` last.
+    fn derived(&self) -> Result<Vec<(String, Vec<u8>)>> {
+        let mut files = Vec::new();
         for (name, value) in [
-            ("config.json", &self.config),
-            ("generation_config.json", &self.generation_config),
-            ("tokenizer.json", &self.tokenizer),
-            ("tokenizer_config.json", &self.tokenizer_config),
+            ("generation_config.json", Some(&self.generation_config)),
+            ("tokenizer.json", Some(&self.tokenizer)),
+            ("tokenizer_config.json", Some(&self.tokenizer_config)),
+            ("preprocessor_config.json", self.preprocessor_config.as_ref()),
         ] {
-            std::fs::write(directory.join(name), serde_json::to_vec_pretty(value)?)?;
-        }
-        if let Some(value) = &self.preprocessor_config {
-            std::fs::write(
-                directory.join("preprocessor_config.json"),
-                serde_json::to_vec_pretty(value)?,
-            )?;
+            if let Some(value) = value {
+                files.push((name.to_owned(), serde_json::to_vec_pretty(value)?));
+            }
         }
         if let Some((name, bytes)) = &self.assembled {
-            std::fs::write(directory.join(name), bytes)?;
+            files.push((name.clone(), bytes.clone()));
         }
-        for shard in &self.shards {
-            let name = shard.file_name().ok_or_else(|| {
-                ModelsError::InvalidGguf(format!("{} has no file name", shard.display()))
-            })?;
-            let link = directory.join(name);
-            if link.symlink_metadata().is_ok() {
-                std::fs::remove_file(&link)?;
-            }
-            link_file(&std::fs::canonicalize(shard)?, &link)?;
-        }
-        Ok(())
+        files.push(("config.json".to_owned(), serde_json::to_vec_pretty(&self.config)?));
+        Ok(files)
     }
 }
 
-#[cfg(unix)]
-fn link_file(target: &Path, link: &Path) -> Result<()> {
-    Ok(std::os::unix::fs::symlink(target, link)?)
+/// Why an import cannot be written where it was asked to go.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum ImportConflict {
+    #[error("a different file already has a shard's name")]
+    OccupiedLink,
+    #[error("two files of the import share a name")]
+    DuplicateName,
+    #[error("a source file lives inside the directory publishing replaces")]
+    SourceInside,
 }
 
-#[cfg(not(unix))]
-fn link_file(target: &Path, link: &Path) -> Result<()> {
-    Ok(std::fs::hard_link(target, link)?)
-}
+#[cfg(test)]
+mod tests;

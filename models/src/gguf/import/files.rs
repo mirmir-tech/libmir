@@ -1,0 +1,129 @@
+//! The files of an import, resolved and checked before the first write, and
+//! each written whole: to a partial file renamed over its name.
+
+use std::{
+    collections::BTreeSet,
+    ffi::{OsStr, OsString},
+    fs, io,
+    path::{Path, PathBuf},
+};
+
+use super::{Import, ImportConflict};
+use crate::error::{ModelsError, Result};
+
+/// What writing an import into one directory does.
+pub(super) struct Plan {
+    /// `(name, contents)`, `config.json` last.
+    derived: Vec<(String, Vec<u8>)>,
+    links: Vec<Link>,
+}
+
+/// A shard linked under its own name.
+struct Link {
+    name: OsString,
+    target: PathBuf,
+    /// The shard itself is already there, under its name.
+    present: bool,
+}
+
+impl Plan {
+    pub(super) fn new(import: &Import, directory: &Path) -> Result<Self> {
+        let derived = import.derived()?;
+        let mut names = BTreeSet::new();
+        for (name, _) in &derived {
+            claim(&mut names, OsStr::new(name), directory)?;
+        }
+        let mut links = Vec::new();
+        for shard in &import.shards {
+            let name = shard.file_name().ok_or_else(|| {
+                ModelsError::InvalidGguf(format!("{} has no file name", shard.display()))
+            })?;
+            claim(&mut names, name, directory)?;
+            let target = fs::canonicalize(shard)?;
+            let present = present(&directory.join(name), &target)?;
+            links.push(Link { name: name.to_owned(), target, present });
+        }
+        Ok(Self { derived, links })
+    }
+
+    pub(super) fn write(&self, directory: &Path) -> Result<()> {
+        for link in self.links.iter().filter(|link| !link.present) {
+            let path = directory.join(&link.name);
+            let partial = partial(&path)?;
+            remove_stale(&partial)?;
+            link_file(&link.target, &partial)?;
+            fs::rename(&partial, &path)?;
+        }
+        for (name, bytes) in &self.derived {
+            let path = directory.join(name);
+            let partial = partial(&path)?;
+            fs::write(&partial, bytes)?;
+            fs::rename(&partial, &path)?;
+        }
+        Ok(())
+    }
+}
+
+/// Takes `name` for one file of the import; names differing only in case
+/// would be one file on a case-insensitive file system.
+fn claim(names: &mut BTreeSet<String>, name: &OsStr, directory: &Path) -> Result<()> {
+    if names.insert(name.to_string_lossy().to_lowercase()) {
+        return Ok(());
+    }
+    Err(ModelsError::ImportConflict {
+        path: directory.join(name),
+        conflict: ImportConflict::DuplicateName,
+    })
+}
+
+/// Whether `path` is already the shard `target` itself. A link there, from
+/// a previous import, is replaced; any other file is kept and refused.
+fn present(path: &Path, target: &Path) -> Result<bool> {
+    let metadata = match path.symlink_metadata() {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    if metadata.file_type().is_symlink() {
+        return Ok(false);
+    }
+    if fs::canonicalize(path)? == target {
+        return Ok(true);
+    }
+    Err(ModelsError::ImportConflict {
+        path: path.to_path_buf(),
+        conflict: ImportConflict::OccupiedLink,
+    })
+}
+
+/// `.<name>.partial` beside `path`, written and then renamed to `path`.
+fn partial(path: &Path) -> Result<PathBuf> {
+    let name = path
+        .file_name()
+        .ok_or_else(|| ModelsError::InvalidGguf(format!("{} has no file name", path.display())))?;
+    let mut partial = OsString::from(".");
+    partial.push(name);
+    partial.push(".partial");
+    Ok(path.with_file_name(partial))
+}
+
+/// Removes a file or directory left by an interrupted write, if any.
+pub(super) fn remove_stale(path: &Path) -> Result<()> {
+    let result = match path.symlink_metadata() {
+        Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(path),
+        Ok(_) => fs::remove_file(path),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => Err(error),
+    };
+    Ok(result?)
+}
+
+#[cfg(unix)]
+fn link_file(target: &Path, link: &Path) -> Result<()> {
+    Ok(std::os::unix::fs::symlink(target, link)?)
+}
+
+#[cfg(not(unix))]
+fn link_file(target: &Path, link: &Path) -> Result<()> {
+    Ok(fs::hard_link(target, link)?)
+}
