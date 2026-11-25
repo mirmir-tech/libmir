@@ -1,9 +1,10 @@
 //! A GGUF import with a separate vision projector: two GGUF groups, the
 //! text model and `mmproj`, each mapped and loaded whichever sorts first.
 
-use std::{fs, path::Path};
+use std::{collections::BTreeSet, fs, path::Path};
 
-use crate::engine::{ModelTensors, Result, Stream};
+use super::{GgufShards, TensorFile};
+use crate::engine::{Error, ModelTensors, Result, Stream};
 
 const MAGIC: &[u8; 4] = b"GGUF";
 const ALIGNMENT: u64 = 32;
@@ -74,5 +75,18 @@ fn a_separate_projector_loads_beside_its_text_model_in_either_order() -> Result<
         let shapes = text_and_vision(&root.join(index.to_string()), text, "mmproj.gguf")?;
         assert_eq!(shapes, (vec![2, 4], vec![4, 4]), "text model {text}");
     }
+    Ok(())
+}
+
+/// A GGUF file outside the model's catalog is refused by type, and before
+/// anything is read: the path need not even exist.
+#[test]
+fn an_uncatalogued_gguf_file_is_refused_unread() -> Result<()> {
+    let missing = std::env::temp_dir().join("libmir-metal-never-written.gguf");
+    let stream = Stream::new_cpu()?;
+    let refused = |result: Result<TensorFile>| matches!(result, Err(Error::UncataloguedGguf(path)) if path == missing);
+    assert!(refused(TensorFile::load(&missing, &stream)));
+    let mut shards = GgufShards::of(&[])?;
+    assert!(refused(shards.load(&missing, &BTreeSet::new(), &stream)));
     Ok(())
 }

@@ -98,7 +98,9 @@ pub(super) fn forward_decode(
 }
 
 /// Rotated `[1, heads, S, D]` queries over `context`: the paged one a
-/// decode reads natively, else with the context's or the layer's mask.
+/// decode reads natively, else with the context's or the layer's mask. A
+/// multi-token pass always asks its cache for a view, so a paged context
+/// there is a broken invariant, refused rather than read.
 fn attend(
     queries: &Array,
     context: &KvContext,
@@ -122,6 +124,9 @@ fn attend(
             )
         },
         |paged| {
+            if queries.shape()?.get(2).is_none_or(|&tokens| tokens != 1) {
+                return Err(Error::MultiTokenPagedAttention);
+            }
             queries.paged_scaled_dot_product_attention_with_scratch(
                 paged.attention(),
                 paged.scratch(),

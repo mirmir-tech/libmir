@@ -12,7 +12,7 @@ use models::{
     weights::TensorInfo,
 };
 
-use super::{Array, Dtype, Result, Stream};
+use super::{Array, Dtype, Error, Result, Stream};
 
 #[derive(Debug)]
 pub struct TensorFile {
@@ -24,33 +24,22 @@ pub struct TensorFile {
 }
 
 impl TensorFile {
-    /// Binds a safetensors file, or a GGUF file whose tensors are read from
-    /// their ranges under their mapped `SafeTensors` names.
+    /// Binds a safetensors file. A GGUF file loads through [`GgufShards`],
+    /// by its share of its model's catalog; nothing is read for it here.
     pub fn load(path: &Path, stream: &Stream) -> Result<Self> {
-        Self::load_keeping(path, &BTreeSet::new(), stream)
+        if WeightContainer::of(path) == Some(WeightContainer::Gguf) {
+            return Err(Error::UncataloguedGguf(path.to_owned()));
+        }
+        Ok(Self {
+            native: mirtal::TensorFile::load(path, stream.native())?,
+            converted: BTreeMap::new(),
+        })
     }
 
-    /// [`Self::load`], keeping the GGUF float tensors named in
+    /// One file of a GGUF model: its `tensors`, its share of the model's
+    /// mapped catalog ([`GgufShards`]), keeping the float tensors named in
     /// `full_precision` in their stored type: the binding plan's
     /// [`models::weights::TensorBinding::full_precision_sources`].
-    pub fn load_keeping(
-        path: &Path,
-        full_precision: &BTreeSet<String>,
-        stream: &Stream,
-    ) -> Result<Self> {
-        if WeightContainer::of(path) != Some(WeightContainer::Gguf) {
-            return Ok(Self {
-                native: mirtal::TensorFile::load(path, stream.native())?,
-                converted: BTreeMap::new(),
-            });
-        }
-        let tensors = gguf::shards(path)?.remove(path).unwrap_or_default();
-        Self::load_gguf_shard(path, &tensors, full_precision, stream)
-    }
-
-    /// One shard of a GGUF model: its `tensors`, its share of the model's
-    /// mapped catalog ([`GgufShards`]), keeping `full_precision` as
-    /// [`Self::load_keeping`] does.
     pub fn load_gguf_shard(
         path: &Path,
         tensors: &[TensorInfo],
@@ -123,8 +112,8 @@ impl GgufShards {
         Ok(Self(files))
     }
 
-    /// Loads `path`: a GGUF file by its share of its group's catalog, other
-    /// weights whole.
+    /// Loads `path`: a GGUF file by its share of its group's catalog, keeping
+    /// `full_precision`; other weights whole.
     pub fn load(
         &mut self,
         path: &Path,
@@ -132,14 +121,10 @@ impl GgufShards {
         stream: &Stream,
     ) -> Result<TensorFile> {
         if WeightContainer::of(path) != Some(WeightContainer::Gguf) {
-            return TensorFile::load_keeping(path, full_precision, stream);
+            return TensorFile::load(path, stream);
         }
-        let tensors = self.0.remove(path).ok_or_else(|| {
-            super::Error::InvalidModel(format!(
-                "{} is not a GGUF file of the model's weights",
-                path.display()
-            ))
-        })?;
+        let tensors =
+            self.0.remove(path).ok_or_else(|| Error::UncataloguedGguf(path.to_owned()))?;
         TensorFile::load_gguf_shard(path, &tensors, full_precision, stream)
     }
 }

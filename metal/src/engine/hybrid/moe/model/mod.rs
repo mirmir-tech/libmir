@@ -54,9 +54,10 @@ impl HybridMoeModel {
                 "hybrid MoE loader requires dense GELU or dense-and-routed softmax layers".into(),
             ));
         }
+        // Before any weight loads: which layers cache, in what windows.
+        let cache_windows = sharing::cache_windows(spec, lowering)?;
         let sharing = sharing::ModelSharing::load(tensors, spec, bindings, stream)?;
         let mut layers = Vec::with_capacity(decoder.num_hidden_layers);
-        let mut cache_windows = Vec::with_capacity(decoder.num_hidden_layers);
         for (index, lowered) in lowering.iter().enumerate() {
             let layer = spec.layer(index)?;
             let config = HybridMoeLayerConfig::from_spec(
@@ -78,19 +79,6 @@ impl HybridMoeModel {
                 let layer_bindings = bindings.hybrid_moe_layer(index)?;
                 HybridMoeLayer::load_bindings(tensors, &layer_bindings, layer, config, stream)?
             });
-            let MixerLowering::Softmax { window, .. } = lowered.mixer else {
-                unreachable!("validated hybrid MoE mixer");
-            };
-            // Caches are indexed by layer: the sharing layers, which keep
-            // none, must follow every caching one.
-            if layers.last().is_some_and(HybridMoeLayer::caches_key_values) {
-                if cache_windows.len() != index {
-                    return Err(crate::engine::Error::InvalidModel(format!(
-                        "layer {index} caches keys and values after a layer sharing them"
-                    )));
-                }
-                cache_windows.push(window.and_then(models::semantic::AttentionWindow::sliding));
-            }
         }
         let boundary = bindings.decoder_boundary_with_tied_output(true)?;
         let mut model = Self::finish_load(

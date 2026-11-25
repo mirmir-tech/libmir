@@ -4,27 +4,15 @@
 //! opaque `Uint8` rows of whole blocks, `[leading..., row_bytes]`, so device
 //! memory holds exactly the file's bytes and kernels decode them in place.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::{Path, PathBuf},
-};
+use std::collections::BTreeSet;
 
 use mirtal::{DType, TensorRange};
-use models::{
-    gguf::{GgmlType, GgufModel},
-    weights::TensorInfo,
-};
+use models::{gguf::GgmlType, weights::TensorInfo};
 
 use crate::engine::{Error, Result};
 
-/// The tensors of every shard of the GGUF model `path` belongs to, by
-/// shard, under the names the whole model's metadata maps (only shard 1
-/// carries it): one header read per shard, one catalog per model.
-pub(super) fn shards(path: &Path) -> Result<BTreeMap<PathBuf, Vec<TensorInfo>>> {
-    Ok(GgufModel::open(path)?.catalog_by_file()?)
-}
-
-/// The ranges of one shard's `tensors`, its share of [`shards`].
+/// The ranges of one GGUF file's `tensors`, its share of its model's
+/// catalog.
 pub(super) fn ranges(tensors: &[TensorInfo]) -> Result<Vec<TensorRange>> {
     tensors.iter().map(range).collect()
 }

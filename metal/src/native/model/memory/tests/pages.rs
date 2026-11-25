@@ -146,3 +146,19 @@ fn duplicate_layer(path: &std::path::Path) -> TestResult<()> {
     std::fs::write(path, output)?;
     Ok(())
 }
+
+/// Gemma 4's E models: the full layer sharing an earlier layer's keys and
+/// values holds no pages, so its empty arena does not bound the headroom.
+#[test]
+fn layers_sharing_keys_and_values_hold_no_pages() -> TestResult<()> {
+    let decoder = models::layout::DecoderConfig::from_value(&serde_json::json!({
+        "hidden_size": 64, "intermediate_size": 64, "num_hidden_layers": 4,
+        "num_attention_heads": 4, "num_key_value_heads": 2, "head_dim": 16,
+        "vocab_size": 32, "sliding_window": 16,
+        "layer_types": ["sliding_attention", "full_attention", "sliding_attention", "full_attention"],
+        "num_kv_shared_layers": 2
+    }))?;
+    let paged = super::super::pages::paged_layers(&decoder).collect::<Vec<_>>();
+    assert_eq!(paged, [1]);
+    Ok(())
+}

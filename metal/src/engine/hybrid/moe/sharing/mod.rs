@@ -8,6 +8,8 @@
 //! before any layer reads it in the same step.
 
 mod per_layer;
+#[cfg(test)]
+mod tests;
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -30,15 +32,29 @@ pub(super) enum SourceAttention {
 pub(super) struct StepShare {
     /// `[B, S, layers, width]` per-layer inputs of the current step.
     per_layer: Mutex<Option<Array>>,
-    /// What each source layer attended over in the current step.
-    attended: Mutex<Vec<Option<Arc<SourceAttention>>>>,
+    /// What each source layer attended over in the current step, held only
+    /// until the last layer sharing it has read it.
+    attended: Mutex<Vec<Slot>>,
+}
+
+#[derive(Debug, Default)]
+struct Slot {
+    attended: Option<Arc<SourceAttention>>,
+    /// The layers sharing this one's keys and values.
+    readers: usize,
+    /// Of them, those yet to read the current step's attention.
+    unread: usize,
 }
 
 impl StepShare {
-    pub(super) fn new(layers: usize) -> Self {
+    /// A step of a model whose layer `i` is read by `readers[i]` later
+    /// layers sharing its keys and values.
+    pub(super) fn new(readers: &[usize]) -> Self {
         Self {
             per_layer: Mutex::new(None),
-            attended: Mutex::new((0..layers).map(|_| None).collect()),
+            attended: Mutex::new(
+                readers.iter().map(|&readers| Slot { readers, ..Slot::default() }).collect(),
+            ),
         }
     }
 
@@ -72,15 +88,25 @@ impl StepShare {
         let slot = slots
             .get_mut(layer)
             .ok_or_else(|| Error::InvalidModel(format!("no attention slot for layer {layer}")))?;
-        *slot = Some(Arc::new(attended));
+        slot.attended = (slot.readers > 0).then(|| Arc::new(attended));
+        slot.unread = slot.readers;
         drop(slots);
         Ok(())
     }
 
-    /// What layer `source` attended over in the current step.
+    /// What layer `source` attended over in the current step. The last
+    /// layer to read it takes it, so its keys and values are freed with that
+    /// layer's attention rather than held into the next step.
     pub(super) fn attended(&self, source: usize) -> Result<Arc<SourceAttention>> {
-        let slots = self.attended.lock().unwrap_or_else(PoisonError::into_inner);
-        let attended = slots.get(source).and_then(Option::as_ref).map(Arc::clone);
+        let mut slots = self.attended.lock().unwrap_or_else(PoisonError::into_inner);
+        let attended = slots.get_mut(source).and_then(|slot| {
+            slot.unread = slot.unread.checked_sub(1)?;
+            if slot.unread == 0 {
+                slot.attended.take()
+            } else {
+                slot.attended.as_ref().map(Arc::clone)
+            }
+        });
         drop(slots);
         attended.ok_or_else(|| {
             Error::InvalidModel(format!("layer {source} published no attention for this step"))

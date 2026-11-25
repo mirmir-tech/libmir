@@ -1,4 +1,4 @@
-use models::layout::AttentionLayerType;
+use models::layout::{AttentionLayerType, DecoderConfig};
 
 use super::LoadedModel;
 use crate::{
@@ -15,9 +15,7 @@ impl LoadedModel {
         let Some(decoder) = self.info.decoder.as_ref() else {
             return Ok(());
         };
-        let layers = (0..decoder.num_hidden_layers)
-            .filter(|layer| decoder.layer_type(*layer) == AttentionLayerType::Full);
-        let Some(first_layer) = layers.clone().next() else {
+        let Some(first_layer) = paged_layers(decoder).next() else {
             return Ok(());
         };
         if required > maximum {
@@ -93,16 +91,24 @@ impl LoadedModel {
             return Ok(usize::MAX);
         };
         let format = KvPageFormat::resolve(self.stream.config().kv_cache.dtype)?;
-        (0..decoder.num_hidden_layers)
-            .filter(|layer| decoder.layer_type(*layer) == AttentionLayerType::Full)
-            .try_fold(usize::MAX, |available, layer| {
-                let free = pages(
-                    layer,
-                    decoder.layer_key_value_heads(layer),
-                    decoder.layer_head_dim(layer),
-                    format,
-                )?;
-                Ok(available.min(free))
-            })
+        paged_layers(decoder).try_fold(usize::MAX, |available, layer| {
+            let free = pages(
+                layer,
+                decoder.layer_key_value_heads(layer),
+                decoder.layer_head_dim(layer),
+                format,
+            )?;
+            Ok(available.min(free))
+        })
     }
+}
+
+/// The full-attention layers with a paged arena of their own. A layer
+/// attending over an earlier layer's keys and values (Gemma 4's E models)
+/// holds no pages, so its empty arena must not bound the others' headroom.
+pub(super) fn paged_layers(decoder: &DecoderConfig) -> impl Iterator<Item = usize> + '_ {
+    (0..decoder.num_hidden_layers).filter(|&layer| {
+        decoder.layer_type(layer) == AttentionLayerType::Full
+            && decoder.key_value_source(layer).is_none()
+    })
 }

@@ -5,18 +5,19 @@
 use std::{collections::BTreeSet, sync::Arc};
 
 use models::{
-    semantic::{DecoderLayerSpec, DecoderSpec},
+    semantic::{AttentionWindow, DecoderLayerSpec, DecoderSpec},
     weights::WeightBindingPlan,
 };
 
 use super::HybridMoeModel;
 use crate::engine::{
-    Array, ModelTensors, Result, Stream,
+    Array, Error, ModelTensors, Result, Stream,
     hybrid::moe::{
         HybridMoeLayer, HybridMoeLayerConfig,
         sharing::{PerLayerGate, PerLayerInputs, StepShare},
         weights::Publish,
     },
+    lowering::{LayerLowering, MixerLowering},
 };
 
 /// The model's per-layer inputs and the step slot its layers share.
@@ -54,14 +55,14 @@ impl ModelSharing {
             )?),
             (None, None) => None,
             _ => {
-                return Err(crate::engine::Error::InvalidModel(
+                return Err(Error::InvalidModel(
                     "per-layer inputs and their tensors disagree".into(),
                 ));
             },
         };
         Ok(Some(Self {
             inputs,
-            step: Arc::new(StepShare::new(spec.layers.len())),
+            step: Arc::new(StepShare::new(&readers(spec))),
             sources,
         }))
     }
@@ -127,4 +128,48 @@ impl HybridMoeModel {
         }
         Ok(())
     }
+}
+
+/// How many later layers share each layer's keys and values.
+fn readers(spec: &DecoderSpec) -> Vec<usize> {
+    let mut readers = vec![0; spec.layers.len()];
+    for source in spec
+        .layers
+        .iter()
+        .filter_map(|layer| layer.mixer.softmax_attention()?.key_value_source)
+    {
+        if let Some(count) = readers.get_mut(source) {
+            *count += 1;
+        }
+    }
+    readers
+}
+
+/// The sliding window of each layer that caches its keys and values, by
+/// layer: Gemma 4's E models share in their last layers, which keep no
+/// cache, so caching layers must all come first. The semantic validation
+/// already admits only an earlier softmax source of the same geometry.
+pub(super) fn cache_windows(
+    spec: &DecoderSpec,
+    lowering: &[LayerLowering],
+) -> Result<Vec<Option<usize>>> {
+    let mut windows = Vec::with_capacity(lowering.len());
+    for (index, lowered) in lowering.iter().enumerate() {
+        let shares = spec
+            .layer(index)?
+            .mixer
+            .softmax_attention()
+            .is_some_and(|attention| attention.key_value_source.is_some());
+        if shares {
+            continue;
+        }
+        if windows.len() != index {
+            return Err(Error::CachingLayerAfterSharing { layer: index });
+        }
+        let MixerLowering::Softmax { window, .. } = lowered.mixer else {
+            return Err(Error::InvalidModel("hybrid MoE layers are softmax attention".into()));
+        };
+        windows.push(window.and_then(AttentionWindow::sliding));
+    }
+    Ok(windows)
 }
