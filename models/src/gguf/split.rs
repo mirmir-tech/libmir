@@ -2,7 +2,10 @@
 //! carries the model metadata; every shard records `split.no` and
 //! `split.count`, and the first records `split.tensors.count`.
 
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use super::{GgmlType, GgufHeader, GgufTensor, vectors::VectorSource};
 use crate::{
@@ -60,6 +63,23 @@ impl GgufModel {
         super::fused::split(self.header(), &mut tensors)?;
         super::names::map(self.header(), &mut tensors)?;
         Ok(TensorCatalog::new(tensors))
+    }
+
+    /// The mapped catalog's tensors by the shard file storing them, every
+    /// shard listed. The names map across the whole model (shard 1's
+    /// metadata, Gemma's sandwich norms paired across shards), so a loader
+    /// reads each shard by its share of this one catalog rather than mapping
+    /// shards one by one.
+    pub fn catalog_by_file(&self) -> Result<BTreeMap<PathBuf, Vec<TensorInfo>>> {
+        let mut files = self
+            .shards
+            .iter()
+            .map(|(path, _)| (path.clone(), Vec::new()))
+            .collect::<BTreeMap<_, _>>();
+        for tensor in self.mapped_catalog()?.tensors {
+            files.entry(tensor.file.clone()).or_default().push(tensor);
+        }
+        Ok(files)
     }
 
     pub fn tensors(&self) -> impl Iterator<Item = &GgufTensor> {

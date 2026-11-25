@@ -69,6 +69,8 @@ impl GgufHeader {
     /// header fits.
     pub fn read(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
+        #[cfg(test)]
+        reads::count(path);
         let file_len = std::fs::metadata(path)?.len();
         let mut wanted = FIRST_READ.min(file_len);
         loop {
@@ -214,4 +216,28 @@ fn alignment(metadata: &BTreeMap<String, MetadataValue>) -> Parsed<u64> {
 
 fn in_file(path: &Path, error: &ModelsError) -> ModelsError {
     ModelsError::InvalidGguf(format!("{}: {error}", path.display()))
+}
+
+/// How many times this thread read each file's header, for tests that
+/// bound the reads of a loading phase.
+#[cfg(test)]
+pub(super) mod reads {
+    use std::{
+        cell::RefCell,
+        collections::BTreeMap,
+        path::{Path, PathBuf},
+    };
+
+    thread_local! {
+        static READS: RefCell<BTreeMap<PathBuf, usize>> = const { RefCell::new(BTreeMap::new()) };
+    }
+
+    pub(in crate::gguf) fn count(path: &Path) {
+        READS.with(|reads| *reads.borrow_mut().entry(path.to_owned()).or_default() += 1);
+    }
+
+    /// The reads since the last call, by file.
+    pub(in crate::gguf) fn take() -> BTreeMap<PathBuf, usize> {
+        READS.with(|reads| std::mem::take(&mut *reads.borrow_mut()))
+    }
 }

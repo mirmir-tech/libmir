@@ -4,7 +4,10 @@
 //! opaque `Uint8` rows of whole blocks, `[leading..., row_bytes]`, so device
 //! memory holds exactly the file's bytes and kernels decode them in place.
 
-use std::{collections::BTreeSet, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::{Path, PathBuf},
+};
 
 use mirtal::{DType, TensorRange};
 use models::{
@@ -14,16 +17,16 @@ use models::{
 
 use crate::engine::{Error, Result};
 
-/// The tensors stored in `path`, one file of a possibly split model, under
-/// the names the whole model's metadata maps (only shard 1 carries it).
-pub(super) fn ranges(path: &Path) -> Result<Vec<TensorRange>> {
-    GgufModel::open(path)?
-        .mapped_catalog()?
-        .tensors
-        .iter()
-        .filter(|tensor| tensor.file == path)
-        .map(range)
-        .collect()
+/// The tensors of every shard of the GGUF model `path` belongs to, by
+/// shard, under the names the whole model's metadata maps (only shard 1
+/// carries it): one header read per shard, one catalog per model.
+pub(super) fn shards(path: &Path) -> Result<BTreeMap<PathBuf, Vec<TensorInfo>>> {
+    Ok(GgufModel::open(path)?.catalog_by_file()?)
+}
+
+/// The ranges of one shard's `tensors`, its share of [`shards`].
+pub(super) fn ranges(tensors: &[TensorInfo]) -> Result<Vec<TensorRange>> {
+    tensors.iter().map(range).collect()
 }
 
 fn range(tensor: &TensorInfo) -> Result<TensorRange> {

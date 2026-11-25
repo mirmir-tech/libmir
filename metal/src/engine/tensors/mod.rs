@@ -2,10 +2,10 @@ mod gguf;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
-use models::layout::WeightContainer;
+use models::{layout::WeightContainer, weights::TensorInfo};
 
 use super::{Array, Dtype, Result, Stream};
 
@@ -39,7 +39,20 @@ impl TensorFile {
                 converted: BTreeMap::new(),
             });
         }
-        let ranges = gguf::ranges(path)?;
+        let tensors = gguf::shards(path)?.remove(path).unwrap_or_default();
+        Self::load_gguf_shard(path, &tensors, full_precision, stream)
+    }
+
+    /// One shard of a GGUF model: its `tensors`, its share of the model's
+    /// mapped catalog ([`GgufShards`]), keeping `full_precision` as
+    /// [`Self::load_keeping`] does.
+    pub fn load_gguf_shard(
+        path: &Path,
+        tensors: &[TensorInfo],
+        full_precision: &BTreeSet<String>,
+        stream: &Stream,
+    ) -> Result<Self> {
+        let ranges = gguf::ranges(tensors)?;
         let mut native = mirtal::TensorFile::load_ranges(path, &ranges, stream.native())?;
         let mut converted = BTreeMap::new();
         for range in ranges.iter().filter(|range| gguf::casts_to_bf16(range, full_precision)) {
@@ -77,5 +90,40 @@ impl TensorFile {
 
     pub fn is_empty(&self) -> Result<bool> {
         Ok(self.native.is_empty() && self.converted.is_empty())
+    }
+}
+
+/// The tensors of each shard of a model's GGUF weights, from one mapped
+/// catalog built for the whole model; empty for other weights.
+#[derive(Debug, Default)]
+pub struct GgufShards(BTreeMap<PathBuf, Vec<TensorInfo>>);
+
+impl GgufShards {
+    /// Maps the model of the first GGUF file in `paths`, once.
+    pub fn of<'a>(paths: impl IntoIterator<Item = &'a Path>) -> Result<Self> {
+        paths
+            .into_iter()
+            .find(|path| WeightContainer::of(path) == Some(WeightContainer::Gguf))
+            .map_or_else(|| Ok(Self::default()), |path| Ok(Self(gguf::shards(path)?)))
+    }
+
+    /// Loads `path`: a shard by its share of the catalog, other weights
+    /// whole.
+    pub fn load(
+        &mut self,
+        path: &Path,
+        full_precision: &BTreeSet<String>,
+        stream: &Stream,
+    ) -> Result<TensorFile> {
+        if WeightContainer::of(path) != Some(WeightContainer::Gguf) {
+            return TensorFile::load_keeping(path, full_precision, stream);
+        }
+        let tensors = self.0.remove(path).ok_or_else(|| {
+            super::Error::InvalidModel(format!(
+                "{} is not a shard of the model's first GGUF file",
+                path.display()
+            ))
+        })?;
+        TensorFile::load_gguf_shard(path, &tensors, full_precision, stream)
     }
 }

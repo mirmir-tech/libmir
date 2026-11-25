@@ -8,7 +8,9 @@ fn shard(number: u32, writer: Writer) -> Writer {
 }
 
 /// Shard 2 of a Nemotron-H model has no `general.architecture`, yet its
-/// llama.cpp `ssm_a` still maps to the checkpoint's `A_log` with its shape.
+/// llama.cpp `ssm_a` still maps to the checkpoint's `A_log` with its shape,
+/// in the whole catalog and in shard 2's share of it, which Metal loads that
+/// shard's tensors from; building the shares reads each header once.
 #[test]
 fn later_shards_map_by_the_first_shards_metadata() -> Result<()> {
     let directory = std::env::temp_dir().join(format!("libmir-gguf-split-{}", std::process::id()));
@@ -21,10 +23,26 @@ fn later_shards_map_by_the_first_shards_metadata() -> Result<()> {
     std::fs::write(&paths[0], first.bytes()?)?;
     std::fs::write(&paths[1], second.bytes()?)?;
     let catalog = GgufModel::open(&paths[1])?.mapped_catalog()?;
-    std::fs::remove_dir_all(&directory)?;
     let decay = catalog.get("backbone.layers.1.mixer.A_log");
     assert_eq!(decay.map(|tensor| tensor.shape.clone()), Some(vec![4]));
     assert!(catalog.get("backbone.layers.0.mixer.D").is_some());
+    drop(super::super::header::reads::take());
+    let mut shards = GgufModel::open(&paths[1])?.catalog_by_file()?;
+    let reads = super::super::header::reads::take();
+    std::fs::remove_dir_all(&directory)?;
+    assert_eq!(reads, paths.iter().map(|path| (path.clone(), 1)).collect());
+    let second = shards.remove(&paths[1]).unwrap_or_default();
+    let decay = second.iter().find(|tensor| tensor.name == "backbone.layers.1.mixer.A_log");
+    assert_eq!(
+        decay.map(|tensor| (tensor.shape.clone(), &tensor.file)),
+        Some((vec![4], &paths[1]))
+    );
+    assert!(second.iter().all(|tensor| tensor.name != "backbone.layers.0.mixer.D"));
+    assert!(
+        shards[&paths[0]]
+            .iter()
+            .any(|tensor| tensor.name == "backbone.layers.0.mixer.D")
+    );
     Ok(())
 }
 

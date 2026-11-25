@@ -2,7 +2,7 @@ use std::{collections::BTreeSet, path::Path};
 
 use models::{layout::ModelLayout, weights::alternate_model_tensor_name};
 
-use super::{Array, Error, Result, Stream, TensorFile};
+use super::{Array, Error, Result, Stream, TensorFile, tensors::GgufShards};
 
 #[derive(Debug)]
 pub struct ModelTensors {
@@ -67,9 +67,11 @@ impl ModelTensors {
         } else {
             ("mapping", "mapped")
         };
+        // One mapped catalog for the model, each shard loading its share.
+        let mut gguf = GgufShards::of(layout.weights.iter().map(|weight| weight.path.as_path()))?;
         for (index, weight) in layout.weights.iter().enumerate() {
             progress(loaded, total, shard_detail(starting, index, shards, &weight.path));
-            let file = TensorFile::load_keeping(&weight.path, full_precision, stream)?;
+            let file = gguf.load(&weight.path, full_precision, stream)?;
             tensors += file.len()?;
             if materialize {
                 file.evaluate(stream)?;
