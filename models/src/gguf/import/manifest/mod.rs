@@ -2,16 +2,21 @@
 //! written last, so a reader tells a complete, current import from file
 //! names and metadata alone, without reading any GGUF header.
 
+mod legacy;
+
 use std::{
     ffi::OsStr,
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     time::UNIX_EPOCH,
 };
 
 use serde::{Deserialize, Serialize};
 
-use crate::{error::Result, layout::WeightContainer};
+use crate::{
+    error::{ModelsError, Result},
+    layout::WeightContainer,
+};
 
 /// The manifest's file name inside an import.
 pub const MANIFEST: &str = "import.json";
@@ -74,15 +79,16 @@ impl SourceFile {
         })
     }
 
-    /// Whether `path` is a hard link to this source: the same size and time
-    /// as the source has now.
+    /// Whether `path` is the link an import made to this source: a symlink
+    /// to its path, or a hard link to the very same file. A copy, even one of
+    /// the same size and time, is not.
     pub(super) fn is_linked_at(&self, path: &Path) -> bool {
-        match (Self::of(&self.path), Self::of(path)) {
-            (Ok(source), Ok(link)) => {
-                source.modified.is_some()
-                    && (source.bytes, source.modified) == (link.bytes, link.modified)
+        match path.symlink_metadata() {
+            Ok(link) if link.file_type().is_symlink() => {
+                fs::read_link(path).is_ok_and(|target| target == self.path)
             },
-            _ => false,
+            Ok(link) => fs::metadata(&self.path).is_ok_and(|source| same_file(&source, &link)),
+            Err(_) => false,
         }
     }
 
@@ -95,19 +101,63 @@ impl SourceFile {
 
 impl ImportManifest {
     /// The manifest of the import in `directory`; `None` when there is none
-    /// or it cannot be read, as for an import an earlier version made.
+    /// or it cannot be used, as for one naming a file outside `directory`.
     #[must_use]
     pub fn read(directory: &Path) -> Option<Self> {
-        let bytes = fs::read(directory.join(MANIFEST)).ok()?;
-        serde_json::from_slice(&bytes).ok()
+        Self::load(directory).ok().flatten()
     }
 
-    /// Whether `directory` still holds every file of the import and each
-    /// source is unchanged.
+    /// The manifest of the import in `directory`, `None` when there is none
+    /// or it cannot be parsed. One an earlier version wrote, which named its
+    /// files alone, is read with the origin each file shows now. A manifest
+    /// naming anything but a file directly in `directory` is refused, before
+    /// any of its names is used.
+    pub fn load(directory: &Path) -> Result<Option<Self>> {
+        let path = directory.join(MANIFEST);
+        let Ok(bytes) = fs::read(&path) else {
+            return Ok(None);
+        };
+        let manifest = match serde_json::from_slice(&bytes) {
+            Ok(manifest) => manifest,
+            Err(_) => match serde_json::from_slice::<legacy::Manifest>(&bytes) {
+                Ok(manifest) => manifest.typed(directory),
+                Err(_) => return Ok(None),
+            },
+        };
+        Self::check(&manifest, &path)?;
+        Ok(Some(manifest))
+    }
+
+    /// Refuses a manifest whose file names are not single file names.
+    fn check(&self, path: &Path) -> Result<()> {
+        let invalid = self.files.iter().find(|file| !is_file_name(&file.name));
+        invalid.map_or(Ok(()), |file| {
+            Err(ModelsError::InvalidImportEntry {
+                manifest: path.to_path_buf(),
+                name: file.name.clone(),
+            })
+        })
+    }
+
+    /// Whether `directory` still holds every file of the import as the
+    /// import left it, a link still to its source, and each source is
+    /// unchanged.
     #[must_use]
     pub fn is_current(&self, directory: &Path) -> bool {
-        self.files.iter().all(|file| directory.join(&file.name).exists())
+        self.files.iter().all(|file| self.holds(directory, file))
             && self.sources().all(SourceFile::is_unchanged)
+    }
+
+    fn holds(&self, directory: &Path, file: &ImportedFile) -> bool {
+        let path = directory.join(&file.name);
+        match file.origin {
+            FileOrigin::Derived => path.is_file(),
+            FileOrigin::Linked => self
+                .linked(OsStr::new(&file.name))
+                .is_some_and(|source| source.is_linked_at(&path)),
+            FileOrigin::InPlace => fs::canonicalize(&path)
+                .is_ok_and(|path| self.sources().any(|source| source.path == path)),
+        }
     }
 
     /// The source the import linked under `name`, if it made that link.
@@ -143,4 +193,23 @@ impl ImportManifest {
     pub fn sources(&self) -> impl Iterator<Item = &SourceFile> {
         self.text.iter().chain(&self.vision)
     }
+}
+
+/// Whether `name` is one file directly inside a directory.
+fn is_file_name(name: &str) -> bool {
+    let mut components = Path::new(name).components();
+    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
+}
+
+#[cfg(unix)]
+fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    (left.dev(), left.ino()) == (right.dev(), right.ino())
+}
+
+/// Without a file identity to compare, no file is taken for a hard link:
+/// it is kept rather than replaced or removed.
+#[cfg(not(unix))]
+const fn same_file(_: &fs::Metadata, _: &fs::Metadata) -> bool {
+    false
 }

@@ -2,6 +2,7 @@ use std::{fs, path::PathBuf};
 
 use serde_json::json;
 
+mod manifest;
 mod ownership;
 
 use super::{FileOrigin, Import, ImportConflict, ImportManifest, files, publish};

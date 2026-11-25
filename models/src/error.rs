@@ -20,6 +20,8 @@ pub enum ModelsError {
         path: PathBuf,
         conflict: crate::gguf::ImportConflict,
     },
+    #[error("the import manifest {} names {name:?}, not a file of its directory", manifest.display())]
+    InvalidImportEntry { manifest: PathBuf, name: String },
     #[error("invalid model config: {0}")]
     InvalidConfig(String),
     #[error("invalid safetensors payload range: {0}")]

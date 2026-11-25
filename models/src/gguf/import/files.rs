@@ -49,7 +49,8 @@ impl Plan {
         // The previous import's manifest tells the links it made, which may
         // be hard links where symlinks are unavailable, from sources it
         // found in place.
-        let previous = ImportManifest::read(directory);
+        // Every name it holds is checked before any is used.
+        let previous = ImportManifest::load(directory)?;
         let mut links = Vec::new();
         let mut sources = [Vec::new(), Vec::new()];
         for (shards, recorded) in
@@ -65,16 +66,18 @@ impl Plan {
                 links.push(Link { name: name.to_owned(), target, present });
             }
         }
+        // A link whose source the manifest no longer tells cannot be told
+        // from a user's file there, and stays.
         let stale = previous
             .iter()
-            .flat_map(ImportManifest::made)
-            .filter(|file| !names.contains(&file.name.to_lowercase()))
-            .map(|file| Stale {
-                name: file.name.clone(),
-                link: previous
-                    .as_ref()
-                    .and_then(|manifest| manifest.linked(OsStr::new(&file.name)))
-                    .cloned(),
+            .flat_map(|manifest| manifest.made().map(move |file| (manifest, file)))
+            .filter(|(_, file)| !names.contains(&file.name.to_lowercase()))
+            .filter_map(|(manifest, file)| {
+                let link = match file.origin {
+                    FileOrigin::Linked => Some(manifest.linked(OsStr::new(&file.name))?.clone()),
+                    FileOrigin::Derived | FileOrigin::InPlace => None,
+                };
+                Some(Stale { name: file.name.clone(), link })
             })
             .collect();
         let files = derived
@@ -145,23 +148,22 @@ fn claim(names: &mut BTreeSet<String>, name: &OsStr, directory: &Path) -> Result
     })
 }
 
-/// Whether `path` is already the shard `target` itself. A link there, a
-/// symlink or the hard link a previous import made to its `owned` source,
-/// is replaced; any other file, one found in place included, is kept and
-/// refused.
+/// Whether `path` is already the shard `target` itself. A symlink there to
+/// `target`, or the link a previous import made to its `owned` source, a
+/// symlink to it or a hard link of the very file, is replaced; any other
+/// file, one found in place included, is kept and refused.
 fn present(path: &Path, target: &Path, owned: Option<&SourceFile>) -> Result<bool> {
     let metadata = match path.symlink_metadata() {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(error.into()),
     };
-    if metadata.file_type().is_symlink() {
-        return Ok(false);
-    }
-    if fs::canonicalize(path)? == target {
+    let resolved = fs::canonicalize(path).ok();
+    if !metadata.file_type().is_symlink() && resolved.as_deref() == Some(target) {
         return Ok(true);
     }
-    if owned.is_some_and(|source| source.is_linked_at(path)) {
+    if resolved.as_deref() == Some(target) || owned.is_some_and(|source| source.is_linked_at(path))
+    {
         return Ok(false);
     }
     Err(ModelsError::ImportConflict {
@@ -171,17 +173,14 @@ fn present(path: &Path, target: &Path, owned: Option<&SourceFile>) -> Result<boo
 }
 
 /// Removes `path`, a file an import made: derived, or its link to `link`'s
-/// source, when it is still that link.
+/// source, while it is still that link.
 fn remove_made(path: &Path, link: Option<&SourceFile>) -> Result<()> {
     let metadata = match path.symlink_metadata() {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error.into()),
     };
-    let made = link.map_or_else(
-        || metadata.is_file(),
-        |source| metadata.file_type().is_symlink() || source.is_linked_at(path),
-    );
+    let made = link.map_or_else(|| metadata.is_file(), |source| source.is_linked_at(path));
     if made {
         fs::remove_file(path)?;
     }
