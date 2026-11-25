@@ -9,7 +9,7 @@ mod publish;
 
 use std::path::{Path, PathBuf};
 
-pub use manifest::{ImportManifest, MANIFEST, SourceFile};
+pub use manifest::{FileOrigin, ImportManifest, ImportedFile, MANIFEST, SourceFile};
 use serde_json::Value;
 
 use super::{GgufModel, VisionImport, config, tokenizer};

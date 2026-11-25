@@ -155,13 +155,12 @@ fn read_indexed_names(path: &Path) -> Result<BTreeSet<String>> {
 
 fn read_safetensor_names(root: &Path) -> Result<BTreeSet<String>> {
     let mut names = BTreeSet::new();
-    // A GGUF import directory links its shards, beside the few tensors a
-    // vision import assembles as `SafeTensors`.
-    for container in [WeightContainer::SafeTensors, WeightContainer::Gguf] {
-        for path in container.discover(root)? {
-            if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
-                let _inserted = names.insert(name.to_owned());
-            }
+    // A GGUF import directory links its shards, only those of its import,
+    // beside the few tensors a vision import assembles as `SafeTensors`.
+    let files = WeightContainer::SafeTensors.discover(root)?;
+    for path in files.into_iter().chain(crate::gguf::files_in(root)?) {
+        if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+            let _inserted = names.insert(name.to_owned());
         }
     }
     Ok(names)

@@ -29,7 +29,9 @@ use std::{
 pub use config::imports_architecture;
 pub use dequantize::dequantize;
 pub use header::GgufHeader;
-pub use import::{Import, ImportConflict, ImportManifest, MANIFEST, SourceFile};
+pub use import::{
+    FileOrigin, Import, ImportConflict, ImportManifest, ImportedFile, MANIFEST, SourceFile,
+};
 pub use names::safetensors_name;
 pub use reader::ParseError;
 pub use split::{GgufModel, ShardName, shard_paths};
@@ -63,8 +65,12 @@ fn type_bytes<'a>(tensors: impl IntoIterator<Item = &'a GgufTensor>) -> Vec<(Ggm
     totals
 }
 
-/// The GGUF files directly inside a directory, sorted.
+/// The GGUF files directly inside a directory, sorted: those of its import
+/// when it holds one ([`ImportManifest`]), else all of them.
 pub fn files_in(directory: &Path) -> Result<Vec<PathBuf>> {
+    if let Some(manifest) = ImportManifest::read(directory) {
+        return Ok(manifest.gguf_files(directory));
+    }
     WeightContainer::Gguf.discover(directory)
 }
 

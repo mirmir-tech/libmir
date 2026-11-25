@@ -2,7 +2,9 @@ use std::{fs, path::PathBuf};
 
 use serde_json::json;
 
-use super::{Import, ImportConflict, ImportManifest, files, publish};
+mod ownership;
+
+use super::{FileOrigin, Import, ImportConflict, ImportManifest, files, publish};
 use crate::{error::ModelsError, gguf::tests::TestResult};
 
 fn root(label: &str) -> std::io::Result<PathBuf> {
@@ -117,8 +119,10 @@ fn the_manifest_records_files_and_sources() -> TestResult {
     let manifest = ImportManifest::read(&output).ok_or("no manifest")?;
     assert_eq!(manifest.text.len(), 1);
     assert!(manifest.vision.is_empty());
-    assert!(manifest.files.iter().any(|name| name == "tokenizer.json"));
-    assert!(manifest.files.iter().any(|name| name == "model.gguf"));
+    let origin =
+        |name: &str| manifest.files.iter().find(|file| file.name == name).map(|file| file.origin);
+    assert_eq!(origin("tokenizer.json"), Some(FileOrigin::Derived));
+    assert_eq!(origin("model.gguf"), Some(FileOrigin::Linked));
     assert!(manifest.is_current(&output));
     fs::remove_file(output.join("tokenizer.json"))?;
     assert!(!manifest.is_current(&output));
@@ -174,23 +178,6 @@ fn publishers_of_one_directory_take_turns() -> TestResult {
     for role in ["staging", "previous"] {
         assert!(!files::beside(&output, role)?.exists(), "{role} left behind");
     }
-    fs::remove_dir_all(root)?;
-    Ok(())
-}
-
-/// Where links are hard links, the previous import's link is a plain file;
-/// its manifest names it, so a refresh replaces it.
-#[test]
-fn a_previous_hard_link_is_replaced() -> TestResult {
-    let root = root("hard")?;
-    let (source, output) = (root.join("source/model.gguf"), root.join("output"));
-    fs::create_dir_all(source.parent().unwrap_or(&root))?;
-    fs::write(&source, b"source bytes")?;
-    import(vec![source.clone()], 1).write(&output)?;
-    fs::remove_file(output.join("model.gguf"))?;
-    fs::hard_link(&source, output.join("model.gguf"))?;
-    import(vec![source], 2).write(&output)?;
-    assert_eq!(fs::read(output.join("model.gguf"))?, b"source bytes");
     fs::remove_dir_all(root)?;
     Ok(())
 }

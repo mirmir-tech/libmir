@@ -1,9 +1,5 @@
 use architecture::{cuda::CudaDecoderPlan, lowering::MixerLowering};
-use models::{
-    execution::DecoderExecutionContract,
-    layout::DecoderConfig,
-    weights::{TensorCatalog, TensorInfo},
-};
+use models::{execution::DecoderExecutionContract, layout::DecoderConfig, weights::TensorCatalog};
 use runtime::kv::CacheConfig;
 
 use super::{
@@ -40,11 +36,10 @@ impl CudaBackend {
             return Err(Error::InvalidPagedKv("windowed KV session capacity is empty"));
         }
         let boundary_bindings = bindings.decoder_boundary()?;
-        let boundary_names = owned_names(boundary_bindings.physical_sources());
-        let boundary = upload_names(self, catalog, &boundary_names)?;
+        let (boundary, mut completed) =
+            upload_names(self, catalog, &boundary_bindings.physical_sources())?;
         let (embedding, final_norm, output) =
             weights::boundary(self, layout, &boundary, boundary_bindings, config)?;
-        let mut completed = bytes_for_names(catalog, &boundary_names)?;
         progress(completed, "clamped-routed model boundary tensors".into());
         let mut layers = Vec::with_capacity(decoder.num_hidden_layers);
         for (layer, lowered) in plan.layers().iter().enumerate() {
@@ -52,11 +47,8 @@ impl CudaBackend {
                 return Err(Error::PlanMixer { layer });
             };
             let layer_bindings = bindings.routed_decoder_layer(layer)?;
-            let names = owned_names(layer_bindings.physical_sources());
-            let tensors = upload_names(self, catalog, &names)?;
-            completed = completed
-                .checked_add(bytes_for_names(catalog, &names)?)
-                .ok_or(Error::InvalidDecoderKernel("checkpoint progress byte overflow"))?;
+            let (tensors, bytes) = upload_names(self, catalog, &layer_bindings.physical_sources())?;
+            completed = add_bytes(completed, bytes)?;
             layers.push(ClampedRoutedLayerTemplate::new(
                 self,
                 config,
@@ -84,40 +76,26 @@ impl CudaBackend {
     }
 }
 
+/// Uploads the tensors `names` as BF16, each found once in the sorted
+/// catalog, and their payload bytes, for progress.
 fn upload_names(
     backend: &CudaBackend,
     catalog: &TensorCatalog,
-    names: &[String],
-) -> Result<CudaTensorSet> {
+    names: &[&str],
+) -> Result<(CudaTensorSet, u64)> {
     let cast = backend.prepare_dense_cast()?;
     let mut upload = backend.begin_tensor_upload();
-    for name in names {
-        upload.enqueue_float_as_bf16(required_any(catalog, &[name])?, &cast)?;
+    let mut bytes = 0;
+    for &name in names {
+        let tensor = catalog.get(name).ok_or_else(|| Error::MissingTensor(name.to_owned()))?;
+        upload.enqueue_float_as_bf16(tensor, &cast)?;
+        bytes = add_bytes(bytes, u64::try_from(tensor.payload_bytes()?)?)?;
     }
-    upload.finish()
+    Ok((upload.finish()?, bytes))
 }
 
-fn required_any<'a>(
-    catalog: &'a TensorCatalog,
-    names: &[impl AsRef<str>],
-) -> Result<&'a TensorInfo> {
-    names
-        .iter()
-        .find_map(|name| catalog.tensors.iter().find(|tensor| tensor.name == name.as_ref()))
-        .ok_or_else(|| {
-            Error::MissingTensor(names.iter().map(AsRef::as_ref).collect::<Vec<_>>().join(" | "))
-        })
-}
-
-fn owned_names(names: Vec<&str>) -> Vec<String> {
-    names.into_iter().map(str::to_owned).collect()
-}
-
-fn bytes_for_names(catalog: &TensorCatalog, names: &[String]) -> Result<u64> {
-    names.iter().try_fold(0_u64, |total, name| {
-        let bytes = required_any(catalog, &[name])?.payload_bytes()?;
-        total
-            .checked_add(u64::try_from(bytes)?)
-            .ok_or(Error::InvalidDecoderKernel("checkpoint progress byte overflow"))
-    })
+fn add_bytes(total: u64, bytes: u64) -> Result<u64> {
+    total
+        .checked_add(bytes)
+        .ok_or(Error::InvalidDecoderKernel("checkpoint progress byte overflow"))
 }
