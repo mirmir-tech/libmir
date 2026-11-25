@@ -29,7 +29,7 @@ use std::{
 pub use config::imports_architecture;
 pub use dequantize::dequantize;
 pub use header::GgufHeader;
-pub use import::{Import, ImportConflict};
+pub use import::{Import, ImportConflict, ImportManifest, MANIFEST, SourceFile};
 pub use names::safetensors_name;
 pub use reader::ParseError;
 pub use split::{GgufModel, ShardName, shard_paths};

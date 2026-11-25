@@ -121,13 +121,11 @@ impl GgufModel {
 /// The files of the model `path` belongs to: every shard of a split model in
 /// order, or `path` alone.
 pub fn shard_paths(path: &Path) -> Result<Vec<PathBuf>> {
-    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-        return Ok(vec![path.to_path_buf()]);
-    };
-    let Some(split) = name
-        .strip_suffix(WeightContainer::Gguf.extension())
-        .and_then(|stem| stem.strip_suffix('.'))
-        .and_then(ShardName::parse)
+    // The extension in any case (`.GGUF`), kept as spelled in the siblings.
+    let gguf = WeightContainer::of(path) == Some(WeightContainer::Gguf);
+    let stem = path.file_stem().and_then(|stem| stem.to_str()).filter(|_| gguf);
+    let (Some(name), Some(split)) =
+        (path.file_name().and_then(|name| name.to_str()), stem.and_then(ShardName::parse))
     else {
         return Ok(vec![path.to_path_buf()]);
     };

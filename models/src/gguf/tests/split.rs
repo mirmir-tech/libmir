@@ -140,3 +140,19 @@ fn shard_names_parse_without_cutting_characters() {
     assert_eq!(ShardName::parse("m_00001-of-00002"), None);
     assert_eq!(ShardName::parse("é-of-00002"), None);
 }
+
+/// An upper-case `.GGUF` extension still finds every numbered sibling,
+/// spelled as the file given.
+#[test]
+fn upper_case_extensions_keep_their_sibling_shards() -> Result<()> {
+    let directory = std::env::temp_dir().join(format!("libmir-gguf-upper-{}", std::process::id()));
+    std::fs::create_dir_all(&directory)?;
+    let paths = [1, 2].map(|number| directory.join(format!("weights-{number:05}-of-00002.GGUF")));
+    for path in &paths {
+        std::fs::write(path, b"")?;
+    }
+    let found = crate::gguf::shard_paths(&paths[1]);
+    std::fs::remove_dir_all(&directory)?;
+    assert_eq!(found?, paths.to_vec());
+    Ok(())
+}

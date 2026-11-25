@@ -2,7 +2,7 @@ use std::{fs, path::PathBuf};
 
 use serde_json::json;
 
-use super::{Import, ImportConflict, publish};
+use super::{Import, ImportConflict, ImportManifest, publish};
 use crate::{error::ModelsError, gguf::tests::TestResult};
 
 fn root(label: &str) -> std::io::Result<PathBuf> {
@@ -19,6 +19,7 @@ fn import(shards: Vec<PathBuf>, version: u32) -> Import {
         tokenizer: json!({}),
         tokenizer_config: json!({}),
         shards,
+        vision_shards: Vec::new(),
         preprocessor_config: None,
         assembled: None,
     }
@@ -101,6 +102,78 @@ fn a_failed_publish_keeps_the_last_good_import() -> TestResult {
     let inside = conflict(&import(vec![source.clone()], 3).publish(&root));
     assert_eq!(inside, Some(ImportConflict::SourceInside));
     assert_eq!(fs::read(&source)?, b"source bytes");
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+/// The manifest lists every file and the sources as they were; losing a
+/// file or touching a source makes the import stale.
+#[test]
+fn the_manifest_records_files_and_sources() -> TestResult {
+    let root = root("manifest")?;
+    let (source, output) = (root.join("model.gguf"), root.join("imports/model"));
+    fs::write(&source, b"source bytes")?;
+    import(vec![source.clone()], 1).publish(&output)?;
+    let manifest = ImportManifest::read(&output).ok_or("no manifest")?;
+    assert_eq!(manifest.text.len(), 1);
+    assert!(manifest.vision.is_empty());
+    assert!(manifest.files.iter().any(|name| name == "tokenizer.json"));
+    assert!(manifest.files.iter().any(|name| name == "model.gguf"));
+    assert!(manifest.is_current(&output));
+    fs::remove_file(output.join("tokenizer.json"))?;
+    assert!(!manifest.is_current(&output));
+    import(vec![source.clone()], 1).publish(&output)?;
+    fs::write(&source, b"changed source")?;
+    assert!(!manifest.is_current(&output));
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+/// A publish interrupted between its two renames leaves the last good import
+/// aside; a retry that fails restores it rather than removing it.
+#[test]
+fn a_failed_retry_after_an_interrupted_swap_restores_the_import() -> TestResult {
+    let root = root("interrupted")?;
+    let (source, output) = (root.join("model.gguf"), root.join("imports/model"));
+    fs::write(&source, b"source bytes")?;
+    import(vec![source.clone()], 1).publish(&output)?;
+    fs::rename(&output, publish::beside(&output, "previous")?)?;
+    let failed = publish::replace(&output, std::slice::from_ref(&source), |_| {
+        Err(ModelsError::MissingFile(source.clone()))
+    });
+    assert!(failed.is_err());
+    assert_eq!(fs::read_to_string(output.join("config.json"))?, "{\n  \"version\": 1\n}");
+    assert!(!publish::beside(&output, "previous")?.exists());
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+/// Publishers of one directory take turns: each leaves a complete import and
+/// no staging or backup directory.
+#[test]
+fn publishers_of_one_directory_take_turns() -> TestResult {
+    let root = root("concurrent")?;
+    let (source, output) = (root.join("model.gguf"), root.join("imports/model"));
+    fs::write(&source, b"source bytes")?;
+    std::thread::scope(|scope| {
+        let mut publishers = Vec::new();
+        for version in 0..4 {
+            let (source, output) = (&source, &output);
+            publishers.push(scope.spawn(move || {
+                (0..8).try_for_each(|_| import(vec![source.clone()], version).publish(output))
+            }));
+        }
+        publishers.into_iter().try_for_each(|publisher| {
+            publisher
+                .join()
+                .map_err(|_| ModelsError::InvalidGguf("publisher panicked".into()))?
+        })
+    })?;
+    let manifest = ImportManifest::read(&output).ok_or("no manifest")?;
+    assert!(manifest.is_current(&output));
+    for role in ["staging", "previous"] {
+        assert!(!publish::beside(&output, role)?.exists(), "{role} left behind");
+    }
     fs::remove_dir_all(root)?;
     Ok(())
 }

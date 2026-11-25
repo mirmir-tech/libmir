@@ -4,10 +4,12 @@
 //! files, whose tensors the catalog reads in place.
 
 mod files;
+mod manifest;
 mod publish;
 
 use std::path::{Path, PathBuf};
 
+pub use manifest::{ImportManifest, MANIFEST, SourceFile};
 use serde_json::Value;
 
 use super::{GgufModel, VisionImport, config, tokenizer};
@@ -20,7 +22,10 @@ pub struct Import {
     pub generation_config: Value,
     pub tokenizer: Value,
     pub tokenizer_config: Value,
+    /// The text model's shards, linked under their names.
     pub shards: Vec<PathBuf>,
+    /// The vision tower's `mmproj` shards, linked like the text model's.
+    pub vision_shards: Vec<PathBuf>,
     /// `preprocessor_config.json` of a vision import.
     pub preprocessor_config: Option<Value>,
     /// `(file name, SafeTensors bytes)` the vision import assembles.
@@ -35,6 +40,7 @@ impl Import {
             tokenizer: tokenizer::tokenizer(model)?,
             tokenizer_config: tokenizer::tokenizer_config(model),
             shards: model.shards.iter().map(|(path, _)| path.clone()).collect(),
+            vision_shards: Vec::new(),
             preprocessor_config: None,
             assembled: None,
         })
@@ -54,7 +60,7 @@ impl Import {
         self.config = Value::Object(root);
         self.preprocessor_config = Some(vision.preprocessor_config);
         self.assembled = vision.assembled;
-        self.shards.extend(mmproj.shards.iter().map(|(path, _)| path.clone()));
+        self.vision_shards.extend(mmproj.shards.iter().map(|(path, _)| path.clone()));
         Ok(self)
     }
 
@@ -62,7 +68,8 @@ impl Import {
     /// `SafeTensors` checkpoint directory. Shards are linked, not copied; a
     /// shard already in `directory`, such as when it is the source's own
     /// directory, stays as it is. Every path is resolved and checked before
-    /// the first write, and `config.json` is written last.
+    /// the first write; `config.json` and then the [`ImportManifest`] are
+    /// written last.
     pub fn write(&self, directory: &Path) -> Result<()> {
         let plan = files::Plan::new(self, directory)?;
         std::fs::create_dir_all(directory)?;
@@ -74,7 +81,8 @@ impl Import {
     /// leaves the last good import in place. No source may live inside
     /// `directory`, which is replaced whole.
     pub fn publish(&self, directory: &Path) -> Result<()> {
-        publish::replace(directory, &self.shards, |staging| self.write(staging))
+        let sources = self.shards.iter().chain(&self.vision_shards).cloned().collect::<Vec<_>>();
+        publish::replace(directory, &sources, |staging| self.write(staging))
     }
 
     /// The derived files, `(name, contents)`, with `config.json` last.

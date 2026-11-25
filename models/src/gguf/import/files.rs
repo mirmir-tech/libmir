@@ -8,7 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use super::{Import, ImportConflict};
+use super::{Import, ImportConflict, ImportManifest, MANIFEST, SourceFile};
 use crate::error::{ModelsError, Result};
 
 /// What writing an import into one directory does.
@@ -16,6 +16,8 @@ pub(super) struct Plan {
     /// `(name, contents)`, `config.json` last.
     derived: Vec<(String, Vec<u8>)>,
     links: Vec<Link>,
+    /// Written after everything else.
+    manifest: ImportManifest,
 }
 
 /// A shard linked under its own name.
@@ -33,17 +35,38 @@ impl Plan {
         for (name, _) in &derived {
             claim(&mut names, OsStr::new(name), directory)?;
         }
+        claim(&mut names, OsStr::new(MANIFEST), directory)?;
         let mut links = Vec::new();
-        for shard in &import.shards {
-            let name = shard.file_name().ok_or_else(|| {
-                ModelsError::InvalidGguf(format!("{} has no file name", shard.display()))
-            })?;
-            claim(&mut names, name, directory)?;
-            let target = fs::canonicalize(shard)?;
-            let present = present(&directory.join(name), &target)?;
-            links.push(Link { name: name.to_owned(), target, present });
+        let mut sources = [Vec::new(), Vec::new()];
+        for (shards, recorded) in
+            [&import.shards, &import.vision_shards].into_iter().zip(&mut sources)
+        {
+            for shard in shards {
+                let name = shard.file_name().ok_or_else(|| {
+                    ModelsError::InvalidGguf(format!("{} has no file name", shard.display()))
+                })?;
+                claim(&mut names, name, directory)?;
+                let target = fs::canonicalize(shard)?;
+                let present = present(&directory.join(name), &target)?;
+                recorded.push(SourceFile::of(&target)?);
+                links.push(Link { name: name.to_owned(), target, present });
+            }
         }
-        Ok(Self { derived, links })
+        let files = derived
+            .iter()
+            .map(|(name, _)| Ok(name.clone()))
+            .chain(links.iter().map(|link| {
+                link.name.to_str().map(str::to_owned).ok_or_else(|| {
+                    ModelsError::InvalidGguf(format!("{} is not UTF-8", link.name.display()))
+                })
+            }))
+            .collect::<Result<Vec<_>>>()?;
+        let [text, vision] = sources;
+        Ok(Self {
+            derived,
+            links,
+            manifest: ImportManifest { text, vision, files },
+        })
     }
 
     pub(super) fn write(&self, directory: &Path) -> Result<()> {
@@ -60,6 +83,10 @@ impl Plan {
             fs::write(&partial, bytes)?;
             fs::rename(&partial, &path)?;
         }
+        let path = directory.join(MANIFEST);
+        let partial = partial(&path)?;
+        fs::write(&partial, serde_json::to_vec_pretty(&self.manifest)?)?;
+        fs::rename(&partial, &path)?;
         Ok(())
     }
 }
