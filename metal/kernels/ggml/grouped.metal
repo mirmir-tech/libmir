@@ -66,11 +66,13 @@ for (uint expert = indices[first]; expert <= min(indices[last], uint(EXPERTS - 1
       const uint column = s0 * 32 + 8 * j + fm;
       const bool inside = s0 * 32 + 8 * j < INPUT;
       simdgroup_float8x8 b[TOKEN_TILES];
+      // Past INPUT (not a multiple of 128) the last token's row ends: read
+      // only inside it, as `mma.metal` does.
       for (uint u = 0; u < TOKEN_TILES; ++u) {
-        const float x0 = float(input[ulong(assignment[u][0]) * INPUT + column]);
-        const float x1 = float(input[ulong(assignment[u][1]) * INPUT + column]);
-        b[u].thread_elements()[0] = inside ? present[u].x * x0 : 0.0f;
-        b[u].thread_elements()[1] = inside ? present[u].y * x1 : 0.0f;
+        b[u].thread_elements()[0] =
+            inside ? present[u].x * float(input[ulong(assignment[u][0]) * INPUT + column]) : 0.0f;
+        b[u].thread_elements()[1] =
+            inside ? present[u].y * float(input[ulong(assignment[u][1]) * INPUT + column]) : 0.0f;
       }
       for (uint t = 0; t < TILES; ++t) {
         const half2 pair =

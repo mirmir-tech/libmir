@@ -90,6 +90,9 @@ struct GgmlSub {
 };
 
 // N little-endian words from byte `at` of a buffer whose base is aligned.
+// Off a word boundary they are assembled from aligned words, the last of
+// which holds up to three bytes past the range: only for a range inside its
+// block, whose next bytes are the block's own.
 template <uint N>
 inline void ggml_load(const device uchar* base, ulong at, thread uint* words) {
   const device uint* aligned = (const device uint*)base + (at >> 2);
@@ -104,6 +107,31 @@ inline void ggml_load(const device uchar* base, ulong at, thread uint* words) {
       previous = next;
     }
   }
+}
+
+// `ggml_load` reading no byte past the range: for a range that ends its
+// block, where the word past it lies beyond the buffer for the last block of
+// the last row (blocks of 17, 18, 22, 34, 66 or 110 bytes leave a buffer's
+// end off a word boundary). The range's last at & 3 bytes are read alone.
+template <uint N>
+inline void ggml_load_exact(const device uchar* base, ulong at, thread uint* words) {
+  const uint shift = uint(at & 3) * 8;
+  if (shift == 0) {
+    ggml_load<N>(base, at, words);
+    return;
+  }
+  const device uint* aligned = (const device uint*)base + (at >> 2);
+  uint previous = aligned[0];
+  for (uint i = 0; i + 1 < N; ++i) {
+    const uint next = aligned[i + 1];
+    words[i] = previous >> shift | next << (32 - shift);
+    previous = next;
+  }
+  const ulong tail = (at & ~ulong(3)) + 4 * N;
+  uint next = base[tail];
+  if (shift >= 16) next |= uint(base[tail + 1]) << 8;
+  if (shift >= 24) next |= uint(base[tail + 2]) << 16;
+  words[N - 1] = previous >> shift | next << (32 - shift);
 }
 
 inline float ggml_half(const device uchar* base, ulong at) {
@@ -165,8 +193,9 @@ inline uint ggml_lookup(constant uchar* table, uint word, uint shift) {
 
 inline void ggml_table(const device uchar* base, ulong at, constant uchar* table,
                        thread GgmlSub& sub) {
+  // IQ4_NL's and MXFP4's indices end their blocks.
   uint words[4];
-  ggml_load<4>(base, at, words);
+  ggml_load_exact<4>(base, at, words);
   for (uint i = 0; i < 4; ++i) {
     sub.q[i] = ggml_lookup(table, words[i], 0);
     sub.q[i + 4] = ggml_lookup(table, words[i], 4);

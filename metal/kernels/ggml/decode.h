@@ -14,7 +14,7 @@ inline void ggml_decode(const device uchar* base, ulong at, uint s, thread GgmlS
       return;
     }
     uint words[4];
-    ggml_load<4>(base, at + (KIND == GGML_Q4_1 ? 4 : 2), words);
+    ggml_load_exact<4>(base, at + (KIND == GGML_Q4_1 ? 4 : 2), words);
     ggml_nibbles(words, sub);
     if (KIND == GGML_Q4_0) {
       for (uint i = 0; i < 8; ++i) sub.q[i] = ggml_sub_bytes(sub.q[i], 0x08080808u);
@@ -25,7 +25,7 @@ inline void ggml_decode(const device uchar* base, ulong at, uint s, thread GgmlS
     // qs[16]; d q + m. Bit j of qh is the fifth bit of value j.
     constexpr uint qh = KIND == GGML_Q5_1 ? 4 : 2;
     uint words[4];
-    ggml_load<4>(base, at + qh + 4, words);
+    ggml_load_exact<4>(base, at + qh + 4, words);
     const uint high = ggml_u32(base, at + qh);
     ggml_nibbles(words, sub);
     for (uint i = 0; i < 4; ++i) {
@@ -38,7 +38,7 @@ inline void ggml_decode(const device uchar* base, ulong at, uint s, thread GgmlS
     ggml_uniform(sub, ggml_half(base, at), KIND == GGML_Q5_1 ? -ggml_half(base, at + 2) : 0.0f);
   } else if (KIND == GGML_Q8_0) {
     // half d, int8 qs[32].
-    ggml_load<8>(base, at + 2, sub.q);
+    ggml_load_exact<8>(base, at + 2, sub.q);
     ggml_uniform(sub, ggml_half(base, at), 0.0f);
   } else if (KIND == GGML_Q2_K) {
     // scales[16] (4-bit scale, 4-bit minimum), qs[64], half d, half dmin.
@@ -63,7 +63,8 @@ inline void ggml_decode(const device uchar* base, ulong at, uint s, thread GgmlS
     uint raw[3];
     ggml_load<8>(base, at, mask);
     ggml_load<8>(base, at + 32 + part * 32, sub.q);
-    ggml_load<3>(base, at + 96, raw);
+    // Its word past the range would reach a byte past the 110-byte block.
+    ggml_load_exact<3>(base, at + 96, raw);
     const uint scales[4] = {
         (raw[0] & 0x0F0F0F0Fu) | (raw[2] & 0x03030303u) << 4,
         (raw[1] & 0x0F0F0F0Fu) | ((raw[2] >> 2) & 0x03030303u) << 4,
@@ -150,7 +151,7 @@ inline void ggml_decode(const device uchar* base, ulong at, uint s, thread GgmlS
   } else if (KIND == GGML_Q2_0) {
     // half d, qs[16]: value j is bits 2 (j % 4) of qs[j / 4], minus 1.
     uint words[2];
-    ggml_load<2>(base, at + 2 + 8 * s, words);
+    ggml_load_exact<2>(base, at + 2 + 8 * s, words);
     for (uint i = 0; i < 8; ++i) {
       const uint b = ggml_byte(words, i);
       const uint value = (b & 3) | ((b >> 2) & 3) << 8 | ((b >> 4) & 3) << 16 | (b >> 6) << 24;
@@ -161,7 +162,7 @@ inline void ggml_decode(const device uchar* base, ulong at, uint s, thread GgmlS
     // qs[64], half d. Sub-block s is shift 2 (s % 4) of qs[32 (s / 4) ..],
     // minus 1.
     const uint shift = 2 * (s & 3);
-    ggml_load<8>(base, at + (s >> 2) * 32, sub.q);
+    ggml_load_exact<8>(base, at + (s >> 2) * 32, sub.q);
     for (uint i = 0; i < 8; ++i) {
       sub.q[i] = ggml_sub_bytes((sub.q[i] >> shift) & 0x03030303u, 0x01010101u);
     }

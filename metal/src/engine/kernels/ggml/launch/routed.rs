@@ -16,15 +16,10 @@ pub(in crate::engine::kernels::ggml) fn gathered(
     matrix: GgmlMatrix,
     experts: usize,
 ) -> Result<Array> {
-    let assignments = indices.native().len();
-    let rows = matrix.rows / experts;
+    let rows = expert_rows(matrix, experts)?;
+    let assignments = expert_indices(indices)?;
     let (_, inputs) = output_shape(input, matrix.columns, rows)?;
-    if experts == 0
-        || !matrix.rows.is_multiple_of(experts)
-        || inputs == 0
-        || assignments % inputs != 0
-        || indices.native().dtype()? != mirtal::DType::Uint32
-    {
+    if inputs == 0 || assignments % inputs != 0 {
         return Err(Error::InvalidQuantization(format!(
             "GGML gather of {assignments} assignments over {inputs} inputs and {experts} experts"
         )));
@@ -60,14 +55,10 @@ pub(in crate::engine::kernels::ggml) fn grouped(
     matrix: GgmlMatrix,
     experts: usize,
 ) -> Result<Array> {
-    let assignments = indices.native().len();
-    let rows = matrix.rows / experts;
+    let rows = expert_rows(matrix, experts)?;
+    let assignments = expert_indices(indices)?;
     let (_, inputs) = output_shape(input, matrix.columns, rows)?;
-    if experts == 0
-        || !matrix.rows.is_multiple_of(experts)
-        || inputs != assignments
-        || assignments == 0
-    {
+    if inputs != assignments || assignments == 0 {
         return Err(Error::InvalidQuantization(format!(
             "GGML grouped product of {inputs} inputs for {assignments} sorted assignments"
         )));
@@ -89,4 +80,27 @@ pub(in crate::engine::kernels::ggml) fn grouped(
             ]),
     )?;
     Array::from_native(output)
+}
+
+/// The rows of one expert of `matrix`, a bank of `experts` equal experts;
+/// checked before anything divides by `experts`.
+fn expert_rows(matrix: GgmlMatrix, experts: usize) -> Result<usize> {
+    if experts == 0 || !matrix.rows.is_multiple_of(experts) {
+        return Err(Error::InvalidQuantization(format!(
+            "GGML bank of {} rows over {experts} experts",
+            matrix.rows
+        )));
+    }
+    Ok(matrix.rows / experts)
+}
+
+/// The assignments `indices` holds, which the kernels read as `uint`.
+fn expert_indices(indices: &Array) -> Result<usize> {
+    let dtype = indices.native().dtype()?;
+    if dtype != mirtal::DType::Uint32 {
+        return Err(Error::InvalidQuantization(format!(
+            "GGML expert indices of {dtype:?}, not Uint32"
+        )));
+    }
+    Ok(indices.native().len())
 }

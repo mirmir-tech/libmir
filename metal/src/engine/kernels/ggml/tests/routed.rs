@@ -1,5 +1,7 @@
 //! Routed GGML products of every type against the host decoder, including
-//! expert widths that are not whole K-quant super-blocks (GLM-4.5-Air's 1408).
+//! expert widths that are not whole K-quant super-blocks (GLM-4.5-Air's 1408)
+//! and widths whose last 128-column step runs past the row (704), which the
+//! grouped kernel must not read beyond.
 
 use super::{GGML_METAL_TYPES, GgmlMatrix, Random, blocks, close, host, weight};
 use crate::engine::{Array, Dtype, Result, Stream};
@@ -49,7 +51,7 @@ fn input(rows: usize, columns: usize, seed: u64, stream: &Stream) -> Result<(Arr
 #[test]
 fn gathered_and_grouped_products_match_the_host_decoder() -> Result<()> {
     let stream = Stream::new_gpu()?;
-    for columns in [512_usize, 1408] {
+    for columns in [512_usize, 704, 1408] {
         for (index, &ggml_type) in GGML_METAL_TYPES.iter().enumerate() {
             if u64::try_from(columns)? % ggml_type.block_elements() != 0 {
                 continue;
@@ -101,5 +103,48 @@ fn gathered_and_grouped_products_match_the_host_decoder() -> Result<()> {
             )?;
         }
     }
+    Ok(())
+}
+
+/// A bank of no experts or one that does not divide into them, and indices
+/// of another type than Uint32, are refused before any kernel runs.
+#[test]
+fn routed_products_refuse_bad_banks_and_indices() -> Result<()> {
+    let stream = Stream::new_gpu()?;
+    let ggml_type = GGML_METAL_TYPES[0];
+    let data = blocks(ggml_type, EXPERTS * ROWS, 512, 3)?;
+    let bank = weight(&data, EXPERTS * ROWS, &stream)?;
+    let matrix = GgmlMatrix::new(ggml_type, 512, &bank)?;
+    let (tokens, _) = input(2, 512, 1, &stream)?;
+    let unsigned = Array::from_u32(&[0, 1], &[2])?;
+    let signed = unsigned.astype(Dtype::Int32, &stream)?;
+    let kernels = stream.kernels();
+    for experts in [0, 5] {
+        assert!(
+            kernels
+                .ggml_gathered(&stream, [&tokens, &bank, &unsigned], matrix, experts)
+                .is_err()
+        );
+        assert!(
+            kernels
+                .ggml_grouped(&stream, [&tokens, &bank, &unsigned], matrix, experts)
+                .is_err()
+        );
+    }
+    assert!(
+        kernels
+            .ggml_gathered(&stream, [&tokens, &bank, &signed], matrix, EXPERTS)
+            .is_err()
+    );
+    assert!(
+        kernels
+            .ggml_grouped(&stream, [&tokens, &bank, &signed], matrix, EXPERTS)
+            .is_err()
+    );
+    assert!(
+        kernels
+            .ggml_grouped(&stream, [&tokens, &bank, &unsigned], matrix, EXPERTS)
+            .is_ok()
+    );
     Ok(())
 }
