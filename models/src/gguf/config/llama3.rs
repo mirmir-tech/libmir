@@ -27,6 +27,11 @@ pub(super) fn rope_scaling(model: &GgufModel, config: &mut Map<String, Value>) -
         .and_then(Value::as_f64)
         .ok_or_else(|| invalid("needs rope.freq_base"))?;
     let divisors = divisors?;
+    // Every divisor is finite as read; one not positive divides no
+    // frequency, and would slip past the comparisons below.
+    if divisors.iter().any(|&divisor| divisor.is_nan() || divisor <= 0.0) {
+        return Err(invalid("holds a divisor that is not positive"));
+    }
     let dims = f64::from(u32::try_from(divisors.len() * 2)?);
     let frequencies = (0..divisors.len())
         .map(|pair| Ok(theta.powf(-2.0 * f64::from(u32::try_from(pair)?) / dims)))

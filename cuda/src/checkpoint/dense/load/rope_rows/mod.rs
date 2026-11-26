@@ -1,17 +1,19 @@
-use mircuda::{DeviceBuffer, bf16};
+use mircuda::bf16;
 use models::weights::TensorStorage;
 
 use crate::{
-    CudaBackend, CudaTensor, CudaTensorDType, CudaTensorSet, Error, Result,
-    checkpoint::dense::DenseLayerBindings, kernels::RopeRows,
+    CudaBackend, CudaTensor, CudaTensorSet, Error, Result,
+    checkpoint::dense::DenseLayerBindings,
+    kernels::{GgmlBlocks, RopeRows},
 };
 
 /// Restores Hugging Face's `rotate_half` row order in the layer's query and
 /// key projections, which the checkpoint declares interleaved pairwise
 /// (llama.cpp's GGUF files of Llama-family architectures). Only the first
 /// `rotary_dim` rows of a head rotate (GLM-4); a projection bias moves with
-/// its rows. Dense and GGML rows move as bytes, before any format loader
-/// reads them.
+/// its rows, and a learned query or key norm (Cohere's per-head norms, or
+/// one shared by every head) with the features of each head it scales.
+/// Dense and GGML rows move as bytes, before any format loader reads them.
 pub(super) fn restore(
     backend: &CudaBackend,
     tensors: &mut CudaTensorSet,
@@ -47,6 +49,15 @@ pub(super) fn restore(
             restore_rows(backend, &operation, tensors, name, (rows, dims))?;
         }
     }
+    // A norm weight holds one value per feature of a head, or of every head;
+    // one tensor bound as both norms moves once.
+    let query = bindings.attention.query_norm();
+    let key = bindings.attention.key_norm();
+    let key = key.filter(|key| query.is_none_or(|query| query.source != key.source));
+    for norm in query.into_iter().chain(key) {
+        let features = norm.shape.iter().product();
+        restore_rows(backend, &operation, tensors, &norm.source, (features, dims))?;
+    }
     Ok(())
 }
 
@@ -59,21 +70,24 @@ fn restore_rows(
     (rows, dims): (usize, (usize, usize)),
 ) -> Result<()> {
     let tensor = tensors.get(name).cloned().ok_or_else(|| Error::MissingTensor(name.into()))?;
-    let source = match tensor.dtype() {
-        CudaTensorDType::U8 => tensor.as_u8().cloned(),
-        CudaTensorDType::Bf16 => tensor.as_bf16().map(DeviceBuffer::reinterpret).transpose()?,
-        _ => None,
-    }
-    .ok_or_else(|| Error::DTypeMismatch {
-        name: name.into(),
-        expected: "BF16 or GGML blocks",
-    })?;
-    let mut output = backend.pool().allocate::<u8>(backend.stream(), source.len())?;
-    operation.execute(backend.stream(), &source, &mut output, rows, dims)?;
     let (name, shape) = (tensor.name().to_owned(), tensor.shape().to_vec());
-    tensors.replace(if tensor.dtype() == CudaTensorDType::U8 {
-        CudaTensor::from_u8(name, shape, output)
-    } else {
+    let (stream, pool) = (backend.stream(), backend.pool());
+    // GGML blocks move into a padded allocation, as uploaded; BF16 values
+    // into a plain one.
+    let restored = if let Some(blocks) = tensor.as_ggml_blocks() {
+        let mut output = GgmlBlocks::allocate(pool, stream, blocks.len())?;
+        operation.execute(stream, blocks.view(), output.view_mut(), rows, dims)?;
+        CudaTensor::from_ggml_blocks(name, shape, output)
+    } else if let Some(values) = tensor.as_bf16() {
+        let source = values.reinterpret::<u8>()?;
+        let mut output = pool.allocate::<u8>(stream, source.len())?;
+        operation.execute(stream, &source, &mut output, rows, dims)?;
         CudaTensor::from_bf16(name, shape, output.reinterpret::<bf16>()?)
-    })
+    } else {
+        return Err(Error::DTypeMismatch { name, expected: "BF16 or GGML blocks" });
+    };
+    tensors.replace(restored)
 }
+
+#[cfg(test)]
+mod tests;

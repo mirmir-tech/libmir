@@ -200,25 +200,25 @@ extern "C" __global__ void libmir_cuda_latent_expanded_layout(
 // Fills what the up-projections leave in the expanded `[rows, heads,
 // head_dim]` keys and values: every head's key gets the shared rotary key
 // after its `nope_dim` columns, then zeros; values get zeros past
-// `value_dim`.
+// `value_dim`. Column `c` of a head row covers key column `nope_dim + c` and
+// value column `value_dim + c`, so the launch spans the wider of the two
+// tails (`span`).
 extern "C" __global__ void libmir_cuda_latent_expand_fill_bf16(
     const __nv_bfloat16* latent, __nv_bfloat16* keys, __nv_bfloat16* values,
     unsigned int rows, unsigned int heads, unsigned int nope_dim, unsigned int value_dim,
-    unsigned int head_dim) {
-  const unsigned int tail = head_dim - nope_dim;
+    unsigned int head_dim, unsigned int span) {
   const unsigned long long index =
       static_cast<unsigned long long>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (index >= static_cast<unsigned long long>(rows) * heads * tail) return;
-  const unsigned long long head_row = index / tail;
-  const unsigned int column = index % tail;
+  if (index >= static_cast<unsigned long long>(rows) * heads * span) return;
+  const unsigned long long head_row = index / span;
+  const unsigned int column = index % span;
   const unsigned long long row = head_row / heads;
   const __nv_bfloat16 zero = __float2bfloat16_rn(0.0f);
-  keys[head_row * head_dim + nope_dim + column] =
-      column < LIBMIR_LATENT_ROPE ? latent[row * LATENT_ROW + LIBMIR_LATENT_RANK + column] : zero;
-  if (nope_dim + column >= value_dim) values[head_row * head_dim + nope_dim + column] = zero;
-  if (column < nope_dim && value_dim + column < head_dim) {
-    values[head_row * head_dim + value_dim + column] = zero;
+  if (nope_dim + column < head_dim) {
+    keys[head_row * head_dim + nope_dim + column] =
+        column < LIBMIR_LATENT_ROPE ? latent[row * LATENT_ROW + LIBMIR_LATENT_RANK + column] : zero;
   }
+  if (value_dim + column < head_dim) values[head_row * head_dim + value_dim + column] = zero;
 }
 
 // Builds the expanded `[tokens, heads, head_dim]` queries: each head's

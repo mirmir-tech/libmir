@@ -145,10 +145,7 @@ impl SourceFile {
             Ok(link) if link.file_type().is_symlink() => {
                 fs::read_link(path).is_ok_and(|target| target == self.path)
             },
-            Ok(link) => {
-                !self.is_at(path)
-                    && fs::metadata(&self.path).is_ok_and(|source| same_file(&source, &link))
-            },
+            Ok(_) => !self.is_at(path) && super::super::identity::same_file(&self.path, path),
             Err(_) => false,
         }
     }
@@ -163,17 +160,4 @@ impl SourceFile {
     pub fn is_unchanged(&self) -> bool {
         Self::of(&self.path).is_ok_and(|now| now == *self)
     }
-}
-
-#[cfg(unix)]
-fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    (left.dev(), left.ino()) == (right.dev(), right.ino())
-}
-
-/// Without a file identity to compare, no file is taken for a hard link:
-/// it is kept rather than replaced or removed.
-#[cfg(not(unix))]
-const fn same_file(_: &fs::Metadata, _: &fs::Metadata) -> bool {
-    false
 }

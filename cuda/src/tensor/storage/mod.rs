@@ -2,8 +2,10 @@ use std::collections::HashMap;
 
 use mircuda::{Context, DeviceBuffer, Stream, bf16, f16};
 
+pub(super) use self::buffers::TensorStorage;
 use crate::{Error, Result};
 
+mod buffers;
 mod constructors;
 mod raw;
 #[cfg(all(test, target_os = "linux"))]
@@ -136,6 +138,7 @@ impl CudaTensor {
     pub fn as_u8(&self) -> Option<&DeviceBuffer<u8>> {
         match &self.storage {
             TensorStorage::U8(buffer) => Some(buffer),
+            TensorStorage::GgmlBlocks(blocks) => Some(blocks.view()),
             _ => None,
         }
     }
@@ -205,46 +208,5 @@ impl CudaTensorSet {
         let mut host = self.context.allocate_pinned::<bf16>(device.len())?;
         self.stream.copy_to_host(device, &mut host)?;
         Ok(host.to_vec()?)
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(super) enum TensorStorage {
-    F16(DeviceBuffer<f16>),
-    Bf16(DeviceBuffer<bf16>),
-    F32(DeviceBuffer<f32>),
-    F8E4M3(DeviceBuffer<u8>),
-    F8E5M2(DeviceBuffer<u8>),
-    U32(DeviceBuffer<u32>),
-    I32(DeviceBuffer<i32>),
-    U8(DeviceBuffer<u8>),
-    I8(DeviceBuffer<i8>),
-}
-
-impl TensorStorage {
-    const fn dtype(&self) -> CudaTensorDType {
-        match self {
-            Self::F16(_) => CudaTensorDType::F16,
-            Self::Bf16(_) => CudaTensorDType::Bf16,
-            Self::F32(_) => CudaTensorDType::F32,
-            Self::F8E4M3(_) => CudaTensorDType::F8E4M3,
-            Self::F8E5M2(_) => CudaTensorDType::F8E5M2,
-            Self::U32(_) => CudaTensorDType::U32,
-            Self::I32(_) => CudaTensorDType::I32,
-            Self::U8(_) => CudaTensorDType::U8,
-            Self::I8(_) => CudaTensorDType::I8,
-        }
-    }
-
-    fn bytes(&self) -> usize {
-        match self {
-            Self::F16(buffer) => buffer.bytes(),
-            Self::Bf16(buffer) => buffer.bytes(),
-            Self::F32(buffer) => buffer.bytes(),
-            Self::F8E4M3(buffer) | Self::F8E5M2(buffer) | Self::U8(buffer) => buffer.bytes(),
-            Self::U32(buffer) => buffer.bytes(),
-            Self::I32(buffer) => buffer.bytes(),
-            Self::I8(buffer) => buffer.bytes(),
-        }
     }
 }

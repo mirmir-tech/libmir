@@ -153,8 +153,14 @@ fn base64(text: &str) -> Result<Vec<u8>> {
         return Err(invalid("a tiktoken token is not padded base64"));
     }
     let mut bytes = Vec::with_capacity(text.len() / 4 * 3);
-    for chunk in text.chunks(4) {
+    let last = text.len() / 4;
+    for (index, chunk) in text.chunks(4).enumerate() {
+        // At most two `=` pad the last quartet; anywhere else one is no
+        // digit.
         let padding = chunk.iter().rev().take_while(|byte| **byte == b'=').count();
+        if padding > 2 || (padding > 0 && index + 1 != last) {
+            return Err(invalid("a tiktoken token is not padded base64"));
+        }
         let mut word = 0_u32;
         for byte in &chunk[..4 - padding] {
             let digit = value(*byte).ok_or_else(|| invalid("a tiktoken token is not base64"))?;

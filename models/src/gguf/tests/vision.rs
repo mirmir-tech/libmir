@@ -137,6 +137,30 @@ fn the_import_joins_the_patch_frames() -> TestResult {
     Ok(())
 }
 
+/// A quantized patch embedding is refused, never copied out as floats.
+#[test]
+fn a_quantized_patch_embedding_is_refused() -> TestResult {
+    let directory = std::env::temp_dir().join(format!("libmir-mmproj-q-{}", std::process::id()));
+    std::fs::create_dir_all(&directory)?;
+    let (vision, model) = (directory.join("mmproj.gguf"), directory.join("text.gguf"));
+    let mut writer = mmproj()?;
+    writer.tensors.clear();
+    let writer = writer.tensor("v.patch_embd.weight", &[32, 2, 3, 4], GgmlType::Q8_0)?.tensor(
+        "v.patch_embd.weight.1",
+        &[32, 2, 3, 4],
+        GgmlType::Q8_0,
+    )?;
+    std::fs::write(&vision, writer.bytes()?)?;
+    std::fs::write(&model, text()?.bytes()?)?;
+    let config = serde_json::json!({"model_type": "qwen3_5_text"});
+    let import =
+        VisionImport::derive(&GgufModel::open(&vision)?, &GgufModel::open(&model)?, &config);
+    std::fs::remove_dir_all(&directory)?;
+    let error = import.err().ok_or("a quantized patch embedding was assembled")?.to_string();
+    assert!(error.contains("Q8_0"), "{error}");
+    Ok(())
+}
+
 /// A one-block `gemma4v` tower with one `[2, 3, 2, 2]` patch projection and
 /// a clipped attention output.
 fn gemma4v() -> TestResult<Writer> {

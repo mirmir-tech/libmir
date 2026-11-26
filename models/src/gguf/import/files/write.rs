@@ -9,7 +9,7 @@ use std::{ffi::OsStr, fs, path::Path};
 use super::{MANIFEST, Plan, beside, link_file, partial, write_new};
 use crate::{
     error::Result,
-    gguf::import::{FileOrigin, ImportManifest, ImportedFile, Stamp, Written},
+    gguf::import::{FileOrigin, ImportManifest, ImportedFile, Stamp, Written, identity},
 };
 
 /// Where a write may be cut short, for tests to stop it there.
@@ -92,7 +92,7 @@ impl Plan {
             // made aside, on a case-insensitive file system, it is that one.
             let partial = beside(&path, "partial")?;
             if partial.symlink_metadata().is_ok_and(|metadata| !metadata.is_dir())
-                && !links.iter().any(|(made, _)| same_path(&partial, made))
+                && !links.iter().any(|(made, _)| identity::same_entry(&partial, made))
             {
                 fs::remove_file(partial)?;
             }
@@ -133,29 +133,7 @@ fn same_entry(path: &Path, held_path: &Path, held: &str, name: &str) -> bool {
     if held.to_lowercase() != name.to_lowercase() {
         return false;
     }
-    same_path(path, held_path)
-}
-
-/// Whether both paths name one existing entry, links not followed.
-#[cfg(unix)]
-fn same_path(left: &Path, right: &Path) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    match (left.symlink_metadata(), right.symlink_metadata()) {
-        (Ok(left), Ok(right)) => (left.dev(), left.ino()) == (right.dev(), right.ino()),
-        _ => false,
-    }
-}
-
-/// Without a file identity, two spellings of one name that both exist are
-/// one entry, as on the case-insensitive file systems such systems use;
-/// two names are never one.
-#[cfg(not(unix))]
-fn same_path(left: &Path, right: &Path) -> bool {
-    let name = |path: &Path| path.file_name().map(|name| name.to_string_lossy().to_lowercase());
-    name(left).is_some()
-        && name(left) == name(right)
-        && left.symlink_metadata().is_ok()
-        && right.symlink_metadata().is_ok()
+    identity::same_entry(path, held_path)
 }
 
 /// Stops the write after `step` where a test asked for it.

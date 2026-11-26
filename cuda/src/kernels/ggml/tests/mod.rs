@@ -6,12 +6,13 @@ use mircuda::{Compiler, Context, DeviceBuffer, DeviceElement, Driver, MemoryPool
 use models::gguf::GgmlType;
 
 use super::{
-    GgmlActivations, GgmlDequantize, GgmlEmbedding, GgmlEmbeddingOperands, GgmlKernelType,
-    GgmlLinear, GgmlSpec,
+    GgmlActivations, GgmlBlocks, GgmlDequantize, GgmlEmbedding, GgmlEmbeddingOperands,
+    GgmlKernelType, GgmlLinear, GgmlSpec,
 };
 use crate::Result;
 
 mod bandwidth;
+mod bounds;
 mod gathered;
 mod mmq;
 mod reference;
@@ -30,7 +31,7 @@ fn linear_kernels_match_the_reference_dequantization() -> Result<()> {
     for (kind, columns) in GgmlKernelType::all().flat_map(shapes) {
         let blocks = Blocks::random(kind, ROWS, columns, 0x9e37_79b9)?;
         let weight = dequantize(kind, &blocks.bytes, ROWS, columns)?;
-        let device_weight = fixture.copy(&blocks.bytes)?;
+        let device_weight = fixture.copy_blocks(&blocks.bytes)?;
         // Passes of 1, 2, 8 and 16 tokens; 37 take three 16-token passes
         // with a ragged last one.
         for tokens in [1, 2, 5, 37] {
@@ -70,7 +71,7 @@ fn embedding_rows_match_the_reference_dequantization() -> Result<()> {
         let blocks = Blocks::random(kind, ROWS, COLUMNS, 0xc2b2_ae35)?;
         let weight = dequantize(kind, &blocks.bytes, ROWS, COLUMNS)?;
         let selected = [5_u32, 0, 23, 5];
-        let device_weight = fixture.copy(&blocks.bytes)?;
+        let device_weight = fixture.copy_blocks(&blocks.bytes)?;
         let device_selected = fixture.copy(&selected)?;
         let mut output = fixture.pool.allocate_zeroed::<bf16>(&fixture.stream, 3 * COLUMNS)?;
         let operation = GgmlEmbedding::compile(&fixture.compiler, kind, ROWS, COLUMNS, 2.0)?;
@@ -105,7 +106,7 @@ fn dequantization_matches_the_reference() -> Result<()> {
     for kind in GgmlKernelType::all() {
         let blocks = Blocks::random(kind, ROWS, COLUMNS, 0x27d4_eb2f)?;
         let weight = dequantize(kind, &blocks.bytes, ROWS, COLUMNS)?;
-        let device_weight = fixture.copy(&blocks.bytes)?;
+        let device_weight = fixture.copy_blocks(&blocks.bytes)?;
         let mut output = fixture.pool.allocate_zeroed::<bf16>(&fixture.stream, ROWS * COLUMNS)?;
         GgmlDequantize::compile(&fixture.compiler, kind, ROWS, COLUMNS)?
             .execute(&fixture.stream, &device_weight, &mut output)?;
@@ -170,6 +171,16 @@ impl Fixture {
         let mut device = self.pool.allocate::<T>(&self.stream, values.len())?;
         self.stream.copy_to_device(&mut host, &mut device)?;
         Ok(device)
+    }
+
+    /// GGML blocks in a padded allocation, as the checkpoint upload makes
+    /// them: the kernels may read past a buffer's last block.
+    fn copy_blocks(&self, bytes: &[u8]) -> Result<DeviceBuffer<u8>> {
+        let mut host = self.context.allocate_pinned::<u8>(bytes.len())?;
+        host.copy_from_slice(bytes)?;
+        let mut blocks = GgmlBlocks::allocate(&self.pool, &self.stream, bytes.len())?;
+        self.stream.copy_to_device(&mut host, blocks.view_mut())?;
+        Ok(blocks.view().clone())
     }
 
     fn read<T: DeviceElement + Copy>(&self, values: &DeviceBuffer<T>) -> Result<Vec<T>> {

@@ -10,6 +10,8 @@ mod granite;
 mod hybrid;
 mod import;
 mod latent;
+mod limits;
+mod llama4;
 mod scales;
 mod split;
 mod vision;

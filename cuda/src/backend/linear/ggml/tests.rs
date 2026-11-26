@@ -4,7 +4,10 @@ use mircuda::{DeviceBuffer, DeviceElement, bf16, f16};
 use models::gguf::GgmlType;
 
 use super::GgmlCheckpointWeight;
-use crate::{CudaBackend, CudaConfig, DenseRole, Result, kernels::GgmlKernelType};
+use crate::{
+    CudaBackend, CudaConfig, DenseRole, Result,
+    kernels::{GgmlBlocks, GgmlKernelType},
+};
 
 const COLUMNS: usize = 256;
 const ROWS: usize = 48;
@@ -19,6 +22,17 @@ pub(in crate::backend) fn copy<T: DeviceElement>(
     backend.inner.stream.copy_to_device(&mut host, &mut device)?;
     backend.inner.stream.synchronize()?;
     Ok(device)
+}
+
+/// GGML blocks in a padded allocation, as the checkpoint upload makes them.
+pub(in crate::backend) fn copy_blocks(backend: &CudaBackend, bytes: &[u8]) -> Result<GgmlBlocks> {
+    let inner = &backend.inner;
+    let mut host = inner.context.allocate_pinned::<u8>(bytes.len())?;
+    host.copy_from_slice(bytes)?;
+    let mut blocks = GgmlBlocks::allocate(&inner.pool, &inner.stream, bytes.len())?;
+    inner.stream.copy_to_device(&mut host, blocks.view_mut())?;
+    inner.stream.synchronize()?;
+    Ok(blocks)
 }
 
 pub(in crate::backend) fn read<T: DeviceElement>(
@@ -80,7 +94,7 @@ pub(in crate::backend) fn assert_close(expected: &[bf16], actual: &[bf16], label
 #[test]
 fn output_scale_multiplies_a_projections_products() -> Result<()> {
     let backend = CudaBackend::new(CudaConfig::default())?;
-    let blocks = copy(&backend, &q8_0(1, ROWS, COLUMNS, &[]))?;
+    let blocks = copy_blocks(&backend, &q8_0(1, ROWS, COLUMNS, &[]))?;
     let geometry = (1, ROWS, COLUMNS);
     let unscaled = GgmlCheckpointWeight::from_blocks(
         blocks.clone(),
@@ -116,5 +130,46 @@ fn output_scale_multiplies_a_projections_products() -> Result<()> {
             .collect::<Vec<_>>();
         assert_close(&doubled, &read(&backend, &third)?, &format!("{tokens} tokens, folded"));
     }
+    Ok(())
+}
+
+/// GGML weights load only from blocks in a padded allocation: the kernels
+/// may read up to `TAIL_BYTES` past a buffer's last block.
+#[test]
+fn weights_load_only_from_padded_blocks() -> Result<()> {
+    use models::weights::{
+        GgmlBlockQuantization, GgmlCompanion, LayerTensorRole, LogicalTensorRole, TensorBinding,
+        TensorStorage,
+    };
+    let backend = CudaBackend::new(CudaConfig::default())?;
+    let bytes = q8_0(1, ROWS, COLUMNS, &[]);
+    let shape = vec![ROWS, COLUMNS];
+    let padded = crate::CudaTensor::from_ggml_blocks(
+        "padded".into(),
+        shape.clone(),
+        copy_blocks(&backend, &bytes)?,
+    );
+    let plain = crate::CudaTensor::from_u8("plain".into(), shape.clone(), copy(&backend, &bytes)?);
+    let tensors = crate::CudaTensorSet::from_tensors(
+        &backend.inner.context,
+        &backend.inner.stream,
+        vec![padded, plain],
+    );
+    let binding = |source: &str| TensorBinding {
+        role: LogicalTensorRole::Layer {
+            index: 0,
+            tensor: LayerTensorRole::InputNorm,
+        },
+        source: source.into(),
+        shape: shape.clone(),
+        logical_shape: Some(shape.clone()),
+        transforms: Vec::new(),
+        storage: TensorStorage::Ggml {
+            format: GgmlBlockQuantization { ggml_type: GgmlType::Q8_0 },
+            companion: GgmlCompanion::Plain,
+        },
+    };
+    assert!(GgmlCheckpointWeight::load_binding(&tensors, &binding("padded")).is_ok());
+    assert!(GgmlCheckpointWeight::load_binding(&tensors, &binding("plain")).is_err());
     Ok(())
 }

@@ -36,8 +36,11 @@ pub enum Unlowerable {
         key_value_rank: usize,
         rope_head_dim: usize,
     },
-    /// Latent keys rotated other than plainly, linearly or by `YaRN`.
+    /// Latent keys not rotated, or rotated other than plainly, linearly, by
+    /// `YaRN` or `LongRoPE`.
     LatentRotary,
+    /// A latent query temperature counting positions from other than zero.
+    LatentQueryTemperatureOffset { offset: usize },
     /// Latent routed experts without a projected latent space.
     LatentExpertsWithoutLatentSize,
     /// A clamped `SwiGLU` slope other than the one the kernel computes.
@@ -127,8 +130,10 @@ impl fmt::Display for Unlowerable {
                 formatter,
                 "no latent attention kernel for a {key_value_rank}-wide latent with a {rope_head_dim}-wide rotary key"
             ),
-            Self::LatentRotary => {
-                formatter.write_str("latent keys rotate only plainly, linearly or by YaRN")
+            Self::LatentRotary => formatter
+                .write_str("latent keys must rotate plainly, linearly, by YaRN or by LongRoPE"),
+            Self::LatentQueryTemperatureOffset { offset } => {
+                write!(formatter, "latent queries temper positions from zero, not from {offset}")
             },
             Self::LatentExpertsWithoutLatentSize => formatter
                 .write_str("latent routed experts need a projected latent space (moe_latent_size)"),

@@ -3,7 +3,11 @@
 // into shared memory with aligned 16-byte loads; lanes then decode two
 // sub-blocks each from there. A chunk is a whole number of 16-byte vectors,
 // so a row's chunks share its misalignment, which the decoders' byte loads
-// absorb; the last chunk of a row may be partial.
+// absorb; the last chunk of a row may be partial. Rows align by their
+// absolute address: a routed expert's matrix starts wherever its bank's
+// earlier matrices end, which a block of 18, 34 or 110 bytes leaves only
+// 2-byte aligned. A row's last vector may run up to 15 bytes past it, past
+// the matrix's last row into the allocation's `GgmlBlocks::TAIL_BYTES`.
 namespace {
 
 constexpr unsigned int kWarps = 4u;
@@ -56,8 +60,9 @@ __device__ void ggml_gemv_staged(
 #pragma unroll
   for (unsigned int r = 0; r < kRows; ++r) {
     const unsigned int owned = row + r < rows ? row + r : row;
-    const unsigned long long start = static_cast<unsigned long long>(owned) * row_bytes;
-    weights[r] = reinterpret_cast<const uint4*>(weight) + (start >> 4u);
+    const unsigned long long start = reinterpret_cast<unsigned long long>(weight) +
+                                     static_cast<unsigned long long>(owned) * row_bytes;
+    weights[r] = reinterpret_cast<const uint4*>(start & ~15ull);
     shifts[r] = static_cast<unsigned int>(start & 15ull);
     ends[r] = static_cast<unsigned int>((start + row_bytes + 15ull) / 16ull - (start >> 4u));
   }

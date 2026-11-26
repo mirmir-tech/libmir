@@ -1,11 +1,17 @@
 //! Per-layer inputs against a host reference of Hugging Face's
 //! `project_per_layer_inputs`.
 
-use mircuda::{DeviceBuffer, DeviceElement, bf16};
+use mircuda::{DeviceBuffer, DeviceElement, bf16, f16};
+use models::gguf::GgmlType;
 
 use super::{PerLayerInputTensors, PerLayerInputs, PerLayerInputsTemplate};
 use crate::{
-    CudaBackend, CudaConfig, CudaTensor, Result, backend::linear::CheckpointProjectionWeight,
+    CudaBackend, CudaConfig, CudaTensor, GgmlCheckpointWeight, Result,
+    backend::linear::{
+        CheckpointProjectionWeight,
+        ggml_tests::{copy_blocks, q8_0},
+    },
+    kernels::GgmlKernelType,
 };
 
 const VOCAB: usize = 8;
@@ -80,14 +86,58 @@ fn reference(tokens: &[u32], embeddings: &[bf16], tables: [&[bf16]; 3]) -> Vec<f
 #[test]
 fn computes_layer_major_inputs_as_the_reference() -> Result<()> {
     let backend = CudaBackend::new(CudaConfig::default())?;
+    let projection = tensor(&backend, "per_layer.projection", &[LAYERS * WIDTH, HIDDEN], 2)?;
+    let host = read(&backend, bf16_buffer(&projection)?)?;
+    check(&backend, CheckpointProjectionWeight::Dense(projection), &host, 1.0e-2)
+}
+
+/// GGUF files quantize the model projection like any other projection; it
+/// runs as GGML blocks, against the reference over their dequantized values
+/// (the GEMV quantizes its input to int8, hence the wider tolerance).
+#[test]
+fn takes_a_ggml_model_projection() -> Result<()> {
+    let backend = CudaBackend::new(CudaConfig::default())?;
     let total = LAYERS * WIDTH;
-    let table = tensor(&backend, "per_layer.embedding", &[VOCAB, total], 1)?;
-    let projection = tensor(&backend, "per_layer.projection", &[total, HIDDEN], 2)?;
-    let norm = tensor(&backend, "per_layer.norm", &[WIDTH], 3)?;
+    let blocks = q8_0(1, total, HIDDEN, &[]);
+    let host = blocks
+        .as_chunks::<34>()
+        .0
+        .iter()
+        .flat_map(|block| {
+            let d = f16::from_le_bytes([block[0], block[1]]).to_f32();
+            block[2..]
+                .iter()
+                .map(move |&q| bf16::from_f32(d * f32::from(q.cast_signed())).to_f32())
+        })
+        .collect::<Vec<_>>();
+    let weight = GgmlCheckpointWeight::from_blocks(
+        copy_blocks(&backend, &blocks)?,
+        GgmlKernelType::new(GgmlType::Q8_0)?,
+        (1, total, HIDDEN),
+        None,
+    );
+    check(&backend, CheckpointProjectionWeight::Ggml(weight), &host, 3.0e-2)
+}
+
+fn bf16_buffer(tensor: &CudaTensor) -> Result<&DeviceBuffer<bf16>> {
+    tensor.as_bf16().ok_or(crate::Error::InvalidDecoderKernel("not BF16"))
+}
+
+/// The per-layer inputs of three tokens with `model_projection`, whose
+/// values are `projection`, against the host reference.
+fn check(
+    backend: &CudaBackend,
+    model_projection: CheckpointProjectionWeight,
+    projection: &[f32],
+    tolerance: f32,
+) -> Result<()> {
+    let total = LAYERS * WIDTH;
+    let table = tensor(backend, "per_layer.embedding", &[VOCAB, total], 1)?;
+    let norm = tensor(backend, "per_layer.norm", &[WIDTH], 3)?;
     let template = PerLayerInputsTemplate::new(
         PerLayerInputTensors {
             embedding: CheckpointProjectionWeight::Dense(table.clone()),
-            model_projection: projection.clone(),
+            model_projection,
             projection_norm: norm.clone(),
         },
         [VOCAB, LAYERS, WIDTH, HIDDEN],
@@ -95,21 +145,23 @@ fn computes_layer_major_inputs_as_the_reference() -> Result<()> {
     )?;
     let tokens = [1_u32, 5, 7];
     let embeddings = values(tokens.len() * HIDDEN, 4);
-    let mut inputs = PerLayerInputs::new(&backend, &template, 1)?;
+    let mut inputs = PerLayerInputs::new(backend, &template, 1)?;
     inputs.ensure_capacity(tokens.len())?;
-    inputs.compute(&copy(&backend, &tokens)?, 0, tokens.len(), &copy(&backend, &embeddings)?)?;
+    inputs.compute(&copy(backend, &tokens)?, 0, tokens.len(), &copy(backend, &embeddings)?)?;
     let host = |tensor: &CudaTensor| -> Result<Vec<bf16>> {
-        let buffer = tensor.as_bf16().ok_or(crate::Error::InvalidDecoderKernel("not BF16"))?;
-        Ok(read(&backend, buffer)?.into_iter().map(bf16::from_f32).collect())
+        Ok(read(backend, bf16_buffer(tensor)?)?.into_iter().map(bf16::from_f32).collect())
     };
-    let expected =
-        reference(&tokens, &embeddings, [&host(&table)?, &host(&projection)?, &host(&norm)?]);
+    let projection = projection.iter().copied().map(bf16::from_f32).collect::<Vec<_>>();
+    let expected = reference(&tokens, &embeddings, [&host(&table)?, &projection, &host(&norm)?]);
     for layer in 0..LAYERS {
-        let actual = read(&backend, &inputs.layer(layer, tokens.len())?)?;
+        let actual = read(backend, &inputs.layer(layer, tokens.len())?)?;
         let rows = layer * tokens.len() * WIDTH..(layer + 1) * tokens.len() * WIDTH;
         for (index, (actual, expected)) in actual.iter().zip(&expected[rows]).enumerate() {
-            let tolerance = 1.0e-2 * expected.abs().max(1.0);
-            assert!((actual - expected).abs() <= tolerance, "layer {layer} [{index}]");
+            let tolerance = tolerance * expected.abs().max(1.0);
+            assert!(
+                (actual - expected).abs() <= tolerance,
+                "layer {layer} [{index}]: {actual} vs {expected}"
+            );
         }
     }
     Ok(())

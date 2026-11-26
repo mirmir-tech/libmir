@@ -1,6 +1,7 @@
 //! BF16 projections and embedding rows over GGML blocks read in place from
 //! GGUF files (`kernels/ggml/`).
 
+mod blocks;
 mod dequantize;
 mod embedding;
 mod gathered;
@@ -12,6 +13,7 @@ mod scale;
 #[cfg(test)]
 mod tests;
 
+pub use blocks::GgmlBlocks;
 pub use dequantize::GgmlDequantize;
 pub use embedding::{GgmlEmbedding, GgmlEmbeddingOperands};
 pub use gathered::{GgmlExpertSpec, GgmlGatheredLinear, GgmlSelections};

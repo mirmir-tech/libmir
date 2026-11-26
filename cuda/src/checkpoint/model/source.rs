@@ -90,9 +90,15 @@ impl<'a> ModelSource<'a> {
     pub(in crate::checkpoint) fn upload(&self, backend: &CudaBackend) -> Result<CudaTensorSet> {
         let cast = backend.prepare_dense_cast()?;
         let mut upload = backend.begin_tensor_upload();
+        // The per-layer table and model projection load in their checkpoint
+        // storage, as the boundary's own projections do.
         let bindings = [self.embedding, self.output]
             .into_iter()
-            .chain(self.per_layer.map(|inputs| inputs.embedding))
+            .chain(
+                self.per_layer
+                    .into_iter()
+                    .flat_map(|inputs| [inputs.embedding, inputs.model_projection]),
+            )
             .collect::<Vec<_>>();
         let raw = bindings
             .iter()

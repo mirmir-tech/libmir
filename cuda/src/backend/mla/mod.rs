@@ -104,13 +104,13 @@ impl CudaLatentAttentionLayer {
                 spec.index
             )));
         };
-        // The latent kernels count tempered positions from zero (Mistral 4),
-        // not from Llama 4's one.
-        if latent.query_temperature.is_some_and(|temperature| temperature.offset != 0) {
-            return Err(Error::UnsupportedDecoderLayer(
-                "CUDA latent attention tempers queries from position zero only".into(),
-            ));
-        }
+        // Admission's own predicate, kept for layers loaded outside a plan.
+        architecture::cuda::latent_query_temperature(latent.query_temperature).map_err(
+            |feature| architecture::ArchitectureError::Unlowerable {
+                layer: Some(spec.index),
+                feature,
+            },
+        )?;
         let (frequencies, rope_scale) =
             rotary::frequencies(&latent.position, latent.rope_head_dim)?;
         let epsilon: f32 = decoder.rms_norm_eps.to_string().parse()?;

@@ -41,3 +41,16 @@ fn phi3_fused_rows_read_as_separate_projections() -> TestResult {
     assert_eq!(up.data_offsets[0], gate.data_offsets[1]);
     Ok(())
 }
+
+/// Widths a crafted header multiplies past `u64` are refused, not wrapped.
+#[test]
+fn overflowing_projection_widths_are_refused() -> TestResult {
+    let mut writer = Writer::new().text("general.architecture", "phi3")?;
+    for key in ["embedding_length", "attention.head_count", "attention.key_length"] {
+        writer = writer.kv(&format!("phi3.{key}"), 10, (1_u64 << 40).to_le_bytes().to_vec());
+    }
+    let bytes = writer.tensor("blk.0.attn_qkv.weight", &[64, 128], GgmlType::Q8_0)?.bytes()?;
+    let header = parse(&bytes).map_err(|error| format!("{error:?}"))?;
+    assert!(header.mapped_catalog(Path::new("model.gguf")).is_err());
+    Ok(())
+}

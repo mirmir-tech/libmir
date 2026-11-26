@@ -9,9 +9,8 @@ use mircuda::{DeviceBuffer, bf16};
 
 use super::boundary::{ModelEmbedding, ModelEmbeddingTemplate};
 use crate::{
-    Bf16Projection, CudaBackend, CudaTensor, DensePlanRequest, DenseRole, Error, ExecutionPhase,
-    Result,
-    backend::linear::CheckpointProjectionWeight,
+    CudaBackend, CudaTensor, DenseRole, Error, Result,
+    backend::linear::{CheckpointProjection, CheckpointProjectionWeight},
     kernels::{PerLayerInputBf16, PerLayerInputSpec},
 };
 
@@ -26,8 +25,9 @@ const MAX_RESIDENT_STEPS: usize = 8;
 pub struct PerLayerInputsTemplate {
     /// `[vocab, layers * width]`, scaled by `sqrt(width)` at lookup.
     embedding: ModelEmbeddingTemplate,
-    /// `[layers * width, hidden]` BF16.
-    model_projection: CudaTensor,
+    /// `[layers * width, hidden]`, in the checkpoint's storage (GGUF files
+    /// quantize it like the other projections).
+    model_projection: CheckpointProjectionWeight,
     /// `[width]` BF16.
     projection_norm: CudaTensor,
     layers: usize,
@@ -39,7 +39,7 @@ pub struct PerLayerInputsTemplate {
 /// The tensors [`PerLayerInputsTemplate::new`] takes.
 pub struct PerLayerInputTensors {
     pub embedding: CheckpointProjectionWeight,
-    pub model_projection: CudaTensor,
+    pub model_projection: CheckpointProjectionWeight,
     pub projection_norm: CudaTensor,
 }
 
@@ -52,9 +52,9 @@ impl PerLayerInputsTemplate {
         let total = layers
             .checked_mul(width)
             .ok_or(Error::InvalidDecoderKernel("per-layer input width overflow"))?;
-        if tensors.model_projection.shape() != [total, hidden]
-            || tensors.projection_norm.shape() != [width]
-        {
+        // Checks the projection's geometry in whichever storage it has.
+        tensors.model_projection.affine_format(1, hidden, total)?;
+        if tensors.projection_norm.shape() != [width] {
             return Err(Error::UnsupportedDecoderLayer(
                 "per-layer input tensors differ from the decoder geometry".into(),
             ));
@@ -106,7 +106,7 @@ impl SessionPerLayerInputs {
 
 /// The fixed-shape operations of one row count.
 struct Step {
-    projection: Bf16Projection,
+    projection: CheckpointProjection,
     combine: PerLayerInputBf16,
 }
 
@@ -169,8 +169,7 @@ impl PerLayerInputs {
         let embeddings = embeddings.slice(0..rows * self.template.hidden)?;
         let mut projected =
             self.projected.slice(0..rows * self.template.layers * self.template.width)?;
-        step.projection
-            .execute(&embeddings, &self.template.model_projection, &mut projected)?;
+        step.projection.execute(&embeddings, &mut projected)?;
         let norm = self.template.projection_norm.as_bf16().ok_or_else(|| Error::DTypeMismatch {
             name: self.template.projection_norm.name().into(),
             expected: "BF16",
@@ -201,17 +200,6 @@ impl PerLayerInputs {
 
 impl Step {
     fn new(backend: &CudaBackend, template: &PerLayerInputsTemplate, rows: usize) -> Result<Self> {
-        let request = DensePlanRequest {
-            phase: if rows == 1 {
-                ExecutionPhase::Decode
-            } else {
-                ExecutionPhase::Prefill
-            },
-            role: DenseRole::DenseGateUp,
-            tokens: rows,
-            input_features: template.hidden,
-            output_features: template.layers * template.width,
-        };
         let spec = PerLayerInputSpec {
             rows,
             layers: template.layers,
@@ -221,7 +209,14 @@ impl Step {
             epsilon: template.epsilon,
         };
         Ok(Self {
-            projection: backend.prepare_bf16_projection(request)?,
+            projection: CheckpointProjection::new(
+                backend,
+                rows,
+                template.hidden,
+                template.layers * template.width,
+                DenseRole::DenseGateUp,
+                &template.model_projection,
+            )?,
             combine: PerLayerInputBf16::compile(backend.compiler(), spec)?,
         })
     }

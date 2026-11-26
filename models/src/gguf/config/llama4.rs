@@ -21,8 +21,10 @@ pub(super) fn llama4(header: &GgufHeader, architecture: &str, config: &mut Map<S
         config.insert("intermediate_size".into(), experts);
     }
     // An explicit zero window means no chunking (llama.cpp's
-    // `LLAMA_SWA_TYPE_NONE`); otherwise llama.cpp chunks by 8192 tokens and
-    // tunes the temperature, as Llama 4 Scout's `config.json` does.
+    // `LLAMA_SWA_TYPE_NONE`); otherwise llama.cpp chunks by 8192 tokens,
+    // whatever other window the file declares, and tunes the temperature
+    // with that size, as Llama 4 Scout's `config.json` does. Importing the
+    // declared window would run such a file unlike llama.cpp does.
     drop(config.remove("sliding_window"));
     let chunk = match header.unsigned(&key("attention.sliding_window")) {
         Some(0) => None,

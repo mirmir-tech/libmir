@@ -36,20 +36,22 @@ pub(in super::super) enum RoutedExperts {
 }
 
 impl RoutedExpertWeights {
-    /// Multiplies every expert's down products by `factor`: GGML banks
-    /// through their output scales.
-    pub(crate) fn scale_down(&mut self, backend: &CudaBackend, factor: f32) -> Result<()> {
-        if self.shared.is_some() {
-            return Err(Error::UnsupportedDecoderLayer(
-                "CUDA scales no shared expert's products".into(),
-            ));
+    /// Multiplies the down products of the GGML banks and of a GGML shared
+    /// expert by `factor`, through their output scales. Dense down weights
+    /// were scaled in place at upload (`residual::fold_dense`), which refuses
+    /// every other storage, so they take nothing here.
+    pub(crate) fn scale_ggml_down(&mut self, backend: &CudaBackend, factor: f32) -> Result<()> {
+        if let RoutedExperts::Ggml(weights) = &mut self.experts {
+            weights.scale_down(backend, factor)?;
         }
-        match &mut self.experts {
-            RoutedExperts::Ggml(weights) => weights.scale_down(backend, factor),
-            RoutedExperts::Dense(_) => Err(Error::UnsupportedDecoderLayer(
-                "CUDA scales routed expert products only for GGML banks".into(),
-            )),
+        if let Some(SharedExpertWeights {
+            down: CheckpointProjectionWeight::Ggml(down),
+            ..
+        }) = &mut self.shared
+        {
+            *down = down.scaled(backend, factor)?;
         }
+        Ok(())
     }
 
     pub(crate) fn load(

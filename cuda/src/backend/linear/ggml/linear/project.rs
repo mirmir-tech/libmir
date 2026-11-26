@@ -29,7 +29,7 @@ impl GgmlBf16Linear {
                 if !quantized {
                     operation.quantize(&self.stream, input, &mut activations)?;
                 }
-                operation.multiply(&self.stream, &activations, &weight.blocks, output)
+                operation.multiply(&self.stream, &activations, weight.blocks(), output)
             },
             Path::Grouped {
                 operation,
@@ -56,7 +56,7 @@ impl GgmlBf16Linear {
                     stride: 1,
                     offset: 0,
                 };
-                let bank = (&weight.blocks, GgmlBankRows::whole(self.output_features));
+                let bank = (weight.blocks(), GgmlBankRows::whole(self.output_features));
                 operation.multiply(
                     &self.stream, &activations, groups, weight.kind, bank, output, placement,
                 )
@@ -71,7 +71,7 @@ impl GgmlBf16Linear {
                 // before the next one's; the lock only guards the handle.
                 let buffer = {
                     let mut scratch = scratch.lock().map_err(|_| poisoned())?;
-                    dequantize.execute(&self.stream, &weight.blocks, &mut scratch)?;
+                    dequantize.execute(&self.stream, weight.blocks(), &mut scratch)?;
                     scratch.clone()
                 };
                 let dense = CudaTensor::from_bf16(

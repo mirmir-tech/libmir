@@ -1,7 +1,11 @@
+use std::num::NonZeroUsize;
+
 use models::{
     execution::TaskExecutionPlan,
     layout::DecoderConfig,
-    semantic::{FeedForwardSpec, MixerSpec, SemanticModelSpec},
+    semantic::{
+        FeedForwardSpec, MixerSpec, PositionEncodingSpec, QueryTemperature, SemanticModelSpec,
+    },
     weights::TensorCatalog,
 };
 use serde_json::json;
@@ -80,6 +84,56 @@ fn refuses_more_experts_than_the_cuda_router_ranks() -> AnyResult<()> {
         Some(ArchitectureError::Unlowerable {
             layer: Some(1),
             feature: Unlowerable::ExpertCount { experts: 384, max: 256 },
+        })
+    );
+    Ok(())
+}
+
+/// The latent kernels temper queries counting positions from zero, as
+/// Mistral 4 does: admission takes that temperature and refuses one counted
+/// from Llama 4's one, which the latent loader would refuse.
+#[test]
+fn takes_latent_temperature_only_from_position_zero() -> AnyResult<()> {
+    let (task, mut semantic) = latent_contract("softmax")?;
+    let temper = |semantic: &mut SemanticModelSpec, offset| {
+        for layer in &mut semantic.decoder.layers {
+            if let MixerSpec::LatentAttention(latent) = &mut layer.mixer {
+                latent.query_temperature = Some(QueryTemperature {
+                    beta: 0.1,
+                    window: NonZeroUsize::MIN.saturating_add(8191),
+                    offset,
+                });
+            }
+        }
+    };
+    temper(&mut semantic, 0);
+    assert!(cuda::admit(&task, Some(&semantic)).is_ok());
+    temper(&mut semantic, 1);
+    assert_eq!(
+        cuda::admit(&task, Some(&semantic)).err(),
+        Some(ArchitectureError::Unlowerable {
+            layer: Some(0),
+            feature: Unlowerable::LatentQueryTemperatureOffset { offset: 1 },
+        })
+    );
+    Ok(())
+}
+
+/// The latent kernels rotate a key part; latent attention without positions
+/// is refused at admission rather than by the loader.
+#[test]
+fn refuses_latent_attention_without_rotary_keys() -> AnyResult<()> {
+    let (task, mut semantic) = latent_contract("softmax")?;
+    for layer in &mut semantic.decoder.layers {
+        if let MixerSpec::LatentAttention(latent) = &mut layer.mixer {
+            latent.position = PositionEncodingSpec::None;
+        }
+    }
+    assert_eq!(
+        cuda::admit(&task, Some(&semantic)).err(),
+        Some(ArchitectureError::Unlowerable {
+            layer: Some(0),
+            feature: Unlowerable::LatentRotary
         })
     );
     Ok(())

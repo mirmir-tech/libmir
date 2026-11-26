@@ -22,61 +22,82 @@ const COLUMNS: usize = 512;
 #[test]
 fn gathered_kernels_match_the_reference_per_selection() -> Result<()> {
     let fixture = Fixture::new()?;
+    for kind in GgmlKernelType::all() {
+        check(&fixture, kind, ROWS, COLUMNS)?;
+    }
+    Ok(())
+}
+
+/// Seven-row experts of nine blocks per row start every expert and every
+/// half bank at an odd multiple of the block size, so blocks of 18, 34, 84,
+/// 110 or 210 bytes leave their matrices only 2-byte aligned. The bank's
+/// allocation ends at its last block.
+#[test]
+fn gathered_kernels_take_unaligned_expert_matrices() -> Result<()> {
+    let fixture = Fixture::new()?;
+    for kind in GgmlKernelType::all() {
+        let block = usize::try_from(kind.ggml_type().block_elements())?;
+        check(&fixture, kind, 14, 9 * block)?;
+    }
+    Ok(())
+}
+
+/// Every selection of a bank of `EXPERTS` experts of `expert_rows` rows, as a
+/// whole matrix and as the second half of a fused gate/up bank.
+fn check(
+    fixture: &Fixture,
+    kind: GgmlKernelType,
+    expert_rows: usize,
+    columns: usize,
+) -> Result<()> {
     // Three tokens, two selections each; expert 3 is chosen twice.
     let (tokens, top_k) = (3, 2);
     let selected = [3_u32, 0, 4, 3, 1, 2];
-    for kind in GgmlKernelType::all() {
-        let blocks = Blocks::random(kind, EXPERTS * ROWS, COLUMNS, 0x1656_67b1)?;
-        let weight = dequantize(kind, &blocks.bytes, EXPERTS * ROWS, COLUMNS)?;
-        // The whole matrix, and the second half of every expert's rows as
-        // the up projection of a fused gate/up bank reads it.
-        for (rows, bank) in [
-            (ROWS, GgmlBankRows::whole(ROWS)),
-            (ROWS / 2, GgmlBankRows { expert_rows: ROWS, first_row: ROWS / 2 }),
-        ] {
-            let spec = GgmlExpertSpec {
-                kind,
-                experts: EXPERTS,
-                rows,
-                columns: COLUMNS,
-            };
-            let operation = GgmlGatheredLinear::compile(&fixture.compiler, spec)?;
-            let input = reference::input(tokens * COLUMNS, 0xd3a2_646c);
-            let device_input = fixture.copy(&input)?;
-            let device_weight = fixture.copy(&blocks.bytes)?;
-            let device_selected = fixture.copy(&selected)?;
-            let mut activations =
-                GgmlActivations::new(&fixture.pool, &fixture.stream, tokens, COLUMNS)?;
-            let mut output =
-                fixture.pool.allocate_zeroed::<bf16>(&fixture.stream, selected.len() * rows)?;
-            operation.quantize(&fixture.stream, &device_input, &mut activations, tokens)?;
-            let selections = GgmlSelections {
-                selected: &device_selected,
-                count: selected.len(),
-                group: top_k,
-            };
-            operation.multiply(
-                &fixture.stream,
-                &activations,
-                (&device_weight, bank),
-                &selections,
-                &mut output,
-            )?;
-            let actual = fixture.read(&output)?;
-            for (selection, &expert) in selected.iter().enumerate() {
-                let token = selection / top_k;
-                for row in 0..rows {
-                    let at = (usize::try_from(expert)? * ROWS + bank.first_row + row) * COLUMNS;
-                    let (expected, magnitude) = reference::dot(
-                        &input[token * COLUMNS..(token + 1) * COLUMNS],
-                        &weight[at..at + COLUMNS],
-                    );
-                    let value = f64::from(actual[selection * rows + row].to_f32());
-                    assert!(
-                        (value - expected).abs() <= 1e-2f64.mul_add(magnitude, 1e-3),
-                        "{kind:?} selection {selection} row {row}: {value} vs {expected}"
-                    );
-                }
+    let blocks = Blocks::random(kind, EXPERTS * expert_rows, columns, 0x1656_67b1)?;
+    let weight = dequantize(kind, &blocks.bytes, EXPERTS * expert_rows, columns)?;
+    let device_weight = fixture.copy_blocks(&blocks.bytes)?;
+    let input = reference::input(tokens * columns, 0xd3a2_646c);
+    let device_input = fixture.copy(&input)?;
+    let device_selected = fixture.copy(&selected)?;
+    let half = expert_rows / 2;
+    for (rows, bank) in [
+        (expert_rows, GgmlBankRows::whole(expert_rows)),
+        (expert_rows - half, GgmlBankRows { expert_rows, first_row: half }),
+    ] {
+        let spec = GgmlExpertSpec { kind, experts: EXPERTS, rows, columns };
+        let operation = GgmlGatheredLinear::compile(&fixture.compiler, spec)?;
+        let mut activations =
+            GgmlActivations::new(&fixture.pool, &fixture.stream, tokens, columns)?;
+        let mut output =
+            fixture.pool.allocate_zeroed::<bf16>(&fixture.stream, selected.len() * rows)?;
+        operation.quantize(&fixture.stream, &device_input, &mut activations, tokens)?;
+        let selections = GgmlSelections {
+            selected: &device_selected,
+            count: selected.len(),
+            group: top_k,
+        };
+        operation.multiply(
+            &fixture.stream,
+            &activations,
+            (&device_weight, bank),
+            &selections,
+            &mut output,
+        )?;
+        let actual = fixture.read(&output)?;
+        for (selection, &expert) in selected.iter().enumerate() {
+            let token = selection / top_k;
+            for row in 0..rows {
+                let at = (usize::try_from(expert)? * expert_rows + bank.first_row + row) * columns;
+                let (expected, magnitude) = reference::dot(
+                    &input[token * columns..(token + 1) * columns],
+                    &weight[at..at + columns],
+                );
+                let value = f64::from(actual[selection * rows + row].to_f32());
+                assert!(
+                    (value - expected).abs() <= 1e-2f64.mul_add(magnitude, 1e-3),
+                    "{kind:?} {expert_rows}x{columns} selection {selection} row {row}: {value} vs \
+                     {expected}"
+                );
             }
         }
     }

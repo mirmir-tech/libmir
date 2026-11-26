@@ -17,13 +17,17 @@ use crate::{
     gguf::ConfigurationVector,
 };
 
+/// Gemma 4's `general.architecture`; it declares each layer type's rotary
+/// part itself, never one for the whole model.
+pub(super) const ARCHITECTURE: &str = "gemma4";
+
 /// Whether `architecture` is Gemma 4; fills its keys.
 pub(super) fn gemma4(
     model: &GgufModel,
     architecture: &str,
     config: &mut Map<String, Value>,
 ) -> Result<bool> {
-    if architecture != "gemma4" {
+    if architecture != ARCHITECTURE {
         return Ok(false);
     }
     let header = model.header();
@@ -79,7 +83,28 @@ pub(super) fn gemma4(
         (unsigned("attention.key_length")?, unsigned("attention.key_length_swa")?);
     config.insert("head_dim".into(), json!(sliding_dim));
     config.insert("global_head_dim".into(), json!(global_dim));
-    rope_parameters(model, global_dim, config)?;
+    // Full layers rotate whole heads, of which `rope_freqs` marks the pairs
+    // that turn; sliding layers rotate their leading
+    // `rope.dimension_count_swa` features (`conversion/gemma.py`).
+    if let Some(rotary) = header.unsigned(&key("rope.dimension_count"))
+        && rotary != global_dim
+    {
+        return Err(ModelsError::InvalidGguf(format!(
+            "gemma4: rope.dimension_count {rotary} is not attention.key_length {global_dim}"
+        )));
+    }
+    let sliding_rotary = match header.unsigned(&key("rope.dimension_count_swa")) {
+        Some(rotary) if rotary == 0 || rotary > sliding_dim || !rotary.is_multiple_of(2) => {
+            return Err(ModelsError::InvalidGguf(format!(
+                "gemma4: rope.dimension_count_swa {rotary} does not fit head_dim {sliding_dim}"
+            )));
+        },
+        Some(rotary) if rotary < sliding_dim => {
+            Some(f64::from(u32::try_from(rotary)?) / f64::from(u32::try_from(sliding_dim)?))
+        },
+        Some(_) | None => None,
+    };
+    rope_parameters(model, global_dim, sliding_rotary, config)?;
     // Full layers without a value projection attend with values equal to
     // their keys; the final layers that read an earlier layer's keys and
     // values have no projections of their own.
@@ -109,10 +134,12 @@ pub(super) fn gemma4(
 }
 
 /// `rope_parameters` per layer type: proportional on full layers, over the
-/// share of pairs `rope_freqs` marks as rotated.
+/// share of pairs `rope_freqs` marks as rotated, and on sliding layers over
+/// `sliding_rotary` of each head where it rotates only part.
 fn rope_parameters(
     model: &GgufModel,
     global_dim: u64,
+    sliding_rotary: Option<f64>,
     config: &mut Map<String, Value>,
 ) -> Result<()> {
     let header = model.header();
@@ -131,6 +158,9 @@ fn rope_parameters(
         full["rope_theta"] = json!(theta);
     }
     let mut local = json!({"rope_type": "default"});
+    if let Some(factor) = sliding_rotary {
+        local["partial_rotary_factor"] = json!(factor);
+    }
     if let Some(theta) = theta("rope.freq_base_swa") {
         local["rope_theta"] = json!(theta);
     }

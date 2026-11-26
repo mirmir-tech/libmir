@@ -34,7 +34,7 @@ fn gemv_bandwidth_on_qwen3_shapes() -> Result<()> {
         for (name, ggml_type, rows, columns) in SHAPES {
             let kind = GgmlKernelType::new(ggml_type)?;
             let blocks = Blocks::random(kind, rows, columns, 7)?;
-            let weight = fixture.copy(&blocks.bytes)?;
+            let weight = fixture.copy_blocks(&blocks.bytes)?;
             let input = fixture.copy(&vec![bf16::ONE; tokens * columns])?;
             let mut output =
                 fixture.pool.allocate_zeroed::<bf16>(&fixture.stream, tokens * rows)?;

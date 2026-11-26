@@ -1,9 +1,13 @@
 //! The kernel exports of `kernels/latent_attention_bf16.cu` and the
 //! tensor-core launch geometry.
 
-use mircuda::{DeviceBuffer, Module, TypedKernel, bf16, cuda_export};
+use mircuda::{DeviceBuffer, LaunchConfig, Module, Stream, TypedKernel, bf16, cuda_export};
 
-use crate::Result;
+use super::LatentAttentionSpec;
+use crate::{
+    Result,
+    kernels::geometry::{narrow, product},
+};
 
 cuda_export!(
     pub(crate) LatentPrepareKernel = "libmir_cuda_latent_prepare_bf16"(
@@ -92,7 +96,7 @@ cuda_export!(
     pub(crate) LatentExpandFillKernel = "libmir_cuda_latent_expand_fill_bf16"(
         latent: &DeviceBuffer<bf16>, keys: &mut DeviceBuffer<bf16>,
         values: &mut DeviceBuffer<bf16>, rows: u32, heads: u32, nope_dim: u32, value_dim: u32,
-        head_dim: u32,
+        head_dim: u32, span: u32,
     )
 );
 
@@ -140,7 +144,54 @@ pub(super) struct ExpandedKernels {
     pub(super) layout: TypedKernel<LatentExpandedLayoutKernel>,
 }
 
+/// The expanded keys and values of `rows` cache rows, `head_dim` wide per
+/// head; the up-projections wrote their first `nope_dim` and `value_dim`
+/// columns.
+pub(super) struct ExpandedTails<'a> {
+    pub(super) latent: &'a DeviceBuffer<bf16>,
+    pub(super) keys: &'a mut DeviceBuffer<bf16>,
+    pub(super) values: &'a mut DeviceBuffer<bf16>,
+    pub(super) rows: usize,
+    pub(super) head_dim: usize,
+}
+
 impl ExpandedKernels {
+    /// Fills every head's key after its `nope_dim` columns (the rotary key,
+    /// then zeros) and zeros its values past `value_dim`, whichever tail is
+    /// wider.
+    pub(super) fn fill(
+        &self,
+        stream: &Stream,
+        spec: LatentAttentionSpec,
+        tails: ExpandedTails<'_>,
+    ) -> Result<()> {
+        let ExpandedTails { latent, keys, values, rows, head_dim } = tails;
+        let span = head_dim.saturating_sub(spec.nope_dim.min(spec.value_dim));
+        let elements = product(product(rows, spec.heads)?, span)?;
+        let config = LaunchConfig {
+            grid: (narrow(elements.div_ceil(256))?, 1, 1),
+            block: (256, 1, 1),
+            shared_memory_bytes: 0,
+        };
+        let geometry = (narrow(spec.nope_dim)?, narrow(spec.value_dim)?, narrow(head_dim)?);
+        self.fill.launch(
+            stream,
+            config,
+            (
+                latent,
+                keys,
+                values,
+                narrow(rows)?,
+                narrow(spec.heads)?,
+                geometry.0,
+                geometry.1,
+                geometry.2,
+                narrow(span)?,
+            ),
+        )?;
+        Ok(())
+    }
+
     pub(super) fn load(module: &Module) -> Result<Self> {
         Ok(Self {
             gather: module.kernel()?,

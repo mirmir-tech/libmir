@@ -51,7 +51,7 @@ impl GgmlEmbeddingLookup {
         self.operation.execute(
             &self.stream,
             &mut GgmlEmbeddingOperands {
-                weight: &self.weight.blocks,
+                weight: self.weight.blocks(),
                 selected,
                 output,
             },

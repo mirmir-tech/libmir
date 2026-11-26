@@ -28,10 +28,10 @@ pub(super) fn load(
             return Err(Error::InvalidExecutionPlan("a gated MLP layer has no routed experts"));
         },
     };
-    // The residual multiplier ends both branches; BF16 attention outputs
-    // were scaled at upload.
+    // The residual multiplier ends both branches; dense attention outputs
+    // and expert downs were scaled at upload.
     if let Some(factor) = residual {
-        experts.scale_down(backend, factor)?;
+        experts.scale_ggml_down(backend, factor)?;
     }
     let feed_forward = DenseFeedForwardSource::Routed(&experts);
     let attention = bindings.attention.projected()?;

@@ -12,7 +12,7 @@ use super::{AffineGatedDeltaLayerConfig, AffineGatedDeltaLayerWeights};
 use crate::{
     CudaBackend, CudaTensor, CudaTensorDType, Error, Result,
     backend::linear::{CheckpointProjection, CheckpointProjectionWeight},
-    kernels::{GatedDeltaLlamaCpp, GatedDeltaTiledValues},
+    kernels::{GatedDeltaLlamaCpp, GatedDeltaTiledValues, GgmlBlocks},
 };
 
 impl AffineGatedDeltaLayerWeights {
@@ -60,23 +60,23 @@ struct Reorder<'a> {
 }
 
 impl Reorder<'_> {
+    /// Gathers `rows` of `row_bytes` from `input` into `output`.
     fn rows(
         &self,
         input: &DeviceBuffer<u8>,
         rows: &[u32],
         row_bytes: usize,
-    ) -> Result<DeviceBuffer<u8>> {
+        output: &mut DeviceBuffer<u8>,
+    ) -> Result<()> {
         let backend = &self.backend.inner;
         let mut host = backend.context.allocate_pinned::<u32>(rows.len())?;
         host.copy_from_slice(rows)?;
         let mut indices = backend.pool.allocate::<u32>(&backend.stream, rows.len())?;
         backend.stream.copy_to_device(&mut host, &mut indices)?;
-        let mut output = backend.pool.allocate::<u8>(&backend.stream, rows.len() * row_bytes)?;
-        self.kernels
-            .gather_rows(&backend.stream, input, &mut output, &indices, row_bytes)?;
+        self.kernels.gather_rows(&backend.stream, input, output, &indices, row_bytes)?;
         // The pinned indices must outlive the transfer.
         backend.stream.synchronize()?;
-        Ok(output)
+        Ok(())
     }
 
     /// A BF16 tensor whose leading axis is reordered.
@@ -93,7 +93,9 @@ impl Reorder<'_> {
             });
         }
         let row_bytes = 2 * shape[1..].iter().product::<usize>();
-        let output = self.rows(&values.reinterpret::<u8>()?, rows, row_bytes)?;
+        let backend = &self.backend.inner;
+        let mut output = backend.pool.allocate::<u8>(&backend.stream, rows.len() * row_bytes)?;
+        self.rows(&values.reinterpret::<u8>()?, rows, row_bytes, &mut output)?;
         Ok(CudaTensor::from_bf16(
             tensor.name().into(),
             shape,
@@ -110,7 +112,10 @@ impl Reorder<'_> {
         match weight {
             CheckpointProjectionWeight::Ggml(weight) => {
                 let row_bytes = weight.kind().bytes(1, weight.input_features())?;
-                let blocks = self.rows(weight.blocks(), rows, row_bytes)?;
+                let backend = &self.backend.inner;
+                let mut blocks =
+                    GgmlBlocks::allocate(&backend.pool, &backend.stream, rows.len() * row_bytes)?;
+                self.rows(weight.blocks(), rows, row_bytes, blocks.view_mut())?;
                 Ok(CheckpointProjectionWeight::Ggml(weight.with_blocks(blocks)?))
             },
             CheckpointProjectionWeight::Dense(tensor) => {

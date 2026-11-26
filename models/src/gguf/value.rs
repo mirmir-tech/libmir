@@ -104,12 +104,21 @@ impl MetadataValue {
     }
 }
 
+/// The most array elements one header's metadata holds, at every depth:
+/// a vocabulary's few hundred thousand tokens, scores and merges, many
+/// times over. Each takes a `MetadataValue` in memory however few bytes it
+/// takes in the file, so the bound, not the header's size, caps the memory.
+pub const MAX_ARRAY_ELEMENTS: usize = 1 << 24;
+
+/// One metadata value; its array elements are taken from `elements`, the
+/// header's [`MAX_ARRAY_ELEMENTS`] still unread.
 pub fn read_value(
     reader: &mut Reader<'_>,
     kind: u32,
     file_len: Option<u64>,
+    elements: &mut usize,
 ) -> Parsed<MetadataValue> {
-    read_nested(reader, kind, file_len, 0)
+    read_nested(reader, kind, file_len, 0, elements)
 }
 
 fn read_nested(
@@ -117,6 +126,7 @@ fn read_nested(
     kind: u32,
     file_len: Option<u64>,
     depth: usize,
+    elements: &mut usize,
 ) -> Parsed<MetadataValue> {
     Ok(match kind {
         0 => MetadataValue::U8(reader.u8()?),
@@ -133,10 +143,14 @@ fn read_nested(
                 return Err(invalid("metadata arrays nest too deeply"));
             }
             let element = reader.u32()?;
-            let count = reader.count("array element", min_bytes(element)?, file_len)?;
+            // Within the elements still unread, refused before a short prefix
+            // asks for the bytes of more.
+            let count =
+                reader.count_within("array element", min_bytes(element)?, file_len, *elements)?;
+            *elements -= count;
             let mut values = Vec::with_capacity(count);
             for _ in 0..count {
-                values.push(read_nested(reader, element, file_len, depth + 1)?);
+                values.push(read_nested(reader, element, file_len, depth + 1, elements)?);
             }
             MetadataValue::Array(values)
         },

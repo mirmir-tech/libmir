@@ -2,7 +2,8 @@
 //! end, so the limits hold for every runtime that uses those kernels.
 
 use models::semantic::{
-    DecoderLayerSpec, MixerSpec, PositionEncodingSpec, RopeScalingSpec, SemanticModelSpec,
+    DecoderLayerSpec, MixerSpec, PositionEncodingSpec, QueryTemperature, RopeScalingSpec,
+    SemanticModelSpec,
 };
 
 use crate::{
@@ -104,15 +105,31 @@ fn lower_layer(layer: &DecoderLayerSpec) -> Result<CudaLayer> {
     if let MixerLowering::Latent(geometry) = mixer {
         latent_kernel(geometry).map_err(refuse)?;
     }
-    if let MixerSpec::LatentAttention(latent) = &layer.mixer
-        && matches!(&latent.position, PositionEncodingSpec::Rotary(rotary)
-            if matches!(rotary.scaling, Some(RopeScalingSpec::PiecewiseFrequency { .. })))
-    {
-        return Err(refuse(Unlowerable::LatentRotary));
+    if let MixerSpec::LatentAttention(latent) = &layer.mixer {
+        // The latent kernels rotate a key part, and not by Llama 3's blend.
+        let rotates = matches!(&latent.position, PositionEncodingSpec::Rotary(rotary)
+            if !matches!(rotary.scaling, Some(RopeScalingSpec::PiecewiseFrequency { .. })));
+        if !rotates {
+            return Err(refuse(Unlowerable::LatentRotary));
+        }
+        latent_query_temperature(latent.query_temperature).map_err(refuse)?;
     }
     let feed_forward = lower_feed_forward(&layer.feed_forward, layer.index)?;
     router_kernel(&feed_forward).map_err(refuse)?;
     Ok(CudaLayer { index: layer.index, mixer, feed_forward })
+}
+
+/// The latent kernels count tempered positions from zero (Mistral 4), not
+/// from one (Llama 4); the CUDA latent loader checks the same.
+pub fn latent_query_temperature(
+    temperature: Option<QueryTemperature>,
+) -> std::result::Result<(), Unlowerable> {
+    match temperature {
+        Some(QueryTemperature { offset, .. }) if offset != 0 => {
+            Err(Unlowerable::LatentQueryTemperatureOffset { offset })
+        },
+        _ => Ok(()),
+    }
 }
 
 fn latent_kernel(geometry: LatentGeometry) -> std::result::Result<(), Unlowerable> {

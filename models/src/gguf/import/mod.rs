@@ -4,6 +4,7 @@
 //! files, whose tensors the catalog reads in place.
 
 mod files;
+mod identity;
 mod manifest;
 mod publish;
 
@@ -73,10 +74,12 @@ impl Import {
     /// path is resolved and checked before the first write; the manifest
     /// naming the new files is written aside before any file changes and
     /// moved into place last, and loaders refuse the directory meanwhile.
-    /// Writers and publishers of one directory take turns.
+    /// Writers and publishers of one directory take turns, however it is
+    /// spelled; a write through a symlink writes where it leads.
     pub fn write(&self, directory: &Path) -> Result<()> {
-        let _turn = publish::lock(directory)?;
-        self.write_unlocked(directory)
+        let directory = publish::resolved(directory)?;
+        let _turn = publish::lock(&directory)?;
+        self.write_unlocked(&directory)
     }
 
     fn write_unlocked(&self, directory: &Path) -> Result<()> {
@@ -139,6 +142,10 @@ pub enum ImportConflict {
     DuplicateName,
     #[error("a source file lives inside the directory publishing replaces")]
     SourceInside,
+    /// Publishing replaces the entry a destination names; `.`, `..`, a path
+    /// ending in `..` or a root names none of its own.
+    #[error("the destination names no directory of its own to replace, as `.` or `..` do")]
+    UnnamedDestination,
 }
 
 #[cfg(test)]

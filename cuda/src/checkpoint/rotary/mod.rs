@@ -1,6 +1,6 @@
 use models::semantic::{AttentionSpec, PositionEncodingSpec, RopeScalingSpec};
 
-use super::config::{to_f32, to_f64, unsupported};
+use super::config::{to_f32, to_f64};
 use crate::{
     Result,
     kernels::{RotaryEmbedding, RotaryPeriods, RotaryScaling},
@@ -18,14 +18,16 @@ pub(super) fn embedding(spec: &AttentionSpec, head_dim: usize) -> Result<Option<
         dimensions,
         pairing,
         theta: to_f32("RoPE theta", rotary.theta)?,
-        scaling: scaling(spec, (dimensions, pairing))?,
+        scaling: scaling(&spec.position, (dimensions, pairing))?,
     }))
 }
 
-/// The layer's long-context frequency scaling; `YaRN` has its own attention
-/// factor and runtime (`clamped_routed`).
-fn scaling(spec: &AttentionSpec, (dimensions, pairing): (usize, usize)) -> Result<RotaryScaling> {
-    let PositionEncodingSpec::Rotary(rotary) = &spec.position else {
+/// The layer's long-context frequency scaling.
+fn scaling(
+    position: &PositionEncodingSpec,
+    (dimensions, pairing): (usize, usize),
+) -> Result<RotaryScaling> {
+    let PositionEncodingSpec::Rotary(rotary) = position else {
         return Ok(RotaryScaling::NONE);
     };
     match rotary.scaling {
@@ -38,7 +40,7 @@ fn scaling(spec: &AttentionSpec, (dimensions, pairing): (usize, usize)) -> Resul
             high_frequency_factor,
             ..
         }) if high_frequency_factor <= low_frequency_factor => {
-            pair_periods(spec, (dimensions, pairing))
+            pair_periods(position, (dimensions, pairing))
         },
         Some(RopeScalingSpec::PiecewiseFrequency {
             factor,
@@ -51,9 +53,10 @@ fn scaling(spec: &AttentionSpec, (dimensions, pairing): (usize, usize)) -> Resul
             to_f32("RoPE high-frequency factor", high_frequency_factor)?,
             to_f32("RoPE original context", f64::from(u32::try_from(original_context_len)?))?,
         )),
-        Some(RopeScalingSpec::Yarn { .. }) => {
-            Err(unsupported("dense CUDA attention has no YaRN rotary scaling"))
-        },
+        // `YaRN` blends each pair between its own and its interpolated
+        // frequency and scales the cosine and sine, which per-pair periods
+        // and their attention factor state exactly.
+        Some(RopeScalingSpec::Yarn { .. }) => pair_periods(position, (dimensions, pairing)),
         Some(RopeScalingSpec::LongRope { factors, attention_factor, .. }) => {
             Ok(RotaryScaling::periods(RotaryPeriods {
                 factors,
@@ -63,17 +66,18 @@ fn scaling(spec: &AttentionSpec, (dimensions, pairing): (usize, usize)) -> Resul
     }
 }
 
-/// Llama 4's hard frequency stop as per-pair period factors: each rotated
-/// pair's base frequency over the semantic spec's scaled one, so the
-/// kernels divide by the factors the spec defines.
+/// The semantic spec's scaled frequencies as per-pair period factors: each
+/// rotated pair's base frequency over its scaled one, so the kernels divide
+/// by the factors the spec defines (Llama 4's hard frequency stop, `YaRN`'s
+/// ramp), with the spec's factor on the cosine and sine.
 fn pair_periods(
-    spec: &AttentionSpec,
+    position: &PositionEncodingSpec,
     (dimensions, pairing): (usize, usize),
 ) -> Result<RotaryScaling> {
-    let PositionEncodingSpec::Rotary(rotary) = &spec.position else {
+    let PositionEncodingSpec::Rotary(rotary) = position else {
         return Ok(RotaryScaling::NONE);
     };
-    let Some((scaled, _)) = spec.position.inverse_frequencies(pairing)? else {
+    let Some((scaled, attention_factor)) = position.inverse_frequencies(pairing)? else {
         return Ok(RotaryScaling::NONE);
     };
     let width = to_f64(pairing)?;
@@ -83,6 +87,9 @@ fn pair_periods(
         .collect::<Result<Vec<_>>>()?;
     Ok(RotaryScaling::periods(RotaryPeriods {
         factors: models::layout::RopeFactors::new(&factors)?,
-        attention_factor: 1.0,
+        attention_factor: to_f32("RoPE attention factor", attention_factor)?,
     }))
 }
+
+#[cfg(test)]
+mod tests;

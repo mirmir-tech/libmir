@@ -13,6 +13,10 @@ use std::{
 use super::{GgmlType, GgufHeader, GgufModel, GgufTensor};
 use crate::error::{ModelsError, Result};
 
+/// The most bytes a configuration vector holds: a value per rotary pair or
+/// frequency is a few kilobytes.
+const MAX_VECTOR_BYTES: u64 = 1024 * 1024;
+
 /// A vector the configuration derives from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfigurationVector {
@@ -96,7 +100,11 @@ impl GgufModel {
         let (path, header, tensor) = self.shards.iter().find_map(|(path, header)| {
             Some((path, header, header.tensors.iter().find(|tensor| tensor.name == name)?))
         })?;
-        Some(self.vector_bytes(path, header, tensor).and_then(|bytes| decode(tensor, &bytes)))
+        Some(
+            check(tensor)
+                .and_then(|()| self.vector_bytes(path, header, tensor))
+                .and_then(|bytes| decode(tensor, &bytes)),
+        )
     }
 
     fn vector_bytes(
@@ -123,13 +131,34 @@ impl GgufModel {
     }
 }
 
-fn decode(tensor: &GgufTensor, bytes: &[u8]) -> Result<Vec<f64>> {
+/// Refuses a vector the configuration cannot be derived from before any
+/// of it is read: one that is not a small vector of F32.
+fn check(tensor: &GgufTensor) -> Result<()> {
     if tensor.ggml_type != GgmlType::F32 || tensor.dims.len() != 1 {
         return Err(ModelsError::InvalidGguf(format!("{} is not a vector of F32", tensor.name)));
     }
+    if tensor.bytes > MAX_VECTOR_BYTES {
+        return Err(ModelsError::InvalidGguf(format!(
+            "{} holds {} bytes, beyond {MAX_VECTOR_BYTES}",
+            tensor.name, tensor.bytes
+        )));
+    }
+    Ok(())
+}
+
+/// The vector's values, every one finite: a configuration derived from a
+/// `NaN` or infinity would pass checks that compare against it.
+fn decode(tensor: &GgufTensor, bytes: &[u8]) -> Result<Vec<f64>> {
     if u64::try_from(bytes.len())? != tensor.bytes {
         return Err(ModelsError::InvalidGguf(format!("{} has the wrong length", tensor.name)));
     }
     let (words, _) = bytes.as_chunks::<4>();
-    Ok(words.iter().map(|word| f64::from(f32::from_le_bytes(*word))).collect())
+    let values = words
+        .iter()
+        .map(|word| f64::from(f32::from_le_bytes(*word)))
+        .collect::<Vec<_>>();
+    if values.iter().any(|value| !value.is_finite()) {
+        return Err(ModelsError::InvalidGguf(format!("{} holds a non-finite value", tensor.name)));
+    }
+    Ok(values)
 }

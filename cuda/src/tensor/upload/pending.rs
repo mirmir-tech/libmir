@@ -1,6 +1,7 @@
 use mircuda::{DeviceBuffer, DeviceElement, PinnedBuffer, bf16, f16};
 
 use super::super::storage::{CudaTensor, TensorStorage};
+use crate::kernels::GgmlBlocks;
 
 #[derive(Debug)]
 pub(super) struct PendingTensor {
@@ -39,6 +40,10 @@ pub(super) enum PendingStorage {
     U32(PendingBuffer<u32>),
     I32(PendingBuffer<i32>),
     U8(PendingBuffer<u8>),
+    GgmlBlocks {
+        blocks: GgmlBlocks,
+        staging: PinnedBuffer<u8>,
+    },
     I8(PendingBuffer<i8>),
     F16ToBf16 {
         source: PendingBuffer<f16>,
@@ -65,6 +70,7 @@ impl PendingStorage {
             Self::U32(PendingBuffer { device, staging: _staging }) => TensorStorage::U32(device),
             Self::I32(PendingBuffer { device, staging: _staging }) => TensorStorage::I32(device),
             Self::U8(PendingBuffer { device, staging: _staging }) => TensorStorage::U8(device),
+            Self::GgmlBlocks { blocks, staging: _staging } => TensorStorage::GgmlBlocks(blocks),
             Self::I8(PendingBuffer { device, staging: _staging }) => TensorStorage::I8(device),
             Self::F16ToBf16 { source: _source, output } => TensorStorage::Bf16(output),
             Self::F32ToBf16 { source: _source, output } => TensorStorage::Bf16(output),

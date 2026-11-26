@@ -46,7 +46,11 @@ pub(super) fn template(
     Ok(Some(PerLayerInputsTemplate::new(
         PerLayerInputTensors {
             embedding,
-            model_projection: tensor(tensors, &bindings.model_projection.source)?.clone(),
+            model_projection: ProjectionWeight::load_binding_prepared(
+                backend,
+                tensors,
+                bindings.model_projection,
+            )?,
             projection_norm: tensor(tensors, &bindings.projection_norm.source)?.clone(),
         },
         geometry,

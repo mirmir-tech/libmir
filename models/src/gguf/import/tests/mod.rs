@@ -4,6 +4,8 @@ use serde_json::json;
 
 #[cfg(unix)]
 mod association;
+mod identity;
+mod index;
 mod interrupted;
 mod manifest;
 mod ownership;

@@ -182,10 +182,10 @@ struct Q3_K {
     const unsigned int shift = 2u * (s & 3u);
     unsigned int mask[8];
     unsigned int q[8];
-    unsigned int raw[4];
+    unsigned int raw[3];
     load32(block, mask);
     load32(block + 32u + part * 32u, q);
-    load16(block + 96u, raw);
+    load12(block + 96u, raw);
     const unsigned int scales[4] = {
         (raw[0] & 0x0F0F0F0Fu) | ((raw[2] & 0x03030303u) << 4u),
         (raw[1] & 0x0F0F0F0Fu) | (((raw[2] >> 2u) & 0x03030303u) << 4u),

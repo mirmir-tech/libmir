@@ -40,10 +40,13 @@ impl CudaBackend {
         let mut block = load.block(decoder, (semantic, plan), layer)?;
         let source = DenseLayerSource::discover(catalog, bindings)?;
         let mut tensors = source.upload(self, bindings, load.projection_format)?;
-        if decoder.query_key_rows_interleaved {
+        // A layer without positions (Cohere 2's full-attention layers) has
+        // no rotated rows to restore.
+        if decoder.query_key_rows_interleaved
+            && let Some(rotary) = block.attention.rotary
+        {
             let head_dim = block.attention.cache.key_head_dim;
-            let rotary = block.attention.rotary.map_or(head_dim, |rotary| rotary.dimensions);
-            rope_rows::restore(self, &mut tensors, bindings, (head_dim, rotary))?;
+            rope_rows::restore(self, &mut tensors, bindings, (head_dim, rotary.dimensions))?;
         }
         let offset = semantic
             .decoder
@@ -59,7 +62,7 @@ impl CudaBackend {
         bias::require_applied(bindings, load.projection_format)?;
         let residual = residual::factor(semantic, decoder.attention_bias)?;
         if let Some(factor) = residual {
-            residual::fold_dense(&tensors, bindings, load.projection_format, factor)?;
+            residual::fold_dense(&tensors, bindings, factor)?;
         }
         let template = if let DenseLayerFeedForwardBindings::Gated(_) = bindings.feed_forward {
             self.load_gated(block, &tensors, bindings, (load.projection_format, residual))?

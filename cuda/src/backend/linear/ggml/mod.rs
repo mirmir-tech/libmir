@@ -14,12 +14,15 @@ use mircuda::{DeviceBuffer, bf16};
 use models::weights::{TensorBinding, TensorStorage};
 
 use super::CudaBackend;
-use crate::{CudaTensorDType, CudaTensorSet, DenseRole, Error, Result, kernels::GgmlKernelType};
+use crate::{
+    CudaTensorDType, CudaTensorSet, DenseRole, Error, Result,
+    kernels::{GgmlBlocks, GgmlKernelType},
+};
 
 /// One validated GGML projection matrix, `[output, input]` in logical shape.
 #[derive(Clone, Debug)]
 pub struct GgmlCheckpointWeight {
-    blocks: DeviceBuffer<u8>,
+    blocks: GgmlBlocks,
     kind: GgmlKernelType,
     input_features: usize,
     output_features: usize,
@@ -51,14 +54,11 @@ impl GgmlCheckpointWeight {
         let tensor = tensors
             .get(&binding.source)
             .ok_or_else(|| Error::MissingTensor(binding.source.clone()))?;
-        let blocks =
-            tensor
-                .as_u8()
-                .filter(|_| tensor.dtype() == CudaTensorDType::U8)
-                .ok_or_else(|| Error::DTypeMismatch {
-                    name: binding.source.clone(),
-                    expected: "GGML blocks",
-                })?;
+        // Only the padded upload yields blocks the kernels may read.
+        let blocks = tensor.as_ggml_blocks().ok_or_else(|| Error::DTypeMismatch {
+            name: binding.source.clone(),
+            expected: "GGML blocks in a padded allocation",
+        })?;
         let expected = kind.bytes(*output_features, *input_features)?;
         if blocks.len() != expected {
             return Err(Error::InvalidTensorSize {
@@ -110,7 +110,7 @@ impl GgmlCheckpointWeight {
     /// blocks, for tests that build their own blocks.
     #[cfg(test)]
     pub(crate) fn from_blocks(
-        blocks: DeviceBuffer<u8>,
+        blocks: GgmlBlocks,
         kind: GgmlKernelType,
         (matrices, rows, input_features): (usize, usize, usize),
         scale: Option<DeviceBuffer<f32>>,
@@ -140,7 +140,7 @@ impl GgmlCheckpointWeight {
 
     /// The same projection over `blocks` of the same type and geometry,
     /// e.g. its rows reordered.
-    pub(crate) fn with_blocks(&self, blocks: DeviceBuffer<u8>) -> Result<Self> {
+    pub(crate) fn with_blocks(&self, blocks: GgmlBlocks) -> Result<Self> {
         if blocks.len() != self.blocks.len() {
             return Err(Error::InvalidExecutionPlan("replacement GGML blocks differ in size"));
         }
@@ -166,7 +166,7 @@ impl GgmlCheckpointWeight {
 
     #[must_use]
     pub const fn blocks(&self) -> &DeviceBuffer<u8> {
-        &self.blocks
+        self.blocks.view()
     }
 
     pub fn prepare(
@@ -189,7 +189,7 @@ impl GgmlCheckpointWeight {
         )?;
         let stream = &backend.inner.stream;
         let mut output = backend.inner.pool.allocate(stream, operation.elements()?)?;
-        operation.execute(stream, &self.blocks, &mut output)?;
+        operation.execute(stream, self.blocks.view(), &mut output)?;
         match (&self.scale, self.matrices) {
             (None, _) => {},
             (Some(scale), 1) => {

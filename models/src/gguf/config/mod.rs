@@ -40,6 +40,10 @@ const INTEGERS: [(&str, &str); 12] = [
     ("attention.sliding_window", "sliding_window"),
 ];
 
+/// More decoder blocks than any model has; a header declaring more is
+/// refused before anything is sized by it.
+const MAX_BLOCKS: u64 = 1 << 16;
+
 const FLOATS: [(&str, &str); 5] = [
     ("attention.layer_norm_rms_epsilon", "rms_norm_eps"),
     ("attention.layer_norm_epsilon", "layer_norm_eps"),
@@ -63,6 +67,11 @@ pub fn config(model: &GgufModel) -> Result<Value> {
         .architecture()
         .ok_or_else(|| ModelsError::InvalidGguf("general.architecture is missing".into()))?;
     let key = |name: &str| format!("{architecture}.{name}");
+    if let Some(blocks) = header.unsigned(&key("block_count")).filter(|&n| n > MAX_BLOCKS) {
+        return Err(ModelsError::InvalidGguf(format!(
+            "{architecture}: block_count {blocks} exceeds {MAX_BLOCKS}"
+        )));
+    }
     let mut config = Map::new();
     // The declared architecture keys import defaults exactly as `model_type`
     // does for SafeTensors checkpoints.
@@ -115,7 +124,8 @@ pub fn config(model: &GgufModel) -> Result<Value> {
     let hybrid =
         state_space::nemotron_h(header, architecture, convolution_bias, &mut config)? || hybrid;
     if !latent {
-        head_geometry(header, architecture, hybrid, &mut config)?;
+        let own_rotary = hybrid || architecture == gemma4::ARCHITECTURE;
+        head_geometry(header, architecture, own_rotary, &mut config)?;
     }
     if let Some(vocabulary) = header.get("tokenizer.ggml.tokens").and_then(MetadataValue::as_array)
     {
@@ -156,12 +166,12 @@ pub fn config(model: &GgufModel) -> Result<Value> {
     Ok(Value::Object(config))
 }
 
-/// A softmax decoder's head width and rotary part; latent attention
-/// declares its own.
+/// A softmax decoder's head width and, unless it declares its own
+/// (`own_rotary`), rotary part; latent attention declares both.
 fn head_geometry(
     header: &super::GgufHeader,
     architecture: &str,
-    hybrid: bool,
+    own_rotary: bool,
     config: &mut Map<String, Value>,
 ) -> Result<()> {
     let key = |name: &str| format!("{architecture}.{name}");
@@ -178,7 +188,7 @@ fn head_geometry(
     });
     // A rotary part of each head (GLM-4, Phi-4-mini): its leading
     // `rope.dimension_count` features rotate.
-    if !hybrid
+    if !own_rotary
         && let (Some(rotary), Some(head_dim)) = (rotary, head_dim)
         && rotary != head_dim
     {

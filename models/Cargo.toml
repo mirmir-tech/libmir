@@ -19,5 +19,8 @@ time.workspace = true
 toml.workspace = true
 tokenizers.workspace = true
 
+[target.'cfg(not(unix))'.dependencies]
+same-file.workspace = true
+
 [lints]
 workspace = true

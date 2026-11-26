@@ -56,7 +56,7 @@ fn grouped_mmq_matches_the_reference_per_expert() -> Result<()> {
                 counts: &device_counts,
             };
             let device_input = fixture.copy(&input)?;
-            let device_weight = fixture.copy(&blocks.bytes)?;
+            let device_weight = fixture.copy_blocks(&blocks.bytes)?;
             let mut output = fixture.copy(&vec![bf16::ZERO; total * placement.ld])?;
             operation.prepare(
                 &fixture.stream,

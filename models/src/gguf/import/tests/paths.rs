@@ -127,3 +127,62 @@ fn writers_of_one_directory_take_turns() -> TestResult {
     fs::remove_dir_all(root)?;
     Ok(())
 }
+
+/// Every spelling of a destination, `.` and `..` included, is one directory
+/// with one lock beside it; a write through a symlink writes, and takes its
+/// turn, where the link leads.
+#[test]
+fn every_spelling_of_a_destination_takes_one_lock() -> TestResult {
+    let root = root("spelling")?;
+    let output = root.join("output");
+    let source = shard(&root, "a", "model.gguf")?;
+    fs::create_dir_all(output.join("inner"))?;
+    import(vec![source.clone()], 1).write(&output.join("inner").join(".."))?;
+    assert!(current(&output));
+    symlink(&output, root.join("alias"))?;
+    import(vec![source], 2).write(&root.join("alias").join("."))?;
+    assert!(current(&output));
+    let mut locks = fs::read_dir(&root)?
+        .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
+        .filter(|name| {
+            name.as_ref()
+                .map_or(true, |name| Path::new(name).extension().is_some_and(|e| e == "lock"))
+        })
+        .collect::<std::io::Result<Vec<_>>>()?;
+    locks.sort();
+    assert_eq!(locks, [".output.lock"]);
+    let here = super::publish::resolved(Path::new("."))?;
+    assert_eq!(here, fs::canonicalize(std::env::current_dir()?)?);
+    let missing = super::publish::resolved(&root.join("alias").join("new").join("deeper"))?;
+    assert_eq!(missing, fs::canonicalize(&output)?.join("new").join("deeper"));
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+/// Publishing replaces the entry a destination names: `.`, `..` and a path
+/// ending in `..` name none, and are refused before anything changes, as
+/// `alias/..` would otherwise replace the directory holding the link's
+/// target.
+#[test]
+fn a_publish_to_an_unnamed_destination_is_refused() -> TestResult {
+    let root = root("unnamed")?;
+    let source = shard(&root, "a", "model.gguf")?;
+    let output = root.join("models").join("output");
+    import(vec![source.clone()], 1).publish(&output)?;
+    symlink(&output, root.join("alias"))?;
+    for destination in [root.join("alias").join(".."), output.join("..")] {
+        let refused = conflict(&import(vec![source.clone()], 2).publish(&destination));
+        assert_eq!(refused, Some(ImportConflict::UnnamedDestination), "{}", destination.display());
+    }
+    for destination in [".", ".."] {
+        assert!(super::publish::placed(Path::new(destination)).is_err());
+    }
+    assert!(current(&output));
+    let mut left = fs::read_dir(root.join("models"))?
+        .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    left.sort();
+    assert_eq!(left, [".output.lock", "output"]);
+    fs::remove_dir_all(root)?;
+    Ok(())
+}

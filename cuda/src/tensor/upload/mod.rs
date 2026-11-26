@@ -4,13 +4,20 @@ use std::{
     io::{Read, Seek, SeekFrom},
 };
 
-use mircuda::{Context, DeviceElement, MemoryPool, Stream, bf16, f16};
-use models::{gguf::GgmlType, weights::TensorInfo};
+use mircuda::{Context, DeviceElement, MemoryPool, PinnedBuffer, Stream, bf16, f16};
+use models::weights::TensorInfo;
 
-use self::pending::{PendingBuffer, PendingStorage, PendingTensor};
+use self::{
+    metadata::{ggml_blocks, metadata},
+    pending::{PendingBuffer, PendingStorage, PendingTensor},
+};
 use super::storage::{CudaTensor, CudaTensorDType, CudaTensorSet};
-use crate::{Error, Result, kernels::DenseCast};
+use crate::{
+    Error, Result,
+    kernels::{DenseCast, GgmlBlocks},
+};
 
+mod metadata;
 mod pending;
 
 const DEFAULT_STAGING_LIMIT: usize = 512 * 1024 * 1024;
@@ -44,6 +51,11 @@ impl TensorUploadBatch {
     /// transfer.
     pub fn enqueue(&mut self, info: &TensorInfo) -> Result<()> {
         let (dtype, elements) = metadata(info)?;
+        // GGML blocks go to a padded allocation, which their kernels need.
+        if ggml_blocks(info).is_some() {
+            let storage = self.stage_blocks(info, elements)?;
+            return self.push(info, storage);
+        }
         let storage = match dtype {
             CudaTensorDType::F16 => PendingStorage::F16(self.stage::<f16>(info, elements)?),
             CudaTensorDType::Bf16 => PendingStorage::Bf16(self.stage::<bf16>(info, elements)?),
@@ -151,6 +163,24 @@ impl TensorUploadBatch {
         info: &TensorInfo,
         elements: usize,
     ) -> Result<PendingBuffer<T>> {
+        let mut staging = self.read_pinned::<T>(info, elements)?;
+        let mut device = self.pool.allocate::<T>(&self.stream, elements)?;
+        self.stream.copy_to_device(&mut staging, &mut device)?;
+        Ok(PendingBuffer { device, staging })
+    }
+
+    fn stage_blocks(&self, info: &TensorInfo, bytes: usize) -> Result<PendingStorage> {
+        let mut staging = self.read_pinned::<u8>(info, bytes)?;
+        let mut blocks = GgmlBlocks::allocate(&self.pool, &self.stream, bytes)?;
+        self.stream.copy_to_device(&mut staging, blocks.view_mut())?;
+        Ok(PendingStorage::GgmlBlocks { blocks, staging })
+    }
+
+    fn read_pinned<T: DeviceElement>(
+        &self,
+        info: &TensorInfo,
+        elements: usize,
+    ) -> Result<PinnedBuffer<T>> {
         let offset = info.payload_start()?;
         let length = info.payload_bytes()?;
         let mut file = File::open(&info.file)?;
@@ -159,9 +189,7 @@ impl TensorUploadBatch {
         let read = staging.with_bytes_mut(|bytes| file.read_exact(bytes))?;
         read?;
         release_file_cache(&file, offset, length);
-        let mut device = self.pool.allocate::<T>(&self.stream, elements)?;
-        self.stream.copy_to_device(&mut staging, &mut device)?;
-        Ok(PendingBuffer { device, staging })
+        Ok(staging)
     }
 }
 
@@ -180,59 +208,3 @@ fn release_file_cache(file: &File, offset: u64, length: usize) {
 
 #[cfg(not(target_os = "linux"))]
 fn release_file_cache(_file: &File, _offset: u64, _length: usize) {}
-
-fn metadata(info: &TensorInfo) -> Result<(CudaTensorDType, usize)> {
-    if let Some(ggml_type) =
-        GgmlType::from_name(&info.dtype).filter(|ggml_type| !ggml_type.is_dense())
-    {
-        return ggml_metadata(info, ggml_type);
-    }
-    let dtype = CudaTensorDType::parse(&info.dtype)?;
-    let elements = element_count(&info.shape, &info.name)?;
-    let actual = info.payload_bytes()?;
-    let expected = elements.checked_mul(dtype.bytes()).ok_or_else(|| Error::InvalidTensorSize {
-        name: info.name.clone(),
-        expected: usize::MAX,
-        actual,
-    })?;
-    if expected != actual {
-        return Err(Error::InvalidTensorSize {
-            name: info.name.clone(),
-            expected,
-            actual,
-        });
-    }
-    Ok((dtype, elements))
-}
-
-/// GGML blocks upload as raw bytes; the binding keeps their type and the
-/// tensor keeps its logical `[rows, input]` shape.
-fn ggml_metadata(info: &TensorInfo, ggml_type: GgmlType) -> Result<(CudaTensorDType, usize)> {
-    let actual = info.payload_bytes()?;
-    let invalid = || Error::InvalidTensorSize {
-        name: info.name.clone(),
-        expected: usize::MAX,
-        actual,
-    };
-    let (&input, rows) = info.shape.split_last().ok_or_else(invalid)?;
-    let row_bytes = usize::try_from(ggml_type.row_bytes(u64::try_from(input)?)?)?;
-    let expected = element_count(rows, &info.name)?.checked_mul(row_bytes).ok_or_else(invalid)?;
-    if expected != actual {
-        return Err(Error::InvalidTensorSize {
-            name: info.name.clone(),
-            expected,
-            actual,
-        });
-    }
-    Ok((CudaTensorDType::U8, actual))
-}
-
-fn element_count(shape: &[usize], name: &str) -> Result<usize> {
-    shape.iter().try_fold(1_usize, |count, dimension| {
-        count.checked_mul(*dimension).ok_or_else(|| Error::InvalidTensorSize {
-            name: name.into(),
-            expected: usize::MAX,
-            actual: 0,
-        })
-    })
-}

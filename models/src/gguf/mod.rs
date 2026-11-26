@@ -66,12 +66,14 @@ fn type_bytes<'a>(tensors: impl IntoIterator<Item = &'a GgufTensor>) -> Vec<(Ggm
     totals
 }
 
-/// The GGUF files directly inside a directory, sorted: those of its import
-/// when it holds one ([`ImportManifest`]), else all of them; refused while
-/// a write of an import there is cut short ([`Listing`]).
+/// The GGUF files directly inside a directory, sorted.
+///
+/// Those of its import when it holds one whose model it is
+/// ([`ImportManifest::describing`]), else all of them; refused while a
+/// write of an import there is cut short ([`Listing`]).
 pub fn files_in(directory: &Path) -> Result<Vec<PathBuf>> {
     Listing::of(directory)?;
-    if let Some(manifest) = ImportManifest::read(directory) {
+    if let Some(manifest) = ImportManifest::describing(directory) {
         return Ok(manifest.gguf_files(directory));
     }
     WeightContainer::Gguf.discover(directory)

@@ -11,7 +11,7 @@ use crate::{
         geometry::{narrow, product},
         mla::{
             LatentAttention, LatentAttentionInputs, LatentAttentionLayer, LatentAttentionWorkspace,
-            LatentUpLayout,
+            LatentUpLayout, kernels::ExpandedTails,
         },
     },
 };
@@ -79,21 +79,14 @@ impl LatentAttention {
             offsets,
             (1.0, 0.0),
         )?;
-        kernels.fill.launch(
-            stream,
-            linear(product(padded * spec.heads, head_dim - spec.nope_dim)?)?,
-            (
-                &buffers.latent,
-                &mut buffers.keys,
-                &mut buffers.values,
-                narrow(padded)?,
-                narrow(spec.heads)?,
-                narrow(spec.nope_dim)?,
-                narrow(spec.value_dim)?,
-                narrow(head_dim)?,
-            ),
-        )?;
-        Ok(())
+        let tails = ExpandedTails {
+            latent: &buffers.latent,
+            keys: &mut buffers.keys,
+            values: &mut buffers.values,
+            rows: padded,
+            head_dim,
+        };
+        kernels.fill(stream, spec, tails)
     }
 
     /// Writes the expanded queries of `tokens` rows.

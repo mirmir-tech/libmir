@@ -1,7 +1,7 @@
 use mircuda::{DeviceBuffer, bf16};
 
 use super::{CudaTensor, CudaTensorSet, TensorStorage};
-use crate::{Error, Result};
+use crate::{Error, Result, kernels::GgmlBlocks};
 
 impl CudaTensor {
     pub(crate) fn from_f8_e4m3(name: String, shape: Vec<usize>, buffer: DeviceBuffer<u8>) -> Self {
@@ -9,6 +9,23 @@ impl CudaTensor {
             name,
             shape,
             storage: TensorStorage::F8E4M3(buffer),
+        }
+    }
+
+    pub(crate) fn from_ggml_blocks(name: String, shape: Vec<usize>, blocks: GgmlBlocks) -> Self {
+        Self {
+            name,
+            shape,
+            storage: TensorStorage::GgmlBlocks(blocks),
+        }
+    }
+
+    /// GGML blocks in their padded allocation; other U8 storage is not.
+    #[must_use]
+    pub fn as_ggml_blocks(&self) -> Option<&GgmlBlocks> {
+        match &self.storage {
+            TensorStorage::GgmlBlocks(blocks) => Some(blocks),
+            _ => None,
         }
     }
 
@@ -22,6 +39,20 @@ impl CudaTensor {
 }
 
 impl CudaTensorSet {
+    /// A set of `tensors` on `stream`, for tests that build their own.
+    #[cfg(test)]
+    pub(crate) fn from_tensors(
+        context: &mircuda::Context,
+        stream: &mircuda::Stream,
+        tensors: Vec<CudaTensor>,
+    ) -> Self {
+        Self {
+            tensors: tensors.into_iter().map(|tensor| (tensor.name.clone(), tensor)).collect(),
+            context: context.clone(),
+            stream: stream.clone(),
+        }
+    }
+
     /// Replaces the tensor of the same name, such as a reordered copy.
     pub(crate) fn replace(&mut self, tensor: CudaTensor) -> Result<()> {
         let slot = self

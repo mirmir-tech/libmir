@@ -119,7 +119,22 @@ impl<'a> Reader<'a> {
     /// A count of items that each take at least `min_bytes`, refused when the
     /// header could never hold that many; a short prefix asks for more bytes.
     pub fn count(&mut self, what: &str, min_bytes: u64, file_len: Option<u64>) -> Parsed<usize> {
+        self.count_within(what, min_bytes, file_len, usize::MAX)
+    }
+
+    /// A [`count`](Self::count) of at most `max` items, refused beyond it
+    /// before a short prefix asks for more bytes.
+    pub fn count_within(
+        &mut self,
+        what: &str,
+        min_bytes: u64,
+        file_len: Option<u64>,
+        max: usize,
+    ) -> Parsed<usize> {
         let count = self.u64()?;
+        if usize::try_from(count).map_or(true, |count| count > max) {
+            return Err(invalid(format!("{what} count {count} exceeds {max}")));
+        }
         let needed = count
             .checked_mul(min_bytes)
             .and_then(|bytes| bytes.checked_add(u64::try_from(self.position).ok()?))

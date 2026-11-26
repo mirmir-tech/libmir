@@ -11,7 +11,7 @@ use std::path::Path;
 
 use serde_json::{Map, Value};
 
-use super::{GgufHeader, GgufModel, MetadataValue};
+use super::{GgmlType, GgufHeader, GgufModel, MetadataValue};
 use crate::error::{ModelsError, Result};
 
 /// The `clip.projector_type` families with an import.
@@ -80,13 +80,21 @@ impl VisionImport {
     }
 }
 
-/// The payload bytes of a dense tensor of `file`.
+/// The payload bytes of a dense float tensor of `file`, which an import
+/// rearranges by element and writes as `SafeTensors` under its own dtype:
+/// a quantized tensor is refused, as its blocks are no elements.
 fn payload(header: &GgufHeader, file: &Path, name: &str) -> Result<(Vec<usize>, String, Vec<u8>)> {
     use std::io::{Read, Seek, SeekFrom};
+    let missing = || ModelsError::InvalidGguf(format!("mmproj tensor {name} is missing"));
+    let stored = header.tensors.iter().find(|tensor| tensor.name == name).ok_or_else(missing)?;
+    if !matches!(stored.ggml_type, GgmlType::F32 | GgmlType::F16 | GgmlType::BF16) {
+        return Err(ModelsError::InvalidGguf(format!(
+            "mmproj tensor {name} is {}, not F32, F16 or BF16, and cannot be assembled",
+            stored.ggml_type
+        )));
+    }
     let catalog = header.catalog(file)?;
-    let tensor = catalog
-        .get(name)
-        .ok_or_else(|| ModelsError::InvalidGguf(format!("mmproj tensor {name} is missing")))?;
+    let tensor = catalog.get(name).ok_or_else(missing)?;
     let mut bytes = vec![0; tensor.payload_bytes()?];
     let mut handle = std::fs::File::open(file)?;
     let _ = handle.seek(SeekFrom::Start(tensor.payload_start()?))?;

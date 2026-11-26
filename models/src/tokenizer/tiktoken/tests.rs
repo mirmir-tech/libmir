@@ -43,5 +43,9 @@ fn decodes_padded_base64() -> Result<()> {
     assert_eq!(base64("YWI=")?, b"ab");
     assert_eq!(base64("IA==")?, b" ");
     assert!(base64("YW").is_err());
+    // Padding is two `=` at most, and only at the end.
+    for malformed in ["====", "a===", "YQ==YWJj", "=AAA"] {
+        assert!(base64(malformed).is_err(), "{malformed}");
+    }
     Ok(())
 }

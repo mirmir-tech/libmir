@@ -1,20 +1,18 @@
-use std::{collections::BTreeMap, fs::File, io::Read, path::Path};
+mod read;
+
+use std::{collections::BTreeMap, path::Path};
+
+#[cfg(test)]
+pub(super) use read::reads;
 
 use super::{
     GgmlType, GgufTensor, MAGIC, MetadataValue, fused, names,
     reader::{ParseError, Parsed, Reader, invalid},
     type_bytes, value,
 };
-use crate::{
-    error::{ModelsError, Result},
-    weights::TensorCatalog,
-};
+use crate::{error::Result, weights::TensorCatalog};
 
 const DEFAULT_ALIGNMENT: u64 = 32;
-/// The first read of a local file; a larger header is read again in full.
-const FIRST_READ: u64 = 16 * 1024 * 1024;
-/// Vocabulary arrays make headers large, but not this large.
-const MAX_HEADER_BYTES: u64 = 1024 * 1024 * 1024;
 
 /// The parsed header of one GGUF file.
 #[derive(Debug, Clone)]
@@ -63,35 +61,6 @@ impl GgufHeader {
         };
         header.validate_tensors(file_len)?;
         Ok(header)
-    }
-
-    /// Reads and parses the header of a local file, growing the read until the
-    /// header fits.
-    pub fn read(path: impl AsRef<Path>) -> Result<Self> {
-        let path = path.as_ref();
-        #[cfg(test)]
-        reads::count(path);
-        let file_len = std::fs::metadata(path)?.len();
-        let mut wanted = FIRST_READ.min(file_len);
-        loop {
-            let mut bytes = Vec::with_capacity(usize::try_from(wanted)?);
-            File::open(path)?.take(wanted).read_to_end(&mut bytes)?;
-            match Self::parse(&bytes, Some(file_len)) {
-                Ok(header) => return Ok(header),
-                Err(ParseError::Invalid(error)) => return Err(in_file(path, &error)),
-                Err(ParseError::Truncated { needed })
-                    if needed <= file_len && needed <= MAX_HEADER_BYTES =>
-                {
-                    wanted = needed.max(wanted.saturating_mul(2)).min(file_len);
-                },
-                Err(ParseError::Truncated { .. }) => {
-                    return Err(ModelsError::InvalidGguf(format!(
-                        "{}: the header is truncated",
-                        path.display()
-                    )));
-                },
-            }
-        }
     }
 
     #[must_use]
@@ -193,10 +162,11 @@ fn read_metadata(
     file_len: Option<u64>,
 ) -> Parsed<BTreeMap<String, MetadataValue>> {
     let mut metadata = BTreeMap::new();
+    let mut elements = value::MAX_ARRAY_ELEMENTS;
     for _ in 0..count {
         let key = reader.string()?;
         let kind = reader.u32()?;
-        let value = value::read_value(reader, kind, file_len)?;
+        let value = value::read_value(reader, kind, file_len, &mut elements)?;
         if metadata.insert(key.clone(), value).is_some() {
             return Err(invalid(format!("metadata key `{key}` appears twice")));
         }
@@ -214,30 +184,5 @@ fn alignment(metadata: &BTreeMap<String, MetadataValue>) -> Parsed<u64> {
     }
 }
 
-fn in_file(path: &Path, error: &ModelsError) -> ModelsError {
-    ModelsError::InvalidGguf(format!("{}: {error}", path.display()))
-}
-
-/// How many times this thread read each file's header, for tests that
-/// bound the reads of a loading phase.
 #[cfg(test)]
-pub(super) mod reads {
-    use std::{
-        cell::RefCell,
-        collections::BTreeMap,
-        path::{Path, PathBuf},
-    };
-
-    thread_local! {
-        static READS: RefCell<BTreeMap<PathBuf, usize>> = const { RefCell::new(BTreeMap::new()) };
-    }
-
-    pub(in crate::gguf) fn count(path: &Path) {
-        READS.with(|reads| *reads.borrow_mut().entry(path.to_owned()).or_default() += 1);
-    }
-
-    /// The reads since the last call, by file.
-    pub(in crate::gguf) fn take() -> BTreeMap<PathBuf, usize> {
-        READS.with(|reads| std::mem::take(&mut *reads.borrow_mut()))
-    }
-}
+mod tests;

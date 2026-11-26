@@ -4,6 +4,9 @@
 // works on 32-value sub-blocks, decoded either to floats or to packed int8
 // with per-16 scales and a minimum for `dp4a`. Blocks that are only 2-byte
 // aligned have their bytes funnel-shifted out of aligned words.
+// Those words may run up to three bytes past a block; every GGML weight
+// buffer's allocation runs `GgmlBlocks::TAIL_BYTES` past its last block, so
+// they stay inside it.
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 
@@ -39,6 +42,18 @@ __device__ __forceinline__ void load16(const unsigned char* bytes, unsigned int*
   const unsigned int shift = static_cast<unsigned int>(address & 3ull) * 8u;
 #pragma unroll
   for (unsigned int i = 0; i < 4u; ++i) {
+    words[i] = shift == 0u ? aligned[i] : __funnelshift_r(aligned[i], aligned[i + 1u], shift);
+  }
+}
+
+// 12 bytes into three words: Q3_K's scales, its block's last bytes but two,
+// where a 16-byte load would take a whole word past the block.
+__device__ __forceinline__ void load12(const unsigned char* bytes, unsigned int* words) {
+  const unsigned long long address = reinterpret_cast<unsigned long long>(bytes);
+  const unsigned int* aligned = reinterpret_cast<const unsigned int*>(address & ~3ull);
+  const unsigned int shift = static_cast<unsigned int>(address & 3ull) * 8u;
+#pragma unroll
+  for (unsigned int i = 0; i < 3u; ++i) {
     words[i] = shift == 0u ? aligned[i] : __funnelshift_r(aligned[i], aligned[i + 1u], shift);
   }
 }

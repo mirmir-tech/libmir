@@ -143,3 +143,40 @@ fn headers_with_fetched_vectors_derive_what_the_file_does() -> TestResult {
     assert!(error.is_some_and(|error| error.to_string().contains("not fetched")));
     Ok(())
 }
+
+/// Each layer type rotates its own part: the sliding layers the leading
+/// `rope.dimension_count_swa` features, the full layers whole heads, with no
+/// model-wide factor for either to inherit; a full rotary part other than
+/// the head is refused.
+#[test]
+fn gemma4_rotary_parts_stay_with_their_layer_types() -> TestResult {
+    let derive = |rotary: u32| -> TestResult<crate::error::Result<serde_json::Value>> {
+        let mut writer = Writer::new().text("general.architecture", "gemma4")?;
+        for (key, value) in [
+            ("block_count", 2_u32),
+            ("attention.key_length", 512),
+            ("attention.key_length_swa", 256),
+            ("attention.head_count_kv", 2),
+            ("rope.dimension_count", rotary),
+            ("rope.dimension_count_swa", 128),
+        ] {
+            writer = writer.kv(&format!("gemma4.{key}"), 4, value.to_le_bytes().to_vec());
+        }
+        let writer = writer
+            .kv("gemma4.attention.sliding_window_pattern", 9, array(7, &[vec![1], vec![0]]))
+            .tensor("token_embd.weight", &[256, 8], GgmlType::Q8_0)?;
+        let path = std::env::temp_dir()
+            .join(format!("libmir-gguf-gemma4-rotary-{rotary}-{}.gguf", std::process::id()));
+        std::fs::write(&path, writer.bytes()?)?;
+        let derived = GgufModel::open(&path).and_then(|model| config(&model));
+        std::fs::remove_file(&path)?;
+        Ok(derived)
+    };
+    let derived = derive(512)??;
+    assert_eq!(derived.get("partial_rotary_factor"), None);
+    let parameters = &derived["rope_parameters"];
+    assert_eq!(parameters["sliding_attention"]["partial_rotary_factor"], 0.5);
+    assert_eq!(parameters["full_attention"]["partial_rotary_factor"], 1.0);
+    assert!(derive(256)?.is_err());
+    Ok(())
+}

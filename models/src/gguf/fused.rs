@@ -22,9 +22,15 @@ pub(super) fn split(header: &GgufHeader, tensors: &mut Vec<TensorInfo>) -> Resul
     };
     let kv_heads = key("attention.head_count_kv").unwrap_or(heads);
     let head_dim = key("attention.key_length").unwrap_or_else(|| hidden / heads.max(1));
-    let width = |heads: u64| usize::try_from(heads * head_dim);
+    let overflow =
+        || ModelsError::InvalidGguf(format!("{architecture}: projection widths overflow"));
+    let width = |heads: u64| -> Result<usize> {
+        Ok(usize::try_from(heads.checked_mul(head_dim).ok_or_else(overflow)?)?)
+    };
     let (query, key_value) = (width(heads)?, width(kv_heads)?);
     let feed_forward = key("feed_forward_length").map(usize::try_from).transpose()?;
+    // A fused `[gate | up]` holds both halves.
+    let fused_feed_forward = feed_forward.and_then(|ff| ff.checked_mul(2));
     let mut split = Vec::with_capacity(tensors.len());
     for tensor in tensors.drain(..) {
         let parts: Option<Vec<(&str, usize)>> = if tensor.name.ends_with(".attn_qkv.weight")
@@ -32,9 +38,9 @@ pub(super) fn split(header: &GgufHeader, tensors: &mut Vec<TensorInfo>) -> Resul
         {
             Some(vec![("attn_q", query), ("attn_k", key_value), ("attn_v", key_value)])
         } else if tensor.name.ends_with(".ffn_up.weight")
-            && feed_forward.is_some_and(|ff| tensor.shape.first() == Some(&(2 * ff)))
+            && let (Some(ff), Some(fused)) = (feed_forward, fused_feed_forward)
+            && tensor.shape.first() == Some(&fused)
         {
-            let ff = feed_forward.unwrap_or_default();
             Some(vec![("ffn_gate", ff), ("ffn_up", ff)])
         } else {
             None
@@ -54,7 +60,8 @@ fn rows(tensor: &TensorInfo, parts: &[(&str, usize)]) -> Result<Vec<TensorInfo>>
     let Some((&rows, columns)) = tensor.shape.split_first() else {
         return Err(invalid("a fused projection has no rows"));
     };
-    if parts.iter().map(|(_, count)| count).sum::<usize>() != rows {
+    let total = parts.iter().try_fold(0_usize, |total, (_, count)| total.checked_add(*count));
+    if total != Some(rows) {
         return Err(invalid("fused rows do not add up to the projections"));
     }
     let bytes = tensor.payload_bytes()?;
@@ -68,7 +75,11 @@ fn rows(tensor: &TensorInfo, parts: &[(&str, usize)]) -> Result<Vec<TensorInfo>>
     parts
         .iter()
         .map(|&(role, count)| {
-            let end = start + row_bytes * u64::try_from(count)?;
+            // Within the tensor: the parts add up to its rows.
+            let end = u64::try_from(count)?
+                .checked_mul(row_bytes)
+                .and_then(|bytes| bytes.checked_add(start))
+                .ok_or_else(|| invalid("fused rows overflow"))?;
             let mut shape = vec![count];
             shape.extend_from_slice(columns);
             let part = TensorInfo {

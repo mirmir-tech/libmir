@@ -7,8 +7,8 @@
 //! a plain directory, and the directory it linked to is never changed.
 
 use std::{
-    fs,
-    path::{Path, PathBuf},
+    fs, io,
+    path::{Component, Path, PathBuf},
 };
 
 use super::{
@@ -26,6 +26,7 @@ pub(super) fn replace(
     sources: &[PathBuf],
     fill: impl FnOnce(&Path) -> Result<()>,
 ) -> Result<()> {
+    let directory = &placed(directory)?;
     let _turn = lock(directory)?;
     let (staging, previous) = (beside(directory, "staging")?, beside(directory, "previous")?);
     // Interrupted between the two renames: the last good import is aside.
@@ -54,7 +55,7 @@ pub(super) fn replace(
             .any(|path| replaced.iter().any(|inside| path.starts_with(inside)))
         {
             return Err(ModelsError::ImportConflict {
-                path: directory.to_path_buf(),
+                path: directory.clone(),
                 conflict: ImportConflict::SourceInside,
             });
         }
@@ -79,8 +80,71 @@ pub(super) fn replace(
     remove_stale(&previous)
 }
 
-/// Waits for, and holds until dropped, the lock of publishing `directory`;
-/// the system releases it if the process dies.
+/// `directory` as publishing replaces it: absolute, every existing
+/// directory above it resolved, links followed, and its own entry, a link
+/// included, named as given. Every spelling of one entry is one path,
+/// beside which its lock, staging and backup are. A destination that names
+/// no entry of its own, as `.`, `..`, `x/..` or a root, is refused: it
+/// would replace whatever directory it resolves to, through any link.
+pub(super) fn placed(directory: &Path) -> Result<PathBuf> {
+    let unnamed = || ModelsError::ImportConflict {
+        path: directory.to_path_buf(),
+        conflict: ImportConflict::UnnamedDestination,
+    };
+    let Some(Component::Normal(name)) = directory.components().next_back() else {
+        return Err(unnamed());
+    };
+    let absolute = std::path::absolute(directory)?;
+    let parent = absolute.parent().ok_or_else(unnamed)?;
+    Ok(resolved(parent)?.join(name))
+}
+
+/// `directory` as writing fills it: absolute, its existing part resolved,
+/// links followed, the directories still to be made named as given. A
+/// write through a link writes, and takes turns with others, where it
+/// leads, and goes on there should the link change meanwhile.
+pub(super) fn resolved(directory: &Path) -> Result<PathBuf> {
+    let absolute = std::path::absolute(directory)?;
+    let mut missing = Vec::new();
+    let mut existing = absolute.as_path();
+    loop {
+        let found = match fs::canonicalize(existing) {
+            Ok(path) => path,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                // A missing part is made as named; `..` past one is not
+                // resolved.
+                let (Some(parent), Some(name)) = (existing.parent(), existing.file_name()) else {
+                    return Err(error.into());
+                };
+                missing.push(name);
+                existing = parent;
+                continue;
+            },
+            Err(error) => unresolved(existing, error)?,
+        };
+        let mut path = found;
+        path.extend(missing.iter().rev());
+        return Ok(path);
+    }
+}
+
+/// An existing path that cannot be resolved: an error on Unix.
+#[cfg(unix)]
+fn unresolved(_: &Path, error: io::Error) -> Result<PathBuf> {
+    Err(error.into())
+}
+
+/// An existing path that cannot be resolved, as on a volume that tells no
+/// final path (some network and virtual drives on Windows), as it is
+/// spelled, absolute.
+#[cfg(not(unix))]
+fn unresolved(existing: &Path, _: io::Error) -> Result<PathBuf> {
+    Ok(existing.to_path_buf())
+}
+
+/// Waits for, and holds until dropped, the lock of publishing or writing
+/// `directory`, given [`placed`] or [`resolved`]; the system releases it if
+/// the process dies.
 pub(super) fn lock(directory: &Path) -> Result<fs::File> {
     let path = beside(directory, "lock")?;
     if let Some(parent) = path.parent() {

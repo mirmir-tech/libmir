@@ -141,9 +141,10 @@ impl Grouped {
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
         let _scratch = self.scratch.lock().map_err(|_| poisoned())?;
+        // The backend interns activations by shape, so equal hidden and
+        // expert widths (gpt-oss: 2880) share one: lock each only for its
+        // projections.
         let mut hidden_activations = self.hidden_activations.lock().map_err(|_| poisoned())?;
-        let mut intermediate_activations =
-            self.intermediate_activations.lock().map_err(|_| poisoned())?;
         let [projected, fused, activated] = &mut self.views;
         let mut dispatch = SelectedDenseDispatch {
             counts: &mut self.dispatch.counts,
@@ -193,7 +194,10 @@ impl Grouped {
         let gate_rows = (self.routes, self.intermediate);
         scale_rows(scaling, stream, weights.gate(), fused, experts, gate_rows, interleaved(0))?;
         scale_rows(scaling, stream, weights.up(), fused, experts, gate_rows, interleaved(1))?;
+        drop(hidden_activations);
         self.operation.activate_compact(stream, fused, activated)?;
+        let mut intermediate_activations =
+            self.intermediate_activations.lock().map_err(|_| poisoned())?;
         let activated = GgmlMmqInput::Rows(activated);
         self.down
             .prepare(stream, activated, self.routes, groups, &mut intermediate_activations)?;

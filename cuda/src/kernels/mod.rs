@@ -96,7 +96,7 @@ pub use gated_delta::{
     GatedDeltaTransformSpec, GatedDeltaTransforms,
 };
 pub use ggml::{
-    GGML_GEMV_MAX_TOKENS, GgmlActivations, GgmlBankRows, GgmlDequantize, GgmlEmbedding,
+    GGML_GEMV_MAX_TOKENS, GgmlActivations, GgmlBankRows, GgmlBlocks, GgmlDequantize, GgmlEmbedding,
     GgmlEmbeddingOperands, GgmlExpertSpec, GgmlGatheredLinear, GgmlGroupedMmq, GgmlKernelType,
     GgmlLinear, GgmlMmqGroups, GgmlMmqInput, GgmlMmqPlacement, GgmlMxFp4Repack, GgmlOutputScaling,
     GgmlRouteCombine, GgmlRowPlacement, GgmlScaledRows, GgmlSelections, GgmlSpec,
