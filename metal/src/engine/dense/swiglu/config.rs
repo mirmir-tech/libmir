@@ -1,32 +1,13 @@
 use models::{
     layout::DecoderConfig,
     semantic::{
-        ActivationSpec, AttentionSpec, AttentionWindow, DecoderLayerSpec, DecoderSpec,
-        FeedForwardSpec, MixerSpec, PositionEncodingSpec, QueryTemperature,
+        AttentionSpec, AttentionWindow, DecoderLayerSpec, DecoderSpec, FeedForwardSpec, MixerSpec,
+        PositionEncodingSpec, QueryTemperature,
     },
 };
 
+pub(super) use crate::engine::mlp_gate::GateActivation;
 use crate::engine::{Error, Result, lowering::NormalizationLowering};
-
-/// The gate activation of the layer's gated MLP (`act(gate) * up`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum GateActivation {
-    /// `SiLU`: Qwen, Llama, Mistral.
-    Silu,
-    /// Tanh-approximated GELU: Gemma.
-    GeluTanh,
-}
-
-impl GateActivation {
-    /// The activation of a plain gated MLP: `SwiGLU`, or tanh GELU.
-    fn from_spec(activation: &ActivationSpec) -> Result<Self> {
-        match activation {
-            ActivationSpec::SwiGlu => Ok(Self::Silu),
-            ActivationSpec::GeluTanh => Ok(Self::GeluTanh),
-            other => Err(Error::InvalidModel(format!("dense Metal MLP has no {other:?} gate"))),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct DenseSwiGluLayerConfig {

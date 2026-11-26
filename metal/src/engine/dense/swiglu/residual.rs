@@ -1,6 +1,6 @@
 //! Residual joins and gate activation shared by the scalar and packed paths.
 
-use super::{config::GateActivation, layer::DenseSwiGluLayer};
+use super::layer::DenseSwiGluLayer;
 use crate::engine::{Array, Result, Stream};
 
 impl DenseSwiGluLayer {
@@ -70,9 +70,6 @@ impl DenseSwiGluLayer {
 
     /// `act(gate) * up` for this layer's gate activation.
     pub(super) fn gated(&self, gate: &Array, up: &Array, stream: &Stream) -> Result<Array> {
-        match self.config.activation {
-            GateActivation::Silu => gate.silu_mul(up, stream),
-            GateActivation::GeluTanh => gate.gelu_approx_mul(up, stream),
-        }
+        self.config.activation.gate(gate, up, stream)
     }
 }

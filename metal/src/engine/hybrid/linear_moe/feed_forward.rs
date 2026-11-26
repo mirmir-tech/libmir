@@ -1,5 +1,5 @@
-//! Feed-forward of a linear-attention layer: routed experts or a dense
-//! `SwiGLU`.
+//! Feed-forward of a linear-attention or latent attention layer: routed
+//! experts or a dense gated MLP, `SwiGLU` or tanh GELU as the layer says.
 
 use models::weights::DenseFeedForwardBindings;
 
@@ -7,6 +7,7 @@ use models::weights::DenseFeedForwardBindings;
 use super::super::super::Error;
 use super::super::super::{
     Array, ModelTensors, Result, SharedExpertMoe, Stream, binding::BoundLinear,
+    mlp_gate::GateActivation,
 };
 
 #[derive(Debug)]
@@ -14,25 +15,29 @@ pub(super) struct DenseMlp {
     gate: BoundLinear,
     up: BoundLinear,
     down: BoundLinear,
+    activation: GateActivation,
 }
 
 impl DenseMlp {
+    /// The layer's gated MLP, gated by the layer's own `activation`.
     pub(super) fn load(
         tensors: &ModelTensors,
         bindings: DenseFeedForwardBindings<'_>,
+        activation: GateActivation,
         stream: &Stream,
     ) -> Result<Self> {
         Ok(Self {
             gate: BoundLinear::load(tensors, bindings.gate, stream)?,
             up: BoundLinear::load(tensors, bindings.up, stream)?,
             down: BoundLinear::load(tensors, bindings.down, stream)?,
+            activation,
         })
     }
 
     fn forward(&self, input: &Array, stream: &Stream) -> Result<Array> {
         let gate = self.gate.forward(input, stream)?;
         let up = self.up.forward(input, stream)?;
-        self.down.forward(&gate.silu_mul(&up, stream)?, stream)
+        self.down.forward(&self.activation.gate(&gate, &up, stream)?, stream)
     }
 }
 

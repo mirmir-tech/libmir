@@ -28,6 +28,7 @@ mod linear;
 pub mod lowering;
 mod memory;
 mod metadata;
+mod mlp_gate;
 mod model;
 mod moe;
 mod norm;
