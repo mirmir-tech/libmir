@@ -7,7 +7,10 @@ use std::{
 use serde::Deserialize;
 
 use super::WeightContainer;
-use crate::error::{ModelsError, Result};
+use crate::{
+    error::{ModelsError, Result},
+    gguf::Listing,
+};
 
 #[derive(Debug, Clone)]
 pub struct WeightFile {
@@ -64,31 +67,31 @@ struct WeightIndex {
 impl ModelLayout {
     pub fn inspect(root: impl AsRef<Path>) -> Result<Self> {
         let root = root.as_ref().to_path_buf();
-        let config_path = required(root.join("config.json"))?;
-        let configuration_path = optional(root.join("configuration.json"))
-            .or_else(|| optional(root.join("params.json")));
-        let vocab_path = optional(root.join("vocab.json"));
-        let tokenizer_path = optional(root.join("tokenizer.json"))
-            .or_else(|| optional(root.join("tokenizer.model")))
-            .or_else(|| optional(root.join("tiktoken.model")))
+        let listing = Listing::of(&root)?;
+        let optional = |name: &str| optional(&listing, root.join(name));
+        let config_path = required(&listing, root.join("config.json"))?;
+        let configuration_path = optional("configuration.json").or_else(|| optional("params.json"));
+        let vocab_path = optional("vocab.json");
+        let tokenizer_path = optional("tokenizer.json")
+            .or_else(|| optional("tokenizer.model"))
+            .or_else(|| optional("tiktoken.model"))
             .or_else(|| vocab_path.clone());
-        let merges_path = optional(root.join("merges.txt"));
-        let added_tokens_path = optional(root.join("added_tokens.json"));
-        let special_tokens_map_path = optional(root.join("special_tokens_map.json"));
-        let tokenizer_config_path = optional(root.join("tokenizer_config.json"));
-        let modules_path = optional(root.join("modules.json"));
-        let sentence_transformers_config_path =
-            optional(root.join("config_sentence_transformers.json"));
-        let generation_config_path = optional(root.join("generation_config.json"));
-        let model_spec_path = optional(root.join("mir-model-spec.toml"));
-        let chat_template_path = optional(root.join("chat_template.jinja"));
-        let kv_config_path = optional(root.join("kv_config.json"));
-        let processor_config_path = optional(root.join("processor_config.json"));
-        let preprocessor_config_path = optional(root.join("preprocessor_config.json"));
-        let video_processor_config_path = optional(root.join("video_processor_config.json"))
-            .or_else(|| optional(root.join("video_preprocessor_config.json")));
-        let safetensors_index_path = optional(root.join("model.safetensors.index.json"));
-        let weights = read_weights(&root, safetensors_index_path.as_deref())?;
+        let merges_path = optional("merges.txt");
+        let added_tokens_path = optional("added_tokens.json");
+        let special_tokens_map_path = optional("special_tokens_map.json");
+        let tokenizer_config_path = optional("tokenizer_config.json");
+        let modules_path = optional("modules.json");
+        let sentence_transformers_config_path = optional("config_sentence_transformers.json");
+        let generation_config_path = optional("generation_config.json");
+        let model_spec_path = optional("mir-model-spec.toml");
+        let chat_template_path = optional("chat_template.jinja");
+        let kv_config_path = optional("kv_config.json");
+        let processor_config_path = optional("processor_config.json");
+        let preprocessor_config_path = optional("preprocessor_config.json");
+        let video_processor_config_path = optional("video_processor_config.json")
+            .or_else(|| optional("video_preprocessor_config.json"));
+        let safetensors_index_path = optional("model.safetensors.index.json");
+        let weights = read_weights(&root, &listing, safetensors_index_path.as_deref())?;
 
         Ok(Self {
             root,
@@ -127,22 +130,34 @@ impl ModelLayout {
     }
 }
 
-fn required(path: PathBuf) -> Result<PathBuf> {
-    if path.is_file() {
+fn required(listing: &Listing, path: PathBuf) -> Result<PathBuf> {
+    if reads(listing, &path) && path.is_file() {
         Ok(path)
     } else {
         Err(ModelsError::MissingFile(path))
     }
 }
 
-fn optional(path: PathBuf) -> Option<PathBuf> {
-    path.is_file().then_some(path)
+fn optional(listing: &Listing, path: PathBuf) -> Option<PathBuf> {
+    (reads(listing, &path) && path.is_file()).then_some(path)
 }
 
-fn read_weights(root: &Path, index_path: Option<&Path>) -> Result<Vec<WeightFile>> {
+/// Whether a loader reads `path`: in a GGUF import, of the files an import
+/// writes only those it holds.
+fn reads(listing: &Listing, path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| listing.reads(name))
+}
+
+fn read_weights(
+    root: &Path,
+    listing: &Listing,
+    index_path: Option<&Path>,
+) -> Result<Vec<WeightFile>> {
     let names = match index_path {
         Some(path) => read_indexed_names(path)?,
-        None => read_safetensor_names(root)?,
+        None => read_safetensor_names(root, listing)?,
     };
     names.into_iter().map(|name| WeightFile::open(root.join(name))).collect()
 }
@@ -153,13 +168,15 @@ fn read_indexed_names(path: &Path) -> Result<BTreeSet<String>> {
     Ok(index.weight_map.into_values().collect())
 }
 
-fn read_safetensor_names(root: &Path) -> Result<BTreeSet<String>> {
+fn read_safetensor_names(root: &Path, listing: &Listing) -> Result<BTreeSet<String>> {
     let mut names = BTreeSet::new();
     // A GGUF import directory links its shards, only those of its import,
     // beside the few tensors a vision import assembles as `SafeTensors`.
     let files = WeightContainer::SafeTensors.discover(root)?;
     for path in files.into_iter().chain(crate::gguf::files_in(root)?) {
-        if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+        if let Some(name) = path.file_name().and_then(|name| name.to_str())
+            && listing.reads(name)
+        {
             let _inserted = names.insert(name.to_owned());
         }
     }

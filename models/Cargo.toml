@@ -7,6 +7,7 @@ description = "Model discovery, tokenization, and generation policy for libmir"
 repository.workspace = true
 
 [dependencies]
+blake3.workspace = true
 foundation = { package = "libmir-core", version = "0.7.0", path = "../core" }
 image.workspace = true
 minijinja.workspace = true

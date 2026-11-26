@@ -30,7 +30,8 @@ pub use config::imports_architecture;
 pub use dequantize::dequantize;
 pub use header::GgufHeader;
 pub use import::{
-    FileOrigin, Import, ImportConflict, ImportManifest, ImportedFile, MANIFEST, SourceFile,
+    FileOrigin, Import, ImportConflict, ImportManifest, ImportedFile, Listing, MANIFEST,
+    SourceFile, Stamp, Written,
 };
 pub use names::safetensors_name;
 pub use reader::ParseError;
@@ -66,8 +67,10 @@ fn type_bytes<'a>(tensors: impl IntoIterator<Item = &'a GgufTensor>) -> Vec<(Ggm
 }
 
 /// The GGUF files directly inside a directory, sorted: those of its import
-/// when it holds one ([`ImportManifest`]), else all of them.
+/// when it holds one ([`ImportManifest`]), else all of them; refused while
+/// a write of an import there is cut short ([`Listing`]).
 pub fn files_in(directory: &Path) -> Result<Vec<PathBuf>> {
+    Listing::of(directory)?;
     if let Some(manifest) = ImportManifest::read(directory) {
         return Ok(manifest.gguf_files(directory));
     }

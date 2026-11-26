@@ -2,7 +2,9 @@
 //! beside its directory, which moves to `.<name>.previous` only once the new
 //! import is complete and is removed after the swap. Publishers of one
 //! directory take turns through a lock on `.<name>.lock`, and one finding
-//! the directory gone while `.previous` remains restores it first.
+//! the directory gone while `.previous` remains restores it first. A
+//! directory that is a symlink is replaced as the link: the import becomes
+//! a plain directory, and the directory it linked to is never changed.
 
 use std::{
     fs,
@@ -17,7 +19,8 @@ use crate::error::{ModelsError, Result};
 
 /// Replaces `directory` with what `fill` writes into a fresh directory. A
 /// failure of `fill` leaves `directory` as it was; `sources`, the files the
-/// import links, must not live inside `directory`.
+/// import links, must not live inside `directory`, by their path or the
+/// file it resolves to.
 pub(super) fn replace(
     directory: &Path,
     sources: &[PathBuf],
@@ -29,14 +32,27 @@ pub(super) fn replace(
     if directory.symlink_metadata().is_err() && previous.symlink_metadata().is_ok() {
         fs::rename(&previous, directory)?;
     }
-    // Publishing replaces or removes all three directories.
+    // Publishing replaces or removes all three directories, and whatever
+    // lives in them: a user's link there given as a shard included, though
+    // it resolves elsewhere.
     let replaced = [directory, &staging, &previous]
         .into_iter()
-        .filter_map(|path| fs::canonicalize(path).ok())
+        .flat_map(|path| [std::path::absolute(path).ok(), fs::canonicalize(path).ok()])
+        .flatten()
         .collect::<Vec<_>>();
     for source in sources {
-        let source = fs::canonicalize(source)?;
-        if replaced.iter().any(|path| source.starts_with(path)) {
+        let given = std::path::absolute(source)?;
+        let placed = given
+            .parent()
+            .and_then(|parent| fs::canonicalize(parent).ok())
+            .zip(given.file_name())
+            .map(|(parent, name)| parent.join(name));
+        let paths = [Some(given), placed, Some(fs::canonicalize(source)?)];
+        if paths
+            .iter()
+            .flatten()
+            .any(|path| replaced.iter().any(|inside| path.starts_with(inside)))
+        {
             return Err(ModelsError::ImportConflict {
                 path: directory.to_path_buf(),
                 conflict: ImportConflict::SourceInside,
@@ -65,7 +81,7 @@ pub(super) fn replace(
 
 /// Waits for, and holds until dropped, the lock of publishing `directory`;
 /// the system releases it if the process dies.
-fn lock(directory: &Path) -> Result<fs::File> {
+pub(super) fn lock(directory: &Path) -> Result<fs::File> {
     let path = beside(directory, "lock")?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;

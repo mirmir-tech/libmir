@@ -2,8 +2,14 @@ use std::{fs, path::PathBuf};
 
 use serde_json::json;
 
+#[cfg(unix)]
+mod association;
+mod interrupted;
 mod manifest;
 mod ownership;
+#[cfg(unix)]
+mod paths;
+mod written;
 
 use super::{FileOrigin, Import, ImportConflict, ImportManifest, files, publish};
 use crate::{error::ModelsError, gguf::tests::TestResult};
@@ -26,6 +32,33 @@ fn import(shards: Vec<PathBuf>, version: u32) -> Import {
         preprocessor_config: None,
         assembled: None,
     }
+}
+
+/// Rewrites `directory`'s manifest as the version recording links' sources
+/// wrote it: without a format, a derived file or one found in place by its
+/// origin alone; `edit` then changes each file's entry.
+fn as_earlier(
+    directory: &std::path::Path,
+    edit: impl Fn(&mut serde_json::Value) -> TestResult,
+) -> TestResult {
+    let path = directory.join(super::MANIFEST);
+    let mut manifest = serde_json::from_slice::<serde_json::Value>(&fs::read(&path)?)?;
+    let object = manifest.as_object_mut().ok_or("no manifest")?;
+    object.remove("format");
+    for file in object
+        .get_mut("files")
+        .and_then(|files| files.as_array_mut())
+        .ok_or("no files")?
+    {
+        for origin in ["derived", "in_place"] {
+            if file["origin"].get(origin).is_some() {
+                file["origin"] = json!(origin);
+            }
+        }
+        edit(file)?;
+    }
+    fs::write(path, serde_json::to_vec(&manifest)?)?;
+    Ok(())
 }
 
 fn conflict(result: &crate::error::Result<()>) -> Option<ImportConflict> {
@@ -127,7 +160,7 @@ fn the_manifest_records_files_and_sources() -> TestResult {
             .find(|file| file.name == name)
             .map(|file| file.origin.clone())
     };
-    assert_eq!(origin("tokenizer.json"), Some(FileOrigin::Derived));
+    assert!(matches!(origin("tokenizer.json"), Some(FileOrigin::Derived { .. })));
     let linked = FileOrigin::Linked {
         source: fs::canonicalize(&source)?,
         named: std::path::absolute(&source)?,

@@ -3,7 +3,7 @@
 
 use std::fs;
 
-use super::{FileOrigin, ImportConflict, ImportManifest, conflict, import, root};
+use super::{FileOrigin, ImportConflict, ImportManifest, as_earlier, conflict, import, root};
 use crate::gguf::{files_in, tests::TestResult};
 
 /// Where links are hard links, the previous import's link is a plain file;
@@ -38,7 +38,8 @@ fn a_source_found_in_place_is_never_replaced() -> TestResult {
     import(vec![first.clone()], 1).write(&directory)?;
     let manifest = ImportManifest::read(&directory).ok_or("no manifest")?;
     let origin = manifest.files.iter().find(|file| file.name == "model.gguf");
-    assert_eq!(origin.map(|file| file.origin.clone()), Some(FileOrigin::InPlace));
+    let source = Some(fs::canonicalize(&first)?);
+    assert_eq!(origin.map(|file| file.origin.clone()), Some(FileOrigin::InPlace { source }));
 
     let refused = conflict(&import(vec![second], 2).write(&directory));
     assert_eq!(refused, Some(ImportConflict::OccupiedLink));
@@ -124,7 +125,8 @@ fn a_user_symlink_given_as_the_shard_survives_a_switch() -> TestResult {
     import(vec![external.clone()], 1).write(&output)?;
     let manifest = ImportManifest::read(&output).ok_or("no manifest")?;
     let origin = manifest.files.iter().find(|file| file.name == "external.gguf");
-    assert_eq!(origin.map(|file| file.origin.clone()), Some(FileOrigin::InPlace));
+    let source = Some(fs::canonicalize(&weights)?);
+    assert_eq!(origin.map(|file| file.origin.clone()), Some(FileOrigin::InPlace { source }));
     assert!(manifest.is_current(&output));
 
     import(vec![second], 2).write(&output)?;
@@ -154,16 +156,19 @@ fn a_user_symlink_an_earlier_import_recorded_as_its_link_survives_a_switch() -> 
     std::os::unix::fs::symlink(&canonical, &external)?;
     import(vec![external.clone()], 1).write(&output)?;
     // As the earlier version wrote it: `external.gguf` linked, named itself.
-    let mut manifest = ImportManifest::read(&output).ok_or("no manifest")?;
-    for file in manifest.files.iter_mut().filter(|file| file.name == "external.gguf") {
-        file.origin = FileOrigin::Linked {
-            source: canonical.clone(),
-            named: std::path::absolute(&external)?,
-        };
-    }
-    fs::write(output.join("import.json"), serde_json::to_vec_pretty(&manifest)?)?;
+    let named = std::path::absolute(&external)?;
+    as_earlier(&output, |file| {
+        if file["name"] == "external.gguf" {
+            file["origin"] =
+                serde_json::json!({ "linked": { "source": canonical, "named": named } });
+        }
+        Ok(())
+    })?;
+    // Its given path is not known to still resolve to its source.
+    assert!(!ImportManifest::read(&output).ok_or("no manifest")?.is_current(&output));
 
-    import(vec![second], 2).write(&output)?;
+    // The same derived files: an earlier version did not record them.
+    import(vec![second], 1).write(&output)?;
     assert_eq!(fs::read_link(&external)?, canonical);
     assert_eq!(fs::read(&external)?, b"user bytes");
     assert_eq!(files_in(&output)?, [output.join("second.gguf")]);

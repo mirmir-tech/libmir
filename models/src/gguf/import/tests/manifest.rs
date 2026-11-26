@@ -6,7 +6,7 @@ use std::fs;
 
 use serde_json::json;
 
-use super::{ImportManifest, import, root};
+use super::{ImportManifest, as_earlier, import, root};
 use crate::{
     error::ModelsError,
     gguf::{MANIFEST, files_in, tests::TestResult},
@@ -46,7 +46,8 @@ fn a_manifest_naming_other_paths_is_refused() -> TestResult {
 
 /// A vision import an earlier version recorded by file names alone becomes
 /// a text-only import of another model: the loader then finds only the new
-/// GGUF file and no processor configuration.
+/// GGUF file and no processor configuration. The old shards' links, which
+/// that version could have taken over from a user, stay.
 #[test]
 fn a_legacy_vision_import_switches_to_text_only() -> TestResult {
     let root = root("legacy")?;
@@ -65,13 +66,14 @@ fn a_legacy_vision_import_switches_to_text_only() -> TestResult {
     names_only(&output)?;
     fs::write(output.join("notes.safetensors.txt"), b"mine")?;
 
-    import(vec![second], 2).write(&output)?;
+    // The same derived files: an earlier version did not record them.
+    import(vec![second], 1).write(&output)?;
     let layout = ModelLayout::inspect(&output)?;
     let weights = layout.weights.iter().map(|weight| weight.path.clone()).collect::<Vec<_>>();
     assert_eq!(weights, [output.join("second.gguf")]);
     assert_eq!(files_in(&output)?, [output.join("second.gguf")]);
     assert_eq!(layout.preprocessor_config_path, None);
-    assert!(output.join("mmproj.gguf").symlink_metadata().is_err());
+    assert!(output.join("mmproj.gguf").symlink_metadata().is_ok());
     assert_eq!(fs::read(output.join("notes.safetensors.txt"))?, b"mine");
     fs::remove_dir_all(root)?;
     Ok(())
@@ -92,7 +94,8 @@ fn a_legacy_in_place_source_survives_a_switch() -> TestResult {
     import(vec![first.clone()], 1).write(&directory)?;
     names_only(&directory)?;
 
-    import(vec![second.clone()], 2).write(&directory)?;
+    // The same derived files: an earlier version did not record them.
+    import(vec![second.clone()], 1).write(&directory)?;
     assert!(!first.symlink_metadata()?.file_type().is_symlink());
     assert_eq!(fs::read(&first)?, b"first bytes");
     assert_eq!(fs::canonicalize(directory.join("other.gguf"))?, fs::canonicalize(&second)?);
@@ -145,15 +148,18 @@ fn names_only(directory: &std::path::Path) -> TestResult {
         .map(|file| file["name"].clone())
         .collect::<Vec<_>>();
     manifest["files"] = names.into();
+    // Earlier versions named no format.
+    manifest.as_object_mut().ok_or("no manifest")?.remove("format");
     fs::write(directory.join(MANIFEST), serde_json::to_vec(&manifest)?)?;
     Ok(())
 }
 
 /// A manifest an earlier version wrote with origins but no link's source
-/// finds each link's source by where it links: it reads current, and a
-/// switch removes the old link.
+/// cannot tell its link from a user's link given as the shard, nor which
+/// source it resolved to: it reads stale, and a switch keeps the old link
+/// while the loader finds the new model alone, under a current import.
 #[test]
-fn a_manifest_without_link_sources_finds_them() -> TestResult {
+fn a_manifest_without_link_sources_keeps_its_links() -> TestResult {
     let root = root("unsourced")?;
     let (first, second) = (root.join("a/first.gguf"), root.join("b/second.gguf"));
     for path in [&first, &second] {
@@ -162,18 +168,18 @@ fn a_manifest_without_link_sources_finds_them() -> TestResult {
     }
     let output = root.join("output");
     import(vec![first], 1).write(&output)?;
-    let mut manifest =
-        serde_json::from_slice::<serde_json::Value>(&fs::read(output.join(MANIFEST))?)?;
-    for file in manifest["files"].as_array_mut().ok_or("no files")? {
+    as_earlier(&output, |file| {
         if file["origin"].get("linked").is_some() {
             file["origin"] = json!("linked");
         }
-    }
-    fs::write(output.join(MANIFEST), serde_json::to_vec(&manifest)?)?;
-    assert!(ImportManifest::read(&output).ok_or("no manifest")?.is_current(&output));
-    import(vec![second], 2).write(&output)?;
-    assert!(output.join("first.gguf").symlink_metadata().is_err());
+        Ok(())
+    })?;
+    assert!(!ImportManifest::read(&output).ok_or("no manifest")?.is_current(&output));
+    // The same derived files: an earlier version did not record them.
+    import(vec![second], 1).write(&output)?;
+    assert!(output.join("first.gguf").symlink_metadata().is_ok());
     assert_eq!(files_in(&output)?, [output.join("second.gguf")]);
+    assert!(ImportManifest::read(&output).ok_or("no manifest")?.is_current(&output));
     fs::remove_dir_all(root)?;
     Ok(())
 }

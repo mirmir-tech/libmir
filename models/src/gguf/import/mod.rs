@@ -9,7 +9,9 @@ mod publish;
 
 use std::path::{Path, PathBuf};
 
-pub use manifest::{FileOrigin, ImportManifest, ImportedFile, MANIFEST, SourceFile};
+pub use manifest::{
+    FileOrigin, ImportManifest, ImportedFile, Listing, MANIFEST, SourceFile, Stamp, Written,
+};
 use serde_json::Value;
 
 use super::{GgufModel, VisionImport, config, tokenizer};
@@ -67,10 +69,17 @@ impl Import {
     /// Writes the import into `directory`, which then loads like a
     /// `SafeTensors` checkpoint directory. Shards are linked, not copied; a
     /// shard already in `directory`, such as when it is the source's own
-    /// directory, stays as it is. Every path is resolved and checked before
-    /// the first write; `config.json` and then the [`ImportManifest`] are
-    /// written last.
+    /// directory, stays as it is, as does every file no import made. Every
+    /// path is resolved and checked before the first write; the manifest
+    /// naming the new files is written aside before any file changes and
+    /// moved into place last, and loaders refuse the directory meanwhile.
+    /// Writers and publishers of one directory take turns.
     pub fn write(&self, directory: &Path) -> Result<()> {
+        let _turn = publish::lock(directory)?;
+        self.write_unlocked(directory)
+    }
+
+    fn write_unlocked(&self, directory: &Path) -> Result<()> {
         let plan = files::Plan::new(self, directory)?;
         std::fs::create_dir_all(directory)?;
         plan.write(directory)
@@ -79,10 +88,11 @@ impl Import {
     /// Publishes the import as `directory` in one step: it is written beside
     /// it and replaces the previous import only once complete, so a failure
     /// leaves the last good import in place. No source may live inside
-    /// `directory`, which is replaced whole.
+    /// `directory`, which is replaced whole; a symlink there is replaced as
+    /// the link, never the directory it links to.
     pub fn publish(&self, directory: &Path) -> Result<()> {
         let sources = self.shards.iter().chain(&self.vision_shards).cloned().collect::<Vec<_>>();
-        publish::replace(directory, &sources, |staging| self.write(staging))
+        publish::replace(directory, &sources, |staging| self.write_unlocked(staging))
     }
 
     /// The derived files, `(name, contents)`, with `config.json` last.
@@ -109,8 +119,22 @@ impl Import {
 /// Why an import cannot be written where it was asked to go.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ImportConflict {
-    #[error("a different file already has a shard's name")]
+    /// A file the import did not make, or cannot tell it made, as where
+    /// its manifest is gone or an earlier version did not record it, is
+    /// kept: the error names it, and removing it lets the import be
+    /// written there.
+    #[error(
+        "the file there has a shard's name, and the import did not make it or cannot tell it \
+         did; remove it to write the import there"
+    )]
     OccupiedLink,
+    /// The same for a file the import derives from the GGUF metadata, such
+    /// as a user's own `tokenizer.json` or one changed since it was written.
+    #[error(
+        "the file there has a derived file's name, and the import did not write it or cannot \
+         tell it wrote it as it is now; remove it to write the import there"
+    )]
+    OccupiedFile,
     #[error("two files of the import share a name")]
     DuplicateName,
     #[error("a source file lives inside the directory publishing replaces")]

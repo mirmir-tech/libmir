@@ -1,7 +1,12 @@
-//! Manifests earlier versions wrote: one naming each file's origin without
-//! the source of a link, and before it one naming the files alone. Each is
-//! read with what the directory shows now, so nothing the import did not
-//! make is ever replaced or removed.
+//! Manifests earlier versions wrote, without a format: one recording each
+//! link's source and the path it was given, before it one naming each
+//! file's origin alone, and first one naming the files alone. Those
+//! versions could record a user's file as their own link, and wrote their
+//! derived files over a user's, so a file is read as the import's only
+//! where the record shows the import made it and it still is that file;
+//! anything else, the user's or not known to be the import's, is kept as
+//! found in place. A file found in place whose source the record does not
+//! tell leaves the import stale, so the next write records it.
 
 use std::{ffi::OsStr, fs, path::Path};
 
@@ -10,16 +15,6 @@ use serde::Deserialize;
 use super::{FileOrigin, ImportManifest, ImportedFile, SourceFile};
 use crate::layout::WeightContainer;
 
-/// The files an import derives from GGUF metadata, beside the `SafeTensors`
-/// a vision import assembles.
-const DERIVED: [&str; 5] = [
-    "config.json",
-    "generation_config.json",
-    "tokenizer.json",
-    "tokenizer_config.json",
-    "preprocessor_config.json",
-];
-
 #[derive(Deserialize)]
 struct Manifest<File> {
     text: Vec<SourceFile>,
@@ -27,95 +22,129 @@ struct Manifest<File> {
     files: Vec<File>,
 }
 
-/// A file of a manifest that named origins without a link's source.
 #[derive(Deserialize)]
-struct Named {
+struct Entry<Origin> {
     name: String,
     origin: Origin,
 }
 
+/// An origin as the version recording links' sources wrote it.
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum Origin {
+enum Sourced {
+    Derived,
+    Linked {
+        source: std::path::PathBuf,
+        named: std::path::PathBuf,
+    },
+    InPlace,
+}
+
+/// An origin as the version before it wrote it, without a link's source.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Named {
     Derived,
     Linked,
     InPlace,
 }
 
 /// An earlier manifest in `bytes`, with each file's origin as `directory`
-/// shows it now; `None` for neither earlier form.
+/// shows it now; `None` for none of the earlier forms.
 pub(super) fn read(bytes: &[u8], directory: &Path) -> Option<ImportManifest> {
-    if let Ok(Manifest { text, vision, files }) = serde_json::from_slice::<Manifest<Named>>(bytes) {
-        let files = files
-            .into_iter()
-            .map(|Named { name, origin }| {
-                let origin = match origin {
-                    Origin::Derived => FileOrigin::Derived,
-                    Origin::Linked => linked(&text, &vision, directory, &name),
-                    Origin::InPlace => FileOrigin::InPlace,
-                };
-                ImportedFile { name, origin }
-            })
-            .collect();
-        return Some(ImportManifest { text, vision, files });
+    if let Ok(manifest) = serde_json::from_slice::<Manifest<Entry<Sourced>>>(bytes) {
+        return Some(convert(manifest, |sources, name, origin| match origin {
+            Sourced::Derived => derived(),
+            Sourced::Linked { source, named } if made_by_import(directory, name, &named) => {
+                FileOrigin::Linked { source, named }
+            },
+            // Whoever made it, its given path is not known to still resolve
+            // to its source, which only a new write records.
+            Sourced::Linked { .. } => FileOrigin::InPlace { source: None },
+            Sourced::InPlace => found_in_place(sources, directory, name),
+        }));
+    }
+    if let Ok(manifest) = serde_json::from_slice::<Manifest<Entry<Named>>>(bytes) {
+        return Some(convert(manifest, |sources, name, origin| match origin {
+            Named::Derived => derived(),
+            // A link without the path it was given cannot be told from a
+            // user's link given as the shard, which that version replaced.
+            Named::Linked | Named::InPlace => found_in_place(sources, directory, name),
+        }));
     }
     let Manifest { text, vision, files } =
         serde_json::from_slice::<Manifest<String>>(bytes).ok()?;
+    let files = files.into_iter().map(|name| Entry { name, origin: () }).collect();
+    Some(convert(Manifest { text, vision, files }, |sources, name, ()| {
+        if is_derived(name, sources) {
+            derived()
+        } else {
+            found_in_place(sources, directory, name)
+        }
+    }))
+}
+
+/// A file an earlier version recorded as derived, by name alone: the
+/// import's only while it holds what a new import writes there, which
+/// replacing it does not change; so a user's file moved there since, with
+/// whatever time, is kept.
+const fn derived() -> FileOrigin {
+    FileOrigin::Derived { written: None }
+}
+
+/// `manifest` with each file's `origin` as `current` reads it, given the
+/// recorded sources.
+fn convert<Origin>(
+    manifest: Manifest<Entry<Origin>>,
+    current: impl Fn(&[&SourceFile], &str, Origin) -> FileOrigin,
+) -> ImportManifest {
+    let Manifest { text, vision, files } = manifest;
+    let sources = text.iter().chain(&vision).collect::<Vec<_>>();
     let files = files
         .into_iter()
-        .map(|name| {
-            let origin = match linked(&text, &vision, directory, &name) {
-                FileOrigin::InPlace if is_derived(&name, &text, &vision) => FileOrigin::Derived,
-                origin => origin,
-            };
+        .map(|Entry { name, origin }| {
+            let origin = current(&sources, &name, origin);
             ImportedFile { name, origin }
         })
         .collect();
-    Some(ImportManifest { text, vision, files })
+    ImportManifest { text, vision, files }
 }
 
-/// Takes back for the user each entry an earlier version recorded as its
-/// link though the path it was given is that very entry: the user's file
-/// in `directory`, a symlink included, which that version replaced with
-/// its own link to the source. Found in place, it is never the import's to
-/// replace or remove.
-pub(super) fn own_entries(manifest: &mut ImportManifest, directory: &Path) {
-    let Ok(directory) = fs::canonicalize(directory) else {
-        return;
+/// Whether an earlier version's record of `name` as its link to the shard
+/// it was given at `named` shows the import made it: `named`, under the
+/// same name, is still a file of another directory than `directory`, and
+/// that directory is no import. Where it was the entry itself, a user's
+/// file that version replaced with its link, it is not, nor where that
+/// cannot be told any more: `named` or its directory gone, as after the
+/// import was moved, or `named` an entry of an import, as of the one this
+/// is a copy of.
+fn made_by_import(directory: &Path, name: &str, named: &Path) -> bool {
+    let (Ok(directory), Some(parent)) = (fs::canonicalize(directory), named.parent()) else {
+        return false;
     };
-    for file in &mut manifest.files {
-        if let FileOrigin::Linked { named, .. } = &file.origin
-            && named.file_name() == Some(OsStr::new(&file.name))
-            && named.parent().and_then(|parent| fs::canonicalize(parent).ok())
-                == Some(directory.clone())
-        {
-            file.origin = FileOrigin::InPlace;
-        }
-    }
+    named.file_name() == Some(OsStr::new(name))
+        && named.symlink_metadata().is_ok()
+        && parent.join(super::MANIFEST).symlink_metadata().is_err()
+        && fs::canonicalize(parent).is_ok_and(|parent| parent != directory)
 }
 
-/// `name`'s origin by what it is now: a link to the source it still links,
-/// whatever either is named, else a file not the import's, the source
-/// itself found in place included.
-fn linked(text: &[SourceFile], vision: &[SourceFile], directory: &Path, name: &str) -> FileOrigin {
+/// `name` as a file found in place, tied to the source it is: a recorded
+/// source at its own path. A link resolving to one could have resolved to
+/// another when the import was made, so its source is not told.
+fn found_in_place(sources: &[&SourceFile], directory: &Path, name: &str) -> FileOrigin {
     let path = directory.join(name);
-    if !super::is_file_name(name) {
-        return FileOrigin::InPlace;
-    }
-    text.iter().chain(vision).find(|source| source.is_linked_at(&path)).map_or(
-        FileOrigin::InPlace,
-        |source| FileOrigin::Linked {
-            // The path it was given is unknown: the source itself.
-            source: source.path.clone(),
-            named: source.path.clone(),
-        },
-    )
+    let itself = super::is_file_name(name)
+        && path.symlink_metadata().is_ok_and(|metadata| !metadata.file_type().is_symlink());
+    let source = itself
+        .then(|| fs::canonicalize(&path).ok())
+        .flatten()
+        .filter(|path| sources.iter().any(|source| source.path == *path));
+    FileOrigin::InPlace { source }
 }
 
 /// Whether `name` is one the import derives, and no source's.
-fn is_derived(name: &str, text: &[SourceFile], vision: &[SourceFile]) -> bool {
-    let named = |source: &&SourceFile| source.path.file_name() == Some(name.as_ref());
-    !text.iter().chain(vision).any(|source| named(&source))
-        && (DERIVED.contains(&name)
+fn is_derived(name: &str, sources: &[&SourceFile]) -> bool {
+    !sources.iter().any(|source| source.path.file_name() == Some(name.as_ref()))
+        && (super::listing::DERIVED.contains(&name)
             || WeightContainer::of(Path::new(name)) == Some(WeightContainer::SafeTensors))
 }
