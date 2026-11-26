@@ -72,15 +72,28 @@ impl Plan {
         // loader would find; a file no import made is never touched.
         for name in &self.stale {
             // Another spelling of a name the import holds, on a file system
-            // that tells them apart, goes; where it is that file, it is
-            // replaced below.
+            // that tells them apart, goes. Where it is that file, on a
+            // case-insensitive one, it goes too when this write makes the
+            // file anew, as a rename over it would keep the old spelling;
+            // a file the import finds in place stays.
             let path = directory.join(name);
-            if !self.held().any(|held| same_entry(&path, &directory.join(held), held, name)) {
+            let held = self.held().any(|held| same_entry(&path, &directory.join(held), held, name));
+            let remade = links.iter().any(|(_, target)| {
+                target
+                    .file_name()
+                    .and_then(OsStr::to_str)
+                    .is_some_and(|remade| same_entry(&path, target, remade, name))
+            });
+            if !held || remade {
                 self.records.remove_made(OsStr::new(name), &path)?;
             }
-            // A write cut short left it aside, by the name only writes use.
+            // A write cut short left it aside, by the name only writes use;
+            // where that name is another spelling of one this write just
+            // made aside, on a case-insensitive file system, it is that one.
             let partial = beside(&path, "partial")?;
-            if partial.symlink_metadata().is_ok_and(|metadata| !metadata.is_dir()) {
+            if partial.symlink_metadata().is_ok_and(|metadata| !metadata.is_dir())
+                && !links.iter().any(|(made, _)| same_path(&partial, made))
+            {
                 fs::remove_file(partial)?;
             }
         }
@@ -120,7 +133,12 @@ fn same_entry(path: &Path, held_path: &Path, held: &str, name: &str) -> bool {
     if held.to_lowercase() != name.to_lowercase() {
         return false;
     }
-    match (path.symlink_metadata(), held_path.symlink_metadata()) {
+    same_path(path, held_path)
+}
+
+/// Whether both paths name one existing entry, links not followed.
+fn same_path(left: &Path, right: &Path) -> bool {
+    match (left.symlink_metadata(), right.symlink_metadata()) {
         (Ok(left), Ok(right)) => same_file(&left, &right),
         _ => false,
     }
