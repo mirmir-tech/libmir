@@ -137,24 +137,25 @@ fn same_entry(path: &Path, held_path: &Path, held: &str, name: &str) -> bool {
 }
 
 /// Whether both paths name one existing entry, links not followed.
+#[cfg(unix)]
 fn same_path(left: &Path, right: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
     match (left.symlink_metadata(), right.symlink_metadata()) {
-        (Ok(left), Ok(right)) => same_file(&left, &right),
+        (Ok(left), Ok(right)) => (left.dev(), left.ino()) == (right.dev(), right.ino()),
         _ => false,
     }
 }
 
-#[cfg(unix)]
-fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    (left.dev(), left.ino()) == (right.dev(), right.ino())
-}
-
-/// Without a file identity, two spellings that both exist are one file, as
-/// on the case-insensitive file systems such systems use.
+/// Without a file identity, two spellings of one name that both exist are
+/// one entry, as on the case-insensitive file systems such systems use;
+/// two names are never one.
 #[cfg(not(unix))]
-const fn same_file(_: &fs::Metadata, _: &fs::Metadata) -> bool {
-    true
+fn same_path(left: &Path, right: &Path) -> bool {
+    let name = |path: &Path| path.file_name().map(|name| name.to_string_lossy().to_lowercase());
+    name(left).is_some()
+        && name(left) == name(right)
+        && left.symlink_metadata().is_ok()
+        && right.symlink_metadata().is_ok()
 }
 
 /// Stops the write after `step` where a test asked for it.
