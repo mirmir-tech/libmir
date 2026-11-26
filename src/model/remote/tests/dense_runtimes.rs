@@ -1,0 +1,112 @@
+//! Dense checkpoints Metal admits by the binding plan of the runtime it
+//! selects: routed experts without sinks run on the dense runtime, and
+//! latent attention with leading dense layers on the latent one. Both were
+//! refused by the plans of other runtimes.
+
+use super::*;
+
+const HIDDEN: usize = 32;
+
+fn admitted_dense(config: &serde_json::Value, catalog: &TensorCatalog) -> Result<()> {
+    let contract = RemoteModelContract::inspect_generation(config, catalog)?;
+    let metal = contract.admission(BackendTarget::Metal);
+    assert_eq!(metal.status, AdmissionStatus::Supported, "{metal:?}");
+    assert!(metal.checks.iter().any(|check| {
+        check.kind() == AdmissionCheckKind::Encoding(EncodingKind::Dense)
+            && check.status() == AdmissionStatus::Supported
+    }));
+    Ok(())
+}
+
+fn add(tensors: &mut Vec<TensorInfo>, name: &str, shape: &[usize]) {
+    tensors.push(tensor_with_dtype(name, shape.to_vec(), "BF16"));
+}
+
+fn experts(tensors: &mut Vec<TensorInfo>, mlp: &str, count: usize, width: usize) {
+    for expert in 0..count {
+        for (projection, shape) in
+            [("gate", [width, HIDDEN]), ("up", [width, HIDDEN]), ("down", [HIDDEN, width])]
+        {
+            add(tensors, &format!("{mlp}.experts.{expert}.{projection}_proj.weight"), &shape);
+        }
+    }
+}
+
+/// Qwen3-MoE: routed experts without a shared expert or attention sinks.
+#[test]
+fn admits_dense_routed_experts_without_sinks_on_metal() -> Result<()> {
+    let config = json!({
+        "model_type": "qwen3_moe", "hidden_size": HIDDEN, "intermediate_size": 16,
+        "moe_intermediate_size": 8, "num_hidden_layers": 1, "num_attention_heads": 4,
+        "num_key_value_heads": 2, "head_dim": 8, "vocab_size": 64, "num_experts": 4,
+        "num_experts_per_tok": 2, "norm_topk_prob": true, "decoder_sparse_step": 1,
+        "mlp_only_layers": [], "hidden_act": "silu", "rms_norm_eps": 1e-6,
+        "tie_word_embeddings": false
+    });
+    let mut tensors = Vec::new();
+    add(&mut tensors, "model.embed_tokens.weight", &[64, HIDDEN]);
+    add(&mut tensors, "model.norm.weight", &[HIDDEN]);
+    add(&mut tensors, "lm_head.weight", &[64, HIDDEN]);
+    let layer = "model.layers.0";
+    add(&mut tensors, &format!("{layer}.input_layernorm.weight"), &[HIDDEN]);
+    add(&mut tensors, &format!("{layer}.post_attention_layernorm.weight"), &[HIDDEN]);
+    for (projection, shape) in
+        [("q", [32, HIDDEN]), ("k", [16, HIDDEN]), ("v", [16, HIDDEN]), ("o", [HIDDEN, 32])]
+    {
+        add(&mut tensors, &format!("{layer}.self_attn.{projection}_proj.weight"), &shape);
+    }
+    add(&mut tensors, &format!("{layer}.self_attn.q_norm.weight"), &[8]);
+    add(&mut tensors, &format!("{layer}.self_attn.k_norm.weight"), &[8]);
+    add(&mut tensors, &format!("{layer}.mlp.gate.weight"), &[4, HIDDEN]);
+    experts(&mut tensors, &format!("{layer}.mlp"), 4, 8);
+    admitted_dense(&config, &TensorCatalog::new(tensors))
+}
+
+/// DeepSeek-V2: latent attention, one leading dense layer, then routed plus
+/// shared experts.
+#[test]
+fn admits_dense_latent_attention_experts_on_metal() -> Result<()> {
+    let config = json!({
+        "architectures": ["DeepseekV2ForCausalLM"], "model_type": "deepseek_v2",
+        "hidden_size": HIDDEN, "intermediate_size": 16, "moe_intermediate_size": 8,
+        "num_hidden_layers": 2, "num_attention_heads": 4, "num_key_value_heads": 4,
+        "vocab_size": 64, "q_lora_rank": null, "kv_lora_rank": 16, "qk_nope_head_dim": 8,
+        "qk_rope_head_dim": 4, "v_head_dim": 8, "n_routed_experts": 4,
+        "num_experts_per_tok": 2, "n_shared_experts": 2, "first_k_dense_replace": 1,
+        "moe_layer_freq": 1, "n_group": 1, "topk_group": 1, "scoring_func": "softmax",
+        "topk_method": "greedy", "norm_topk_prob": false, "routed_scaling_factor": 1.0,
+        "hidden_act": "silu", "rms_norm_eps": 1e-6
+    });
+    let mut tensors = Vec::new();
+    add(&mut tensors, "model.embed_tokens.weight", &[64, HIDDEN]);
+    add(&mut tensors, "model.norm.weight", &[HIDDEN]);
+    add(&mut tensors, "lm_head.weight", &[64, HIDDEN]);
+    for layer in 0..2 {
+        let prefix = format!("model.layers.{layer}");
+        let attention = format!("{prefix}.self_attn");
+        add(&mut tensors, &format!("{prefix}.input_layernorm.weight"), &[HIDDEN]);
+        add(&mut tensors, &format!("{prefix}.post_attention_layernorm.weight"), &[HIDDEN]);
+        add(&mut tensors, &format!("{attention}.q_proj.weight"), &[4 * 12, HIDDEN]);
+        add(&mut tensors, &format!("{attention}.kv_a_proj_with_mqa.weight"), &[20, HIDDEN]);
+        add(&mut tensors, &format!("{attention}.kv_a_layernorm.weight"), &[16]);
+        add(&mut tensors, &format!("{attention}.kv_b_proj.weight"), &[4 * 16, 16]);
+        add(&mut tensors, &format!("{attention}.o_proj.weight"), &[HIDDEN, 4 * 8]);
+        let mlp = format!("{prefix}.mlp");
+        if layer == 0 {
+            for (projection, shape) in
+                [("gate", [16, HIDDEN]), ("up", [16, HIDDEN]), ("down", [HIDDEN, 16])]
+            {
+                add(&mut tensors, &format!("{mlp}.{projection}_proj.weight"), &shape);
+            }
+            continue;
+        }
+        add(&mut tensors, &format!("{mlp}.gate.weight"), &[4, HIDDEN]);
+        for (projection, shape) in
+            [("gate", [16, HIDDEN]), ("up", [16, HIDDEN]), ("down", [HIDDEN, 16])]
+        {
+            add(&mut tensors, &format!("{mlp}.shared_experts.{projection}_proj.weight"), &shape);
+        }
+        experts(&mut tensors, &mlp, 4, 8);
+    }
+    admitted_dense(&config, &TensorCatalog::new(tensors))
+}

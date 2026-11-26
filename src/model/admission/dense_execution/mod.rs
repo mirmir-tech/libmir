@@ -79,7 +79,7 @@ fn metal(
     if matches!(
         task,
         TaskExecutionPlan::Generation { .. } | TaskExecutionPlan::CausalScoring { .. }
-    ) && !execution.is_some_and(metal_generation_supported)
+    ) && !execution.is_some_and(|contract| metal_generation_supported(task, contract))
     {
         return (
             AdmissionStatus::Unsupported,

@@ -9,6 +9,7 @@ use crate::{AdmissionCheckKind, AdmissionStatus, EncodingKind};
 
 mod causal_scoring;
 mod clamped_routed_dense;
+mod dense_runtimes;
 mod routed_dense;
 mod shared_routed_dense;
 mod vision;
