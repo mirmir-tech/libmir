@@ -134,3 +134,39 @@ fn a_user_symlink_given_as_the_shard_survives_a_switch() -> TestResult {
     fs::remove_dir_all(root)?;
     Ok(())
 }
+
+/// The same symlink in an import an earlier version made, which replaced it
+/// with its own link to the canonical source and recorded that link with the
+/// symlink as the path it was given: switching models straight from that
+/// import, never rewritten since, keeps the symlink and its weights.
+#[cfg(unix)]
+#[test]
+fn a_user_symlink_an_earlier_import_recorded_as_its_link_survives_a_switch() -> TestResult {
+    let root = root("user-link-upgrade")?;
+    let (weights, second) = (root.join("weights/model.gguf"), root.join("b/second.gguf"));
+    for (path, bytes) in [(&weights, b"user bytes"), (&second, b"next bytes")] {
+        fs::create_dir_all(path.parent().unwrap_or(&root))?;
+        fs::write(path, bytes)?;
+    }
+    let (output, canonical) = (root.join("output"), fs::canonicalize(&weights)?);
+    fs::create_dir_all(&output)?;
+    let external = output.join("external.gguf");
+    std::os::unix::fs::symlink(&canonical, &external)?;
+    import(vec![external.clone()], 1).write(&output)?;
+    // As the earlier version wrote it: `external.gguf` linked, named itself.
+    let mut manifest = ImportManifest::read(&output).ok_or("no manifest")?;
+    for file in manifest.files.iter_mut().filter(|file| file.name == "external.gguf") {
+        file.origin = FileOrigin::Linked {
+            source: canonical.clone(),
+            named: std::path::absolute(&external)?,
+        };
+    }
+    fs::write(output.join("import.json"), serde_json::to_vec_pretty(&manifest)?)?;
+
+    import(vec![second], 2).write(&output)?;
+    assert_eq!(fs::read_link(&external)?, canonical);
+    assert_eq!(fs::read(&external)?, b"user bytes");
+    assert_eq!(files_in(&output)?, [output.join("second.gguf")]);
+    fs::remove_dir_all(root)?;
+    Ok(())
+}

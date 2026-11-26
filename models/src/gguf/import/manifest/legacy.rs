@@ -3,7 +3,7 @@
 //! read with what the directory shows now, so nothing the import did not
 //! make is ever replaced or removed.
 
-use std::path::Path;
+use std::{ffi::OsStr, fs, path::Path};
 
 use serde::Deserialize;
 
@@ -72,6 +72,26 @@ pub(super) fn read(bytes: &[u8], directory: &Path) -> Option<ImportManifest> {
         })
         .collect();
     Some(ImportManifest { text, vision, files })
+}
+
+/// Takes back for the user each entry an earlier version recorded as its
+/// link though the path it was given is that very entry: the user's file
+/// in `directory`, a symlink included, which that version replaced with
+/// its own link to the source. Found in place, it is never the import's to
+/// replace or remove.
+pub(super) fn own_entries(manifest: &mut ImportManifest, directory: &Path) {
+    let Ok(directory) = fs::canonicalize(directory) else {
+        return;
+    };
+    for file in &mut manifest.files {
+        if let FileOrigin::Linked { named, .. } = &file.origin
+            && named.file_name() == Some(OsStr::new(&file.name))
+            && named.parent().and_then(|parent| fs::canonicalize(parent).ok())
+                == Some(directory.clone())
+        {
+            file.origin = FileOrigin::InPlace;
+        }
+    }
 }
 
 /// `name`'s origin by what it is now: a link to the source it still links,

@@ -121,7 +121,8 @@ impl ImportManifest {
 
     /// The manifest of the import in `directory`, `None` when there is none
     /// or it cannot be parsed. One an earlier version wrote, which named its
-    /// files alone, is read with the origin each file shows now. A manifest
+    /// files alone, is read with the origin each file shows now, and a link
+    /// one recorded to the very entry it was given is the user's. A manifest
     /// naming anything but a file directly in `directory` is refused, before
     /// any of its names is used.
     pub fn load(directory: &Path) -> Result<Option<Self>> {
@@ -129,7 +130,7 @@ impl ImportManifest {
         let Ok(bytes) = fs::read(&path) else {
             return Ok(None);
         };
-        let manifest = match serde_json::from_slice(&bytes) {
+        let mut manifest = match serde_json::from_slice(&bytes) {
             Ok(manifest) => manifest,
             Err(_) => match legacy::read(&bytes, directory) {
                 Some(manifest) => manifest,
@@ -137,6 +138,7 @@ impl ImportManifest {
             },
         };
         Self::check(&manifest, &path)?;
+        legacy::own_entries(&mut manifest, directory);
         Ok(Some(manifest))
     }
 
