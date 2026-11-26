@@ -158,7 +158,28 @@ fn layers_sharing_keys_and_values_hold_no_pages() -> TestResult<()> {
         "layer_types": ["sliding_attention", "full_attention", "sliding_attention", "full_attention"],
         "num_kv_shared_layers": 2
     }))?;
-    let paged = super::super::pages::paged_layers(&decoder).collect::<Vec<_>>();
-    assert_eq!(paged, [1]);
+    let paged = super::super::pages::paged_layers(&decoder).map(|paged| paged.layer);
+    assert_eq!(paged.collect::<Vec<_>>(), [1]);
+    Ok(())
+}
+
+/// A decoder all of multi-head latent attention (DeepSeek-V2, Mistral Small
+/// 4) pages every layer, each as the one `kv_lora_rank + rope_dim` row it
+/// caches split into a key and a value half: no layer is left out of the
+/// headroom or the packed prefill workspace.
+#[test]
+fn latent_layers_page_their_cached_rows() -> TestResult<()> {
+    let decoder = models::layout::DecoderConfig::from_value(&serde_json::json!({
+        "model_type": "deepseek_v2", "hidden_size": 64, "intermediate_size": 32,
+        "moe_intermediate_size": 16, "num_hidden_layers": 3, "num_attention_heads": 4,
+        "num_key_value_heads": 4, "vocab_size": 8, "q_lora_rank": null, "kv_lora_rank": 32,
+        "qk_nope_head_dim": 16, "qk_rope_head_dim": 8, "v_head_dim": 16,
+        "first_k_dense_replace": 1, "rms_norm_eps": 1e-6
+    }))?;
+    let expected = (0..3)
+        .map(|layer| super::super::pages::PagedLayer { layer, kv_heads: 1, head_dim: 20 })
+        .collect::<Vec<_>>();
+    assert_eq!(super::super::pages::paged_layers(&decoder).collect::<Vec<_>>(), expected);
+    assert_eq!(super::super::pages::attention_layers(&decoder).collect::<Vec<_>>(), expected);
     Ok(())
 }

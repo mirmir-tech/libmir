@@ -15,7 +15,7 @@ impl LoadedModel {
         let Some(decoder) = self.info.decoder.as_ref() else {
             return Ok(());
         };
-        let Some(first_layer) = paged_layers(decoder).next() else {
+        let Some(PagedLayer { layer: first_layer, .. }) = paged_layers(decoder).next() else {
             return Ok(());
         };
         if required > maximum {
@@ -91,24 +91,47 @@ impl LoadedModel {
             return Ok(usize::MAX);
         };
         let format = KvPageFormat::resolve(self.stream.config().kv_cache.dtype)?;
-        paged_layers(decoder).try_fold(usize::MAX, |available, layer| {
-            let free = pages(
-                layer,
-                decoder.layer_key_value_heads(layer),
-                decoder.layer_head_dim(layer),
-                format,
-            )?;
+        paged_layers(decoder).try_fold(usize::MAX, |available, paged| {
+            let free = pages(paged.layer, paged.kv_heads, paged.head_dim, format)?;
             Ok(available.min(free))
         })
     }
 }
 
-/// The full-attention layers with a paged arena of their own. A layer
-/// attending over an earlier layer's keys and values (Gemma 4's E models)
-/// holds no pages, so its empty arena must not bound the others' headroom.
-pub(super) fn paged_layers(decoder: &DecoderConfig) -> impl Iterator<Item = usize> + '_ {
-    (0..decoder.num_hidden_layers).filter(|&layer| {
-        decoder.layer_type(layer) == AttentionLayerType::Full
-            && decoder.key_value_source(layer).is_none()
+/// An attention layer's cache as its paged arena keeps it: `kv_heads` heads
+/// of `head_dim` keys and as many values per token.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct PagedLayer {
+    pub(super) layer: usize,
+    pub(super) kv_heads: usize,
+    pub(super) head_dim: usize,
+}
+
+/// The layers that attend over a whole paged history, with their arena's
+/// geometry: full attention by its key/value heads, and multi-head latent
+/// attention as the one `kv_lora_rank + rope_dim` row it caches, split into
+/// the key and value halves of one head (`latent_attention::row`).
+pub(super) fn attention_layers(decoder: &DecoderConfig) -> impl Iterator<Item = PagedLayer> + '_ {
+    (0..decoder.num_hidden_layers).filter_map(|layer| match decoder.layer_type(layer) {
+        AttentionLayerType::Full => Some(PagedLayer {
+            layer,
+            kv_heads: decoder.layer_key_value_heads(layer),
+            head_dim: decoder.layer_head_dim(layer),
+        }),
+        AttentionLayerType::Latent => decoder.latent.as_ref().map(|latent| PagedLayer {
+            layer,
+            kv_heads: 1,
+            head_dim: latent.attention.cached_width() / 2,
+        }),
+        AttentionLayerType::Linear
+        | AttentionLayerType::Sliding
+        | AttentionLayerType::StateSpace => None,
     })
+}
+
+/// The attention layers with a paged arena of their own. A layer attending
+/// over an earlier layer's keys and values (Gemma 4's E models) holds no
+/// pages, so its empty arena must not bound the others' headroom.
+pub(super) fn paged_layers(decoder: &DecoderConfig) -> impl Iterator<Item = PagedLayer> + '_ {
+    attention_layers(decoder).filter(|paged| decoder.key_value_source(paged.layer).is_none())
 }

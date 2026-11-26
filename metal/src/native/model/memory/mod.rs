@@ -1,5 +1,3 @@
-use models::layout::AttentionLayerType;
-
 use super::LoadedModel;
 use crate::{
     engine::{MemoryStats, clear_memory_cache, memory_stats},
@@ -60,14 +58,13 @@ impl LoadedModel {
         };
         let context = position.checked_add(sequence).ok_or(crate::engine::Error::ShapeOverflow)?;
         let mut largest_context = 0_usize;
-        for layer in 0..decoder.num_hidden_layers {
-            if decoder.layer_type(layer) != AttentionLayerType::Full {
-                continue;
-            }
+        // Every layer attending over the whole context, a latent one by the
+        // row it caches; one sharing another's keys still attends.
+        for paged in pages::attention_layers(decoder) {
             let elements = batch
                 .checked_mul(context)
-                .and_then(|value| value.checked_mul(decoder.layer_key_value_heads(layer)))
-                .and_then(|value| value.checked_mul(decoder.layer_head_dim(layer)))
+                .and_then(|value| value.checked_mul(paged.kv_heads))
+                .and_then(|value| value.checked_mul(paged.head_dim))
                 .and_then(|value| value.checked_mul(2))
                 .ok_or(crate::engine::Error::ShapeOverflow)?;
             let bytes = elements
