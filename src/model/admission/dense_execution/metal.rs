@@ -28,39 +28,28 @@ pub(super) fn metal_generation_supported(
 }
 
 /// Whether `layer` resolves in `runtime`'s binding plan, as its loader in
-/// `metal/src/native/model/load/backend.rs` reads it.
+/// `metal/src/native/model/load/backend.rs` reads it. A dense layer is
+/// every runtime's plain path; routed layers are read by the runtime's own
+/// plan.
 fn layer_resolves(
     runtime: MetalDecoderRuntime,
     bindings: &WeightBindingPlan,
     layer: &DecoderLayerSpec,
 ) -> bool {
+    if matches!(layer.feed_forward, FeedForwardSpec::Dense { .. }) {
+        return true;
+    }
     let index = layer.index;
     match runtime {
-        // Dense layers and routed experts without sinks (Qwen3-MoE, Mixtral,
-        // Llama 4, GLM-4-MoE): `DenseSwiGluModel`.
+        // Routed experts without sinks (Qwen3-MoE, Mixtral, Llama 4,
+        // GLM-4-MoE): `DenseSwiGluModel`.
         MetalDecoderRuntime::Dense => bindings.dense_decoder_layer(index).is_ok(),
-        // `HybridMoeModel`: dense layers, those sharing an earlier layer's
-        // keys and values among them, and dense-plus-routed ones.
-        MetalDecoderRuntime::DenseAndRouted | MetalDecoderRuntime::DenseGelu => {
-            match &layer.feed_forward {
-                FeedForwardSpec::Dense { .. } => {
-                    let shares = layer
-                        .mixer
-                        .softmax_attention()
-                        .is_some_and(|attention| attention.key_value_source.is_some());
-                    if shares {
-                        bindings.dense_decoder_layer_sharing_key_values(index).is_ok()
-                    } else {
-                        bindings.dense_decoder_layer(index).is_ok()
-                    }
-                },
-                _ => bindings
-                    .hybrid_moe_layer(index)
-                    .is_ok_and(|bindings| hybrid_experts_supported(&bindings.experts)),
-            }
-        },
+        // `HybridMoeModel`'s dense-plus-routed layers.
+        MetalDecoderRuntime::DenseAndRouted | MetalDecoderRuntime::DenseGelu => bindings
+            .hybrid_moe_layer(index)
+            .is_ok_and(|bindings| hybrid_experts_supported(&bindings.experts)),
         // `HybridLinearMoeModel`, by layer: linear or softmax attention with
-        // a dense MLP or shared experts, or latent attention.
+        // shared experts, or latent attention.
         MetalDecoderRuntime::SharedRouted | MetalDecoderRuntime::DenseMixed => {
             bindings.mixed_decoder_layer(index).is_ok()
         },
