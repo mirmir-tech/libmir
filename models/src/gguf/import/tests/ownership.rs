@@ -104,3 +104,33 @@ fn a_replaced_link_is_kept_through_a_switch() -> TestResult {
     fs::remove_dir_all(root)?;
     Ok(())
 }
+
+/// A user's symlink in the output directory, given as the shard itself, is
+/// theirs like a source found in place: switching models keeps the symlink
+/// and the weights it points to.
+#[cfg(unix)]
+#[test]
+fn a_user_symlink_given_as_the_shard_survives_a_switch() -> TestResult {
+    let root = root("user-link")?;
+    let (weights, second) = (root.join("weights/model.gguf"), root.join("b/second.gguf"));
+    for (path, bytes) in [(&weights, b"user bytes"), (&second, b"next bytes")] {
+        fs::create_dir_all(path.parent().unwrap_or(&root))?;
+        fs::write(path, bytes)?;
+    }
+    let output = root.join("output");
+    fs::create_dir_all(&output)?;
+    let external = output.join("external.gguf");
+    std::os::unix::fs::symlink(&weights, &external)?;
+    import(vec![external.clone()], 1).write(&output)?;
+    let manifest = ImportManifest::read(&output).ok_or("no manifest")?;
+    let origin = manifest.files.iter().find(|file| file.name == "external.gguf");
+    assert_eq!(origin.map(|file| file.origin.clone()), Some(FileOrigin::InPlace));
+    assert!(manifest.is_current(&output));
+
+    import(vec![second], 2).write(&output)?;
+    assert_eq!(fs::read_link(&external)?, weights);
+    assert_eq!(fs::read(&external)?, b"user bytes");
+    assert_eq!(files_in(&output)?, [output.join("second.gguf")]);
+    fs::remove_dir_all(root)?;
+    Ok(())
+}

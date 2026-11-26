@@ -63,7 +63,8 @@ impl Plan {
                 claim(&mut names, name, directory)?;
                 let target = fs::canonicalize(shard)?;
                 let owned = previous.as_ref().and_then(|manifest| manifest.linked(name));
-                let present = present(&directory.join(name), &target, owned)?;
+                let present = is_entry_in(shard, directory)
+                    || present(&directory.join(name), &target, owned)?;
                 recorded.push(SourceFile::of(&target)?);
                 links.push(Link {
                     name: name.to_owned(),
@@ -158,6 +159,16 @@ fn claim(names: &mut BTreeSet<String>, name: &OsStr, directory: &Path) -> Result
         path: directory.join(name),
         conflict: ImportConflict::DuplicateName,
     })
+}
+
+/// Whether `shard` is itself the entry under its name in `directory`: a
+/// file the user put there, a symlink included, that the import found in
+/// place and never replaces or removes, whatever a previous manifest says.
+fn is_entry_in(shard: &Path, directory: &Path) -> bool {
+    let parent = std::path::absolute(shard)
+        .ok()
+        .and_then(|shard| fs::canonicalize(shard.parent()?).ok());
+    parent.is_some() && parent == fs::canonicalize(directory).ok()
 }
 
 /// Whether `path` is already the shard `target` itself. A symlink there to
