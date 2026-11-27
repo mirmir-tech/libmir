@@ -19,7 +19,8 @@ pub(in crate::engine::kernels::ggml) fn gathered(
     let rows = expert_rows(matrix, experts)?;
     let assignments = expert_indices(indices)?;
     let (_, inputs) = output_shape(input, matrix.columns, rows)?;
-    if inputs == 0 || assignments % inputs != 0 {
+    // No assignment would make a zero `GROUP` and an empty grid.
+    if inputs == 0 || assignments == 0 || !assignments.is_multiple_of(inputs) {
         return Err(Error::InvalidQuantization(format!(
             "GGML gather of {assignments} assignments over {inputs} inputs and {experts} experts"
         )));

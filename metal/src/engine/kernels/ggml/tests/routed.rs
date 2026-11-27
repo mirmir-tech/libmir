@@ -4,7 +4,7 @@
 //! grouped kernel must not read beyond.
 
 use super::{GGML_METAL_TYPES, GgmlMatrix, Random, blocks, close, host, weight};
-use crate::engine::{Array, Dtype, Result, Stream};
+use crate::engine::{Array, Dtype, Result, Stream, kernels::Kernels};
 
 const EXPERTS: usize = 3;
 const ROWS: usize = 8;
@@ -141,6 +141,11 @@ fn routed_products_refuse_bad_banks_and_indices() -> Result<()> {
             .ggml_grouped(&stream, [&tokens, &bank, &signed], matrix, EXPERTS)
             .is_err()
     );
+    // No assignment is no product: a zero group over an empty grid.
+    let none = Array::from_u32(&[], &[0])?;
+    for launch in [Kernels::ggml_gathered, Kernels::ggml_grouped] {
+        assert!(launch(kernels, &stream, [&tokens, &bank, &none], matrix, EXPERTS).is_err());
+    }
     assert!(
         kernels
             .ggml_grouped(&stream, [&tokens, &bank, &unsigned], matrix, EXPERTS)

@@ -146,7 +146,9 @@ pub(super) fn mxfp4_repack(
 ) -> Result<[Array; 2]> {
     let shape = weight.shape()?;
     let (rows, bytes) = match *shape.as_slice() {
-        [rows, bytes] if bytes % 17 == 0 => (usize::try_from(rows)?, usize::try_from(bytes)?),
+        [rows, bytes] if rows > 0 && bytes > 0 && bytes % 17 == 0 => {
+            (usize::try_from(rows)?, usize::try_from(bytes)?)
+        },
         _ => {
             return Err(Error::InvalidQuantization(format!(
                 "GGML MXFP4 rows {shape:?} are not whole 17-byte blocks"
