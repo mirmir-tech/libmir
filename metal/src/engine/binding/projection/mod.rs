@@ -173,7 +173,7 @@ impl BoundLinear {
         stream: &Stream,
     ) -> Result<Array> {
         match self {
-            Self::Dense(linear) => linear.gather(input, indices, stream),
+            Self::Dense(linear) => linear.gather(input, indices, sorted, stream),
             Self::Affine(linear) => linear.gather(input, indices, sorted, stream),
             Self::Float8(linear) => linear.gather(input, indices, stream),
             Self::MxFp4(linear) => linear.gather(input, indices, sorted, stream),

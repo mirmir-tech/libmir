@@ -125,7 +125,7 @@ impl Float8Linear {
 
     pub(super) fn gather(&self, input: &Array, indices: &Array, stream: &Stream) -> Result<Array> {
         match &self.operation {
-            Float8Operation::Dense(dense) => dense.gather(input, indices, stream),
+            Float8Operation::Dense(dense) => dense.gather(input, indices, false, stream),
             Float8Operation::Direct(_) => Err(Error::InvalidQuantization(
                 "quantized direct FP8 does not support gathered execution".into(),
             )),

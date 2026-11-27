@@ -157,15 +157,22 @@ impl DenseLinear {
         }
     }
 
+    /// Each assignment's product with its expert, by MLX's `gather_mm`: taking
+    /// the matrices first copies one per assignment, gigabytes in a prefill.
     pub(in crate::engine) fn gather(
         &self,
         input: &Array,
         indices: &Array,
+        sorted: bool,
         stream: &Stream,
     ) -> Result<Array> {
         let graph = stream.native().graph();
-        let weight = graph.take(self.transposed_weight.native(), indices.native(), 0)?;
-        let output = Array::from_native(graph.matmul(input.native(), &weight)?)?;
+        let output = Array::from_native(graph.gather_mm(
+            input.native(),
+            self.transposed_weight.native(),
+            mirtal::GatherIndices { lhs: None, rhs: Some(indices.native()) },
+            sorted,
+        )?)?;
         let output = match self.bias.as_ref() {
             Some(bias) => {
                 let bias = graph.take(bias.native(), indices.native(), 0)?;
