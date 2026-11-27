@@ -157,3 +157,57 @@ fn a_dense_model_metal_does_not_lower_is_refused_by_architecture_only() -> Resul
     );
     Ok(())
 }
+
+/// Nemotron-H: mixer-only Mamba-2 and attention layers have
+/// `FeedForwardSpec::None`, which must pass dense admission alongside routed
+/// layers.
+#[test]
+fn admits_dense_state_space_hybrid_with_mixer_only_layers_on_metal() -> Result<()> {
+    let config = json!({
+        "architectures": ["NemotronHForCausalLM"], "model_type": "nemotron_h",
+        "hidden_size": HIDDEN, "intermediate_size": 8, "num_attention_heads": 4,
+        "num_key_value_heads": 2, "head_dim": 8, "vocab_size": 64, "layer_norm_epsilon": 1e-5,
+        "layers_block_type": ["mamba", "attention", "moe"], "mamba_num_heads": 4,
+        "mamba_head_dim": 16, "ssm_state_size": 32, "n_groups": 2, "conv_kernel": 4,
+        "chunk_size": 8, "expand": 2, "mamba_ssm_cache_dtype": "float32", "use_conv_bias": true,
+        "n_routed_experts": 4, "num_experts_per_tok": 2, "moe_latent_size": null,
+        "moe_intermediate_size": 8, "moe_shared_expert_intermediate_size": 16,
+        "n_shared_experts": 1, "routed_scaling_factor": 2.5, "norm_topk_prob": true,
+        "mlp_hidden_act": "relu2", "tie_word_embeddings": false
+    });
+    let mut tensors = Vec::new();
+    add(&mut tensors, "backbone.embeddings.weight", &[64, HIDDEN]);
+    add(&mut tensors, "backbone.norm_f.weight", &[HIDDEN]);
+    add(&mut tensors, "lm_head.weight", &[64, HIDDEN]);
+    add(&mut tensors, "backbone.layers.0.norm.weight", &[HIDDEN]);
+    for name in ["A_log", "D", "dt_bias"] {
+        add(&mut tensors, &format!("backbone.layers.0.mixer.{name}"), &[4]);
+    }
+    add(&mut tensors, "backbone.layers.0.mixer.conv1d.weight", &[192, 4, 1]);
+    add(&mut tensors, "backbone.layers.0.mixer.conv1d.bias", &[192]);
+    add(&mut tensors, "backbone.layers.0.mixer.in_proj.weight", &[260, HIDDEN]);
+    add(&mut tensors, "backbone.layers.0.mixer.norm.weight", &[64]);
+    add(&mut tensors, "backbone.layers.0.mixer.out_proj.weight", &[HIDDEN, 64]);
+    add(&mut tensors, "backbone.layers.1.norm.weight", &[HIDDEN]);
+    for (proj, shape) in
+        [("q", [HIDDEN, HIDDEN]), ("k", [16, HIDDEN]), ("v", [16, HIDDEN]), ("o", [HIDDEN, HIDDEN])]
+    {
+        add(&mut tensors, &format!("backbone.layers.1.mixer.{proj}_proj.weight"), &shape);
+    }
+    add(&mut tensors, "backbone.layers.2.norm.weight", &[HIDDEN]);
+    add(&mut tensors, "backbone.layers.2.mixer.gate.weight", &[4, HIDDEN]);
+    add(&mut tensors, "backbone.layers.2.mixer.gate.e_score_correction_bias", &[4]);
+    add(&mut tensors, "backbone.layers.2.mixer.switch_mlp.fc1.weight", &[4, 8, HIDDEN]);
+    add(&mut tensors, "backbone.layers.2.mixer.switch_mlp.fc2.weight", &[4, HIDDEN, 8]);
+    add(
+        &mut tensors,
+        "backbone.layers.2.mixer.shared_experts.up_proj.weight",
+        &[16, HIDDEN],
+    );
+    add(
+        &mut tensors,
+        "backbone.layers.2.mixer.shared_experts.down_proj.weight",
+        &[HIDDEN, 16],
+    );
+    admitted_dense(&config, &TensorCatalog::new(tensors))
+}

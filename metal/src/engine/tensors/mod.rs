@@ -64,7 +64,9 @@ impl TensorFile {
     }
 
     pub fn len(&self) -> Result<usize> {
-        Ok(self.native().len() + self.converted().len())
+        let native = self.native().len();
+        let converted = self.converted().len();
+        Ok(native + converted)
     }
 
     /// Evaluates every tensor; the casts one at a time, so a stored tensor is
@@ -96,11 +98,16 @@ impl TensorFile {
     }
 
     pub fn contains(&self, name: &str) -> Result<bool> {
-        Ok(self.converted().contains_key(name) || self.native().contains(name)?)
+        if self.converted().contains_key(name) {
+            return Ok(true);
+        }
+        Ok(self.native().contains(name)?)
     }
 
     pub fn is_empty(&self) -> Result<bool> {
-        Ok(self.native().is_empty() && self.converted().is_empty())
+        let native = self.native().is_empty();
+        let converted = self.converted().is_empty();
+        Ok(native && converted)
     }
 
     fn native(&self) -> MutexGuard<'_, mirtal::TensorFile> {

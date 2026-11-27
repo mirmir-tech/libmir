@@ -8,7 +8,7 @@ use architecture::metal::{
 };
 use models::{
     execution::{DecoderExecutionContract, TaskExecutionPlan},
-    semantic::{DecoderLayerSpec, FeedForwardSpec},
+    semantic::{DecoderLayerSpec, NormPlacement},
     weights::{
         DenseLayerFeedForwardBindings, MixedFeedForwardBindings, RoutedExpertBindings,
         WeightBindingPlan,
@@ -23,10 +23,7 @@ pub(super) fn metal_generation_supported(
     // Without routed experts dense storage loads as every runtime's plain
     // path; an architecture Metal does not run is the architecture check's
     // refusal, not this one's.
-    if layers
-        .iter()
-        .all(|layer| matches!(layer.feed_forward, FeedForwardSpec::Dense { .. }))
-    {
+    if layers.iter().all(|layer| layer.feed_forward.routed().is_none()) {
         return true;
     }
     let Ok(MetalArchitecture::Generation(plan)) =
@@ -39,15 +36,15 @@ pub(super) fn metal_generation_supported(
 }
 
 /// Whether `layer` resolves in `runtime`'s binding plan, as its loader in
-/// `metal/src/native/model/load/backend.rs` reads it. A dense layer is
-/// every runtime's plain path; routed layers are read by the runtime's own
-/// plan, their experts by the runtime's expert loader.
+/// `metal/src/native/model/load/backend.rs` reads it. A non-routed layer
+/// (`Dense` or `None`) is every runtime's plain path; routed layers are read
+/// by the runtime's own plan, their experts by the runtime's expert loader.
 fn layer_resolves(
     runtime: MetalDecoderRuntime,
     bindings: &WeightBindingPlan,
     layer: &DecoderLayerSpec,
 ) -> bool {
-    if matches!(layer.feed_forward, FeedForwardSpec::Dense { .. }) {
+    if layer.feed_forward.routed().is_none() {
         return true;
     }
     let index = layer.index;
@@ -60,16 +57,12 @@ fn layer_resolves(
         },
         // Routed experts without sinks (Qwen3-MoE, Mixtral, Llama 4,
         // GLM-4-MoE): `DenseSwiGluModel`.
-        MetalDecoderRuntime::Dense => {
-            bindings
-                .dense_decoder_layer(index)
-                .ok()
-                .and_then(|layer| match layer.feed_forward {
-                    DenseLayerFeedForwardBindings::Gated(_) => None,
-                    DenseLayerFeedForwardBindings::Routed(routed) => Some(routed.experts),
-                    DenseLayerFeedForwardBindings::SharedRouted(shared) => Some(shared.routed),
-                })
-        },
+        MetalDecoderRuntime::Dense => dense_feed_forward(bindings, layer.norm_placement, index)
+            .and_then(|feed_forward| match feed_forward {
+                DenseLayerFeedForwardBindings::Gated(_) => None,
+                DenseLayerFeedForwardBindings::Routed(routed) => Some(routed.experts),
+                DenseLayerFeedForwardBindings::SharedRouted(shared) => Some(shared.routed),
+            }),
         // `HybridLinearMoeModel`, by layer: linear or softmax attention with
         // shared experts, or latent attention.
         MetalDecoderRuntime::SharedRouted | MetalDecoderRuntime::DenseMixed => bindings
@@ -90,6 +83,20 @@ fn layer_resolves(
             .map(|routed| routed.routed),
     };
     experts.is_some_and(|experts| loads(runtime, experts))
+}
+
+fn dense_feed_forward(
+    bindings: &WeightBindingPlan,
+    placement: NormPlacement,
+    index: usize,
+) -> Option<DenseLayerFeedForwardBindings<'_>> {
+    match placement {
+        NormPlacement::Pre => bindings.dense_decoder_layer(index).ok().map(|l| l.feed_forward),
+        NormPlacement::Post => bindings.post_norm_decoder_layer(index).ok().map(|l| l.feed_forward),
+        NormPlacement::Parallel => {
+            bindings.parallel_decoder_layer(index).ok().map(|l| l.feed_forward)
+        },
+    }
 }
 
 const fn mixed(feed_forward: MixedFeedForwardBindings<'_>) -> Option<RoutedExpertBindings<'_>> {
