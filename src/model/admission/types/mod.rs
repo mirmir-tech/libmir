@@ -97,6 +97,30 @@ pub enum WeightEncoding {
     },
 }
 
+impl WeightEncoding {
+    /// The encoding of one binding's storage; none for auxiliary tensors.
+    pub(crate) fn of(storage: &TensorStorage) -> Option<Self> {
+        Some(match storage {
+            TensorStorage::Dense { dtype, .. } => Self::Dense { dtype: dtype.clone() },
+            TensorStorage::AffineQuantized { format, .. } => Self::Affine { format: *format },
+            TensorStorage::PackedInteger { format, .. } => Self::PackedInteger { format: *format },
+            TensorStorage::Awq { format, .. } => Self::Awq { format: *format },
+            TensorStorage::Gptq { format, .. } => Self::Gptq { format: *format },
+            TensorStorage::BitsAndBytes4Bit { format, .. } => {
+                Self::BitsAndBytes4Bit { format: *format }
+            },
+            TensorStorage::Float8 { format, .. } => Self::Float8 { format: *format },
+            TensorStorage::BlockQuantized { format, .. } => match format.format {
+                BlockFormat::MxFp4 => Self::MxFp4 { format: *format },
+                BlockFormat::MxFp8 => Self::MxFp8 { format: *format },
+                BlockFormat::NvFp4 => Self::NvFp4 { format: *format },
+            },
+            TensorStorage::Ggml { format, .. } => Self::Ggml { format: *format },
+            TensorStorage::Auxiliary { .. } => return None,
+        })
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 /// Deduplicated physical encodings required by a checkpoint contract.
 pub struct CheckpointEncoding {
@@ -125,38 +149,7 @@ impl CheckpointEncoding {
     }
 
     fn from_storage<'a>(storage: impl Iterator<Item = &'a TensorStorage>) -> Self {
-        let mut weights = storage
-            .filter_map(|storage| match storage {
-                TensorStorage::Dense { dtype, .. } => {
-                    Some(WeightEncoding::Dense { dtype: dtype.clone() })
-                },
-                TensorStorage::AffineQuantized { format, .. } => {
-                    Some(WeightEncoding::Affine { format: *format })
-                },
-                TensorStorage::PackedInteger { format, .. } => {
-                    Some(WeightEncoding::PackedInteger { format: *format })
-                },
-                TensorStorage::Awq { format, .. } => Some(WeightEncoding::Awq { format: *format }),
-                TensorStorage::Gptq { format, .. } => {
-                    Some(WeightEncoding::Gptq { format: *format })
-                },
-                TensorStorage::BitsAndBytes4Bit { format, .. } => {
-                    Some(WeightEncoding::BitsAndBytes4Bit { format: *format })
-                },
-                TensorStorage::Float8 { format, .. } => {
-                    Some(WeightEncoding::Float8 { format: *format })
-                },
-                TensorStorage::BlockQuantized { format, .. } => Some(match format.format {
-                    BlockFormat::MxFp4 => WeightEncoding::MxFp4 { format: *format },
-                    BlockFormat::MxFp8 => WeightEncoding::MxFp8 { format: *format },
-                    BlockFormat::NvFp4 => WeightEncoding::NvFp4 { format: *format },
-                }),
-                TensorStorage::Ggml { format, .. } => {
-                    Some(WeightEncoding::Ggml { format: *format })
-                },
-                TensorStorage::Auxiliary { .. } => None,
-            })
-            .collect::<Vec<_>>();
+        let mut weights = storage.filter_map(WeightEncoding::of).collect::<Vec<_>>();
         weights.sort();
         weights.dedup();
         Self { weights }

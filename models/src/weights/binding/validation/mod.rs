@@ -13,6 +13,7 @@ mod affine;
 mod awq;
 mod bitsandbytes;
 mod convolution;
+mod dense;
 mod float8;
 mod gptq;
 mod packed_integer;
@@ -34,7 +35,7 @@ pub(super) fn validate(plan: &WeightBindingPlan, catalog: &TensorCatalog) -> Res
                     && logical.len() > 1
                 {
                     companion(catalog, bias, &logical[..logical.len() - 1])?;
-                    companion_dtype(catalog, bias, dtype)?;
+                    dense::bias_dtype(catalog, bias, dtype)?;
                 }
             },
             TensorStorage::AffineQuantized { format, scales, biases, output_bias, .. } => {

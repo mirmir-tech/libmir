@@ -1,3 +1,4 @@
+mod bias;
 mod latent;
 mod metal;
 use std::collections::BTreeSet;
@@ -100,6 +101,15 @@ fn cuda(
     dtypes: &BTreeSet<&str>,
     actual: &str,
 ) -> (AdmissionStatus, String) {
+    if let Some(binding) = bias::unapplied(execution, task) {
+        return (
+            AdmissionStatus::Unsupported,
+            format!(
+                "CUDA adds projection biases only to GGML dense layers; {} has one",
+                binding.source
+            ),
+        );
+    }
     if execution.is_some_and(|contract| {
         has_dense_routed_experts(contract)
             && !supports_dense_selected_experts(contract)

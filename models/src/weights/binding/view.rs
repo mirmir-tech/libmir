@@ -110,6 +110,12 @@ impl WeightBindingPlan {
         })
     }
 
+    /// The routed expert banks of decoder layer `index`, without the rest of
+    /// the layer.
+    pub fn routed_experts(&self, index: usize) -> Result<RoutedExpertBindings<'_>> {
+        experts(self, index)
+    }
+
     pub fn routed_decoder_layer(&self, index: usize) -> Result<RoutedDecoderLayerBindings<'_>> {
         Ok(RoutedDecoderLayerBindings {
             input_norm: layer(self, index, LayerTensorRole::InputNorm)?,

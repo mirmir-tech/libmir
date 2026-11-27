@@ -7,8 +7,9 @@ use serde_json::json;
 use super::*;
 use crate::{AdmissionCheckKind, AdmissionStatus, EncodingKind};
 
+mod biased_dense;
 mod causal_scoring;
-mod clamped_routed_dense;
+mod clamped_routed;
 mod dense_runtimes;
 mod routed_dense;
 mod shared_routed_dense;

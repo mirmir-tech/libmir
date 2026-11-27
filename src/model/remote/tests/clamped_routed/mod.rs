@@ -1,9 +1,10 @@
 use super::*;
 use crate::EncodingKind;
 
-#[test]
-fn admits_dense_clamped_routed_generation_on_metal_and_cuda() -> Result<()> {
-    let config = json!({
+mod gguf;
+
+fn config() -> serde_json::Value {
+    json!({
         "hidden_size": 32,
         "intermediate_size": 32,
         "num_hidden_layers": 1,
@@ -26,8 +27,13 @@ fn admits_dense_clamped_routed_generation_on_metal_and_cuda() -> Result<()> {
             "original_max_position_embeddings": 32
         },
         "tie_word_embeddings": false
-    });
-    let contract = RemoteModelContract::inspect_generation(&config, &catalog())?;
+    })
+}
+
+#[test]
+fn admits_dense_clamped_routed_generation_on_metal_and_cuda() -> Result<()> {
+    let catalog = catalog("F32", "F32", "remote.safetensors");
+    let contract = RemoteModelContract::inspect_generation(&config(), &catalog)?;
     let metal = contract.admission(BackendTarget::Metal);
     let cuda = contract.admission(BackendTarget::Cuda);
 
@@ -41,7 +47,38 @@ fn admits_dense_clamped_routed_generation_on_metal_and_cuda() -> Result<()> {
     Ok(())
 }
 
-fn catalog() -> TensorCatalog {
+/// GPT-OSS from an F16 or BF16 GGUF: half-precision projections beside the
+/// F32 biases GGUF keeps, which its loaders convert with the weights.
+#[test]
+fn admits_half_precision_gguf_projections_beside_f32_biases() -> Result<()> {
+    for dtype in ["F16", "BF16"] {
+        let catalog = catalog(dtype, "F32", "gpt-oss-20b.gguf");
+        let contract = RemoteModelContract::inspect_generation(&config(), &catalog)?;
+        for backend in [BackendTarget::Metal, BackendTarget::Cuda] {
+            let report = contract.admission(backend);
+            assert_eq!(report.status, AdmissionStatus::Supported, "{dtype} {report:?}");
+        }
+    }
+    Ok(())
+}
+
+/// `SafeTensors` biases load as stored, so an F32 bias beside F16 weights
+/// would widen the projection's output: the contract refuses it.
+#[test]
+fn refuses_f32_safetensors_biases_beside_half_precision_projections() {
+    let catalog = catalog("F16", "F32", "model.safetensors");
+    let error = RemoteModelContract::inspect_generation(&config(), &catalog).err();
+    assert!(
+        error
+            .as_ref()
+            .is_some_and(|error| error.to_string().contains("expected dtype F16, found F32")),
+        "{error:?}"
+    );
+}
+
+/// The tensors of a one-layer dense GPT-OSS: `projection` weights, `bias`
+/// biases, F32 norms and sinks, all in `file`.
+fn catalog(projection: &str, bias: &str, file: &str) -> TensorCatalog {
     let layer = "model.layers.0";
     let specs = [
         ("model.embed_tokens.weight".into(), vec![64, 32]),
@@ -66,7 +103,19 @@ fn catalog() -> TensorCatalog {
     TensorCatalog::new(
         specs
             .into_iter()
-            .map(|(name, shape)| tensor_with_dtype(&name, shape, "F32"))
+            .map(|(name, shape)| {
+                // Norms and sinks are vectors, like the biases.
+                let dtype = if name.ends_with("_proj.bias") {
+                    bias
+                } else if shape.len() == 1 {
+                    "F32"
+                } else {
+                    projection
+                };
+                let mut tensor = tensor_with_dtype(&name, shape, dtype);
+                tensor.file = file.into();
+                tensor
+            })
             .collect(),
     )
 }
