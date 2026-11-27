@@ -189,10 +189,22 @@ fn read_indexed_names(path: &Path) -> Result<BTreeSet<String>> {
 
 fn read_safetensor_names(root: &Path, listing: &Listing) -> Result<BTreeSet<String>> {
     let mut names = BTreeSet::new();
-    // A GGUF import directory links its shards, only those of its import,
-    // beside the few tensors a vision import assembles as `SafeTensors`.
-    let files = WeightContainer::SafeTensors.discover(root)?;
-    for path in files.into_iter().chain(crate::gguf::files_in(root)?) {
+    // A GGUF import directory links its shards beside any assembled vision
+    // `SafeTensors` file, and its manifest names both. An ordinary checkpoint
+    // directory keeps one format: if non-projector `SafeTensors` weights exist
+    // at its root, never merge `.gguf` files beside them.
+    let safetensors = WeightContainer::SafeTensors.discover(root)?;
+    let has_base_safetensors = safetensors.iter().any(|path| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| !crate::gguf::is_projector_name(name))
+    });
+    let gguf = if listing.is_import() || !has_base_safetensors {
+        crate::gguf::files_in(root)?
+    } else {
+        Vec::new()
+    };
+    for path in safetensors.into_iter().chain(gguf) {
         if let Some(name) = path.file_name().and_then(|name| name.to_str())
             && listing.reads(name)
         {
@@ -203,22 +215,4 @@ fn read_safetensor_names(root: &Path, listing: &Listing) -> Result<BTreeSet<Stri
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn discovers_mistral_params_as_supplemental_configuration() -> Result<()> {
-        let root =
-            std::env::temp_dir().join(format!("libmir-model-layout-params-{}", std::process::id()));
-        fs::create_dir(&root)?;
-        fs::write(root.join("config.json"), "{}")?;
-        fs::write(root.join("params.json"), "{}")?;
-        fs::write(root.join("model.safetensors"), [])?;
-
-        let layout = ModelLayout::inspect(&root)?;
-        fs::remove_dir_all(&root)?;
-
-        assert_eq!(layout.configuration_path, Some(root.join("params.json")));
-        Ok(())
-    }
-}
+mod tests;

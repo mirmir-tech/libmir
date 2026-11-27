@@ -65,16 +65,24 @@ impl WeightContainer {
         })
     }
 
-    /// The model container of a directory libmir could not inspect: GGUF
-    /// when it holds GGUF files, whose import may add a vision `SafeTensors`
-    /// file beside them.
+    /// The model container of a directory libmir could not inspect:
+    /// `SafeTensors` when a non-import directory holds base (non-projector)
+    /// `SafeTensors` weights, else GGUF when it holds GGUF files (whose
+    /// import may add a vision `SafeTensors` file beside them).
     pub fn detect(root: &Path) -> Result<Option<Self>> {
-        for container in [Self::Gguf, Self::SafeTensors] {
-            if !container.discover(root)?.is_empty() {
-                return Ok(Some(container));
-            }
+        let safetensors = Self::SafeTensors.discover(root)?;
+        let has_base_safetensors = safetensors.iter().any(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| !crate::gguf::is_projector_name(name))
+        });
+        if has_base_safetensors && !crate::gguf::Listing::of(root)?.is_import() {
+            return Ok(Some(Self::SafeTensors));
         }
-        Ok(None)
+        if !Self::Gguf.discover(root)?.is_empty() {
+            return Ok(Some(Self::Gguf));
+        }
+        Ok((!safetensors.is_empty()).then_some(Self::SafeTensors))
     }
 
     /// The tensors of `files`, each of this container. A split GGUF model

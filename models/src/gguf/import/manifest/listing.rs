@@ -52,6 +52,12 @@ impl Listing {
         Ok(Self { imported })
     }
 
+    /// Whether the directory holds a GGUF import described by its manifest.
+    #[must_use]
+    pub const fn is_import(&self) -> bool {
+        self.imported.is_some()
+    }
+
     /// Whether a loader reads the file `name`: any where no import is, else
     /// one the import holds or of a name that does not tell the model: no
     /// derived file, weight file or `SafeTensors` index.

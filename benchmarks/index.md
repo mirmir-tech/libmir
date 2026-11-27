@@ -1,7 +1,7 @@
 # Benchmarks
 
 These reports track our work to match and outperform established inference
-engines: vLLM on CUDA, and MLX-LM and llama.cpp on Apple Silicon.
+engines: vLLM and llama.cpp on CUDA, and MLX-LM and llama.cpp on Apple Silicon.
 
 ## Methodology
 
@@ -104,14 +104,13 @@ cell.
 
 | Model | Device | PP tok/s ↑<br>mirmir / MLX-LM | TG tok/s ↑<br>mirmir / MLX-LM |
 |:---|:---|---:|---:|
-| [Qwen3.6-35B-A3B MXFP4](qwen3.6-35b-a3b-nvfp4.md) | Apple M3 Max<br>40-core GPU · 64 GiB | 1,085.09 / 1,069.22<br>101.5% · 2/4 wins | 109.19 / 100.21<br>109.0% · 4/4 wins |
+| Qwen3.6-35B-A3B MXFP4 | Apple M3 Max<br>40-core GPU · 64 GiB | 1,085.09 / 1,069.22<br>101.5% · 2/4 wins | 109.19 / 100.21<br>109.0% · 4/4 wins |
 
 ## Partial Metal reference diagnostics (M3 Max, earlier releases)
 
 These rows are excluded from the canonical table because the reference process
-did not finish. They retain only common positive cells and document the exact
-coverage and failure on the linked model page.
+did not finish; they retain only common positive cells.
 
 | Model | Device | PP tok/s ↑<br>mirmir / MLX-LM | TG tok/s ↑<br>mirmir / MLX-LM | TTFT ms ↓<br>mirmir / MLX-LM |
 |:---|:---|---:|---:|---:|
-| [Gemma 4 26B-A4B IT 8-bit](gemma4-26b-a4b-it-8bit.md) | Apple M3 Max<br>40-core GPU · 64 GiB | 569.0 / 362.2<br>157.1% · 25/26 wins | 40.04 / 35.14<br>113.9% · 21/26 wins | 18,017 / 28,815<br>0.625× · 25/26 wins |
+| Gemma 4 26B-A4B IT 8-bit | Apple M3 Max<br>40-core GPU · 64 GiB | 569.0 / 362.2<br>157.1% · 25/26 wins | 40.04 / 35.14<br>113.9% · 21/26 wins | 18,017 / 28,815<br>0.625× · 25/26 wins |
