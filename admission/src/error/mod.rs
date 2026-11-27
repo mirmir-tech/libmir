@@ -39,6 +39,8 @@ pub enum Unlowerable {
     /// Latent keys not rotated, or rotated other than plainly, linearly, by
     /// `YaRN` or `LongRoPE`.
     LatentRotary,
+    /// Latent attention with no rotary key part to rotate.
+    LatentUnrotated,
     /// A latent query temperature counting positions from other than zero.
     LatentQueryTemperatureOffset { offset: usize },
     /// Latent routed experts without a projected latent space.
@@ -132,6 +134,9 @@ impl fmt::Display for Unlowerable {
             ),
             Self::LatentRotary => formatter
                 .write_str("latent keys must rotate plainly, linearly, by YaRN or by LongRoPE"),
+            Self::LatentUnrotated => {
+                formatter.write_str("latent attention needs a rotary key part")
+            },
             Self::LatentQueryTemperatureOffset { offset } => {
                 write!(formatter, "latent queries temper positions from zero, not from {offset}")
             },

@@ -2,7 +2,8 @@
 //! compute.
 
 use models::semantic::{
-    DecoderLayerSpec, NormPlacement, NormalizationKind, NormalizationSpec, SemanticModelSpec,
+    DecoderLayerSpec, MixerSpec, NormPlacement, NormalizationKind, NormalizationSpec,
+    PositionEncodingSpec, SemanticModelSpec,
 };
 
 use crate::{
@@ -33,6 +34,16 @@ pub struct LayerLowering {
 }
 
 pub fn lower_layer(layer: &DecoderLayerSpec) -> Result<LayerLowering> {
+    // Metal's latent attention rotates the key part by any rotary scaling
+    // (its loader reads the inverse frequencies), but there must be one.
+    if let MixerSpec::LatentAttention(latent) = &layer.mixer
+        && latent.position == PositionEncodingSpec::None
+    {
+        return Err(ArchitectureError::Unlowerable {
+            layer: Some(layer.index),
+            feature: Unlowerable::LatentUnrotated,
+        });
+    }
     Ok(LayerLowering {
         index: layer.index,
         input_norm: lower_normalization(Some(layer.index), layer.input_norm)?,

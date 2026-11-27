@@ -14,6 +14,7 @@ use super::fixtures::AnyResult;
 use crate::{
     ArchitectureError, Unlowerable, cuda,
     lowering::{LatentGeometry, MixerLowering},
+    metal,
 };
 
 /// A miniature DeepSeek-V2-Lite decoder: latent attention, one dense layer,
@@ -120,7 +121,7 @@ fn takes_latent_temperature_only_from_position_zero() -> AnyResult<()> {
 }
 
 /// The latent kernels rotate a key part; latent attention without positions
-/// is refused at admission rather than by the loader.
+/// is refused at admission rather than by the loader, on CUDA and on Metal.
 #[test]
 fn refuses_latent_attention_without_rotary_keys() -> AnyResult<()> {
     let (task, mut semantic) = latent_contract("softmax")?;
@@ -134,6 +135,13 @@ fn refuses_latent_attention_without_rotary_keys() -> AnyResult<()> {
         Some(ArchitectureError::Unlowerable {
             layer: Some(0),
             feature: Unlowerable::LatentRotary
+        })
+    );
+    assert_eq!(
+        metal::admit(&task, Some(&semantic)).err(),
+        Some(ArchitectureError::Unlowerable {
+            layer: Some(0),
+            feature: Unlowerable::LatentUnrotated
         })
     );
     Ok(())
