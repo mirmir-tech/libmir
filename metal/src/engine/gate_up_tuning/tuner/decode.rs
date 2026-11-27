@@ -25,6 +25,7 @@ impl MetalTuner {
         elapsed: std::time::Duration,
     ) {
         self.budgets.decode_plan.consume(elapsed);
+        self.measured.decode_plans.insert(key.clone(), plan);
         self.decode_plans.insert(key, plan);
     }
 

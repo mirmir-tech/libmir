@@ -1,5 +1,7 @@
 use std::{collections::HashMap, fs, path::Path};
 
+mod merge;
+pub(super) use merge::persist_merged;
 use serde::{Deserialize, Serialize};
 
 use super::{GateUpExecution, GateUpKey};
