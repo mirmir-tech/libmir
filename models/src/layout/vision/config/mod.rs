@@ -1,5 +1,3 @@
-use std::fs;
-
 use serde_json::Value;
 
 mod pixel_shuffle;
@@ -36,9 +34,7 @@ pub enum VisionConfig {
 
 impl VisionConfig {
     pub fn from_layout(layout: &ModelLayout) -> Result<Option<Self>> {
-        let json = fs::read_to_string(&layout.config_path)?;
-        let value: Value = serde_json::from_str(&json)?;
-        Self::from_value(&value)
+        Self::from_value(&crate::layout::json::read(&layout.config_path)?)
     }
 
     pub fn from_value(root: &Value) -> Result<Option<Self>> {

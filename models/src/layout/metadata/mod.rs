@@ -30,8 +30,7 @@ impl ModelMetadata {
     }
 
     pub fn from_config_path(path: impl AsRef<Path>) -> Result<Self> {
-        let json = fs::read_to_string(path)?;
-        let value: Value = serde_json::from_str(&json)?;
+        let value = crate::layout::json::read(path)?;
         let architectures = read_architectures(&value);
         let model_type = value.get("model_type").and_then(Value::as_str).map(str::to_owned);
         let dtype = read_dtype(&value);

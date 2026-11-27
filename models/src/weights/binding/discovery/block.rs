@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, fs};
+use std::collections::BTreeSet;
 
 use serde_json::Value;
 
@@ -10,7 +10,7 @@ use crate::{
 };
 
 pub(super) fn hint(layout: &ModelLayout) -> Result<Option<BlockQuantization>> {
-    let root: Value = serde_json::from_str(&fs::read_to_string(&layout.config_path)?)?;
+    let root = crate::layout::json::read(&layout.config_path)?;
     hint_from(&root)
 }
 

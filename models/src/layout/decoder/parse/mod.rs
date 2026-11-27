@@ -1,4 +1,4 @@
-use std::{fs, path::Path};
+use std::path::Path;
 
 use serde_json::Value;
 
@@ -34,8 +34,7 @@ impl DecoderConfig {
     pub fn from_layout(layout: &ModelLayout) -> Result<Self> {
         let mut config = Self::from_config_path(&layout.config_path)?;
         if let Some(path) = layout.configuration_path.as_deref() {
-            let json = fs::read_to_string(path)?;
-            let value: Value = serde_json::from_str(&json)?;
+            let value = crate::layout::json::read(path)?;
             if let Some(context) = optional_usize(
                 &value,
                 &["max_position_embeddings", "max_sequence_length", "seq_length"],
@@ -47,9 +46,7 @@ impl DecoderConfig {
     }
 
     pub fn from_config_path(path: impl AsRef<Path>) -> Result<Self> {
-        let json = fs::read_to_string(path)?;
-        let value: Value = serde_json::from_str(&json)?;
-        Self::from_value(&value)
+        Self::from_value(&crate::layout::json::read(path)?)
     }
 
     pub fn from_value(value: &Value) -> Result<Self> {

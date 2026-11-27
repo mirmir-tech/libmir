@@ -1,5 +1,4 @@
 use std::{
-    fs,
     fs::File,
     io::{Read, Seek, SeekFrom},
 };
@@ -37,7 +36,7 @@ struct PackedState {
 }
 
 pub(super) fn hint(layout: &ModelLayout) -> Result<Option<Hint>> {
-    let value: Value = serde_json::from_str(&fs::read_to_string(&layout.config_path)?)?;
+    let value = crate::layout::json::read(&layout.config_path)?;
     let Some(config) = value.get("quantization_config") else {
         return Ok(None);
     };

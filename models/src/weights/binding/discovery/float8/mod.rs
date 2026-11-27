@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, fs};
+use std::collections::BTreeSet;
 
 use serde_json::Value;
 
@@ -17,8 +17,7 @@ pub(super) struct Float8Hint {
 }
 
 pub(super) fn hint(layout: &crate::layout::ModelLayout) -> Result<Option<Float8Hint>> {
-    let source = fs::read_to_string(&layout.config_path)?;
-    let root: Value = serde_json::from_str(&source)?;
+    let root = crate::layout::json::read(&layout.config_path)?;
     let Some(config) = ["quantization_config", "quantization"]
         .into_iter()
         .find_map(|key| root.get(key))

@@ -52,7 +52,7 @@ pub use models::{
     },
     generation::{GenerationChannel, GenerationOverrides, GenerationSettings, GenerationToken},
     gguf,
-    layout::WeightContainer,
+    layout::{WeightContainer, json as config_json},
     tokenizer::{TokenizerAssets, TokenizerKind},
     weights::{TensorCatalog, TensorInfo, safetensors_header_len},
 };

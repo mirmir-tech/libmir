@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, fs};
+use std::collections::BTreeSet;
 
 use serde_json::Value;
 
@@ -22,8 +22,7 @@ pub(super) struct GptqHint {
 }
 
 pub(super) fn hint(layout: &ModelLayout) -> Result<Option<GptqHint>> {
-    let source = fs::read_to_string(&layout.config_path)?;
-    let root: Value = serde_json::from_str(&source)?;
+    let root = crate::layout::json::read(&layout.config_path)?;
     let Some(config) = ["quantization_config", "quantization"]
         .into_iter()
         .find_map(|key| root.get(key))

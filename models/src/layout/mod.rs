@@ -2,6 +2,7 @@ mod container;
 mod decoder;
 mod encoder;
 mod files;
+pub mod json;
 mod metadata;
 mod modernbert;
 mod vision;

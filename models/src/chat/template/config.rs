@@ -88,7 +88,7 @@ impl ModelTemplateConfig {
 }
 
 fn read_model_type(path: &std::path::Path) -> Result<Option<String>> {
-    let value: Value = serde_json::from_str(&fs::read_to_string(path)?)?;
+    let value = crate::layout::json::read(path)?;
     Ok(value.get("model_type").and_then(Value::as_str).map(str::to_owned))
 }
 
