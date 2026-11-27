@@ -45,3 +45,20 @@ fn refuses_expert_banks_without_the_bias_the_loaders_add() -> crate::Result<()> 
     }
     Ok(())
 }
+
+/// GPT-OSS `SafeTensors` with MXFP4 gate and up banks and a BF16 down bank:
+/// Metal's loader binds each projection on its own and loads the mix, so
+/// only CUDA refuses it; a GGML mix stays refused on both.
+#[test]
+fn metal_admits_dense_and_block_banks_mixed_within_a_layer() -> crate::Result<()> {
+    let mxfp4 = block(BlockQuantization::MXFP4, TensorPacking::Separate);
+    let mixed = separate(&mxfp4, &mxfp4, &dense("BF16"));
+    let metal = refused(&[mixed.clone(), mixed.clone()], &BackendTarget::Metal)?;
+    assert!(metal.is_none(), "{metal:?}");
+    let cuda = refused(&[mixed.clone(), mixed], &BackendTarget::Cuda)?;
+    assert!(cuda.is_some_and(|(_, detail)| detail.contains("mixes")), "CUDA reads no mix");
+    let ggml = ggml(GgmlType::MXFP4);
+    let ggml_mix = separate(&ggml, &ggml, &dense("BF16"));
+    assert!(refused(&[ggml_mix], &BackendTarget::Metal)?.is_some());
+    Ok(())
+}

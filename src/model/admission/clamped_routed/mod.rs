@@ -1,7 +1,9 @@
 //! Whether a backend's clamped-routed (GPT-OSS) loader assembles every
 //! layer's routed expert banks: each layer's gate, up and down projections
 //! must share one storage the loader reads, and on CUDA, whose loader picks
-//! one layout from the whole plan, every layer the same layout.
+//! one layout from the whole plan, every layer the same layout. Metal binds
+//! dense and block-quantized banks projection by projection, so it also
+//! reads a layer mixing them.
 
 use foundation::model::BackendTarget;
 use models::{
@@ -17,7 +19,7 @@ mod banks;
 #[cfg(test)]
 mod tests;
 
-use banks::{BankRefusal, ExpertBanks};
+use banks::{BankRefusal, ExpertBanks, metal_composes};
 
 pub(super) fn assess(
     backend: &BackendTarget,
@@ -64,6 +66,7 @@ fn refusal(contract: &DecoderExecutionContract, cuda: bool) -> Option<(EncodingK
         };
         let banks = match ExpertBanks::of(experts) {
             Ok(banks) => banks,
+            Err(BankRefusal::Mixed(_)) if !cuda && metal_composes(experts) => continue,
             Err(refusal) => return Some((refusal.kind(), refused(index, &refusal))),
         };
         if !cuda {

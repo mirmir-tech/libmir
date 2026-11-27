@@ -29,6 +29,26 @@ pub(super) enum ExpertBanks {
     Block(BlockFormat),
 }
 
+/// Whether Metal's loader composes these banks projection by projection:
+/// its separate and fused branches bind each projection on its own, so
+/// any mix of dense and block-quantized banks loads. GGML and affine banks
+/// load only as one uniform layout, and CUDA reads none mixed.
+pub(super) fn metal_composes(experts: RoutedExpertBindings<'_>) -> bool {
+    let projections = match experts {
+        RoutedExpertBindings::InterleavedGateUp { gate_up, down } => vec![gate_up, down],
+        RoutedExpertBindings::SeparateGateUp { gate, up, down } => vec![gate, up, down],
+        RoutedExpertBindings::UngatedStacked { .. } | RoutedExpertBindings::Individual { .. } => {
+            return false;
+        },
+    };
+    projections.iter().all(|binding| {
+        matches!(
+            binding.storage,
+            TensorStorage::Dense { .. } | TensorStorage::BlockQuantized { .. }
+        )
+    })
+}
+
 /// The layout CUDA's clamped-routed loader selects for the whole model.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum CudaExpertLayout {
