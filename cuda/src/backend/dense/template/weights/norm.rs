@@ -9,7 +9,7 @@ use crate::{
 pub(super) fn qk_norms(
     backend: &CudaBackend,
     attention: DecodeAttentionConfig,
-    source: DenseWeightSource<'_>,
+    source: &DenseWeightSource<'_>,
 ) -> Result<[DeviceBuffer<bf16>; 2]> {
     let normalization = attention.qkv_normalization;
     let [query, key] = normalization.weight_lengths(

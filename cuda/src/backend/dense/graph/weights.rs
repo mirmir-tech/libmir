@@ -5,7 +5,7 @@ use crate::{
     MxFp4CheckpointWeight, MxFp8CheckpointWeight, NvFp4LinearWeight, PackedIntegerWeight, Result,
     backend::{
         attention::graph::CapturedAttentionWeights,
-        dense::{RoutedExpertWeights, per_layer::PerLayerInputOwned, sandwich::DenseSandwichOwned},
+        dense::{PerLayerInputWeights, RoutedExpertWeights, sandwich::DenseSandwichOwned},
     },
 };
 
@@ -15,7 +15,7 @@ pub(super) struct CapturedDenseWeights {
     post_attention_norm: Option<CudaTensor>,
     sandwich: Option<DenseSandwichOwned>,
     feed_forward: CapturedFeedForward,
-    per_layer_input: Option<PerLayerInputOwned>,
+    per_layer_input: Option<PerLayerInputWeights>,
 }
 
 #[expect(
@@ -105,7 +105,7 @@ impl CapturedDenseWeights {
                 },
                 CapturedFeedForward::Routed(weights) => DenseFeedForwardWeights::Routed(weights),
             },
-            per_layer_input: self.per_layer_input.as_ref().map(PerLayerInputOwned::borrow),
+            per_layer_input: self.per_layer_input.as_ref(),
         }
     }
 }
@@ -127,7 +127,7 @@ impl TryFrom<DenseSwiGluWeights<'_>> for CapturedDenseWeights {
                     CapturedFeedForward::Routed(Box::new(weights.clone()))
                 },
             },
-            per_layer_input: weights.per_layer_input.map(PerLayerInputOwned::new),
+            per_layer_input: weights.per_layer_input.cloned(),
         })
     }
 }

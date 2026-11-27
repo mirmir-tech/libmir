@@ -3,6 +3,7 @@ use models::weights::{
     CompressedIntegerScaleDType, CompressedIntegerScaleStrategy, TensorBinding, TensorStorage,
 };
 
+use super::integer::{PackedIntegerLayout, require_layout};
 use crate::{
     CudaBackend, CudaTensor, CudaTensorDType, CudaTensorSet, Error, Result,
     kernels::{
@@ -20,6 +21,13 @@ pub struct CompressedInt8Weight {
 }
 
 impl CompressedInt8Weight {
+    pub(in crate::backend) const fn layout(&self) -> PackedIntegerLayout {
+        PackedIntegerLayout::Compressed {
+            bits: self.bits,
+            group_size: self.group_size,
+        }
+    }
+
     pub(crate) fn load_binding(
         tensors: &CudaTensorSet,
         binding: &TensorBinding,
@@ -154,6 +162,7 @@ pub struct CompressedInt8Bf16Linear {
     stream: Stream,
     input: usize,
     output: usize,
+    layout: PackedIntegerLayout,
 }
 
 impl CompressedInt8Bf16Linear {
@@ -173,6 +182,7 @@ impl CompressedInt8Bf16Linear {
             stream: backend.inner.stream.clone(),
             input,
             output,
+            layout: weight.layout(),
         })
     }
 
@@ -182,6 +192,7 @@ impl CompressedInt8Bf16Linear {
         weight: &CompressedInt8Weight,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
+        require_layout(self.layout, weight.layout())?;
         weight.validate(self.input, self.output)?;
         let packed = weight.weight.as_i32().ok_or_else(|| Error::DTypeMismatch {
             name: weight.weight.name().into(),

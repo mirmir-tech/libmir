@@ -145,8 +145,7 @@ impl ClampedRoutedSplitDecode {
                 .map(models::semantic::AttentionWindow::Sliding),
             scale,
         )?;
-        let query_heads = sinks.len();
-        let head_dim = output.len() / query_heads;
+        let (query_heads, head_dim) = merge_heads(self.operation.spec(), sinks)?;
         self.merge.launch(
             stream,
             self.operation.configs(active)?.merge,
@@ -156,12 +155,21 @@ impl ClampedRoutedSplitDecode {
                 &self.workspace.denominators,
                 sinks,
                 output,
-                u32::try_from(query_heads)?,
-                u32::try_from(head_dim)?,
+                query_heads,
+                head_dim,
                 u32::try_from(active)?,
                 u32::try_from(self.operation.max_partitions())?,
             ),
         )?;
         Ok(true)
     }
+}
+
+/// The sink merge's query heads and value width: the plan's, whose output
+/// the partitions checked, with one sink per head.
+fn merge_heads(spec: PagedAttentionSpec, sinks: &DeviceBuffer<bf16>) -> Result<(u32, u32)> {
+    if sinks.len() != spec.query_heads {
+        return Err(Error::InvalidPagedKv("clamped-routed sinks differ from the query heads"));
+    }
+    Ok((u32::try_from(spec.query_heads)?, u32::try_from(spec.value_head_dim)?))
 }

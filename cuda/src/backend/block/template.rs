@@ -8,7 +8,11 @@ use super::{
 };
 use crate::{
     CudaTensorSet, Error, PagedKvCache, Result,
-    backend::{dense::GgmlExpertWeights, linear::DenseExpertWeights},
+    backend::{
+        attention::AttentionLayout,
+        dense::{ExpertBankLayout, GgmlExpertWeights},
+        linear::DenseExpertWeights,
+    },
     kernels::BatchedSplitAttentionWorkspace,
 };
 
@@ -98,6 +102,17 @@ impl DecodeMoeLayerTemplate {
     #[must_use]
     pub(in crate::backend) const fn experts_bind_at_execution(&self) -> bool {
         matches!(self.experts, ExpertWeights::Dense(_) | ExpertWeights::Ggml(_))
+    }
+
+    /// What a prefill plan compiles in from this layer's attention
+    /// projections and expert banks.
+    pub(in crate::backend) fn layouts(&self) -> (AttentionLayout, ExpertBankLayout) {
+        let experts = match &self.experts {
+            ExpertWeights::Dense(banks) => ExpertBankLayout::Dense(banks.layout()),
+            ExpertWeights::Ggml(_) => ExpertBankLayout::Ggml,
+            ExpertWeights::NvFp4 { .. } => ExpertBankLayout::NvFp4,
+        };
+        (AttentionLayout::of(self.weights.borrow().attention), experts)
     }
 
     /// Creates private execution state for one session without copying weights.

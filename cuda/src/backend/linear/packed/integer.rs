@@ -9,6 +9,16 @@ use super::super::{
 };
 use crate::{CudaBackend, CudaTensorSet, Error, Result};
 
+/// What a packed integer plan compiles in beyond its geometry; it executes
+/// only weights of the same layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::backend) enum PackedIntegerLayout {
+    Compressed { bits: usize, group_size: usize },
+    Awq { group_size: usize },
+    Gptq { group_size: usize, legacy: bool },
+    BitsAndBytes4Bit(models::weights::BitsAndBytes4BitQuantization),
+}
+
 #[derive(Clone, Debug)]
 pub enum PackedIntegerWeight {
     Compressed(CompressedInt8Weight),
@@ -18,6 +28,15 @@ pub enum PackedIntegerWeight {
 }
 
 impl PackedIntegerWeight {
+    pub(in crate::backend) const fn layout(&self) -> PackedIntegerLayout {
+        match self {
+            Self::Compressed(weight) => weight.layout(),
+            Self::Awq(weight) => weight.layout(),
+            Self::Gptq(weight) => weight.layout(),
+            Self::BitsAndBytes4Bit(weight) => weight.layout(),
+        }
+    }
+
     pub(crate) fn load_binding(
         tensors: &CudaTensorSet,
         binding: &TensorBinding,
@@ -126,5 +145,20 @@ pub(in crate::backend) fn embedding(
         | PackedIntegerWeight::BitsAndBytes4Bit(_) => Err(Error::InvalidQuantizedGemv(
             "AWQ/GPTQ storage cannot be used as an embedding table",
         )),
+    }
+}
+
+/// Refuses a late-bound weight whose layout differs from the one its plan
+/// was compiled for.
+pub(in crate::backend) fn require_layout(
+    planned: PackedIntegerLayout,
+    weight: PackedIntegerLayout,
+) -> Result<()> {
+    if planned == weight {
+        Ok(())
+    } else {
+        Err(Error::InvalidExecutionPlan(
+            "packed integer plan and late-bound weight layout differ",
+        ))
     }
 }

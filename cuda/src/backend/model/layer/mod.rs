@@ -3,6 +3,8 @@ use std::collections::HashMap;
 mod prefill;
 mod prepared;
 mod shared;
+#[cfg(test)]
+mod tests;
 
 use mircuda::{DeviceBuffer, bf16};
 pub(super) use prepared::{LayerPrefill, PrefillSignature, PreparedLayer, SharedLayerPrefill};

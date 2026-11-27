@@ -7,8 +7,29 @@ use models::weights::{RoutedFeedForwardBindings, SharedRoutedFeedForwardBindings
 use super::super::DenseSwiGluConfig;
 use crate::{
     CudaBackend, CudaTensor, CudaTensorDType, CudaTensorSet, Error, Result,
-    backend::{CheckpointProjectionWeight, DenseExpertWeights},
+    backend::{
+        CheckpointProjectionWeight, DenseExpertWeights,
+        linear::{DenseExpertLayout, ProjectionLayout},
+    },
 };
+
+/// What an expert plan compiles in from a layer's banks beyond their
+/// geometry; GGML plans dispatch on each bank's block type, NVFP4 banks stay
+/// with their layer's plan.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::backend) enum ExpertBankLayout {
+    Dense(DenseExpertLayout),
+    Ggml,
+    NvFp4,
+}
+
+/// What a routed feed-forward plan compiles in from a layer's weights.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::backend) struct RoutedLayout {
+    experts: ExpertBankLayout,
+    /// The shared expert's gate, up and down.
+    shared: Option<[ProjectionLayout; 3]>,
+}
 
 /// A layer's router and expert banks, bound at execution like the gated
 /// MLP's projections so one executor serves every layer.
@@ -36,6 +57,19 @@ pub(in super::super) enum RoutedExperts {
 }
 
 impl RoutedExpertWeights {
+    pub(in crate::backend) fn layout(&self) -> RoutedLayout {
+        RoutedLayout {
+            experts: match &self.experts {
+                RoutedExperts::Dense(banks) => ExpertBankLayout::Dense(banks.layout()),
+                RoutedExperts::Ggml(_) => ExpertBankLayout::Ggml,
+            },
+            shared: self
+                .shared
+                .as_ref()
+                .map(|shared| [shared.gate.layout(), shared.up.layout(), shared.down.layout()]),
+        }
+    }
+
     /// Multiplies the down products of the GGML banks and of a GGML shared
     /// expert by `factor`, through their output scales. Dense down weights
     /// were scaled in place at upload (`residual::fold_dense`), which refuses

@@ -66,7 +66,7 @@ impl CudaMoeModelSession {
                     (&self.prefill_second, &mut self.prefill_first)
                 };
                 let signature = layer.prefill_signature();
-                let plan_index = plans.iter().position(|plan| plan.supports(signature));
+                let plan_index = plans.iter().position(|plan| plan.supports(&signature));
                 let plan_index = if let Some(index) = plan_index {
                     index
                 } else {

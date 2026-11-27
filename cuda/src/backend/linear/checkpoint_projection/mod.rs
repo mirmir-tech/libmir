@@ -1,3 +1,5 @@
+pub(in crate::backend) use layout::ProjectionLayout;
+
 use super::{
     AffineProjection, AffineQuantizedWeight, Bf16Projection, DirectFp8Bf16Linear,
     DirectFp8CheckpointWeight, GgmlBf16Linear, GgmlCheckpointWeight, MxFp4Bf16Linear,
@@ -8,6 +10,7 @@ use super::{
 use crate::{CudaBackend, CudaTensor, DensePlanRequest, DenseRole, ExecutionPhase, Result};
 
 mod execution;
+mod layout;
 mod load;
 mod nvfp4;
 mod pack;

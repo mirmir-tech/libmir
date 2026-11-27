@@ -32,6 +32,7 @@ impl CheckpointProjection {
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
         type Weight = CheckpointProjectionWeight;
+        self.require_layout(weight)?;
         match (self, weight) {
             (Self::Affine { operation, .. }, Weight::Affine(weight)) => {
                 operation.execute(input, weight, output)

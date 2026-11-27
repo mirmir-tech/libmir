@@ -30,4 +30,4 @@ fn u32_tensor(tensor: &CudaTensor) -> Result<&DeviceBuffer<u32>> {
     })
 }
 pub use dense::DenseExpertWeights;
-pub(in crate::backend) use dense::SelectedDenseMoeBf16;
+pub(in crate::backend) use dense::{DenseExpertLayout, SelectedDenseMoeBf16};

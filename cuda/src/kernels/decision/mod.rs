@@ -38,3 +38,12 @@ fn require<T: mircuda::DeviceElement>(
         Err(Error::InvalidDecoderKernel(operand))
     }
 }
+
+/// The number of `width`-wide rows in `elements`, refusing an empty width
+/// or a partial row.
+fn rows_of(elements: usize, width: usize, operand: &'static str) -> Result<usize> {
+    if width == 0 || !elements.is_multiple_of(width) {
+        return Err(Error::InvalidDecoderKernel(operand));
+    }
+    Ok(elements / width)
+}

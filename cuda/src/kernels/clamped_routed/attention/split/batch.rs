@@ -133,12 +133,11 @@ impl ClampedRoutedBatchSplitDecode {
             self.threshold,
             batch.max_context_tokens(),
         )?;
-        let query_heads = sinks.len();
-        let head_dim = output.len() / (batch.active() * query_heads);
+        let (query_heads, head_dim) = super::merge_heads(self.operation.spec(), sinks)?;
         self.merge.launch(
             stream,
             LaunchConfig {
-                grid: (u32::try_from(query_heads)?, u32::try_from(batch.active())?, 1),
+                grid: (query_heads, u32::try_from(batch.active())?, 1),
                 block: (128, 1, 1),
                 shared_memory_bytes: 0,
             },
@@ -150,8 +149,8 @@ impl ClampedRoutedBatchSplitDecode {
                 sinks,
                 output,
                 u32::try_from(batch.active())?,
-                u32::try_from(query_heads)?,
-                u32::try_from(head_dim)?,
+                query_heads,
+                head_dim,
                 0,
                 u32::try_from(self.operation.partition_tokens())?,
                 u32::try_from(self.operation.max_partitions())?,

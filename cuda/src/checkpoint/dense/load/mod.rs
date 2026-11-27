@@ -23,6 +23,7 @@ mod norm_bias;
 
 pub(in crate::checkpoint) use norm_bias::append_bias as append_norm_bias;
 mod nvfp4;
+mod per_layer;
 mod residual;
 mod rope_rows;
 mod routed;
@@ -208,13 +209,7 @@ pub(super) fn common_source<'a>(
         feed_forward,
         per_layer_input: bindings
             .per_layer_input
-            .map(|input| {
-                Ok::<_, Error>(crate::PerLayerInputWeights {
-                    gate: tensor(tensors, &input.gate.source)?,
-                    projection: tensor(tensors, &input.projection.source)?,
-                    output_norm: tensor(tensors, &input.output_norm.source)?,
-                })
-            })
+            .map(|input| per_layer::load(tensors, input))
             .transpose()?,
     })
 }

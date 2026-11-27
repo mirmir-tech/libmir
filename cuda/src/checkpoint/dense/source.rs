@@ -101,11 +101,13 @@ fn layer_bindings(bindings: DenseLayerBindings<'_>) -> Vec<&TensorBinding> {
 }
 
 fn packed_shape_sources(bindings: DenseLayerBindings<'_>) -> HashSet<&str> {
+    let per_layer = bindings.per_layer_input.into_iter();
     bindings
         .attention
         .projections()
         .into_iter()
         .chain(gated(bindings))
+        .chain(per_layer.flat_map(|input| [input.gate, input.projection]))
         .filter_map(|binding| match &binding.storage {
             TensorStorage::PackedInteger { shape, .. } => Some(shape.as_str()),
             TensorStorage::BitsAndBytes4Bit { quant_state, .. } => Some(quant_state.as_str()),

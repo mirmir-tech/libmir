@@ -2,8 +2,7 @@ use mircuda::{DeviceBuffer, bf16};
 
 use super::super::{
     DenseFeedForwardWeights, DenseSandwichWeights, DenseSwiGluConfig, DenseSwiGluWeights,
-    PerLayerInputWeights, RoutedExpertWeights, per_layer::PerLayerInputOwned,
-    sandwich::DenseSandwichOwned,
+    PerLayerInputWeights, RoutedExpertWeights, sandwich::DenseSandwichOwned,
 };
 use crate::{
     AffineQuantizedWeight, Bf16LinearPackWeights, Bf16LinearPairWeights, CudaBackend, CudaTensor,
@@ -95,7 +94,7 @@ pub enum DenseDownSource<'a> {
     NvFp4(&'a NvFp4LinearWeight),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct DenseWeightSource<'a> {
     /// `None` in post-norm layers, as in [`DecodeAttentionWeights`].
     pub input_norm: Option<&'a CudaTensor>,
@@ -106,7 +105,8 @@ pub struct DenseWeightSource<'a> {
     pub post_attention_norm: Option<&'a CudaTensor>,
     pub sandwich: Option<DenseSandwichWeights<'a>>,
     pub feed_forward: DenseFeedForwardSource<'a>,
-    pub per_layer_input: Option<PerLayerInputWeights<'a>>,
+    /// Required exactly when the config declares per-layer inputs.
+    pub per_layer_input: Option<PerLayerInputWeights>,
 }
 
 #[derive(Clone, Copy)]
@@ -128,7 +128,7 @@ pub(super) struct DenseWeights {
     post_attention_norm: Option<CudaTensor>,
     sandwich: Option<DenseSandwichOwned>,
     feed_forward: FeedForwardOwned,
-    per_layer_input: Option<PerLayerInputOwned>,
+    per_layer_input: Option<PerLayerInputWeights>,
 }
 
 #[expect(
@@ -150,7 +150,19 @@ impl DenseWeights {
         config: DenseSwiGluConfig,
         source: DenseWeightSource<'_>,
     ) -> Result<Self> {
-        let [query_norm, key_norm] = qk_norms(backend, config.attention, source)?;
+        let [query_norm, key_norm] = qk_norms(backend, config.attention, &source)?;
+        let per_layer_input = match (config.per_layer_input, source.per_layer_input) {
+            (Some(width), Some(weights)) => {
+                weights.validate(config.attention.hidden_size, width.get().into())?;
+                Some(weights)
+            },
+            (None, None) => None,
+            _ => {
+                return Err(crate::Error::InvalidDecoderKernel(
+                    "dense layer config and weights disagree on per-layer inputs",
+                ));
+            },
+        };
         Ok(Self {
             input_norm: source.input_norm.cloned(),
             qkv: source.qkv.into(),
@@ -168,7 +180,7 @@ impl DenseWeights {
                     FeedForwardOwned::Routed(Box::new(weights.clone()))
                 },
             },
-            per_layer_input: source.per_layer_input.map(PerLayerInputOwned::new),
+            per_layer_input,
         })
     }
 
@@ -190,7 +202,7 @@ impl DenseWeights {
                 },
                 FeedForwardOwned::Routed(weights) => DenseFeedForwardWeights::Routed(weights),
             },
-            per_layer_input: self.per_layer_input.as_ref().map(PerLayerInputOwned::borrow),
+            per_layer_input: self.per_layer_input.as_ref(),
         }
     }
 }

@@ -90,7 +90,7 @@ pub struct DenseSwiGluWeights<'a> {
     pub post_attention_norm: Option<&'a CudaTensor>,
     pub sandwich: Option<DenseSandwichWeights<'a>>,
     pub feed_forward: DenseFeedForwardWeights<'a>,
-    pub per_layer_input: Option<super::PerLayerInputWeights<'a>>,
+    pub per_layer_input: Option<&'a super::PerLayerInputWeights>,
 }
 
 #[derive(Clone, Copy)]

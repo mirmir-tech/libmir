@@ -40,6 +40,19 @@ pub struct DirectFp8CheckpointWeight {
     activation: DirectFp8Activation,
 }
 
+/// What a direct FP8 plan compiles in beyond its geometry; it executes only
+/// weights of the same layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::backend) struct DirectFp8Layout {
+    format: DirectFp8Format,
+    scale: DirectFp8Scale,
+    inverse_scale: bool,
+    activation: DirectFp8Activation,
+    scale_dtype: Option<CudaTensorDType>,
+    input_scale: bool,
+    bias: bool,
+}
+
 #[derive(Clone, Debug)]
 /// Prepared BF16-input projection retaining direct checkpoint tensors.
 pub struct DirectFp8Bf16Linear {
@@ -52,6 +65,18 @@ pub struct DirectFp8Bf16Linear {
 }
 
 impl DirectFp8CheckpointWeight {
+    pub(in crate::backend) fn layout(&self) -> DirectFp8Layout {
+        DirectFp8Layout {
+            format: self.format,
+            scale: self.scale,
+            inverse_scale: self.inverse_scale,
+            activation: self.activation,
+            scale_dtype: self.scales.as_ref().map(CudaTensor::dtype),
+            input_scale: self.input_scale.is_some(),
+            bias: self.bias.is_some(),
+        }
+    }
+
     pub fn prepare(&self, backend: &CudaBackend, tokens: usize) -> Result<DirectFp8Bf16Linear> {
         let spec = DirectFp8Spec::new_with_format(
             self.format,

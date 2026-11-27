@@ -3,6 +3,7 @@ mod config;
 mod decode;
 mod feed_forward;
 pub(in crate::backend) mod graph;
+mod layout;
 mod per_layer;
 mod prefill;
 mod projection;
@@ -20,11 +21,14 @@ pub use config::{
 pub use decode::DecodeDenseSwiGlu;
 use decode::validate;
 use feed_forward::DenseFeedForward;
+pub(in crate::backend) use layout::DenseLayerLayout;
 pub use per_layer::PerLayerInputWeights;
 pub use prefill::PrefillDenseSwiGlu;
 use projection::{DownProjection, GateUpBuffers, GateUpProjection};
 pub use routed::RoutedExpertWeights;
-pub(in crate::backend) use routed::{GgmlExpertGeometry, GgmlExpertWeights, GgmlRoutedExperts};
+pub(in crate::backend) use routed::{
+    ExpertBankLayout, GgmlExpertGeometry, GgmlExpertWeights, GgmlRoutedExperts,
+};
 use scratch::DenseScratch;
 pub use template::{
     DenseDownSource, DenseFeedForwardSource, DenseGateUpSource, DenseOutputSource, DenseQkvSource,

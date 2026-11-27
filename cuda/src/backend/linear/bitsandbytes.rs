@@ -1,6 +1,7 @@
 use mircuda::{DeviceBuffer, Stream, bf16};
 use models::weights::{BitsAndBytes4BitQuantization, TensorBinding, TensorStorage};
 
+use super::packed::integer::{PackedIntegerLayout, require_layout};
 use crate::{
     CudaBackend, CudaTensorSet, Error, Result,
     kernels::{BitsAndBytes4BitLaunch, BitsAndBytes4BitLinear, BitsAndBytes4BitSpec},
@@ -20,6 +21,10 @@ pub struct BitsAndBytes4BitWeight {
 }
 
 impl BitsAndBytes4BitWeight {
+    pub(in crate::backend) const fn layout(&self) -> PackedIntegerLayout {
+        PackedIntegerLayout::BitsAndBytes4Bit(self.format)
+    }
+
     pub(crate) fn load_binding(
         tensors: &CudaTensorSet,
         binding: &TensorBinding,
@@ -86,6 +91,9 @@ impl BitsAndBytes4BitWeight {
 pub struct BitsAndBytes4BitBf16Linear {
     operation: BitsAndBytes4BitLinear,
     stream: Stream,
+    /// The planned weight's `[input, output]` and layout.
+    geometry: [usize; 2],
+    layout: PackedIntegerLayout,
 }
 
 impl BitsAndBytes4BitBf16Linear {
@@ -105,6 +113,8 @@ impl BitsAndBytes4BitBf16Linear {
         Ok(Self {
             operation: BitsAndBytes4BitLinear::compile(&backend.inner.compiler, spec)?,
             stream: backend.inner.stream.clone(),
+            geometry: [weight.input, weight.output],
+            layout: weight.layout(),
         })
     }
 
@@ -114,6 +124,12 @@ impl BitsAndBytes4BitBf16Linear {
         weight: &BitsAndBytes4BitWeight,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
+        require_layout(self.layout, weight.layout())?;
+        if self.geometry != [weight.input, weight.output] {
+            return Err(Error::InvalidExecutionPlan(
+                "bitsandbytes plan and late-bound weight geometry differ",
+            ));
+        }
         weight.validate()?;
         self.operation.execute(
             &self.stream,

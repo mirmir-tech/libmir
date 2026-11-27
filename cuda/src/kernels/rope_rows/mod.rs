@@ -6,6 +6,9 @@ use mircuda::{
 use super::geometry::{narrow, product, require};
 use crate::{Error, Result};
 
+#[cfg(test)]
+mod tests;
+
 cuda_export!(RopeRowsKernel = "libmir_cuda_rope_rows_u8"(
     source: &DeviceBuffer<u8>, output: &mut DeviceBuffer<u8>, rows: u32, row_bytes: u32,
     head_dim: u32, rotary_dim: u32,
@@ -21,7 +24,7 @@ pub struct RopeRows {
 impl RopeRows {
     pub fn compile(compiler: &Compiler) -> Result<Self> {
         let module = compiler.compile(
-            cuda_kernel_file!("../../kernels/rope_rows_u8.cu"),
+            cuda_kernel_file!("../../../kernels/rope_rows_u8.cu"),
             &CompileOptions::default(),
         )?;
         Ok(Self { kernel: module.kernel()? })
@@ -35,7 +38,9 @@ impl RopeRows {
         rows: usize,
         (head_dim, rotary_dim): (usize, usize),
     ) -> Result<()> {
-        if head_dim == 0
+        // No rows pass the head check but leave no row width.
+        if rows == 0
+            || head_dim == 0
             || rotary_dim == 0
             || !rotary_dim.is_multiple_of(2)
             || rotary_dim > head_dim
@@ -44,6 +49,9 @@ impl RopeRows {
             return Err(Error::InvalidDecoderKernel("rotary rows need whole even heads"));
         }
         let row_bytes = source.len() / rows;
+        if row_bytes == 0 {
+            return Err(Error::InvalidDecoderKernel("rotary rows hold no bytes"));
+        }
         require("rotary rows", product(rows, row_bytes)?, source.len())?;
         require("restored rotary rows", source.len(), output.len())?;
         self.kernel.launch(

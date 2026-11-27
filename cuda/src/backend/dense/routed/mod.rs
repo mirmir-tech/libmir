@@ -11,9 +11,9 @@ pub(super) mod weights;
 
 pub(in crate::backend) use ggml::{GgmlExpertGeometry, GgmlRoutedExperts};
 use mircuda::{DeviceBuffer, Stream, bf16};
-pub(in crate::backend) use weights::GgmlExpertWeights;
 pub use weights::RoutedExpertWeights;
 use weights::RoutedExperts;
+pub(in crate::backend) use weights::{ExpertBankLayout, GgmlExpertWeights};
 
 use super::{DenseRoutedExperts, DenseSwiGluConfig};
 use crate::{

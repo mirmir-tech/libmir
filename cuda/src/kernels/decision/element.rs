@@ -2,6 +2,7 @@ use mircuda::{CublasElement, DeviceBuffer, LaunchConfig, PaddedAttentionElement,
 
 use super::{
     DecisionLayout, HeadLayout, RopeTables, ScoreRows, elements_launch, require, rows_launch,
+    rows_of,
 };
 use crate::{Error, Result};
 
@@ -79,7 +80,7 @@ macro_rules! decision_element {
                 output: &mut DeviceBuffer<Self>,
             ) -> Result<()> {
                 require(output, input.len(), "decision norm output")?;
-                let rows = input.len() / weight.len();
+                let rows = rows_of(input.len(), weight.len(), "decision norm input")?;
                 let geometry = (u32::try_from(rows)?, u32::try_from(weight.len())?);
                 Ok(layout.norm.$variant.launch(
                     stream,
@@ -95,7 +96,7 @@ macro_rules! decision_element {
                 output: &mut DeviceBuffer<Self>,
                 width: usize,
             ) -> Result<()> {
-                let rows = output.len() / width;
+                let rows = rows_of(output.len(), width, "decision GeGLU output")?;
                 require(input, rows * 2 * width, "decision GeGLU input")?;
                 let geometry = (u32::try_from(rows)?, u32::try_from(width)?);
                 Ok(layout.geglu.$variant.launch(
@@ -144,7 +145,7 @@ macro_rules! decision_element {
                 require(output, qkv.len(), "decision rotate output")?;
                 check_rope(rope, length, dim)?;
                 let arguments = (
-                    u32::try_from(qkv.len() / (3 * heads * dim))?,
+                    u32::try_from(rows_of(qkv.len(), 3 * heads * dim, "decision rotate input")?)?,
                     u32::try_from(length)?,
                     u32::try_from(heads)?,
                     u32::try_from(dim)?,
@@ -167,7 +168,8 @@ macro_rules! decision_element {
                 output: &mut DeviceBuffer<Self>,
             ) -> Result<()> {
                 require(output, input.len(), "decision merge output")?;
-                let tokens = u32::try_from(input.len() / (heads * dim))?;
+                let tokens =
+                    u32::try_from(rows_of(input.len(), heads * dim, "decision merge input")?)?;
                 let geometry = (u32::try_from(heads)?, u32::try_from(dim)?);
                 Ok(layout.merge.$variant.launch(
                     stream,
@@ -190,7 +192,7 @@ macro_rules! decision_element {
                 }
                 let launch = LaunchConfig {
                     shared_memory_bytes: u32::try_from(cached)?,
-                    ..rows_launch(scores.len() / rows.keys)?
+                    ..rows_launch(rows_of(scores.len(), rows.keys, "decision softmax scores")?)?
                 };
                 let arguments = (
                     u32::try_from(rows.queries)?,

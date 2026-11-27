@@ -57,12 +57,21 @@ impl DenseFeedForward {
                 .sandwich
                 .map(|_| SandwichNorms::new(backend, rows, hidden, epsilon))
                 .transpose()?,
-            per_layer: config
-                .per_layer_input
-                .map(|width| {
-                    PerLayerGate::new(backend, rows, [hidden, width.get().into()], epsilon)
-                })
-                .transpose()?,
+            per_layer: match (config.per_layer_input, weights.per_layer_input) {
+                (Some(width), Some(weights)) => Some(PerLayerGate::new(
+                    backend,
+                    rows,
+                    [hidden, width.get().into()],
+                    epsilon,
+                    weights,
+                )?),
+                (None, None) => None,
+                _ => {
+                    return Err(Error::InvalidDecoderKernel(
+                        "dense layer per-layer input mismatch",
+                    ));
+                },
+            },
             mlp: match weights.feed_forward {
                 DenseFeedForwardWeights::Gated { gate_up, down } => Mlp::Gated {
                     gate_up: GateUpProjection::new(backend, config, rows, Some(gate_up))?,
