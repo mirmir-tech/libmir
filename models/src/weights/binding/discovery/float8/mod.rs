@@ -16,8 +16,7 @@ pub(super) struct Float8Hint {
     block_shape: Option<[usize; 2]>,
 }
 
-pub(super) fn hint(layout: &crate::layout::ModelLayout) -> Result<Option<Float8Hint>> {
-    let root = crate::layout::json::read(&layout.config_path)?;
+pub(super) fn hint(root: &Value) -> Result<Option<Float8Hint>> {
     let Some(config) = ["quantization_config", "quantization"]
         .into_iter()
         .find_map(|key| root.get(key))

@@ -95,7 +95,18 @@ impl WeightBindingPlan {
         catalog: &TensorCatalog,
         layout: &ModelLayout,
     ) -> Result<Self> {
-        discovery::discover_from_layout(spec, catalog, layout)
+        let config = crate::layout::json::read(&layout.config_path)?;
+        discovery::discover_with_config(spec, catalog, &config)
+    }
+
+    /// Discovers bindings as the parsed `config.json` declares the
+    /// checkpoint's quantization, as for a Hub repository not downloaded.
+    pub fn discover_with_config(
+        spec: &SemanticModelSpec,
+        catalog: &TensorCatalog,
+        config: &serde_json::Value,
+    ) -> Result<Self> {
+        discovery::discover_with_config(spec, catalog, config)
     }
 
     #[must_use]

@@ -63,7 +63,7 @@ impl RemoteModelContract {
                 ))
             })?;
             let decoder = DecoderConfig::from_value(config)?;
-            let execution = decoder_execution(&decoder, catalog)?;
+            let execution = decoder_execution(&decoder, config, catalog)?;
             return Ok(Some(Self {
                 execution: Some(execution),
                 task: TaskExecutionPlan::Embedding { decoder, task, tensors },
@@ -84,7 +84,7 @@ impl RemoteModelContract {
                 decoder.vocab_size,
             )?;
             return Ok(Some(Self {
-                execution: Some(decoder_execution(&decoder, catalog)?),
+                execution: Some(decoder_execution(&decoder, config, catalog)?),
                 task: TaskExecutionPlan::CausalScoring { decoder, task },
                 vision,
                 container,
@@ -189,7 +189,7 @@ fn generation_contract(
 ) -> Result<RemoteModelContract> {
     let decoder = DecoderConfig::from_value(config)?;
     Ok(RemoteModelContract {
-        execution: Some(decoder_execution(&decoder, catalog)?),
+        execution: Some(decoder_execution(&decoder, config, catalog)?),
         task: TaskExecutionPlan::Generation { decoder },
         vision,
         container: container(catalog),
@@ -202,12 +202,15 @@ fn container(catalog: &TensorCatalog) -> Option<WeightContainer> {
     )
 }
 
+/// The decoder's contract, its bindings discovered as `config` declares
+/// the quantization, as a downloaded checkpoint's are.
 fn decoder_execution(
     decoder: &DecoderConfig,
+    config: &serde_json::Value,
     catalog: &TensorCatalog,
 ) -> Result<DecoderExecutionContract> {
     let semantic = SemanticModelSpec::discover(decoder, catalog)?;
-    let bindings = WeightBindingPlan::discover(&semantic, catalog)?;
+    let bindings = WeightBindingPlan::discover_with_config(&semantic, catalog, config)?;
     Ok(DecoderExecutionContract { semantic, bindings })
 }
 

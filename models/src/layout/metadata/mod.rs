@@ -30,14 +30,18 @@ impl ModelMetadata {
     }
 
     pub fn from_config_path(path: impl AsRef<Path>) -> Result<Self> {
-        let value = crate::layout::json::read(path)?;
-        let architectures = read_architectures(&value);
+        Self::from_value(&crate::layout::json::read(path)?)
+    }
+
+    /// The metadata a parsed `config.json` declares.
+    pub fn from_value(value: &Value) -> Result<Self> {
+        let architectures = read_architectures(value);
         let model_type = value.get("model_type").and_then(Value::as_str).map(str::to_owned);
-        let dtype = read_dtype(&value);
-        let context_len = read_context_len(&value)?.unwrap_or(4096);
-        let quantization = read_quantization(&value);
-        let quantization_group_size = read_quantization_usize(&value, "group_size")?;
-        let quantization_mode = read_quantization_string(&value, "mode");
+        let dtype = read_dtype(value);
+        let context_len = read_context_len(value)?.unwrap_or(4096);
+        let quantization = read_quantization(value);
+        let quantization_group_size = read_quantization_usize(value, "group_size")?;
+        let quantization_mode = read_quantization_string(value, "mode");
         Ok(Self {
             architectures,
             model_type,

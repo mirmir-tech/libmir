@@ -8,7 +8,6 @@ use super::super::{
 };
 use crate::{
     error::{ModelsError, Result},
-    layout::ModelLayout,
     weights::{TensorCatalog, TensorInfo},
 };
 
@@ -21,8 +20,7 @@ pub(super) struct GptqHint {
     activation_order: bool,
 }
 
-pub(super) fn hint(layout: &ModelLayout) -> Result<Option<GptqHint>> {
-    let root = crate::layout::json::read(&layout.config_path)?;
+pub(super) fn hint(root: &Value) -> Result<Option<GptqHint>> {
     let Some(config) = ["quantization_config", "quantization"]
         .into_iter()
         .find_map(|key| root.get(key))

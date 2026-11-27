@@ -33,7 +33,8 @@ fn reads_compressed_tensors_dynamic_token_activation_contract() -> Result<()> {
     )?;
     fs::write(root.join("model.safetensors"), [])?;
     let layout = ModelLayout::inspect(&root)?;
-    let parsed = hint(&layout)?.ok_or_else(|| invalid("config", "missing FP8 hint"))?;
+    let parsed = hint(&crate::layout::json::read(&layout.config_path)?)?
+        .ok_or_else(|| invalid("config", "missing FP8 hint"))?;
     assert_eq!(parsed.activation_scale, Float8ActivationScale::DynamicToken);
     fs::remove_dir_all(root)?;
     Ok(())
@@ -64,7 +65,8 @@ fn retains_declared_dimensions_for_a_padded_block_grid() -> Result<()> {
     )?;
     fs::write(root.join("model.safetensors"), [])?;
     let layout = ModelLayout::inspect(&root)?;
-    let parsed = hint(&layout)?.ok_or_else(|| invalid("config", "missing FP8 hint"))?;
+    let parsed = hint(&crate::layout::json::read(&layout.config_path)?)?
+        .ok_or_else(|| invalid("config", "missing FP8 hint"))?;
     let catalog = TensorCatalog {
         tensors: vec![
             tensor("projection.weight", "F8_E4M3", vec![5, 12]),

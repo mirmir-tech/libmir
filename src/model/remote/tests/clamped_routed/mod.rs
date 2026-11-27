@@ -2,6 +2,7 @@ use super::*;
 use crate::EncodingKind;
 
 mod gguf;
+mod mlx;
 
 fn config() -> serde_json::Value {
     json!({
