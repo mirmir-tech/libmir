@@ -3,7 +3,7 @@
 
 use std::fs;
 
-use super::{FileOrigin, ImportConflict, ImportManifest, as_earlier, conflict, import, root};
+use super::{FileOrigin, ImportConflict, ImportManifest, conflict, import, root};
 use crate::gguf::{files_in, tests::TestResult};
 
 /// Where links are hard links, the previous import's link is a plain file;
@@ -157,7 +157,7 @@ fn a_user_symlink_an_earlier_import_recorded_as_its_link_survives_a_switch() -> 
     import(vec![external.clone()], 1).write(&output)?;
     // As the earlier version wrote it: `external.gguf` linked, named itself.
     let named = std::path::absolute(&external)?;
-    as_earlier(&output, |file| {
+    super::as_earlier(&output, |file| {
         if file["name"] == "external.gguf" {
             file["origin"] =
                 serde_json::json!({ "linked": { "source": canonical, "named": named } });

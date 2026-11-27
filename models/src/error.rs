@@ -22,6 +22,10 @@ pub enum ModelsError {
     },
     #[error("the GGUF import in {} was cut short while it was written; write it again", .0.display())]
     InterruptedImport(PathBuf),
+    /// The directory was replaced or changed every time it was read, as a
+    /// GGUF import republished meanwhile: what was read may mix versions.
+    #[error("the model in {} changed while it was read, as when it is republished; load it again", .0.display())]
+    ChangedWhileRead(PathBuf),
     #[error("the import manifest {} names {name:?}, not a file of its directory", manifest.display())]
     InvalidImportEntry { manifest: PathBuf, name: String },
     #[error("invalid model config: {0}")]

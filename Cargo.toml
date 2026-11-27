@@ -51,6 +51,8 @@ mircup = "0.7.0"
 mirtal = "0.7.0"
 # File identity off Unix (volume and file index on Windows), for GGUF imports.
 same-file = "1.0.6"
+# Exchanging a published GGUF import with its replacement in one rename.
+rustix = { version = "1.1", features = ["fs"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

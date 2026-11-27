@@ -6,6 +6,8 @@ use std::{
 
 use serde::Deserialize;
 
+mod version;
+
 use super::WeightContainer;
 use crate::{
     error::{ModelsError, Result},
@@ -65,8 +67,25 @@ struct WeightIndex {
 }
 
 impl ModelLayout {
+    /// The model files in `root`, all of one version of it: a directory
+    /// replaced while it is read, as a GGUF import is when republished, or
+    /// whose entries change meanwhile, is read again, and one that keeps
+    /// changing for about half a second is
+    /// [`ModelsError::ChangedWhileRead`]. Where the system tells no
+    /// directory's identity (off Unix) it is read once, unchecked. The
+    /// layout names its files by path: opening them later may find a
+    /// later version than the one inspected.
     pub fn inspect(root: impl AsRef<Path>) -> Result<Self> {
-        let root = root.as_ref().to_path_buf();
+        let root = root.as_ref();
+        version::one_version(
+            root,
+            || version::of(root),
+            || Self::read(root.to_path_buf()),
+            std::thread::sleep,
+        )
+    }
+
+    fn read(root: PathBuf) -> Result<Self> {
         let listing = Listing::of(&root)?;
         let optional = |name: &str| optional(&listing, root.join(name));
         let config_path = required(&listing, root.join("config.json"))?;

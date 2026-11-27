@@ -11,6 +11,9 @@ mod manifest;
 mod ownership;
 #[cfg(unix)]
 mod paths;
+#[cfg(any(target_os = "android", target_os = "linux", target_vendor = "apple"))]
+mod readers;
+mod republish;
 mod written;
 
 use super::{FileOrigin, Import, ImportConflict, ImportManifest, files, publish};

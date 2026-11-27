@@ -1,10 +1,24 @@
 //! Publishing an import in one step: it is written to `.<name>.staging`
-//! beside its directory, which moves to `.<name>.previous` only once the new
-//! import is complete and is removed after the swap. Publishers of one
-//! directory take turns through a lock on `.<name>.lock`, and one finding
-//! the directory gone while `.previous` remains restores it first. A
-//! directory that is a symlink is replaced as the link: the import becomes
-//! a plain directory, and the directory it linked to is never changed.
+//! beside its directory and, once complete, exchanged with the directory
+//! in one rename (`renameat2` with `RENAME_EXCHANGE` on Linux,
+//! `renameatx_np` with `RENAME_SWAP` on Apple systems), so every lookup of
+//! a path in the directory finds a whole import, the earlier or the new
+//! one; the earlier one, then at `.staging`, is removed. Where the exchange
+//! is refused, by a file system, kernel or sandbox without it, the
+//! directory moves to `.<name>.previous` and the import into its place, a
+//! moment in which the directory is missing, and `.previous` is removed
+//! after. Publishers of one directory take turns through a lock on
+//! `.<name>.lock`, and one finding the directory gone while `.previous`
+//! remains restores it first. A directory that is a symlink is replaced as
+//! the link: the import becomes a plain directory, the link is removed, and
+//! the directory it linked to is never changed.
+//!
+//! Each lookup sees one version, not each reader: one that reads several
+//! files by path may find some in the earlier import and some in the new.
+//! [`ModelLayout::inspect`](crate::layout::ModelLayout::inspect) reads
+//! again when the directory changed meanwhile, but a load that inspects
+//! and later opens the files it found, or inspects twice, may find a later
+//! import than the one it inspected.
 
 use std::{
     fs, io,
@@ -66,9 +80,20 @@ pub(super) fn replace(
         drop(remove_stale(&staging));
         return Err(error);
     }
-    let replaced = directory.symlink_metadata().is_ok();
+    let mut replaced = directory.symlink_metadata().is_ok();
     if replaced {
-        fs::rename(directory, &previous)?;
+        match exchange(&staging, directory) {
+            // `staging` holds the earlier import, or the link that stood
+            // for it, which is removed as a link.
+            Exchange::Done => return remove_stale(&staging),
+            Exchange::Vanished => replaced = false,
+            Exchange::Refused => {
+                if let Err(error) = fs::rename(directory, &previous) {
+                    drop(remove_stale(&staging));
+                    return Err(error.into());
+                }
+            },
+        }
     }
     if let Err(error) = fs::rename(&staging, directory) {
         if replaced {
@@ -78,6 +103,72 @@ pub(super) fn replace(
         return Err(error.into());
     }
     remove_stale(&previous)
+}
+
+/// How an exchange of a complete import with its directory went.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Exchange {
+    /// The two changed places.
+    Done,
+    /// One of them was gone, as the directory removed meanwhile; neither
+    /// moved.
+    Vanished,
+    /// The system, the file system or a sandbox refused; neither moved, so
+    /// two renames replace the directory instead.
+    Refused,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Whether this thread's exchanges are refused, as where the system
+    /// cannot exchange two entries.
+    pub(super) static NO_EXCHANGE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// How this thread's exchanges went, in order.
+    pub(super) static EXCHANGES: std::cell::RefCell<Vec<Exchange>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Exchanges the entries `left` and `right` name, links not followed, in
+/// one step. Any refusal leaves both in place, whatever its cause: a file
+/// system or kernel without the exchange, or a sandbox's filter.
+pub(super) fn exchange(left: &Path, right: &Path) -> Exchange {
+    let exchanged = if refused() {
+        Err(io::ErrorKind::Unsupported.into())
+    } else {
+        swap(left, right)
+    };
+    let exchange = match exchanged {
+        Ok(()) => Exchange::Done,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Exchange::Vanished,
+        Err(_) => Exchange::Refused,
+    };
+    #[cfg(test)]
+    EXCHANGES.with_borrow_mut(|exchanges| exchanges.push(exchange));
+    exchange
+}
+
+#[cfg(test)]
+fn refused() -> bool {
+    NO_EXCHANGE.get()
+}
+
+#[cfg(not(test))]
+const fn refused() -> bool {
+    false
+}
+
+/// `renameat2` with `RENAME_EXCHANGE` on Linux, `renameatx_np` with
+/// `RENAME_SWAP` on Apple systems.
+#[cfg(any(target_os = "android", target_os = "linux", target_vendor = "apple"))]
+fn swap(left: &Path, right: &Path) -> io::Result<()> {
+    use rustix::fs::{CWD, RenameFlags, renameat_with};
+    Ok(renameat_with(CWD, left, CWD, right, RenameFlags::EXCHANGE)?)
+}
+
+/// Elsewhere the system exchanges no entries.
+#[cfg(not(any(target_os = "android", target_os = "linux", target_vendor = "apple")))]
+fn swap(_: &Path, _: &Path) -> io::Result<()> {
+    Err(io::ErrorKind::Unsupported.into())
 }
 
 /// `directory` as publishing replaces it: absolute, every existing
@@ -138,6 +229,7 @@ fn unresolved(_: &Path, error: io::Error) -> Result<PathBuf> {
 /// final path (some network and virtual drives on Windows), as it is
 /// spelled, absolute.
 #[cfg(not(unix))]
+#[expect(clippy::unnecessary_wraps, reason = "fails on Unix, where any existing path resolves")]
 fn unresolved(existing: &Path, _: io::Error) -> Result<PathBuf> {
     Ok(existing.to_path_buf())
 }

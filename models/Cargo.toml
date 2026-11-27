@@ -22,5 +22,8 @@ tokenizers.workspace = true
 [target.'cfg(not(unix))'.dependencies]
 same-file.workspace = true
 
+[target.'cfg(any(target_os = "android", target_os = "linux", target_vendor = "apple"))'.dependencies]
+rustix.workspace = true
+
 [lints]
 workspace = true
