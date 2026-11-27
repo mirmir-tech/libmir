@@ -6,7 +6,7 @@ use mircuda::{
 use super::geometry::{narrow, product, require};
 use crate::{Error, Result};
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests;
 
 cuda_export!(RopeRowsKernel = "libmir_cuda_rope_rows_u8"(

@@ -11,7 +11,7 @@ mod absorb;
 mod execute;
 mod expanded;
 mod kernels;
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests;
 
 pub use absorb::{LatentAbsorption, LatentUpLayout, LatentUpWeights};

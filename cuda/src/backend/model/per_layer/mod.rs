@@ -14,7 +14,7 @@ use crate::{
     kernels::{PerLayerInputBf16, PerLayerInputSpec},
 };
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests;
 
 /// The row counts whose fixed-shape operations a [`PerLayerInputs`] keeps.

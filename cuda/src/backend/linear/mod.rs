@@ -30,7 +30,7 @@ pub use block_fp8::{BlockFp8LinearWeight, Fp8ResidualLinearWeight};
 pub use checkpoint_projection::CheckpointProjectionWeight;
 pub(in crate::backend) use checkpoint_projection::{CheckpointProjection, ProjectionLayout};
 pub use direct_fp8::{DirectFp8Bf16Linear, DirectFp8CheckpointWeight, DirectFp8EmbeddingLookup};
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 pub(in crate::backend) use ggml::tests as ggml_tests;
 pub use ggml::{GgmlBf16Linear, GgmlCheckpointWeight, GgmlEmbeddingLookup};
 use mircuda::{DenseMatmulPlan, DenseMatmulSpec, DeviceBuffer, Stream, bf16};

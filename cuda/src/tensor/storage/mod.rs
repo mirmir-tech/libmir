@@ -8,7 +8,7 @@ use crate::{Error, Result};
 mod buffers;
 mod constructors;
 mod raw;
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests;
 
 /// Safetensors storage types currently admitted by the CUDA loader.

@@ -15,7 +15,7 @@ mod prefill;
 mod score;
 pub use score::{ScoreSoftcap, attention_compile_options};
 mod split;
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests;
 pub mod window;
 

@@ -89,5 +89,5 @@ fn restore_rows(
     tensors.replace(restored)
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests;

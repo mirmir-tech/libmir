@@ -3,7 +3,7 @@ use std::collections::HashMap;
 mod prefill;
 mod prepared;
 mod shared;
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests;
 
 use mircuda::{DeviceBuffer, bf16};

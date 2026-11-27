@@ -11,7 +11,7 @@ mod launch;
 mod normalization;
 mod rotary;
 mod temperature;
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests;
 
 pub use batch::BatchedQkvPostprocess;

@@ -1,8 +1,12 @@
+#[cfg(target_os = "linux")]
 use std::path::PathBuf;
 
+#[cfg(target_os = "linux")]
 use mircuda::{Compiler, Driver, bf16};
 
-use super::{LogitShaping, LogitShapingBf16};
+use super::LogitShaping;
+#[cfg(target_os = "linux")]
+use super::LogitShapingBf16;
 use crate::Result;
 
 #[test]
@@ -20,6 +24,7 @@ fn identity_shaping_is_none_and_invalid_factors_are_refused() -> Result<()> {
 
 /// Logits are divided, then soft-capped.
 #[test]
+#[cfg(target_os = "linux")]
 fn shaping_divides_then_caps_logits_on_cuda() -> Result<()> {
     let driver = Driver::initialize()?;
     let device = driver.devices()?.into_iter().next().ok_or(mircuda::Error::InvalidLaunch)?;

@@ -12,7 +12,7 @@ use crate::{
     kernels::{ElementwiseBf16, GatedActivation},
 };
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests;
 
 /// A layer's per-layer input tensors: both projections in the checkpoint's

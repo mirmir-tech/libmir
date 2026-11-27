@@ -5,7 +5,7 @@ mod embedding;
 mod linear;
 mod scale;
 mod scratch;
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 pub(in crate::backend) mod tests;
 
 pub use embedding::GgmlEmbeddingLookup;
@@ -108,7 +108,7 @@ impl GgmlCheckpointWeight {
 
     /// A weight of `matrices` stacked `[rows, input]` matrices of `kind`
     /// blocks, for tests that build their own blocks.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn from_blocks(
         blocks: GgmlBlocks,
         kind: GgmlKernelType,

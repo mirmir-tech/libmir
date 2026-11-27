@@ -22,7 +22,7 @@ mod prefill;
 mod qkv;
 mod rebind;
 mod semantic;
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests;
 
 pub use batch::BatchedDecodeAttentionBf16;

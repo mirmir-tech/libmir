@@ -79,7 +79,7 @@ impl ClampedRoutedAttention {
         )
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn compile_scalar(
         backend: &CudaBackend,
         block_size: usize,

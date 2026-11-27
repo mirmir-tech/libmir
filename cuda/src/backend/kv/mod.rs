@@ -4,7 +4,7 @@ mod prefill_batch;
 #[cfg(test)]
 mod profile;
 mod storage;
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests;
 mod windowed_prefill;
 

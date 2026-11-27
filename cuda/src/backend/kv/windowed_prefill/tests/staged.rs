@@ -2,7 +2,7 @@ use mircuda::{DeviceBuffer, DeviceElement, bf16};
 use runtime::kv::{BlockId, BlockTable, CacheConfig, KvCacheDType, KvStorageSpec, KvWritePlan};
 use uuid::Uuid;
 
-use super::WindowedPrefillStaging;
+use super::super::WindowedPrefillStaging;
 use crate::{CudaBackend, CudaConfig, Result, kernels::ClampedRoutedAttention};
 
 const BLOCK_SIZE: usize = 16;
@@ -13,18 +13,6 @@ const WINDOW: usize = 128;
 const PREFIX: usize = 127;
 const QUERY: usize = 2_048;
 const RING_BLOCKS: usize = (WINDOW + BLOCK_SIZE - 1).div_ceil(BLOCK_SIZE);
-
-#[test]
-fn staging_context_keeps_only_the_receptive_history() {
-    let window = 128_usize;
-    let start = 8_192_usize;
-    let query = 2_048_usize;
-    let history = start.min(window - 1);
-
-    assert_eq!(history, 127);
-    assert_eq!(history + query, 2_175);
-    assert_eq!(start - history, 8_065);
-}
 
 #[test]
 #[allow(clippy::too_many_lines)]

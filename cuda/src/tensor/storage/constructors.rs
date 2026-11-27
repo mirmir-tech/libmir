@@ -40,7 +40,7 @@ impl CudaTensor {
 
 impl CudaTensorSet {
     /// A set of `tensors` on `stream`, for tests that build their own.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn from_tensors(
         context: &mircuda::Context,
         stream: &mircuda::Stream,

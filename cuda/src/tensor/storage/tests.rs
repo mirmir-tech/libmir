@@ -11,8 +11,6 @@ impl CudaTensor {
         }
     }
 
-    /// For the FP8 autotuning tests, which run on Linux.
-    #[cfg(target_os = "linux")]
     pub(crate) fn from_f8_e5m2(name: String, shape: Vec<usize>, buffer: DeviceBuffer<u8>) -> Self {
         Self {
             name,

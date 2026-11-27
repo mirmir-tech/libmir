@@ -10,7 +10,7 @@ use crate::{
     backend::CheckpointProjectionWeight,
 };
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests;
 
 /// The layer's per-layer input weights; the layer template checks their

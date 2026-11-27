@@ -8,7 +8,7 @@ use super::CudaBackend;
 use crate::{DenseExecution, DensePlanRequest, ExecutionPhase, PlanSource, Result};
 
 mod candidate;
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests;
 mod validation;
 

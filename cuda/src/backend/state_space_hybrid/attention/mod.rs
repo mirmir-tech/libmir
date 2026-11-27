@@ -4,7 +4,7 @@
 
 mod batch;
 mod execution;
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests;
 
 pub use execution::CudaAttentionHybridExecution;

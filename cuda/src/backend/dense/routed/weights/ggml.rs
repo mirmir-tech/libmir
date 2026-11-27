@@ -140,7 +140,7 @@ impl GgmlExpertWeights {
     }
 
     /// Separate gate, up and down banks, for tests that build their blocks.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn separate(
         [gate, up, down]: [GgmlCheckpointWeight; 3],
         (hidden, intermediate): (usize, usize),

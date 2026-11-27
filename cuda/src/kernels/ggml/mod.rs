@@ -10,7 +10,7 @@ mod linear;
 mod mmq;
 mod repack;
 mod scale;
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests;
 
 pub use blocks::GgmlBlocks;
