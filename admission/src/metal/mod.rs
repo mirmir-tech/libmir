@@ -1,8 +1,10 @@
 //! Metal architecture admission: lower, require, select.
 
+mod experts;
 mod lowering;
 mod runtime;
 
+pub use experts::{IndividualBank, RoutedExpertLoader, hybrid_experts_load};
 pub use lowering::{LayerLowering, NormalizationLowering, lower_layer};
 use models::{
     execution::{PoolingMode, TaskExecutionPlan},

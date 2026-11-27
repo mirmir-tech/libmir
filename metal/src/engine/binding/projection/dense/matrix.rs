@@ -2,7 +2,7 @@
 //! that fold weights into other products at load (latent attention's key
 //! and value up-projections).
 
-use super::BoundLinear;
+use super::super::BoundLinear;
 use crate::engine::{Array, Error, Result, Stream};
 
 impl BoundLinear {

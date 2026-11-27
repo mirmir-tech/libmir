@@ -1,10 +1,11 @@
+use architecture::metal::IndividualBank;
 use models::weights::{AffineStorageDType, BindingTransform, TensorBinding, TensorStorage};
 
 use crate::engine::{
     Array, DenseLinear, Error, ModelTensors, QuantizedLinear, Result, Stream, linear::GptqLinear,
 };
 mod bitsandbytes;
-mod dense_matrix;
+mod dense;
 mod embedding;
 mod float8;
 mod fusion;
@@ -40,18 +41,28 @@ pub(in crate::engine) enum BoundLinear {
     Ggml(GgmlLinear),
 }
 impl BoundLinear {
-    /// An expert bank stacked from per-expert projections: NVFP4 or
+    /// An expert bank stacked from per-expert projections: dense, NVFP4 or
     /// compressed-tensors packed integers.
     pub(in crate::engine) fn load_individual_bank(
         tensors: &ModelTensors,
         bindings: &[&TensorBinding],
         stream: &Stream,
     ) -> Result<Self> {
-        match bindings.first().map(|binding| &binding.storage) {
-            Some(TensorStorage::PackedInteger { .. }) => {
+        // The bank admission checks for the layout is the one built here.
+        match IndividualBank::of(bindings) {
+            Some(IndividualBank::Dense) => {
+                dense::individual_bank(tensors, bindings, stream).map(Self::Dense)
+            },
+            Some(IndividualBank::PackedInteger) => {
                 packed_integer::individual_bank(tensors, bindings, stream).map(Self::Affine)
             },
-            _ => nvfp4::individual_bank(tensors, bindings, stream).map(Self::NvFp4),
+            Some(IndividualBank::NvFp4) => {
+                nvfp4::individual_bank(tensors, bindings, stream).map(Self::NvFp4)
+            },
+            None => Err(Error::InvalidQuantization(format!(
+                "per-expert projections from {} stack into no Metal expert bank",
+                bindings.first().map_or("an empty bank", |binding| binding.source.as_str())
+            ))),
         }
     }
 

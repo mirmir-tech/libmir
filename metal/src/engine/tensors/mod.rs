@@ -5,6 +5,7 @@ mod tests;
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
+    sync::{Mutex, MutexGuard, PoisonError},
 };
 
 use models::{
@@ -16,11 +17,13 @@ use super::{Array, Dtype, Error, Result, Stream};
 
 #[derive(Debug)]
 pub struct TensorFile {
-    native: mirtal::TensorFile,
+    /// Behind a lock so a loader that copies a tensor into another (an
+    /// expert bank) can take it out through a shared reference.
+    native: Mutex<mirtal::TensorFile>,
     /// GGUF float tensors cast to the BF16 activation type, by name, taken
     /// out of `native`: the cast is the only owner of the stored array, which
     /// is freed once the cast has run, so a tensor occupies memory once.
-    converted: BTreeMap<String, mirtal::Array>,
+    converted: Mutex<BTreeMap<String, mirtal::Array>>,
 }
 
 impl TensorFile {
@@ -31,8 +34,8 @@ impl TensorFile {
             return Err(Error::UncataloguedGguf(path.to_owned()));
         }
         Ok(Self {
-            native: mirtal::TensorFile::load(path, stream.native())?,
-            converted: BTreeMap::new(),
+            native: Mutex::new(mirtal::TensorFile::load(path, stream.native())?),
+            converted: Mutex::default(),
         })
     }
 
@@ -54,36 +57,58 @@ impl TensorFile {
             let value = value.astype(Dtype::Bfloat16, stream)?;
             converted.insert(range.name().to_owned(), value.native().clone());
         }
-        Ok(Self { native, converted })
+        Ok(Self {
+            native: Mutex::new(native),
+            converted: Mutex::new(converted),
+        })
     }
 
     pub fn len(&self) -> Result<usize> {
-        Ok(self.native.len() + self.converted.len())
+        Ok(self.native().len() + self.converted().len())
     }
 
     /// Evaluates every tensor; the casts one at a time, so a stored tensor is
     /// freed before the next is read.
     pub fn evaluate(&self, stream: &Stream) -> Result<()> {
-        self.native.evaluate()?;
-        for value in self.converted.values() {
+        self.native().evaluate()?;
+        for value in self.converted().values() {
             stream.native().eval(value)?;
         }
         Ok(())
     }
 
     pub fn get(&self, name: &str) -> Result<Array> {
-        match self.converted.get(name) {
-            Some(value) => Array::from_native(value.clone()),
-            None => Array::from_native(self.native.get(name)?),
+        if let Some(value) = self.converted().get(name) {
+            return Array::from_native(value.clone());
+        }
+        Array::from_native(self.native().get(name)?)
+    }
+
+    /// Removes `name` and returns it, so the file no longer keeps what it
+    /// reads alive: a loader that copies it into another array frees it once
+    /// the copy is evaluated.
+    pub fn take(&self, name: &str) -> Result<Array> {
+        let converted = self.converted().remove(name);
+        match converted {
+            Some(value) => Array::from_native(value),
+            None => Array::from_native(self.native().take(name)?),
         }
     }
 
     pub fn contains(&self, name: &str) -> Result<bool> {
-        Ok(self.converted.contains_key(name) || self.native.contains(name)?)
+        Ok(self.converted().contains_key(name) || self.native().contains(name)?)
     }
 
     pub fn is_empty(&self) -> Result<bool> {
-        Ok(self.native.is_empty() && self.converted.is_empty())
+        Ok(self.native().is_empty() && self.converted().is_empty())
+    }
+
+    fn native(&self) -> MutexGuard<'_, mirtal::TensorFile> {
+        self.native.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn converted(&self) -> MutexGuard<'_, BTreeMap<String, mirtal::Array>> {
+        self.converted.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 

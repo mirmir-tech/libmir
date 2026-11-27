@@ -110,3 +110,50 @@ fn admits_dense_latent_attention_experts_on_metal() -> Result<()> {
     }
     admitted_dense(&config, &TensorCatalog::new(tensors))
 }
+
+/// A dense decoder Metal does not lower is refused by its architecture
+/// check alone: without routed experts its dense storage is not what
+/// fails, so that check does not blame a routed composition.
+#[test]
+fn a_dense_model_metal_does_not_lower_is_refused_by_architecture_only() -> Result<()> {
+    let config = json!({
+        "model_type": "llama", "hidden_size": HIDDEN, "intermediate_size": 16,
+        "num_hidden_layers": 1, "num_attention_heads": 4, "num_key_value_heads": 2,
+        "head_dim": 8, "vocab_size": 64, "hidden_act": "unknown_gelu", "rms_norm_eps": 1e-6,
+        "tie_word_embeddings": false
+    });
+    let mut tensors = Vec::new();
+    add(&mut tensors, "model.embed_tokens.weight", &[64, HIDDEN]);
+    add(&mut tensors, "model.norm.weight", &[HIDDEN]);
+    add(&mut tensors, "lm_head.weight", &[64, HIDDEN]);
+    let layer = "model.layers.0";
+    add(&mut tensors, &format!("{layer}.input_layernorm.weight"), &[HIDDEN]);
+    add(&mut tensors, &format!("{layer}.post_attention_layernorm.weight"), &[HIDDEN]);
+    for (projection, shape) in
+        [("q", [32, HIDDEN]), ("k", [16, HIDDEN]), ("v", [16, HIDDEN]), ("o", [HIDDEN, 32])]
+    {
+        add(&mut tensors, &format!("{layer}.self_attn.{projection}_proj.weight"), &shape);
+    }
+    for (projection, shape) in
+        [("gate", [16, HIDDEN]), ("up", [16, HIDDEN]), ("down", [HIDDEN, 16])]
+    {
+        add(&mut tensors, &format!("{layer}.mlp.{projection}_proj.weight"), &shape);
+    }
+    let contract = RemoteModelContract::inspect_generation(&config, &TensorCatalog::new(tensors))?;
+    let metal = contract.admission(BackendTarget::Metal);
+    assert_eq!(metal.status, AdmissionStatus::Unsupported, "{metal:?}");
+    let status = |kind| {
+        metal
+            .checks
+            .iter()
+            .find(|check| check.kind() == kind)
+            .map(crate::AdmissionCheck::status)
+    };
+    assert_eq!(status(AdmissionCheckKind::Architecture), Some(AdmissionStatus::Unsupported));
+    assert_eq!(
+        status(AdmissionCheckKind::Encoding(EncodingKind::Dense)),
+        Some(AdmissionStatus::Supported),
+        "{metal:?}"
+    );
+    Ok(())
+}

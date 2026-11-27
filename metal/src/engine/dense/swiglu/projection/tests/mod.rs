@@ -11,6 +11,7 @@ use crate::engine::{Array, ModelTensors, Result, Stream};
 
 mod awq;
 mod bitsandbytes;
+mod dense_bank;
 mod float8;
 mod gptq;
 mod mxfp4;

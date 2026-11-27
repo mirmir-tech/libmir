@@ -101,6 +101,27 @@ impl ModelTensors {
         self.get_exact(&alternate_model_tensor_name(name))
     }
 
+    /// [`Self::get`], removing the tensor so the model's files no longer
+    /// keep it: for a loader that copies it into another array (an expert
+    /// bank), which is then its only owner.
+    pub(in crate::engine) fn take(&self, name: &str) -> Result<Array> {
+        for name in [name.to_owned(), alternate_model_tensor_name(name)] {
+            if let Some(file) = self.file_with(&name)? {
+                return file.take(&name);
+            }
+        }
+        Err(Error::MissingTensor(name.to_owned()))
+    }
+
+    fn file_with(&self, name: &str) -> Result<Option<&TensorFile>> {
+        for file in &self.files {
+            if file.contains(name)? {
+                return Ok(Some(file));
+            }
+        }
+        Ok(None)
+    }
+
     fn get_exact(&self, name: &str) -> Result<Option<Array>> {
         for file in &self.files {
             if file.contains(name)? {
