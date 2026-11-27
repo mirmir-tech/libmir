@@ -124,7 +124,15 @@ fn prefill(
     let session = Uuid::new_v4();
     let output = model.prefill(session, prompt, &[], &sampling, None, &mut |_| {})?;
     let token = output_token(model, output.output)?;
-    Ok((DecodeInput { session, token, sampling }, output.prefix_cache_tokens))
+    Ok((
+        DecodeInput {
+            session,
+            token,
+            sampling,
+            speculation: None,
+        },
+        output.prefix_cache_tokens,
+    ))
 }
 
 fn reference(model: &mut LoadedModel, mut input: DecodeInput) -> Result<Vec<u32>> {

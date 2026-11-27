@@ -18,16 +18,22 @@ pub(in crate::backend) struct DecodeWorkspaceKey {
 }
 
 /// The workspace for a batch of `rows`, allocated for the template's decode
-/// width when that is wider. The handle keeps the pool entry alive.
+/// width when that is wider, or `None` for a model without paged softmax
+/// attention. The handle keeps the pool entry alive.
 pub(super) fn attention_workspace(
     template: &CudaSharedRoutedModelTemplate,
     rows: usize,
-) -> Result<(SharedScratch<BatchedSplitAttentionWorkspace>, BatchedSplitAttentionWorkspace)> {
+) -> Result<Option<(SharedScratch<BatchedSplitAttentionWorkspace>, BatchedSplitAttentionWorkspace)>>
+{
     let capacity = rows.max(template.decode_rows);
     let (values, statistics) = template.layers.iter().enumerate().try_fold(
         (0_usize, 0_usize),
         |(values, statistics), (layer, template_layer)| {
-            let Some(storage) = template.layer_storage(layer, template_layer) else {
+            // Latent layers keep their own split workspace.
+            let Some(storage) = template
+                .layer_storage(layer, template_layer)
+                .filter(|_| !matches!(template_layer, SharedRoutedLayerTemplate::Latent(_)))
+            else {
                 return Ok((values, statistics));
             };
             let query_heads = match template_layer {
@@ -45,9 +51,7 @@ pub(super) fn attention_workspace(
         },
     )?;
     if values == 0 || statistics == 0 {
-        return Err(Error::InvalidDecoderKernel(
-            "shared-routed CUDA batch has no attention workspace",
-        ));
+        return Ok(None);
     }
     let backend = &template.backend;
     let key = DecodeWorkspaceKey {
@@ -63,5 +67,5 @@ pub(super) fn attention_workspace(
         ))
     })?;
     let workspace = handle.lock()?.clone();
-    Ok((handle, workspace))
+    Ok(Some((handle, workspace)))
 }

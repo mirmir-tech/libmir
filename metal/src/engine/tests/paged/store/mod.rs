@@ -133,7 +133,8 @@ fn selects_explicit_native_or_gathered_paged_attention() -> Result<()> {
         .paged
         .as_ref()
         .ok_or_else(|| Error::InvalidModel("fragmented paged context is missing".into()))?;
-    assert!(paged.fragmented);
+    // Copy-on-write moved the one page, which is still a single run.
+    assert!(!paged.fragmented);
     let actual = query.paged_scaled_dot_product_attention(paged.attention(), 1.0, &stream)?;
     actual.async_eval(&stream)?;
     stream.synchronize()?;

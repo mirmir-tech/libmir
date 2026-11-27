@@ -24,6 +24,11 @@ impl CudaMoeModelSession {
         sampling: &SamplingLogits,
     ) -> Result<&DeviceBuffer<bf16>> {
         self.validate_prefill(tokens, 0, table)?;
+        if self.per_layer.is_some() {
+            return Err(Error::UnsupportedVisionContract(
+                "CUDA has no image prefill with per-layer inputs".into(),
+            ));
+        }
         if image_start >= image_end
             || image_end > tokens.len()
             || image.len() != (image_end - image_start) * self.hidden_size

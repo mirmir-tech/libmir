@@ -3,6 +3,8 @@ mod bitsandbytes;
 mod direct_fp8;
 pub(super) mod expert;
 pub(super) mod gated_delta;
+pub use gated_delta::RecurrenceStates;
+pub(super) mod ggml;
 mod gptq;
 mod mxfp4;
 mod nvfp4;
@@ -110,7 +112,7 @@ mirtal::metal_kernel! {
         name: "mirmir_gated_delta",
         templates: [
             InT: dtype = bf16, StT: dtype = f32, DK: int = 128, DV: int = 128,
-            HK: int = 8, HV: int = 16, STEPS: int = 4,
+            HK: int = 8, HV: int = 16, STEPS: int = 4, TRAIL: bool = false, STATES: int = 16,
         ],
         inputs: [query: InT, key: InT, value: InT, decay: f32, update: f32, state: StT],
         outputs: [output: InT, next_state: StT],
@@ -203,6 +205,7 @@ pub(super) struct Kernels {
     expert_reduce: expert::reduce::ExpertReduceKernel,
     gated_delta_recurrence: mirtal::MetalKernel<6, 2>,
     gated_delta_decode: mirtal::MetalKernel<8, 2>,
+    ggml: ggml::GgmlKernels,
     state_space_decode: mirtal::MetalKernel<7, 2>,
     gptq: gptq::GptqKernels,
     paged_attention: mirtal::MetalKernel<6, 1>,

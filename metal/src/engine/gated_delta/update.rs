@@ -1,5 +1,5 @@
 use super::{GatedDeltaInputs, GatedDeltaState};
-use crate::engine::{Array, Error, Result, Stream};
+use crate::engine::{Array, Error, Result, Stream, kernels::RecurrenceStates};
 
 pub(super) fn update(
     state: &mut GatedDeltaState,
@@ -9,8 +9,18 @@ pub(super) fn update(
     let dimensions = validate(inputs)?;
     ensure_state(state, dimensions, stream)?;
     if dimensions.key_dimension % 32 != 0 {
+        if state.trail_armed() {
+            return Err(Error::InvalidModel(
+                "Gated Delta row trails require a 32-aligned key dimension".into(),
+            ));
+        }
         return super::fallback::update(state, inputs, dimensions.sequence, stream);
     }
+    let states = if state.trail_armed() {
+        RecurrenceStates::Trail
+    } else {
+        RecurrenceStates::Final
+    };
     let [decay, update] = stream.gated_delta_gates([
         inputs.alpha.native(),
         inputs.beta.native(),
@@ -21,15 +31,35 @@ pub(super) fn update(
         .value
         .as_ref()
         .ok_or_else(|| Error::InvalidModel("Gated Delta state was not initialized".into()))?;
-    let [output, next_state] = stream.gated_delta_recurrence([
-        inputs.query.native(),
-        inputs.key.native(),
-        inputs.value.native(),
-        &decay,
-        &update,
-        current.native(),
-    ])?;
-    state.value = Some(Array::from_native(next_state)?.into());
+    let [output, next_state] = stream.gated_delta_recurrence(
+        [
+            inputs.query.native(),
+            inputs.key.native(),
+            inputs.value.native(),
+            &decay,
+            &update,
+            current.native(),
+        ],
+        states,
+    )?;
+    let next_state = Array::from_native(next_state)?;
+    let next_state = match states {
+        RecurrenceStates::Final => next_state,
+        RecurrenceStates::Trail => {
+            // The trail keeps every row; the state continues from the last.
+            let shape = next_state.shape()?;
+            let mut start = vec![0; shape.len()];
+            start[0] = dimensions.sequence - 1;
+            let stop = shape
+                .iter()
+                .map(|&value| usize::try_from(value))
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let last = next_state.slice(&start, &stop, stream)?.reshape(&shape[1..], stream)?;
+            state.record_values(next_state);
+            last
+        },
+    };
+    state.value = Some(next_state.into());
     state.offset += dimensions.sequence;
     Array::from_native(output)
 }

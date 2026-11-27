@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::{FeedForwardSpec, MixerSpec};
+use crate::error::{ModelsError, Result};
 
 pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 
@@ -21,6 +22,12 @@ pub struct DecoderSpec {
     /// Factor applied to token embeddings before the first layer.
     #[serde(default = "unit_multiplier", skip_serializing_if = "is_unit_multiplier")]
     pub embedding_multiplier: f64,
+    /// Factor on each residual branch before it joins the residual stream.
+    #[serde(default = "unit_multiplier", skip_serializing_if = "is_unit_multiplier")]
+    pub residual_multiplier: f64,
+    /// Divisor of the output logits.
+    #[serde(default = "unit_multiplier", skip_serializing_if = "is_unit_multiplier")]
+    pub logit_divisor: f64,
     pub layers: Vec<DecoderLayerSpec>,
     #[serde(default, skip_serializing_if = "BlockLayoutSpec::is_unified")]
     pub block_layout: BlockLayoutSpec,
@@ -28,6 +35,30 @@ pub struct DecoderSpec {
     /// mixer with the routed block after it; empty when the model has none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub prediction_layers: Vec<DecoderLayerSpec>,
+    /// Per-layer inputs beside the residual stream (Gemma 4's E models).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub per_layer_input: Option<PerLayerInputSpec>,
+}
+
+/// Every layer's `width`-wide input beside the residual stream.
+///
+/// Each layer's slice of a second token embedding over `vocab_size` tokens
+/// joins its slice of a projection of the scaled token embeddings; the layer
+/// gates it into its output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PerLayerInputSpec {
+    pub width: usize,
+    pub vocab_size: usize,
+}
+
+impl DecoderSpec {
+    /// The decoder layer at `index`.
+    pub fn layer(&self, index: usize) -> Result<&DecoderLayerSpec> {
+        self.layers.get(index).ok_or_else(|| {
+            ModelsError::InvalidConfig(format!("no specification for layer {index}"))
+        })
+    }
 }
 
 const fn unit_multiplier() -> f64 {
@@ -96,8 +127,74 @@ pub struct DecoderLayerSpec {
     pub index: usize,
     pub input_norm: NormalizationSpec,
     pub post_attention_norm: NormalizationSpec,
+    /// Where the block normalizes: before each sub-block, or only on each
+    /// sub-block's output (`OLMo` 2).
+    #[serde(default, skip_serializing_if = "NormPlacement::is_pre")]
+    pub norm_placement: NormPlacement,
     pub mixer: MixerSpec,
     pub feed_forward: FeedForwardSpec,
+}
+
+impl DecoderLayerSpec {
+    /// What the layer caches per token; `None` for recurrent mixers and for
+    /// layers attending over an earlier layer's cache. A latent layer caches
+    /// one `kv_lora_rank + rope_dim` row shared by every head, with no
+    /// separate values.
+    #[must_use]
+    pub const fn cache_shape(&self) -> Option<LayerCacheShape> {
+        match &self.mixer {
+            MixerSpec::SoftmaxAttention(attention) if attention.key_value_source.is_some() => None,
+            MixerSpec::SoftmaxAttention(attention) => Some(LayerCacheShape {
+                heads: attention.key_value_heads,
+                key_width: attention.head_dim,
+                value_width: attention.head_dim,
+            }),
+            MixerSpec::LatentAttention(latent) => Some(LayerCacheShape {
+                heads: 1,
+                key_width: latent.cached_width(),
+                value_width: 0,
+            }),
+            MixerSpec::LinearAttention(_) | MixerSpec::StateSpace(_) => None,
+        }
+    }
+
+    /// The most recent tokens the layer attends to: its sliding window or
+    /// its chunk (a query never sees more than `chunk` tokens back); `None`
+    /// for the full history.
+    #[must_use]
+    pub fn attention_span(&self) -> Option<usize> {
+        self.mixer.softmax_attention()?.window.map(super::AttentionWindow::span)
+    }
+}
+
+/// One layer's cached keys and values per token: `heads` heads of
+/// `key_width` and `value_width` values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LayerCacheShape {
+    pub heads: usize,
+    pub key_width: usize,
+    pub value_width: usize,
+}
+
+/// Where a decoder block applies its norms.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NormPlacement {
+    /// `x + f(norm(x))`, optionally with a norm on `f`'s output (Gemma).
+    #[default]
+    Pre,
+    /// `x + norm(f(x))`: the sub-blocks see the raw residual stream.
+    Post,
+    /// `x + attention(norm(x)) + feed_forward(norm(x))`: one norm feeds both
+    /// sub-blocks, which read the same stream (Cohere).
+    Parallel,
+}
+
+impl NormPlacement {
+    #[must_use]
+    pub const fn is_pre(&self) -> bool {
+        matches!(self, Self::Pre)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -105,6 +202,18 @@ pub struct DecoderLayerSpec {
 pub struct NormalizationSpec {
     pub kind: NormalizationKind,
     pub epsilon: f64,
+    /// Added to the learned weight before scaling: 1 for norms that scale by
+    /// `1 + weight` (Gemma's), which no configuration declares.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub weight_offset: f64,
+}
+
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde `skip_serializing_if` passes a reference"
+)]
+fn is_zero(value: &f64) -> bool {
+    *value == 0.0
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

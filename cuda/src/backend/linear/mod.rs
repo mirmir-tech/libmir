@@ -5,6 +5,7 @@ mod bitsandbytes;
 mod block_fp8;
 mod checkpoint_projection;
 mod direct_fp8;
+mod ggml;
 mod gptq;
 mod mixed;
 mod mxfp4;
@@ -26,9 +27,12 @@ mod weight;
 pub(in crate::backend) use affine_projection::AffineProjection;
 pub(super) use autotune::AutoBf16Plan;
 pub use block_fp8::{BlockFp8LinearWeight, Fp8ResidualLinearWeight};
-pub(in crate::backend) use checkpoint_projection::CheckpointProjection;
 pub use checkpoint_projection::CheckpointProjectionWeight;
+pub(in crate::backend) use checkpoint_projection::{CheckpointProjection, ProjectionLayout};
 pub use direct_fp8::{DirectFp8Bf16Linear, DirectFp8CheckpointWeight, DirectFp8EmbeddingLookup};
+#[cfg(all(test, target_os = "linux"))]
+pub(in crate::backend) use ggml::tests as ggml_tests;
+pub use ggml::{GgmlBf16Linear, GgmlCheckpointWeight, GgmlEmbeddingLookup};
 use mircuda::{DenseMatmulPlan, DenseMatmulSpec, DeviceBuffer, Stream, bf16};
 pub use mixed::Bf16Fp32Linear;
 pub use mxfp4::{
@@ -63,11 +67,11 @@ pub use pair::{Bf16LinearPair, Bf16LinearPairWeights};
 pub use projection::Bf16Projection;
 pub use qmm::AffineQuantizedBf16Qmm;
 pub use quantized::{AffineQuantizedBf16Linear, AffineQuantizedConfig, AffineQuantizedTensors};
-pub(in crate::backend) use selected::SelectedDenseMoeBf16;
 pub use selected::{
     AffineQuantizedPairTensors, DenseExpertWeights, GatedActivation, SelectedAffineGatedBf16Linear,
     SelectedAffinePairBf16Linear, SelectedAffineReduceBf16Linear,
 };
+pub(in crate::backend) use selected::{DenseExpertLayout, SelectedDenseMoeBf16};
 pub use vector::Bf16VectorLinear;
 pub use vendor::Bf16VendorLinear;
 pub use weight::AffineQuantizedWeight;
@@ -81,6 +85,7 @@ pub enum ProjectionFormat {
     Affine,
     Bf16,
     DirectFp8,
+    Ggml,
     MxFp4,
     MxFp8,
     PackedInteger,

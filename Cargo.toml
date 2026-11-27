@@ -1,6 +1,6 @@
 [package]
 name = "libmir"
-version = "0.6.2"
+version = "0.7.0"
 edition.workspace = true
 
 license.workspace = true
@@ -34,7 +34,7 @@ default-members = [".", "admission", "core", "models", "runtime"]
 resolver = "3"
 
 [workspace.package]
-version = "0.6.2"
+version = "0.7.0"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/mirmir-tech/libmir"
@@ -44,11 +44,15 @@ async-trait = "0.1"
 blake3 = "1"
 image = { version = "0.25.10", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 # Template output is part of the tokenization contract; upgrade both after parity checks.
-minijinja = { version = "=2.21.0", features = ["builtins", "json"] }
+minijinja = { version = "=2.21.0", features = ["builtins", "json", "loop_controls"] }
 minijinja-contrib = { version = "=2.21.0", features = ["pycompat"] }
-mircuda = "0.6.2"
-mircup = "0.6.2"
-mirtal = "0.6.2"
+mircuda = "0.7.0"
+mircup = "0.7.0"
+mirtal = "0.7.0"
+# File identity off Unix (volume and file index on Windows), for GGUF imports.
+same-file = "1.0.6"
+# Exchanging a published GGUF import with its replacement in one rename.
+rustix = { version = "1.1", features = ["fs"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -78,14 +82,14 @@ llguidance = "=1.8.0"
 jsonschema = { version = "=0.29.0", default-features = false }
 toktrie_hf_tokenizers = "=1.8.0"
 serde.workspace = true
-architecture = { package = "libmir-admission", version = "0.6.2", path = "admission" }
+architecture = { package = "libmir-admission", version = "0.7.0", path = "admission" }
 async-trait.workspace = true
-foundation = { package = "libmir-core", version = "0.6.2", path = "core" }
-cpu = { package = "libmir-cpu", version = "0.6.2", path = "cpu", optional = true }
-cuda = { package = "libmir-cuda", version = "0.6.2", path = "cuda", optional = true }
-metal = { package = "libmir-metal", version = "0.6.2", path = "metal", optional = true }
-models = { package = "libmir-models", version = "0.6.2", path = "models" }
-runtime = { package = "libmir-runtime", version = "0.6.2", path = "runtime" }
+foundation = { package = "libmir-core", version = "0.7.0", path = "core" }
+cpu = { package = "libmir-cpu", version = "0.7.0", path = "cpu", optional = true }
+cuda = { package = "libmir-cuda", version = "0.7.0", path = "cuda", optional = true }
+metal = { package = "libmir-metal", version = "0.7.0", path = "metal", optional = true }
+models = { package = "libmir-models", version = "0.7.0", path = "models" }
+runtime = { package = "libmir-runtime", version = "0.7.0", path = "runtime" }
 serde_json.workspace = true
 sysinfo = { workspace = true, optional = true }
 thiserror.workspace = true
@@ -103,6 +107,7 @@ macmon = { version = "0.8.1", default-features = false, optional = true }
 blake3.workspace = true
 image.workspace = true
 serde.workspace = true
+tokenizers.workspace = true
 toml.workspace = true
 tracing-subscriber.workspace = true
 

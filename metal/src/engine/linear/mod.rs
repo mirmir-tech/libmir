@@ -3,8 +3,10 @@ use super::{
     QuantizedArrays, Result, RouterOutput, Stream,
 };
 
+mod dense;
 mod gptq;
 mod quantization;
+mod rows;
 pub(in crate::engine) use gptq::GptqLinear;
 pub(super) use quantization::infer_bits;
 
@@ -22,6 +24,11 @@ impl QuantizedLinear {
         bits: i32,
     ) -> Self {
         Self { arrays, bias: None, group_size, bits }
+    }
+
+    /// The projection with `bias` added to its outputs.
+    pub(in crate::engine) fn with_bias(self, bias: Option<Array>) -> Self {
+        Self { bias, ..self }
     }
 
     pub fn load(tensors: &ModelTensors, prefix: &str, group_size: i32) -> Result<Self> {

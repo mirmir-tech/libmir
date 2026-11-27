@@ -20,11 +20,13 @@ impl ClampedRoutedLayer {
     pub fn load(
         tensors: &ModelTensors,
         bindings: RoutedDecoderLayerBindings<'_>,
+        layer: &models::semantic::DecoderLayerSpec,
         config: ClampedRoutedConfig,
         stream: &Stream,
     ) -> Result<Self> {
+        let attention = super::config::attention(layer)?;
         Ok(Self {
-            attention: ClampedRoutedAttention::load(tensors, bindings, config, stream)?,
+            attention: ClampedRoutedAttention::load(tensors, bindings, attention, config, stream)?,
             moe_norm: NormWeight::load_name(tensors, &bindings.post_attention_norm.source)?,
             experts: ClampedRoutedExperts::load(tensors, bindings, config, stream)?,
             epsilon: config.epsilon,

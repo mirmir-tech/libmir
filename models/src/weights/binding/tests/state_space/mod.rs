@@ -63,7 +63,10 @@ fn binds_every_hybrid_layer_through_its_typed_view() -> Result<()> {
     };
     assert_eq!(mamba.input_projection.source, format!("{}.mixer.in_proj.weight", block(0)));
     assert!(matches!(mamba.convolution.storage, TensorStorage::Dense { bias: Some(_), .. }));
-    let routed = first.feed_forward.ok_or_else(|| invalid("layer 0 has a routed block"))?;
+    let routed = first
+        .feed_forward
+        .and_then(StateSpaceHybridFeedForwardBindings::routed)
+        .ok_or_else(|| invalid("layer 0 has a routed block"))?;
     assert_eq!(routed.norm.source, format!("{}.norm.weight", block(1)));
     assert_eq!(routed.routed.individual(ExpertProjectionRole::Up).len(), EXPERTS);
     assert!(routed.routed.individual(ExpertProjectionRole::Gate).is_empty());
@@ -85,7 +88,10 @@ fn binds_stacked_experts_without_latent_space_or_prediction_modules() -> Result<
 
     assert!(spec.decoder.prediction_layers.is_empty());
     let layer = plan.state_space_hybrid_layer(0)?;
-    let routed = layer.feed_forward.ok_or_else(|| invalid("layer 0 has a routed block"))?;
+    let routed = layer
+        .feed_forward
+        .and_then(StateSpaceHybridFeedForwardBindings::routed)
+        .ok_or_else(|| invalid("layer 0 has a routed block"))?;
     assert!(routed.latent.is_none());
     assert!(matches!(routed.routed, RoutedExpertBindings::UngatedStacked { .. }));
     assert!(plan.state_space_hybrid_layer(1)?.feed_forward.is_none());

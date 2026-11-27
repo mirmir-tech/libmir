@@ -1,4 +1,7 @@
+use std::num::NonZeroUsize;
+
 use mircuda::{DeviceBuffer, PinnedBuffer, bf16};
+use models::semantic::AttentionWindow;
 use runtime::kv::{
     BlockId, BlockTable, CacheConfig, KvBackendStorage, KvCacheDType, KvStorageSpec, KvWritePlan,
 };
@@ -8,7 +11,7 @@ use super::super::super::CudaBackend;
 use crate::{CudaAttentionPolicy, CudaConfig, CudaPlanningPolicy, Result};
 
 const TOKENS: usize = 513;
-const BLOCK_SIZE: usize = 16;
+pub(super) const BLOCK_SIZE: usize = 16;
 const KV_HEADS: usize = 2;
 const HEAD_DIM: usize = 64;
 
@@ -27,7 +30,15 @@ fn split_kv_matches_direct_attention() -> Result<()> {
     for dtype in [KvCacheDType::BFloat16, KvCacheDType::Fp8E4M3] {
         for query_heads in [2, 4, 6, 16] {
             compare(&backend, dtype, query_heads, None)?;
-            compare(&backend, dtype, query_heads, Some(300))?;
+            let window = NonZeroUsize::new(300).map(AttentionWindow::Sliding);
+            compare(&backend, dtype, query_heads, window)?;
+            // The newest of 513 tokens starts its 300- and 380-token chunks at
+            // 300 and 380, past the split threshold of 128 visible keys.
+            for chunk in [300, 380] {
+                let window =
+                    NonZeroUsize::new(chunk).map(|chunk| AttentionWindow::Chunked { chunk });
+                compare(&backend, dtype, query_heads, window)?;
+            }
         }
     }
     Ok(())
@@ -37,7 +48,7 @@ fn compare(
     backend: &CudaBackend,
     dtype: KvCacheDType,
     query_heads: usize,
-    window: Option<usize>,
+    window: Option<AttentionWindow>,
 ) -> Result<()> {
     let blocks = TOKENS.div_ceil(BLOCK_SIZE);
     let storage = KvStorageSpec::new(
@@ -51,9 +62,14 @@ fn compare(
     );
     let mut cache = backend.prepare_paged_kv(0, storage)?;
     let width = TOKENS * KV_HEADS * HEAD_DIM;
-    let keys = copy(backend, &values(width, 29, 14, 31.0)?)?;
-    let value_input = copy(backend, &values(width, 37, 18, 23.0)?)?;
-    let query = copy(backend, &values(query_heads * HEAD_DIM, 17, 8, 11.0)?)?;
+    let (keys_host, values_host, query_host) = (
+        values(width, 29, 14, 31.0)?,
+        values(width, 37, 18, 23.0)?,
+        values(query_heads * HEAD_DIM, 17, 8, 11.0)?,
+    );
+    let keys = copy(backend, &keys_host)?;
+    let value_input = copy(backend, &values_host)?;
+    let query = copy(backend, &query_host)?;
     let table = block_table(blocks)?;
     let plan = KvWritePlan::prefill(Uuid::nil(), 0, &table, 0, TOKENS)?;
     cache.store(&plan, &keys, &value_input)?;
@@ -67,9 +83,25 @@ fn compare(
     let split = read(backend, &split)?;
     let max_error = direct
         .iter()
-        .zip(split)
+        .zip(&split)
         .map(|(direct, split)| (direct.to_f32() - split.to_f32()).abs())
         .fold(0.0_f32, f32::max);
+    // BF16 pages hold the inputs exactly, so both paths match an `f32` host
+    // reference to accumulation order and the tensor-core path's BF16
+    // weights: a sixteenth of the output's scale, where reading the wrong
+    // keys misses by the whole output.
+    if dtype == KvCacheDType::BFloat16 {
+        let expected = host_reference(&keys_host, &values_host, &query_host, query_heads, window);
+        let tolerance = expected.iter().fold(0.0_f32, |scale, value| scale.max(value.abs())) / 16.0;
+        for (path, actual) in [("direct", &direct), ("split", &split)] {
+            let error = actual
+                .iter()
+                .zip(&expected)
+                .map(|(actual, expected)| (actual.to_f32() - expected).abs())
+                .fold(0.0_f32, f32::max);
+            assert!(error <= tolerance, "{path} GQA {query_heads} {window:?} error: {error}");
+        }
+    }
     assert!(
         max_error <= 0.015_625,
         "{dtype:?} GQA {query_heads}/{KV_HEADS} {window:?} max error: {max_error}"
@@ -77,7 +109,12 @@ fn compare(
     Ok(())
 }
 
-fn values(len: usize, modulus: usize, midpoint: usize, divisor: f32) -> Result<Vec<bf16>> {
+pub(super) fn values(
+    len: usize,
+    modulus: usize,
+    midpoint: usize,
+    divisor: f32,
+) -> Result<Vec<bf16>> {
     (0..len)
         .map(|index| {
             let value = i16::try_from(index % modulus)? - i16::try_from(midpoint)?;
@@ -86,7 +123,7 @@ fn values(len: usize, modulus: usize, midpoint: usize, divisor: f32) -> Result<V
         .collect()
 }
 
-fn block_table(blocks: usize) -> Result<BlockTable> {
+pub(super) fn block_table(blocks: usize) -> Result<BlockTable> {
     let mut table = BlockTable::with_block_size(BLOCK_SIZE);
     for block in 0..blocks {
         table.push(BlockId(u32::try_from(block)?));
@@ -95,7 +132,7 @@ fn block_table(blocks: usize) -> Result<BlockTable> {
     Ok(table)
 }
 
-fn copy(backend: &CudaBackend, values: &[bf16]) -> Result<DeviceBuffer<bf16>> {
+pub(super) fn copy(backend: &CudaBackend, values: &[bf16]) -> Result<DeviceBuffer<bf16>> {
     let mut host = backend.inner.context.allocate_pinned::<bf16>(values.len())?;
     host.copy_from_slice(values)?;
     let mut device = backend.inner.pool.allocate::<bf16>(&backend.inner.stream, values.len())?;
@@ -103,9 +140,46 @@ fn copy(backend: &CudaBackend, values: &[bf16]) -> Result<DeviceBuffer<bf16>> {
     Ok(device)
 }
 
-fn read(backend: &CudaBackend, source: &DeviceBuffer<bf16>) -> Result<Vec<bf16>> {
+pub(super) fn read(backend: &CudaBackend, source: &DeviceBuffer<bf16>) -> Result<Vec<bf16>> {
     let mut host: PinnedBuffer<bf16> = backend.inner.context.allocate_pinned(source.len())?;
     backend.inner.stream.copy_to_host(source, &mut host)?;
     backend.inner.stream.synchronize()?;
     Ok(host.to_vec()?)
+}
+
+fn host_reference(
+    keys: &[bf16],
+    values: &[bf16],
+    query: &[bf16],
+    query_heads: usize,
+    window: Option<AttentionWindow>,
+) -> Vec<f32> {
+    let visible = crate::kernels::attention_window::visible(TOKENS, window);
+    let first = TOKENS - visible;
+    let mut output = vec![0.0_f32; query_heads * HEAD_DIM];
+    for head in 0..query_heads {
+        let kv = head / (query_heads / KV_HEADS);
+        let scores = (first..TOKENS)
+            .map(|token| {
+                (0..HEAD_DIM)
+                    .map(|d| {
+                        query[head * HEAD_DIM + d].to_f32()
+                            * keys[(token * KV_HEADS + kv) * HEAD_DIM + d].to_f32()
+                    })
+                    .sum::<f32>()
+                    * 0.25
+            })
+            .collect::<Vec<_>>();
+        let maximum = scores.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let weights = scores.iter().map(|score| (score - maximum).exp()).collect::<Vec<_>>();
+        let total = weights.iter().sum::<f32>();
+        for (index, weight) in weights.iter().enumerate() {
+            let token = first + index;
+            for d in 0..HEAD_DIM {
+                output[head * HEAD_DIM + d] +=
+                    values[(token * KV_HEADS + kv) * HEAD_DIM + d].to_f32() * weight / total;
+            }
+        }
+    }
+    output
 }

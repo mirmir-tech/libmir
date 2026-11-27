@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use ::runtime::kv::BlockTable;
 use mircuda::{DeviceBuffer, bf16};
+use models::semantic::AttentionWindow;
 
 use self::measure::{measure_direct, measure_split};
 use super::{PagedAttentionBf16, PagedKvCache};
@@ -23,7 +24,7 @@ impl PagedAttentionBf16 {
         cache: &PagedKvCache,
         table: &BlockTable,
         output: &mut DeviceBuffer<bf16>,
-        window: Option<usize>,
+        window: Option<AttentionWindow>,
         scale: f32,
     ) {
         if self.tuning_complete {
@@ -35,7 +36,7 @@ impl PagedAttentionBf16 {
             batch_rows: 1,
             block_size: self.spec.block_size,
             dtype: self.spec.dtype,
-            window_tokens: window,
+            window_tokens: crate::kernels::attention_window::span(window),
         };
         if !self.profile_allowed {
             self.tuning_complete = true;
@@ -80,13 +81,13 @@ impl PagedAttentionBf16 {
         cache: &PagedKvCache,
         table: &BlockTable,
         output: &mut DeviceBuffer<bf16>,
-        window: Option<usize>,
+        window: Option<AttentionWindow>,
         scale: f32,
     ) -> Result<(AttentionExecution, Duration, Duration)> {
         self.validate(cache, table)?;
         self.update_table(table)?;
         let token_count = table.token_len();
-        let visible = window.map_or(token_count, |limit| token_count.min(limit));
+        let visible = crate::kernels::attention_window::visible(token_count, window);
         let contexts = sample_contexts(visible, self.spec.block_size);
         let (direct, mut elapsed) =
             measure_direct(self, query, cache, table, output, window, scale, &contexts)?;

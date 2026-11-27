@@ -117,7 +117,10 @@ fn build(
     let normalized = graph.rms_norm(&recurrent, &weights.norm, config.rms_norm_eps)?;
     let normalized = graph.astype(&normalized, recurrent.dtype()?)?;
     let output = precise_gate(graph, &recurrent, &gate, &normalized)?;
-    let output = graph.reshape(&output, &Shape::new([batch, 1, value_width])?)?;
+    let output = match weights.tiled {
+        Some(tiled) => tiled.tile_graph(graph, &output)?,
+        None => graph.reshape(&output, &Shape::new([batch, 1, value_width])?)?,
+    };
     let output = weights.output.forward(graph, &output)?;
     Ok([output, next_state, next_history])
 }

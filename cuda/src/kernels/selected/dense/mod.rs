@@ -8,6 +8,7 @@ use crate::{Error, Result};
 
 mod canonicalize;
 mod expert_major;
+mod interleave;
 mod launch;
 mod reduce;
 mod tensor_core;
@@ -16,6 +17,7 @@ mod validation;
 pub use canonicalize::DenseExpertCanonicalizer;
 use expert_major::ExpertMajorKernels;
 pub use expert_major::SelectedDenseDispatch;
+pub use interleave::DenseExpertInterleave;
 use tensor_core::TensorCoreKernels;
 
 cuda_export!(

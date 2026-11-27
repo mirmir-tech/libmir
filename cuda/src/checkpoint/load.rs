@@ -1,5 +1,6 @@
 use mircuda::{DeviceBuffer, bf16};
 use models::{
+    execution::TaskExecutionPlan,
     layout::DecoderConfig,
     semantic::SemanticModelSpec,
     weights::{HybridMoeLayerBindings, TensorCatalog, WeightBindingPlan},
@@ -23,11 +24,24 @@ impl CudaBackend {
         load: NvFp4MoeLayerLoadConfig,
     ) -> Result<DecodeMoeLayerTemplate> {
         let spec = SemanticModelSpec::discover(decoder, catalog)?;
+        // Admitted, not only lowered: a model no runtime runs stays unloaded.
+        let task = TaskExecutionPlan::Generation { decoder: decoder.clone() };
+        let architecture::cuda::CudaArchitecture::Generation(admitted) =
+            architecture::cuda::admit(&task, Some(&spec))?
+        else {
+            return Err(Error::State("a generation task admitted as another task".into()));
+        };
+        let plan = admitted.plan;
         let bindings = WeightBindingPlan::discover(&spec, catalog)?;
         let layer_bindings = bindings.hybrid_moe_layer(layer)?;
         Ok(self
             .load_nvfp4_moe_layer_template_tracked(
-                decoder, &spec, catalog, layer, &layer_bindings, load,
+                decoder,
+                (&spec, &plan),
+                catalog,
+                layer,
+                &layer_bindings,
+                load,
             )?
             .0)
     }
@@ -35,13 +49,13 @@ impl CudaBackend {
     pub(super) fn load_nvfp4_moe_layer_template_tracked(
         &self,
         decoder: &DecoderConfig,
-        semantic: &SemanticModelSpec,
+        (semantic, plan): (&SemanticModelSpec, &architecture::cuda::CudaDecoderPlan),
         catalog: &TensorCatalog,
         layer: usize,
         bindings: &HybridMoeLayerBindings<'_>,
         load: NvFp4MoeLayerLoadConfig,
     ) -> Result<(DecodeMoeLayerTemplate, u64)> {
-        let block = load.block(decoder, semantic, layer)?;
+        let block = load.block(decoder, (semantic, plan), layer)?;
         let source = LayerSource::discover(catalog, bindings)?;
         let tensors = upload(self, &source)?;
         let gate = self.prepare_nvfp4_expert_bank(
@@ -114,7 +128,7 @@ pub(super) fn weights<'a>(
     let get = |index: usize| tensor(tensors, &names[index]);
     Ok(DecodeMoeBlockWeights {
         attention: DecodeAttentionWeights {
-            input_norm: get(0)?,
+            input_norm: Some(get(0)?),
             qkv: DecodeQkvWeights::Bf16(qkv),
             query_norm: bf16_tensor(get(4)?)?,
             key_norm: bf16_tensor(get(5)?)?,

@@ -95,7 +95,13 @@ fn preserves_hybrid_moe_greedy_sequence_after_128_token_prefill() -> Result<()> 
         .contract
         .as_ref()
         .ok_or_else(|| Error::Benchmark("context matrix requires a decoder model".into()))?;
-    let expected = expected_digest(crate::engine::lowering::plan(&contract.semantic)?.runtime())?;
+    let decoder = model
+        .info
+        .decoder
+        .as_ref()
+        .ok_or_else(|| Error::Benchmark("context matrix requires a decoder model".into()))?;
+    let expected =
+        expected_digest(crate::engine::lowering::plan(decoder, &contract.semantic)?.runtime())?;
     let samples = collect_samples(&mut model, &config, GREEDY_VERIFY_CONTEXT, 0)?;
     assert_eq!(digest(&samples).as_bytes(), expected);
     Ok(())
@@ -116,6 +122,9 @@ fn expected_digest(runtime: crate::engine::lowering::DecoderRuntime) -> Result<&
         crate::engine::lowering::DecoderRuntime::StateSpaceHybrid => {
             Err(Error::Benchmark("context matrix has no state-space reference digest".into()))
         },
+        crate::engine::lowering::DecoderRuntime::LatentAttention => Err(Error::Benchmark(
+            "context matrix has no latent-attention reference digest".into(),
+        )),
     }
 }
 

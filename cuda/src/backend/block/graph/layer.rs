@@ -108,7 +108,7 @@ impl CapturedLayer {
         prefill.execute_batch(&mut self.block, input, self.weights.borrow(), batch, output)
     }
 
-    pub(in crate::backend) fn kernels(&self) -> Kernels {
+    pub(in crate::backend) fn kernels(&self) -> Result<Kernels> {
         Kernels::new(&self.block.attention)
     }
 
@@ -157,6 +157,9 @@ impl CapturedLayer {
             geometry.pairing_dim,
             dynamic.position,
             geometry.theta,
+            geometry.rope_scaling.factor,
+            geometry.rope_scaling.slope,
+            geometry.rope_scaling.offset,
             geometry.epsilon,
             0,
             u32::from(geometry.normalization.query),

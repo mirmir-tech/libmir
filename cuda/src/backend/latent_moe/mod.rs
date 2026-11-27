@@ -29,23 +29,28 @@ pub struct LatentMoeConfig {
 }
 
 impl LatentMoeConfig {
-    /// Block geometry of a state-space hybrid decoder's routed blocks. An
-    /// absent latent size yields an invalid geometry that [`Self::validate`]
+    /// Block geometry of a latent routed feed-forward layer. An absent
+    /// latent size yields an invalid geometry that [`Self::validate`]
     /// rejects; admission refuses such decoders earlier with a clear error.
-    #[must_use]
-    pub fn from_hybrid(hidden: usize, routed: &models::layout::LatentRoutedConfig) -> Self {
-        Self {
+    pub fn from_spec(hidden: usize, spec: &models::semantic::FeedForwardSpec) -> Result<Self> {
+        let models::semantic::FeedForwardSpec::LatentRouted { latent_size, routed, shared } = spec
+        else {
+            return Err(Error::UnsupportedDecoderLayer(
+                "layer feed-forward is not a latent routed block".into(),
+            ));
+        };
+        Ok(Self {
             hidden,
-            latent: routed.latent_size.unwrap_or(0),
+            latent: latent_size.unwrap_or(0),
             experts: routed.expert_count,
             top_k: routed.top_k,
-            expert_intermediate: routed.expert_intermediate_size,
-            shared_intermediate: routed.shared_intermediate_size,
+            expert_intermediate: routed.intermediate_size,
+            shared_intermediate: shared.as_ref().map(|shared| shared.intermediate_size),
             // Kernels apply the scale in FP32; checkpoint values are small
             // positive constants that FP32 represents to full precision.
             #[allow(clippy::cast_possible_truncation)]
-            routed_scale: routed.routed_scale as f32,
-        }
+            routed_scale: routed.output_scale as f32,
+        })
     }
 
     fn validate(self) -> Result<()> {

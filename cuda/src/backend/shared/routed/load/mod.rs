@@ -1,12 +1,13 @@
-mod feed_forward;
+mod latent;
 mod state_space;
+use architecture::cuda::CudaLayer;
+pub(super) use latent::layers as latent_layers;
 use models::{
-    layout::{AttentionLayerType, DecoderConfig},
+    layout::{AttentionLayerType, DecoderConfig, LinearAttentionLayout},
+    semantic::DecoderLayerSpec,
     weights::{HybridMixerBindings, MixedDecoderLayerBindings, TensorCatalog, WeightBindingPlan},
 };
-pub(super) use state_space::{
-    HybridLoad, validate_composition as validate_state_space_composition,
-};
+pub(super) use state_space::HybridLoad;
 
 use super::SharedRoutedLayerTemplate;
 use crate::{
@@ -22,12 +23,18 @@ pub(super) fn build_layer(
     decoder: &DecoderConfig,
     tensors: &CudaTensorSet,
     catalog: &TensorCatalog,
-    layer: usize,
+    (layer, spec, lowered): (usize, &DecoderLayerSpec, &CudaLayer),
     bindings: MixedDecoderLayerBindings<'_>,
     norm_shift: f32,
 ) -> Result<SharedRoutedLayerTemplate> {
-    let feed_forward =
-        feed_forward::load(backend, decoder, tensors, catalog, bindings.feed_forward)?;
+    let feed_forward = crate::backend::feed_forward::load(
+        backend,
+        decoder.hidden_size,
+        tensors,
+        catalog,
+        (&spec.feed_forward, &lowered.feed_forward),
+        bindings.feed_forward,
+    )?;
     let epsilon = decoder.rms_norm_eps.to_string().parse()?;
     match decoder.layer_type(layer) {
         AttentionLayerType::Linear => {
@@ -39,7 +46,7 @@ pub(super) fn build_layer(
                     "linear layer has no linear mixer bindings".into(),
                 ));
             };
-            let weights = AffineGatedDeltaLayerWeights::load_bindings(tensors, mixer_bindings)?;
+            let mut weights = AffineGatedDeltaLayerWeights::load_bindings(tensors, mixer_bindings)?;
             let mixed_width = linear
                 .key_heads
                 .checked_mul(linear.key_head_dim)
@@ -63,6 +70,9 @@ pub(super) fn build_layer(
                 decoder.rms_norm_eps,
                 0.0,
             )?;
+            if linear.layout == LinearAttentionLayout::LlamaCpp {
+                weights.restore_llama_cpp_layout(backend, attention)?;
+            }
             let config = LayerNormConfig {
                 hidden_size: decoder.hidden_size,
                 rms_norm_epsilon: epsilon,
@@ -86,6 +96,9 @@ pub(super) fn build_layer(
         )),
         AttentionLayerType::StateSpace => Err(Error::UnsupportedDecoderLayer(
             "shared-routed linear mixer stack contains a state-space mixer".into(),
+        )),
+        AttentionLayerType::Latent => Err(Error::UnsupportedDecoderLayer(
+            "shared-routed linear mixer stack contains latent attention".into(),
         )),
     }
 }
@@ -148,6 +161,14 @@ pub(super) fn infer_norm_shift(
             "linear layer has no linear mixer binding".into(),
         ));
     };
+    // llama.cpp's GGUF conversion folds the unit offset into the norms.
+    let folded = decoder
+        .linear_attention
+        .as_ref()
+        .is_some_and(|linear| linear.layout == LinearAttentionLayout::LlamaCpp);
+    if folded {
+        return Ok(0.0);
+    }
     let tensor = tensors
         .get(&linear.convolution.source)
         .ok_or_else(|| Error::MissingTensor(linear.convolution.source.clone()))?;
@@ -177,30 +198,24 @@ pub(super) fn required_norm(
     Ok(tensor)
 }
 
-pub(super) fn validate_composition(
-    semantic: &models::semantic::SemanticModelSpec,
+/// Whether the runtime admission chose runs the hybrid or the latent layers
+/// of the template, which builds every shared-routed runtime.
+pub(super) fn composition(
+    runtime: crate::CudaDecoderRuntime,
     max_sequence_blocks: usize,
-) -> Result<()> {
-    use models::semantic::{FeedForwardSpec, MixerSpec};
-    let compatible = semantic.decoder.layers.iter().all(|layer| {
-        matches!(
-            layer.feed_forward,
-            FeedForwardSpec::Routed { shared: Some(_), .. } | FeedForwardSpec::Dense { .. }
-        )
-    }) && semantic
-        .decoder
-        .layers
-        .iter()
-        .any(|layer| matches!(layer.mixer, MixerSpec::LinearAttention(_)))
-        && semantic
-            .decoder
-            .layers
-            .iter()
-            .any(|layer| matches!(layer.mixer, MixerSpec::SoftmaxAttention(_)));
-    if !compatible || max_sequence_blocks == 0 {
-        return Err(Error::UnsupportedDecoderLayer(
-            "parsed decoder is not a shared-routed mixed-mixer stack".into(),
-        ));
+) -> Result<(bool, bool)> {
+    use crate::CudaDecoderRuntime;
+    if max_sequence_blocks == 0 {
+        return Err(Error::InvalidPagedKv("shared-routed sequence capacity is empty"));
     }
-    Ok(())
+    match runtime {
+        CudaDecoderRuntime::StateSpaceHybrid => Ok((true, false)),
+        CudaDecoderRuntime::LatentAttention => Ok((false, true)),
+        CudaDecoderRuntime::SharedRouted | CudaDecoderRuntime::DenseMixed => Ok((false, false)),
+        CudaDecoderRuntime::Dense
+        | CudaDecoderRuntime::DenseAndRouted
+        | CudaDecoderRuntime::ClampedRouted => {
+            Err(Error::State(format!("{runtime:?} is not a shared-routed runtime")))
+        },
+    }
 }

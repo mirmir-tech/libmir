@@ -34,8 +34,9 @@ for (uint index = 0; index < QK_PER_THREAD; ++index) {
 for (uint index = 0; index < V_PER_THREAD; ++index) accumulator[index] = 0.0f;
 float maximum = -INFINITY;
 float normalizer = 0.0f;
-uint context_tokens = page_dependencies[batch];
 uint page_capacity = page_capacities[batch];
+uint context_tokens =
+    min(page_dependencies[batch], min(page_capacity, uint(PAGE_TABLE_CAPACITY)) * uint(PAGE_SIZE));
 for (uint token = simd_group; token < context_tokens; token += BN) {
   uint page = page_tables[batch * PAGE_TABLE_CAPACITY + token / PAGE_SIZE];
   uint in_page = token % PAGE_SIZE;

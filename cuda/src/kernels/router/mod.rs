@@ -1,11 +1,17 @@
+mod input_scale;
 mod pattern;
+mod scoring;
+#[cfg(all(test, target_os = "linux"))]
+mod tests;
 mod unit;
 
+pub use input_scale::RouterInputScale;
 use mircuda::{
     CompileOptions, Compiler, DeviceBuffer, LaunchConfig, Stream, TypedKernel, bf16, cuda_export,
     cuda_kernel_file,
 };
 pub use pattern::{RoutePattern, RoutePatternGenerator, RoutePatternSpec};
+pub use scoring::{RouterJitter, RouterUnitScoring, RouterUnitWeighting};
 pub use unit::{RouterUnitSpec, RouterUnitTopK};
 
 use super::geometry::require;

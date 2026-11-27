@@ -35,10 +35,11 @@ use self::{
     prediction::PredictionTemplate,
 };
 use crate::{
-    CudaAffineGatedDeltaMoeLayer, CudaAffineGatedFullAttentionMoeLayer,
+    CudaAdmitted, CudaAffineGatedDeltaMoeLayer, CudaAffineGatedFullAttentionMoeLayer,
     CudaAffineGatedFullAttentionState, CudaAttentionHybridLayer, CudaBackend, CudaGatedDeltaState,
-    CudaMamba2HybridLayer, CudaMamba2State, CudaTensor, CudaTensorSet, DecodeAttentionBf16,
-    PagedKvCache, Result, backend::linear::CheckpointProjectionWeight,
+    CudaLatentAttentionLayer, CudaMamba2HybridLayer, CudaMamba2State, CudaTensor, CudaTensorSet,
+    DecodeAttentionBf16, LatentAttentionState, PagedKvCache, Result,
+    backend::linear::CheckpointProjectionWeight,
 };
 
 #[derive(Clone, Debug)]
@@ -47,6 +48,7 @@ enum SharedRoutedLayerTemplate {
     Full(Box<CudaAffineGatedFullAttentionMoeLayer>),
     Mamba2(Box<CudaMamba2HybridLayer>),
     Attention(Box<CudaAttentionHybridLayer>),
+    Latent(Box<CudaLatentAttentionLayer>),
 }
 
 #[derive(Debug)]
@@ -55,6 +57,7 @@ pub enum CudaSharedRoutedLayerState {
     Full(Box<CudaAffineGatedFullAttentionState>),
     Mamba2(CudaMamba2State),
     Attention(Box<DecodeAttentionBf16>),
+    Latent(Box<LatentAttentionState>),
 }
 
 #[derive(Clone, Debug)]
@@ -86,6 +89,7 @@ impl CudaSharedRoutedModelTemplate {
     pub fn from_tensors(
         backend: &CudaBackend,
         decoder: &DecoderConfig,
+        admitted: &CudaAdmitted,
         semantic: &SemanticModelSpec,
         tensors: &CudaTensorSet,
         catalog: &TensorCatalog,
@@ -94,13 +98,9 @@ impl CudaSharedRoutedModelTemplate {
         max_sequence_blocks: usize,
         speculation: Option<Speculation>,
     ) -> Result<Self> {
-        let hybrid = decoder.state_space.is_some();
-        if hybrid {
-            load::validate_state_space_composition(&semantic.decoder.layers, max_sequence_blocks)?;
-        } else {
-            load::validate_composition(semantic, max_sequence_blocks)?;
-        }
-        let boundary = bindings.decoder_boundary()?;
+        let (hybrid, latent) = load::composition(admitted.runtime, max_sequence_blocks)?;
+        let plan = admitted.plan.layers();
+        let boundary = bindings.decoder_boundary_with_tied_output(decoder.tie_word_embeddings)?;
         let embedding = CheckpointProjectionWeight::load_binding_prepared(
             backend,
             tensors,
@@ -128,26 +128,43 @@ impl CudaSharedRoutedModelTemplate {
                 .layers
                 .iter()
                 .enumerate()
-                .map(|(layer, spec)| {
-                    load.layer(layer, spec, bindings.state_space_hybrid_layer(layer)?)
+                .zip(plan)
+                .map(|((layer, spec), lowered)| {
+                    load.layer(layer, (spec, lowered), bindings.state_space_hybrid_layer(layer)?)
                 })
                 .collect::<Result<Vec<_>>>()?;
             // Speculation drafts only with a checkpoint's prediction module.
             let prediction = speculation
                 .filter(|_| !semantic.decoder.prediction_layers.is_empty())
-                .map(|_| PredictionTemplate::load(&load, semantic, bindings))
+                .map(|_| PredictionTemplate::load(&load, (semantic, &admitted.plan), bindings))
                 .transpose()?;
             (0.0, layers, prediction)
+        } else if latent {
+            let layers = load::latent_layers(
+                backend,
+                decoder,
+                (semantic, plan),
+                tensors,
+                catalog,
+                bindings,
+                cache,
+            )?;
+            (0.0, layers, None)
         } else {
             let norm_shift = infer_norm_shift(tensors, decoder, bindings)?;
-            let layers = (0..decoder.num_hidden_layers)
-                .map(|layer| {
+            let layers = semantic
+                .decoder
+                .layers
+                .iter()
+                .enumerate()
+                .zip(plan)
+                .map(|((layer, spec), lowered)| {
                     build_layer(
                         backend,
                         decoder,
                         tensors,
                         catalog,
-                        layer,
+                        (layer, spec, lowered),
                         bindings.mixed_decoder_layer(layer)?,
                         norm_shift,
                     )

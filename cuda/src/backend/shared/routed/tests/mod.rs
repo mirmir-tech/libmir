@@ -88,6 +88,7 @@ fn continues_decode_after_spatial_vision_prefill() -> Result<()> {
 }
 
 #[test]
+#[ignore = "requires an idle CUDA device; measures the shared driver memory pool"]
 fn concurrent_sessions_reuse_model_kv_pages_and_plans() -> Result<()> {
     let backend = CudaBackend::new(CudaConfig::default())?;
     let decoder = decoder()?;

@@ -45,6 +45,7 @@ fn preserves_batched_pipeline_against_synchronous_logits() -> Result<()> {
             session,
             token: output_token(&model, output.output)?,
             sampling: SamplingLogits::None,
+            speculation: None,
         });
     }
     for (step, expected) in expected.iter().enumerate() {

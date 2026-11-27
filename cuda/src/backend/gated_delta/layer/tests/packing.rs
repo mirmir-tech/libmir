@@ -24,6 +24,7 @@ pub(super) fn dense_weights(
         bits: 0,
         rms_norm_epsilon: 1.0e-6,
         norm_weight_shift: 0.0,
+        layout: models::layout::LinearAttentionLayout::Checkpoint,
     };
     let tensor = |name: &str, shape: Vec<usize>, seed: usize| {
         let values = pattern(shape.iter().product(), seed);

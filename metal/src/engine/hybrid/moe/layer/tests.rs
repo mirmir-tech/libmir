@@ -17,11 +17,11 @@ fn bench_hybrid_moe_attention_decode() -> Result<()> {
     let tensors = ModelTensors::load(root, &load_stream)?;
     let stream = Stream::new_gpu()?;
     let config =
-        HybridMoeLayerConfig::from_decoder(env_usize("MIRMIR_BENCH_LAYER", 0)?, &decoder, 64)?;
-    let layer = HybridMoeLayer::load(&tensors, config, &stream)?;
+        super::super::CheckpointLayer::discover(&decoder, env_usize("MIRMIR_BENCH_LAYER", 0)?, 64)?;
+    let layer = HybridMoeLayer::load(&tensors, &config, &stream)?;
     let reference = tensors.get("language_model.model.norm.weight")?;
     let prefill = benchmark_input(128, decoder.hidden_size, &reference, &stream)?;
-    let mut cache = KvCache::new_with_window(256, config.max_context)?;
+    let mut cache = KvCache::new_with_window(256, config.config.max_context())?;
     let warmup = layer.attention_residual_for_test(&prefill, &mut cache, 0, true, &stream)?;
     warmup.async_eval(&stream)?;
     stream.synchronize()?;
@@ -38,7 +38,7 @@ fn bench_hybrid_moe_attention_decode() -> Result<()> {
     let iters = f64::from(u32::try_from(iters)?);
     println!(
         "mirmir_attention_bench layer={} context=128 decode_ms={:.4}",
-        config.layer_index,
+        config.config.layer_index,
         started.elapsed().as_secs_f64() * 1_000.0 / iters
     );
     Ok(())
@@ -129,22 +129,21 @@ impl HybridMoeLayer {
         stream: &Stream,
     ) -> Result<(Array, Array)> {
         let input = self.weights.input_norm.apply(input, self.config.rms_norm_eps, stream)?;
-        let raw_keys = self.weights.attention.key.forward(&input, stream)?;
-        let raw_values = self
-            .weights
-            .attention
-            .value
-            .as_ref()
-            .map(|value| value.forward(&input, stream))
-            .transpose()?;
         let sequence =
             input.shape()?.get(1).copied().ok_or_else(|| {
                 Error::InvalidModel("attention input has no sequence axis".into())
             })?;
-        let keys =
-            raw_keys.reshape(&[1, sequence, self.config.kv_heads, self.config.head_dim], stream)?;
-        let keys =
-            self.weights.attention.key_norm.apply(&keys, self.config.rms_norm_eps, stream)?;
+        let attention::Projected { key_values, .. } = attention::project(
+            &input,
+            &self.weights.attention,
+            self.config,
+            (None, None),
+            [1, sequence],
+            stream,
+        )?;
+        let attention::KeyValues::Own { keys, values, .. } = key_values else {
+            return Err(Error::InvalidModel("the layer shares another layer's keys".into()));
+        };
         let keys = attention::rope_layout(
             &keys,
             self.weights.attention.rope_frequencies.as_ref(),
@@ -152,11 +151,6 @@ impl HybridMoeLayer {
             position,
             stream,
         )?;
-        let values = raw_values
-            .ok_or_else(|| Error::InvalidModel("missing hybrid MoE value projection".into()))?
-            .reshape(&[1, sequence, self.config.kv_heads, self.config.head_dim], stream)?
-            .rms_norm_unit(self.config.rms_norm_eps, stream)?
-            .transpose(&[0, 2, 1, 3], stream)?;
         Ok((keys, values))
     }
 

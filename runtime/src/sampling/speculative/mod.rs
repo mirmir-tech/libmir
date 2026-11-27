@@ -13,6 +13,9 @@ use super::{
 };
 use crate::error::{Result, RuntimeError};
 
+mod step;
+pub use step::{SampledStep, speculative_seed};
+
 /// Tokens more than this many temperature-scaled nats below the top carry
 /// under `e^-30` of the mass each and are left out before sorting.
 const NEGLIGIBLE_NATS: f32 = 30.0;

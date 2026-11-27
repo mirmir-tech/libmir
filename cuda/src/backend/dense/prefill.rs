@@ -46,7 +46,7 @@ impl PrefillDenseSwiGlu {
         weights: DenseSwiGluWeights<'_>,
         write_plan: &KvWritePlan,
         table: &BlockTable,
-        start_position: usize,
+        (start_position, per_layer): (usize, Option<&DeviceBuffer<bf16>>),
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
         self.attention.execute(
@@ -58,7 +58,7 @@ impl PrefillDenseSwiGlu {
             start_position,
             &mut self.scratch.attention,
         )?;
-        self.feed_forward.execute(input, weights, &mut self.scratch, output)
+        self.feed_forward.execute(input, weights, &mut self.scratch, per_layer, output)
     }
 
     pub fn execute_batch(
@@ -67,6 +67,7 @@ impl PrefillDenseSwiGlu {
         input: &DeviceBuffer<bf16>,
         weights: DenseSwiGluWeights<'_>,
         batch: &PagedPrefillBatch,
+        per_layer: Option<&DeviceBuffer<bf16>>,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
         self.attention.execute_batch(
@@ -76,7 +77,7 @@ impl PrefillDenseSwiGlu {
             batch,
             &mut self.scratch.attention,
         )?;
-        self.feed_forward.execute(input, weights, &mut self.scratch, output)
+        self.feed_forward.execute(input, weights, &mut self.scratch, per_layer, output)
     }
 
     #[must_use]

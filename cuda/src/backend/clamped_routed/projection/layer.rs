@@ -1,10 +1,13 @@
-use mircuda::{DeviceBuffer, Stream, bf16};
+use mircuda::Stream;
 
-use super::super::{ClampedRoutedConfig, ClampedRoutedQkvLowering, scratch::ClampedRoutedScratch};
+use super::{
+    super::{ClampedRoutedConfig, ClampedRoutedQkvLowering, scratch::ClampedRoutedScratch},
+    linear::{ClampedRoutedLinear, ClampedRoutedLinearWeight, affine, phase},
+};
 use crate::{
-    AffineQuantizedWeight, Bf16LinearPack, Bf16LinearPackWeights, Bf16Projection, CudaBackend,
-    CudaTensor, DensePlanRequest, DenseRole, ExecutionPhase, Result,
-    backend::linear::AffineProjection, kernels::ClampedRoutedKernels,
+    AffineQuantizedWeight, Bf16LinearPack, Bf16LinearPackWeights, CudaBackend, CudaTensor,
+    DenseRole, GgmlBf16Linear, GgmlCheckpointWeight, Result, backend::linear::AffineProjection,
+    kernels::ClampedRoutedKernels,
 };
 
 #[derive(Clone)]
@@ -17,6 +20,8 @@ pub(in crate::backend::clamped_routed) struct ClampedRoutedQkvWeight {
 pub(in crate::backend::clamped_routed) enum ClampedRoutedQkvProjections {
     Native(Bf16LinearPackWeights<3>),
     Mlx(Box<[AffineQuantizedWeight; 3]>),
+    Ggml(Box<[GgmlCheckpointWeight; 3]>),
+    Mixed(Box<[ClampedRoutedLinearWeight; 3]>),
 }
 
 pub(in crate::backend::clamped_routed) enum ClampedRoutedQkv {
@@ -30,22 +35,14 @@ pub(in crate::backend::clamped_routed) enum ClampedRoutedQkv {
         weights: Box<[AffineQuantizedWeight; 3]>,
         biases: [CudaTensor; 3],
     },
-}
-
-#[derive(Clone)]
-pub(in crate::backend::clamped_routed) enum ClampedRoutedLinearWeight {
-    Native(CudaTensor),
-    Mlx(AffineQuantizedWeight),
-}
-
-pub(in crate::backend::clamped_routed) enum ClampedRoutedLinear {
-    Native {
-        operation: Bf16Projection,
-        weight: CudaTensor,
+    Ggml {
+        operations: Box<[GgmlBf16Linear; 3]>,
+        weights: Box<[GgmlCheckpointWeight; 3]>,
+        biases: [CudaTensor; 3],
     },
-    Mlx {
-        operation: AffineProjection,
-        weight: AffineQuantizedWeight,
+    Mixed {
+        operations: Box<[ClampedRoutedLinear; 3]>,
+        biases: [CudaTensor; 3],
     },
 }
 
@@ -64,7 +61,7 @@ impl ClampedRoutedQkv {
         ];
         match (lowering, &weight.projections) {
             (
-                ClampedRoutedQkvLowering::PackedFused,
+                ClampedRoutedQkvLowering::PackedFused | ClampedRoutedQkvLowering::SeparateComposed,
                 ClampedRoutedQkvProjections::Native(weights),
             ) => Ok(Self::Native {
                 operation: Bf16LinearPack::new(
@@ -89,6 +86,41 @@ impl ClampedRoutedQkv {
                 weights: weights.clone(),
                 biases: weight.biases.clone(),
             }),
+            (
+                ClampedRoutedQkvLowering::SeparateComposed,
+                ClampedRoutedQkvProjections::Ggml(weights),
+            ) => {
+                let role = DenseRole::AttentionQkv;
+                Ok(Self::Ggml {
+                    operations: Box::new([
+                        weights[0].prepare(backend, tokens, role)?,
+                        weights[1].prepare(backend, tokens, role)?,
+                        weights[2].prepare(backend, tokens, role)?,
+                    ]),
+                    weights: weights.clone(),
+                    biases: weight.biases.clone(),
+                })
+            },
+            (
+                ClampedRoutedQkvLowering::SeparateComposed,
+                ClampedRoutedQkvProjections::Mixed(weights),
+            ) => {
+                let role = DenseRole::AttentionQkv;
+                Ok(Self::Mixed {
+                    operations: Box::new([
+                        ClampedRoutedLinear::new(
+                            backend, tokens, config.hidden, outputs[0], role, &weights[0],
+                        )?,
+                        ClampedRoutedLinear::new(
+                            backend, tokens, config.hidden, outputs[1], role, &weights[1],
+                        )?,
+                        ClampedRoutedLinear::new(
+                            backend, tokens, config.hidden, outputs[2], role, &weights[2],
+                        )?,
+                    ]),
+                    biases: weight.biases.clone(),
+                })
+            },
             _ => Err(crate::Error::InvalidExecutionPlan(
                 "clamped-routed QKV lowering differs from bound storage",
             )),
@@ -116,6 +148,24 @@ impl ClampedRoutedQkv {
                     scratch.rope_concentration,
                 )
             },
+            Self::Ggml { operations, weights, biases } => {
+                // One input: Q quantizes it, K and V reuse that.
+                let input = &scratch.normalized;
+                operations[0].execute_shared(input, &weights[0], &mut scratch.raw_query, false)?;
+                operations[1].execute_shared(input, &weights[1], &mut scratch.raw_key, true)?;
+                operations[2].execute_shared(input, &weights[2], &mut scratch.raw_value, true)?;
+                kernels.qkv_mlx(
+                    stream,
+                    [&scratch.raw_query, &scratch.raw_key, &scratch.raw_value],
+                    biases,
+                    &mut scratch.query,
+                    &mut scratch.key,
+                    &mut scratch.value,
+                    &scratch.rope_sines,
+                    &scratch.rope_cosines,
+                    scratch.rope_concentration,
+                )
+            },
             Self::Mlx { operations, weights, biases } => {
                 operations[0].execute(&scratch.normalized, &weights[0], &mut scratch.raw_query)?;
                 operations[1].execute(&scratch.normalized, &weights[1], &mut scratch.raw_key)?;
@@ -132,64 +182,22 @@ impl ClampedRoutedQkv {
                     scratch.rope_concentration,
                 )
             },
+            Self::Mixed { operations, biases } => {
+                operations[0].execute(&scratch.normalized, &mut scratch.raw_query)?;
+                operations[1].execute(&scratch.normalized, &mut scratch.raw_key)?;
+                operations[2].execute(&scratch.normalized, &mut scratch.raw_value)?;
+                kernels.qkv_mlx(
+                    stream,
+                    [&scratch.raw_query, &scratch.raw_key, &scratch.raw_value],
+                    biases,
+                    &mut scratch.query,
+                    &mut scratch.key,
+                    &mut scratch.value,
+                    &scratch.rope_sines,
+                    &scratch.rope_cosines,
+                    scratch.rope_concentration,
+                )
+            },
         }
-    }
-}
-
-impl ClampedRoutedLinear {
-    pub(in crate::backend::clamped_routed) fn new(
-        backend: &CudaBackend,
-        tokens: usize,
-        input: usize,
-        output: usize,
-        role: DenseRole,
-        weight: &ClampedRoutedLinearWeight,
-    ) -> Result<Self> {
-        match weight {
-            ClampedRoutedLinearWeight::Native(weight) => Ok(Self::Native {
-                operation: backend.prepare_bf16_projection(DensePlanRequest {
-                    phase: phase(tokens),
-                    role,
-                    tokens,
-                    input_features: input,
-                    output_features: output,
-                })?,
-                weight: weight.clone(),
-            }),
-            ClampedRoutedLinearWeight::Mlx(weight) => Ok(Self::Mlx {
-                operation: affine(backend, tokens, input, output, weight)?,
-                weight: weight.clone(),
-            }),
-        }
-    }
-
-    pub(in crate::backend::clamped_routed) fn execute(
-        &mut self,
-        input: &DeviceBuffer<bf16>,
-        output: &mut DeviceBuffer<bf16>,
-    ) -> Result<()> {
-        match self {
-            Self::Native { operation, weight } => operation.execute(input, weight, output),
-            Self::Mlx { operation, weight } => operation.execute(input, weight, output),
-        }
-    }
-}
-
-fn affine(
-    backend: &CudaBackend,
-    tokens: usize,
-    input: usize,
-    output: usize,
-    weight: &AffineQuantizedWeight,
-) -> Result<AffineProjection> {
-    let config = weight.infer_config(1, input, output)?;
-    AffineProjection::new(backend, tokens, input, output, config.group_size, config.bits, weight)
-}
-
-const fn phase(tokens: usize) -> ExecutionPhase {
-    if tokens == 1 {
-        ExecutionPhase::Decode
-    } else {
-        ExecutionPhase::Prefill
     }
 }

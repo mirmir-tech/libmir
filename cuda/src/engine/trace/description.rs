@@ -16,7 +16,9 @@ pub(super) fn attention_counts(model: &LoadedModel) -> (usize, usize) {
                 MixerSpec::SoftmaxAttention(attention) if attention.window.is_some() => {
                     (full, sliding + 1)
                 },
-                MixerSpec::SoftmaxAttention(_) => (full + 1, sliding),
+                MixerSpec::SoftmaxAttention(_) | MixerSpec::LatentAttention(_) => {
+                    (full + 1, sliding)
+                },
                 MixerSpec::LinearAttention(_) | MixerSpec::StateSpace(_) => (full, sliding),
             });
     }

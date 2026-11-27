@@ -53,7 +53,8 @@ fn autotunes_and_persists_complete_mxfp8_prefill() -> Result<()> {
     let payload = fs::read_to_string(profile)?;
     assert!(payload.contains("\"quantized\""));
     assert!(payload.contains("MxFp8"));
-    assert!(payload.contains("TensorCore"));
+    // The measured winner depends on device load; either candidate is valid.
+    assert!(payload.contains("TensorCore") || payload.contains("Portable"));
     fs::remove_dir_all(directory)?;
     Ok(())
 }

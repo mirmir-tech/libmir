@@ -44,6 +44,7 @@ fn config() -> AffineGatedDeltaLayerConfig {
         bits: 4,
         rms_norm_epsilon: 1.0e-6,
         norm_weight_shift: 0.0,
+        layout: models::layout::LinearAttentionLayout::Checkpoint,
     }
 }
 

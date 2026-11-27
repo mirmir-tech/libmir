@@ -8,8 +8,9 @@ mod reduce;
 mod tests;
 
 pub use dense::{
-    DenseExpertCanonicalizer, DenseGateUpLayout, DenseGatedActivation, SelectedDenseDispatch,
-    SelectedDenseGateLaunch, SelectedDenseMoe, SelectedDenseMoeSpec, SelectedDenseReduceLaunch,
+    DenseExpertCanonicalizer, DenseExpertInterleave, DenseGateUpLayout, DenseGatedActivation,
+    SelectedDenseDispatch, SelectedDenseGateLaunch, SelectedDenseMoe, SelectedDenseMoeSpec,
+    SelectedDenseReduceLaunch,
 };
 pub use gated::{
     GatedActivation, SelectedAffineGated, SelectedAffineGatedLaunch, SelectedAffineGatedSpec,

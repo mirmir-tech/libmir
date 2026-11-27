@@ -2,8 +2,10 @@ mod convolution;
 mod fallback;
 mod layer;
 mod state;
+mod trail;
 mod update;
 
+pub(in crate::engine) use layer::decay_log;
 pub use layer::{GatedDeltaLayer, GatedDeltaLayerConfig};
 pub(super) use state::StateArray;
 
@@ -25,6 +27,7 @@ pub struct GatedDeltaState {
     value: Option<StateArray>,
     convolution: Option<StateArray>,
     offset: usize,
+    trail: Option<trail::RowTrail>,
 }
 
 impl GatedDeltaState {
@@ -40,6 +43,7 @@ impl GatedDeltaState {
         self.value = None;
         self.convolution = None;
         self.offset = 0;
+        self.trail = None;
         Ok(())
     }
 
@@ -76,6 +80,7 @@ impl GatedDeltaState {
             value: self.value.as_ref().map(StateArray::try_clone).transpose()?,
             convolution: self.convolution.as_ref().map(StateArray::try_clone).transpose()?,
             offset: self.offset,
+            trail: None,
         })
     }
 

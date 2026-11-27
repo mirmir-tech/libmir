@@ -27,7 +27,10 @@ fn shared_scratch_preserves_distinct_weights_and_graph_replay() -> Result<()> {
     let first = template()?;
     let backend = &first.backend;
     let mut second = first.clone();
-    second.down = first.up.clone();
+    let DenseMlp::Gated { up, .. } = &first.mlp else {
+        return Err(Error::InvalidExecutionPlan("the template MLP is gated"));
+    };
+    second.down = up.clone();
     let stream = backend.inner.stream.clone();
     let upload = |values: &[f32]| -> Result<DeviceBuffer<bf16>> {
         let mut host = backend.inner.context.allocate_pinned(values.len())?;

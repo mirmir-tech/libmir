@@ -6,6 +6,7 @@ mod dense;
 mod dimensions;
 mod discovery;
 mod float8;
+mod ggml;
 mod gptq;
 mod grammar;
 mod hybrid;
@@ -32,18 +33,25 @@ pub use block::{
     BlockActivationMode, BlockFormat, BlockInputPadding, BlockProjectionLayout, BlockQuantization,
     BlockScale, BlockScaleEncoding, BlockStorageDType,
 };
-pub use dense::{DenseDecoderLayerBindings, DenseSandwichBindings, DenseSoftmaxBindings};
+pub use dense::{
+    DenseDecoderLayerBindings, DenseLayerFeedForwardBindings, DenseSandwichBindings,
+    DenseSoftmaxBindings, ParallelDecoderLayerBindings, PerLayerEmbeddingBindings,
+    PerLayerInputBindings, PostNormDecoderLayerBindings, RoutedFeedForwardBindings,
+    SharedKeyValueLayerBindings,
+};
 pub use float8::{
     Float8ActivationScale, Float8Format, Float8ParameterDType, Float8Quantization,
     Float8ScaleGranularity, Float8ScaleMode,
 };
+pub use ggml::{GgmlBlockQuantization, GgmlCompanion};
 pub use gptq::{
     GptqBits, GptqCheckpointFormat, GptqPacking, GptqQuantization, GptqScaleDType, GptqStorageDType,
 };
 pub use hybrid::{
     DenseFeedForwardBindings, GatedSoftmaxBindings, HybridDecoderLayerBindings,
-    HybridMixerBindings, LinearAttentionBindings, MixedDecoderLayerBindings,
-    MixedFeedForwardBindings, SharedRoutedFeedForwardBindings,
+    HybridMixerBindings, LatentAttentionBindings, LatentDecoderLayerBindings, LatentQueryBindings,
+    LatentUpBindings, LinearAttentionBindings, MixedDecoderLayerBindings, MixedFeedForwardBindings,
+    SharedRoutedFeedForwardBindings,
     moe::{
         HybridMoeAttentionBindings, HybridMoeDenseBindings, HybridMoeExpertBindings,
         HybridMoeLayerBindings, HybridMoeRouterBindings,
@@ -54,17 +62,18 @@ pub use packed_integer::{
     CompressedIntegerQuantization, CompressedIntegerScaleDType, CompressedIntegerScaleStrategy,
     CompressedIntegerSignedness, CompressedIntegerStorageDType, CompressedIntegerZeroPointMode,
 };
-pub use prediction::PredictionLayerBindings;
+pub use prediction::{MixedPredictionLayerBindings, PredictionLayerBindings};
 pub use roles::{
-    AttentionProjectionRole, ExpertProjectionRole, FeedForwardProjectionRole, LatentProjectionRole,
-    LayerTensorRole, LinearAttentionTensorRole, LogicalTensorRole, PredictionTensorRole,
+    AttentionProjectionRole, ExpertProjectionRole, FeedForwardProjectionRole,
+    LatentAttentionTensorRole, LatentProjectionRole, LayerTensorRole, LinearAttentionTensorRole,
+    LogicalTensorRole, PerLayerEmbeddingRole, PerLayerInputRole, PredictionTensorRole,
     StateSpaceTensorRole,
 };
 pub use slot::LayerSlot;
 pub use state_space::{
-    AttentionProjectionBindings, LatentProjectionBindings, LatentRoutedBindings,
-    StateSpaceHybridLayerBindings, StateSpaceHybridMixerBindings, StateSpaceMixerBindings,
-    UngatedExpertBindings,
+    AttentionProjectionBindings, DenseHybridBindings, LatentProjectionBindings,
+    LatentRoutedBindings, StateSpaceHybridFeedForwardBindings, StateSpaceHybridLayerBindings,
+    StateSpaceHybridMixerBindings, StateSpaceMixerBindings, UngatedExpertBindings,
 };
 pub use types::{
     BindingTransform, ExpertProjectionLayout, TensorBinding, TensorPacking, TensorStorage,
@@ -86,7 +95,18 @@ impl WeightBindingPlan {
         catalog: &TensorCatalog,
         layout: &ModelLayout,
     ) -> Result<Self> {
-        discovery::discover_from_layout(spec, catalog, layout)
+        let config = crate::layout::json::read(&layout.config_path)?;
+        discovery::discover_with_config(spec, catalog, &config)
+    }
+
+    /// Discovers bindings as the parsed `config.json` declares the
+    /// checkpoint's quantization, as for a Hub repository not downloaded.
+    pub fn discover_with_config(
+        spec: &SemanticModelSpec,
+        catalog: &TensorCatalog,
+        config: &serde_json::Value,
+    ) -> Result<Self> {
+        discovery::discover_with_config(spec, catalog, config)
     }
 
     #[must_use]
@@ -125,17 +145,10 @@ impl WeightBindingPlan {
     }
 
     #[must_use]
-    pub fn uses_packed_int8(&self) -> bool {
+    pub fn uses_packed_integer(&self) -> bool {
         self.tensors
             .iter()
-            .any(|binding| matches!(binding.storage, TensorStorage::PackedInt8 { .. }))
-    }
-
-    #[must_use]
-    pub fn uses_packed_int4(&self) -> bool {
-        self.tensors
-            .iter()
-            .any(|binding| matches!(binding.storage, TensorStorage::PackedInt4 { .. }))
+            .any(|binding| matches!(binding.storage, TensorStorage::PackedInteger { .. }))
     }
 
     #[must_use]
@@ -157,6 +170,13 @@ impl WeightBindingPlan {
         self.tensors
             .iter()
             .any(|binding| matches!(binding.storage, TensorStorage::BitsAndBytes4Bit { .. }))
+    }
+
+    #[must_use]
+    pub fn uses_ggml(&self) -> bool {
+        self.tensors
+            .iter()
+            .any(|binding| matches!(binding.storage, TensorStorage::Ggml { .. }))
     }
 
     #[must_use]

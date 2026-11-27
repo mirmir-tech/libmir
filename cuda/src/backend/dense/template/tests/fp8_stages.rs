@@ -80,8 +80,8 @@ fn validate_mlp(
         "post-attention norm",
     );
 
-    let gate = projection(backend, tensors, bindings.gate, &normalized)?;
-    let up = projection(backend, tensors, bindings.up, &normalized)?;
+    let gate = projection(backend, tensors, bindings.feed_forward.gated()?.gate, &normalized)?;
+    let up = projection(backend, tensors, bindings.feed_forward.gated()?.up, &normalized)?;
     assert_values(
         &read(backend, &gate)?,
         &[-0.304_687_5, -1.234_375, 0.341_796_88, -0.060_058_594],
@@ -105,7 +105,7 @@ fn validate_mlp(
         ],
         "SwiGLU activation",
     );
-    let down = projection(backend, tensors, bindings.down, &activated)?;
+    let down = projection(backend, tensors, bindings.feed_forward.gated()?.down, &activated)?;
     assert_values(
         &read(backend, &down)?,
         &[-0.279_296_88, -0.190_429_69, -0.089_355_47, -0.171_875],
@@ -142,9 +142,9 @@ fn upload(
         bindings.attention.value,
         bindings.attention.output,
         bindings.post_attention_norm,
-        bindings.gate,
-        bindings.up,
-        bindings.down,
+        bindings.feed_forward.gated()?.gate,
+        bindings.feed_forward.gated()?.up,
+        bindings.feed_forward.gated()?.down,
     ] {
         names.extend(binding.physical_sources());
     }

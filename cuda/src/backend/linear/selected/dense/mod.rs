@@ -4,8 +4,8 @@ use super::super::CudaBackend;
 use crate::{
     Result,
     kernels::{
-        DenseGatedActivation, SelectedDenseDispatch, SelectedDenseGateLaunch, SelectedDenseMoe,
-        SelectedDenseReduceLaunch,
+        DenseGateUpLayout, DenseGatedActivation, SelectedDenseDispatch, SelectedDenseGateLaunch,
+        SelectedDenseMoe, SelectedDenseReduceLaunch,
     },
 };
 
@@ -18,9 +18,42 @@ mod weights;
 use tensor_core::TensorCoreScratch;
 pub use weights::DenseExpertWeights;
 
+/// What a selected-expert plan compiles in from its banks beyond their
+/// geometry: how gate and up are stored, which banks are transposed and which
+/// add a bias.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::backend) struct DenseExpertLayout {
+    gate_up: DenseGateUpLayout,
+    /// Gate, up and down.
+    transposed: [bool; 3],
+    bias: [bool; 3],
+}
+
+impl DenseExpertWeights {
+    pub(in crate::backend) fn layout(&self) -> DenseExpertLayout {
+        let gate_up = match &self.gate_up {
+            weights::DenseGateUpWeights::Separate { .. } => DenseGateUpLayout::Separate,
+            weights::DenseGateUpWeights::Fused { interleaved: true, .. } => {
+                DenseGateUpLayout::FusedInterleaved
+            },
+            weights::DenseGateUpWeights::Fused { interleaved: false, .. } => {
+                DenseGateUpLayout::FusedContiguous
+            },
+        };
+        let (gate, up) = self.gate_up();
+        let banks = [gate, up, &self.down];
+        DenseExpertLayout {
+            gate_up,
+            transposed: banks.map(|bank| bank.transposed),
+            bias: banks.map(|bank| bank.bias.is_some()),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(in crate::backend) struct SelectedDenseMoeBf16 {
     operation: SelectedDenseMoe,
+    layout: DenseExpertLayout,
     down_partial: DeviceBuffer<f32>,
     dispatch: Option<ExpertMajorScratch>,
     tensor_core: Option<TensorCoreScratch>,
@@ -63,6 +96,7 @@ impl SelectedDenseMoeBf16 {
             expert_major.then(|| TensorCoreScratch::new(backend, &operation)).transpose()?;
         Ok(Self {
             operation,
+            layout: weights.layout(),
             down_partial: backend.inner.pool.allocate(&backend.inner.stream, partial_elements)?,
             dispatch: tensor_core
                 .is_some()
@@ -82,6 +116,11 @@ impl SelectedDenseMoeBf16 {
         intermediate: &mut DeviceBuffer<bf16>,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
+        if weights.layout() != self.layout {
+            return Err(crate::Error::InvalidExecutionPlan(
+                "selected-expert plan and late-bound bank layout differ",
+            ));
+        }
         let (gate, up) = weights.gate_up();
         let gate_weight = gate.weight.as_bf16().ok_or_else(|| dtype(&gate.weight))?;
         let up_weight = up.weight.as_bf16().ok_or_else(|| dtype(&up.weight))?;

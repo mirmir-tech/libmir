@@ -3,14 +3,14 @@
 use std::{hint::black_box, time::Instant};
 
 use super::*;
-use crate::engine::hybrid::moe::{HybridMoeLayer, HybridMoeLayerConfig};
+use crate::engine::hybrid::moe::{CheckpointLayer, HybridMoeLayer};
 
 #[test]
 #[ignore = "loads a real model; set MIRMIR_BENCH_MODEL or MODEL"]
 fn executes_real_gemma_layer_zero() -> Result<()> {
     let (tensors, stream) = load_model()?;
     let input = Array::from_f32(&gemma_input(), &[1, 1, 2_816])?;
-    let layer = HybridMoeLayer::load(&tensors, config(), &stream)?;
+    let layer = HybridMoeLayer::load(&tensors, &config()?, &stream)?;
     let output = layer.forward_uncached_decode(&input, &stream)?;
     output.async_eval(&stream)?;
     stream.synchronize()?;
@@ -28,7 +28,7 @@ fn executes_real_gemma_layer_zero() -> Result<()> {
 #[ignore = "loads a real model; set MIRMIR_BENCH_MODEL or MODEL"]
 fn executes_real_gemma_layer_zero_with_kv_cache() -> Result<()> {
     let (tensors, stream) = load_model()?;
-    let layer = HybridMoeLayer::load(&tensors, config(), &stream)?;
+    let layer = HybridMoeLayer::load(&tensors, &config()?, &stream)?;
     let mut cache = KvCache::new(2)?;
     let first = Array::from_f32(&gemma_input(), &[1, 1, 2_816])?;
     let second = Array::from_f32(&gemma_input_shifted(), &[1, 1, 2_816])?;
@@ -54,7 +54,7 @@ fn matches_mlx_lm_layer_zero_causal_prefill() -> Result<()> {
     let input = embedding
         .lookup(&Array::from_u32(&[1_000, 1_001], &[1, 2])?, &stream)?
         .multiply_scalar(2_816.0_f32.sqrt(), &stream)?;
-    let layer = HybridMoeLayer::load(&tensors, config(), &stream)?;
+    let layer = HybridMoeLayer::load(&tensors, &config()?, &stream)?;
     let mut cache = KvCache::new(16)?;
     let output = layer.forward_decode(&input, Some(&mut cache), 0, true, &stream)?;
     output.async_eval(&stream)?;
@@ -73,7 +73,7 @@ fn matches_mlx_lm_layer_zero_causal_prefill() -> Result<()> {
 #[ignore = "loads a real model; set MIRMIR_BENCH_MODEL or MODEL"]
 fn executes_real_gemma_full_attention_layer() -> Result<()> {
     let (tensors, stream) = load_model()?;
-    let layer = HybridMoeLayer::load(&tensors, full_config(), &stream)?;
+    let layer = HybridMoeLayer::load(&tensors, &full_config()?, &stream)?;
     let input = Array::from_f32(&gemma_input(), &[1, 1, 2_816])?;
     let output = layer.forward_uncached_decode(&input, &stream)?;
     output.async_eval(&stream)?;
@@ -91,7 +91,7 @@ fn executes_real_gemma_full_attention_layer() -> Result<()> {
 #[ignore = "loads a real model; set MIRMIR_BENCH_MODEL or MODEL"]
 fn paged_full_attention_matches_contiguous_cache() -> Result<()> {
     let (tensors, stream) = load_model()?;
-    let layer = HybridMoeLayer::load(&tensors, full_config(), &stream)?;
+    let layer = HybridMoeLayer::load(&tensors, &full_config()?, &stream)?;
     let first = Array::from_f32(&gemma_input(), &[1, 1, 2_816])?;
     let second = Array::from_f32(&gemma_input_shifted(), &[1, 1, 2_816])?;
     let mut contiguous = KvCache::new(2)?;
@@ -129,7 +129,7 @@ fn paged_full_attention_matches_contiguous_cache() -> Result<()> {
 fn benchmarks_real_gemma_layer_zero() -> Result<()> {
     const ITERATIONS: u32 = 10;
     let (tensors, stream) = load_model()?;
-    let layer = HybridMoeLayer::load(&tensors, config(), &stream)?;
+    let layer = HybridMoeLayer::load(&tensors, &config()?, &stream)?;
     let reference = tensors.get("language_model.model.norm.weight")?;
     let input =
         Array::from_f32(&gemma_input(), &[1, 1, 2_816])?.astype_like(&reference, &stream)?;
@@ -162,44 +162,17 @@ fn benchmarks_real_gemma_layer_zero() -> Result<()> {
     Ok(())
 }
 
-fn config() -> HybridMoeLayerConfig {
-    HybridMoeLayerConfig {
-        layer_index: 0,
-        hidden_size: 2_816,
-        attention_heads: 16,
-        kv_heads: 8,
-        head_dim: 256,
-        rope_dimensions: 256,
-        rope_base: 10_000.0,
-        proportional_rope: false,
-        use_k_eq_v: false,
-        rms_norm_eps: 1.0e-6,
-        top_k: 8,
-        expert_count: 128,
-        expert_intermediate: 2_816,
-        group_size: 64,
-        router_norm_scale: 0.018_844_46,
-        max_context: None,
-    }
+fn config() -> Result<CheckpointLayer> {
+    checkpoint_layer(0)
 }
 
-fn full_config() -> HybridMoeLayerConfig {
-    HybridMoeLayerConfig {
-        layer_index: 5,
-        hidden_size: 2_816,
-        attention_heads: 16,
-        kv_heads: 2,
-        head_dim: 512,
-        rope_dimensions: 128,
-        rope_base: 1_000_000.0,
-        proportional_rope: true,
-        use_k_eq_v: true,
-        rms_norm_eps: 1.0e-6,
-        top_k: 8,
-        expert_count: 128,
-        expert_intermediate: 2_816,
-        group_size: 64,
-        router_norm_scale: 0.018_844_46,
-        max_context: None,
-    }
+/// Layer 5: full attention with shared keys and values, proportional `RoPE`.
+fn full_config() -> Result<CheckpointLayer> {
+    checkpoint_layer(5)
+}
+
+fn checkpoint_layer(index: usize) -> Result<CheckpointLayer> {
+    let layout = models::layout::ModelLayout::inspect(model_root()?)?;
+    let decoder = models::layout::DecoderConfig::from_layout(&layout)?;
+    CheckpointLayer::discover(&decoder, index, 64)
 }

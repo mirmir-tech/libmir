@@ -70,6 +70,7 @@ fn validate(
         && query[0] == 1
         && query[2] > 0
         && keys[0] > 0
+        && query[1] > 0
         && query[1].is_multiple_of(keys[0])
         && packed == keys.get(3).copied()
         && key_scale == &keys[..3]

@@ -2,6 +2,7 @@ mod config;
 mod dense;
 mod load;
 mod model;
+mod rotary;
 mod shared_routed;
 mod source;
 mod vision;

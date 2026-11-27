@@ -1,4 +1,7 @@
-use models::semantic::{FeedForwardSpec, MixerSpec, SemanticModelSpec};
+use models::{
+    semantic::{FeedForwardSpec, MixerSpec, SemanticModelSpec},
+    weights::WeightBindingPlan,
+};
 
 const DEFAULT_PREFILL_STEP: usize = 512;
 const LARGE_PREFILL_STEP: usize = 2_048;
@@ -13,11 +16,20 @@ const NATIVE_PAGED_TAIL_TOKENS: usize = 16;
 struct PrefillArchitecture {
     linear_attention: bool,
     routed_experts: bool,
+    /// GGML blocks, which every prefill chunk dequantizes for MLX's matmul:
+    /// Qwen3-8B `Q8_0` 1362 to 1615 and `Q4_K_M` 1394 to 1547 tok/s at 2048
+    /// rather than 512-token chunks on M5 Pro, BF16 unchanged.
+    dequantized_projections: bool,
 }
 
-pub(super) fn prefill_step(spec: &SemanticModelSpec, configured: Option<usize>) -> usize {
+pub(super) fn prefill_step(
+    spec: &SemanticModelSpec,
+    bindings: &WeightBindingPlan,
+    configured: Option<usize>,
+) -> usize {
     configured.filter(|step| *step > 0).unwrap_or_else(|| {
         default_prefill_step(PrefillArchitecture {
+            dequantized_projections: bindings.uses_ggml(),
             linear_attention: spec
                 .decoder
                 .layers
@@ -52,7 +64,10 @@ pub(super) fn bounded_step_with_limit(
 }
 
 const fn default_prefill_step(architecture: PrefillArchitecture) -> usize {
-    if architecture.linear_attention || architecture.routed_experts {
+    if architecture.linear_attention
+        || architecture.routed_experts
+        || architecture.dequantized_projections
+    {
         LARGE_PREFILL_STEP
     } else {
         DEFAULT_PREFILL_STEP
@@ -64,22 +79,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn enlarges_prefill_for_linear_attention_and_routed_experts() {
+    fn enlarges_prefill_for_linear_attention_routed_experts_and_ggml_blocks() {
         let dense = PrefillArchitecture {
             linear_attention: false,
             routed_experts: false,
+            dequantized_projections: false,
         };
-        let linear = PrefillArchitecture {
-            linear_attention: true,
-            routed_experts: false,
-        };
-        let routed = PrefillArchitecture {
-            linear_attention: false,
-            routed_experts: true,
-        };
+        let linear = PrefillArchitecture { linear_attention: true, ..dense };
+        let ggml = PrefillArchitecture { dequantized_projections: true, ..dense };
+        let routed = PrefillArchitecture { routed_experts: true, ..dense };
         assert_eq!(default_prefill_step(dense), 512);
         assert_eq!(default_prefill_step(linear), 2_048);
         assert_eq!(default_prefill_step(routed), 2_048);
+        assert_eq!(default_prefill_step(ggml), 2_048);
     }
 
     #[test]

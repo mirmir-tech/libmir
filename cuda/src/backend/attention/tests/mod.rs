@@ -123,12 +123,16 @@ pub(super) fn config() -> DecodeAttentionConfig {
             dimensions: 256,
             pairing: 256,
             theta: 10_000.0,
+            scaling: crate::kernels::RotaryScaling::NONE,
         }),
         rms_norm_epsilon: 1.0e-6,
+        stream_norm: crate::kernels::NormFormula::Rms,
         attention_scale: 0.0625,
         projection_format: ProjectionFormat::Bf16,
         qkv_normalization: crate::kernels::QkvNormalization::ALL,
-        sliding_window: Some(1_024),
+        window: std::num::NonZeroUsize::new(1_024).map(models::semantic::AttentionWindow::Sliding),
+        score_softcap: None,
+        query_temperature: None,
         max_sequence_blocks: 2,
         cache: KvStorageSpec::new(
             CacheConfig {
@@ -139,6 +143,7 @@ pub(super) fn config() -> DecodeAttentionConfig {
             8,
             256,
         ),
+        key_value_source: None,
     }
 }
 
@@ -165,7 +170,7 @@ pub(super) fn weights<'a>(
             .ok_or_else(|| Error::MissingTensor(names[index].clone()))
     };
     Ok(DecodeAttentionWeights {
-        input_norm: get(0)?,
+        input_norm: Some(get(0)?),
         qkv: DecodeQkvWeights::Bf16(qkv),
         query_norm: get(4)?
             .as_bf16()

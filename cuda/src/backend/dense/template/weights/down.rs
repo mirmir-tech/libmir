@@ -2,8 +2,8 @@ use super::DenseDownSource;
 use crate::{
     AffineQuantizedWeight, BlockFp8LinearWeight, CudaBackend, CudaTensor, DenseDownWeight,
     DenseExecution, DensePlanRequest, DenseRole, DirectFp8CheckpointWeight, Error, ExecutionPhase,
-    Fp8ResidualLinearWeight, MxFp4CheckpointWeight, MxFp8CheckpointWeight, NvFp4LinearWeight,
-    PackedIntegerWeight, Result,
+    Fp8ResidualLinearWeight, GgmlCheckpointWeight, MxFp4CheckpointWeight, MxFp8CheckpointWeight,
+    NvFp4LinearWeight, PackedIntegerWeight, Result,
 };
 
 #[derive(Clone)]
@@ -12,6 +12,7 @@ pub(super) enum DenseDownOwned {
     Bf16(CudaTensor),
     DirectFp8(DirectFp8CheckpointWeight),
     MxFp4(MxFp4CheckpointWeight),
+    Ggml(GgmlCheckpointWeight),
     MxFp8(MxFp8CheckpointWeight),
     PackedInteger(PackedIntegerWeight),
     NvFp4(NvFp4LinearWeight),
@@ -33,6 +34,7 @@ impl DenseDownOwned {
                 DenseDownSource::PackedInteger(weight) => Self::PackedInteger(weight.clone()),
                 DenseDownSource::DirectFp8(weight) => Self::DirectFp8(weight.clone()),
                 DenseDownSource::MxFp4(weight) => Self::MxFp4(weight.clone()),
+                DenseDownSource::Ggml(weight) => Self::Ggml(weight.clone()),
                 DenseDownSource::MxFp8(weight) => Self::MxFp8(weight.clone()),
                 DenseDownSource::NvFp4(weight) => Self::NvFp4(weight.clone()),
                 DenseDownSource::Bf16(_) => unreachable!(),
@@ -66,9 +68,11 @@ impl DenseDownOwned {
                     exact: weight.clone(),
                     quantized: backend.prepare_fp8_residual_linear_weight(weight)?,
                 },
-                DenseExecution::Matrix | DenseExecution::Vector | DenseExecution::CublasLt => {
-                    Self::Bf16(weight.clone())
-                },
+                DenseExecution::Matrix
+                | DenseExecution::Vector
+                | DenseExecution::RowGroupVector
+                | DenseExecution::SplitKVector { .. }
+                | DenseExecution::CublasLt => Self::Bf16(weight.clone()),
             },
         )
     }
@@ -79,6 +83,7 @@ impl DenseDownOwned {
             Self::Bf16(weight) => DenseDownWeight::Bf16(weight),
             Self::DirectFp8(weight) => DenseDownWeight::DirectFp8(weight),
             Self::MxFp4(weight) => DenseDownWeight::MxFp4(weight),
+            Self::Ggml(weight) => DenseDownWeight::Ggml(weight),
             Self::MxFp8(weight) => DenseDownWeight::MxFp8(weight),
             Self::PackedInteger(weight) => DenseDownWeight::PackedInteger(weight),
             Self::NvFp4(weight) => DenseDownWeight::NvFp4(weight),

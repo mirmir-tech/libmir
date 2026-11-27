@@ -52,10 +52,13 @@ fn dense_gemma_layers_match_reference() -> TestResult<()> {
         let expected = values(&oracle.join(format!("layer{layer}.bf16")))?;
         let (template, _) = backend.load_dense_swiglu_layer_tracked(
             &decoder,
-            &spec,
+            (
+                &spec,
+                &architecture::cuda::CudaDecoderPlan::lower(&spec, decoder.attention_scale)?,
+            ),
             &catalog,
             layer,
-            bindings.dense_decoder_layer(layer)?,
+            bindings.dense_decoder_layer(layer)?.into(),
             load,
         )?;
         let config = template.config();
@@ -71,7 +74,7 @@ fn dense_gemma_layers_match_reference() -> TestResult<()> {
         batch.prepare(&[&table], &[0], &[tokens])?;
         let mut output =
             backend.inner.pool.allocate::<bf16>(&backend.inner.stream, tokens * hidden)?;
-        prefill.execute_batch(&mut state, &input, template.weights(), &batch, &mut output)?;
+        prefill.execute_batch(&mut state, &input, template.weights(), &batch, None, &mut output)?;
         let error = relative_l2(&read(&backend, &output)?, &expected);
         errors.push(format!("{layer} {:?}: {error:.4}", decoder.layer_type(layer)));
         worst = worst.max(error);

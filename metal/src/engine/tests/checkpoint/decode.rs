@@ -1,7 +1,7 @@
 use models::layout::{DecoderConfig, ModelLayout};
 
 use super::*;
-use crate::engine::hybrid::moe::{HybridMoeLayer, HybridMoeLayerConfig};
+use crate::engine::hybrid::moe::{CheckpointLayer, HybridMoeLayer};
 
 const EXPECTED_LAYERS: [u64; 30] = [
     0x69be_169d_89e4_8a1f,
@@ -49,9 +49,9 @@ fn matches_mlx_lm_decode_after_128_token_prefill() -> Result<()> {
     let mut layers = Vec::with_capacity(decoder.num_hidden_layers);
     let mut caches = Vec::with_capacity(decoder.num_hidden_layers);
     for index in 0..decoder.num_hidden_layers {
-        let config = HybridMoeLayerConfig::from_decoder(index, &decoder, 64)?;
-        layers.push(HybridMoeLayer::load(&tensors, config, &stream)?);
-        caches.push(KvCache::new_with_window(256, config.max_context)?);
+        let config = CheckpointLayer::discover(&decoder, index, 64)?;
+        layers.push(HybridMoeLayer::load(&tensors, &config, &stream)?);
+        caches.push(KvCache::new_with_window(256, config.config.max_context())?);
     }
 
     let prompt = (1_000..1_127).collect::<Vec<_>>();
@@ -104,9 +104,9 @@ fn matches_mlx_lm_layer_one_attention_after_128_token_prefill() -> Result<()> {
     let mut layers = Vec::with_capacity(2);
     let mut caches = Vec::with_capacity(2);
     for index in 0..2 {
-        let config = HybridMoeLayerConfig::from_decoder(index, &decoder, 64)?;
-        layers.push(HybridMoeLayer::load(&tensors, config, &stream)?);
-        caches.push(KvCache::new_with_window(256, config.max_context)?);
+        let config = CheckpointLayer::discover(&decoder, index, 64)?;
+        layers.push(HybridMoeLayer::load(&tensors, &config, &stream)?);
+        caches.push(KvCache::new_with_window(256, config.config.max_context())?);
     }
     let prompt = (1_000..1_127).collect::<Vec<_>>();
     let hidden = embedding
@@ -146,14 +146,14 @@ fn matches_mlx_lm_layer_zero_attention_during_127_token_prefill() -> Result<()> 
     let tensors = ModelTensors::load(&root, &Stream::new_cpu()?)?;
     let stream = Stream::new_gpu()?;
     let embedding = QuantizedEmbedding::load(&tensors, "language_model.model.embed_tokens", 64)?;
-    let config = HybridMoeLayerConfig::from_decoder(0, &decoder, 64)?;
-    let layer = HybridMoeLayer::load(&tensors, config, &stream)?;
+    let config = CheckpointLayer::discover(&decoder, 0, 64)?;
+    let layer = HybridMoeLayer::load(&tensors, &config, &stream)?;
     let input = embedding
         .lookup(&Array::from_u32(&(1_000..1_127).collect::<Vec<_>>(), &[1, 127])?, &stream)?
         .multiply_scalar(decoder.hidden_size.to_string().parse::<f32>()?.sqrt(), &stream)?;
     let attention = layer.attention_residual_for_test(
         &input,
-        &mut KvCache::new_with_window(256, config.max_context)?,
+        &mut KvCache::new_with_window(256, config.config.max_context())?,
         0,
         true,
         &stream,

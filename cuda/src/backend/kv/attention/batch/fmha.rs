@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use mircuda::{Context, DeviceBuffer, FmhaBf16Plan, FmhaBf16Spec, Stream, bf16};
+use models::semantic::AttentionWindow;
 use runtime::kv::{KvCacheDType, KvStorageSpec};
 
 use super::super::super::{PagedDecodeBatch, PagedKvCache};
@@ -18,7 +19,7 @@ pub(super) struct PagedFmhaDecode {
     block_size: usize,
     query_heads: usize,
     head_dim: usize,
-    tuned_splits: BTreeMap<(usize, usize), usize>,
+    tuned_splits: BTreeMap<(usize, usize, Option<usize>), usize>,
     num_splits: usize,
 }
 
@@ -72,40 +73,51 @@ impl PagedFmhaDecode {
         }))
     }
 
+    /// Full attention, or a window of the last `window` keys.
     pub(super) fn execute(
         &mut self,
         query: &DeviceBuffer<bf16>,
         cache: &PagedKvCache,
         batch: &PagedDecodeBatch,
         output: &mut DeviceBuffer<bf16>,
+        window: Option<AttentionWindow>,
         scale: f32,
     ) -> Result<()> {
         // Interleaved requests can alternate context bands at every decode
         // step. Retain each measured shape instead of synchronizing the GPU
         // to retune every layer whenever the previous band changes. Geometry
-        // and device are fixed by this plan; active rows also affect the choice.
-        let shape = (batch.active(), context_band(batch.maximum_tokens()));
+        // and device are fixed by this plan; active rows also affect the
+        // choice.
+        let shape = (
+            batch.active(),
+            context_band(batch.maximum_tokens()),
+            crate::kernels::attention_window::span(window),
+        );
         if let Some(&selected) = self.tuned_splits.get(&shape) {
             self.num_splits = selected;
         } else {
-            self.tune(query, cache, batch, output, scale)?;
+            self.tune(query, cache, batch, output, window, scale)?;
             self.tuned_splits.insert(shape, self.num_splits);
         }
-        self.execute_with_splits(query, cache, batch, output, scale, self.num_splits)
+        self.execute_with_splits(query, cache, batch, output, window, scale, self.num_splits)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn execute_with_splits(
         &mut self,
         query: &DeviceBuffer<bf16>,
         cache: &PagedKvCache,
         batch: &PagedDecodeBatch,
         output: &mut DeviceBuffer<bf16>,
+        window: Option<AttentionWindow>,
         scale: f32,
         num_splits: usize,
     ) -> Result<()> {
         let rows = batch.active();
+        let window = crate::kernels::attention_window::flash(window)?
+            .ok_or(crate::Error::InvalidPagedKv("paged FlashAttention has no chunked attention"))?;
         if num_splits == 1 {
-            Ok(self.plan.execute_paged_varlen(
+            Ok(self.plan.execute_paged_varlen_windowed(
                 &self.stream,
                 query,
                 cache.key_pages(),
@@ -122,6 +134,7 @@ impl PagedFmhaDecode {
                 batch.maximum_tokens(),
                 self.max_blocks,
                 self.block_size,
+                window,
                 scale,
             )?)
         } else {
@@ -145,6 +158,7 @@ impl PagedFmhaDecode {
                 batch.maximum_tokens(),
                 self.max_blocks,
                 self.block_size,
+                window,
                 scale,
             )?)
         }
@@ -156,17 +170,18 @@ impl PagedFmhaDecode {
         cache: &PagedKvCache,
         batch: &PagedDecodeBatch,
         output: &mut DeviceBuffer<bf16>,
+        window: Option<AttentionWindow>,
         scale: f32,
     ) -> Result<()> {
         let mut selected = 1;
         let mut selected_ms = f32::INFINITY;
         for candidate in [1, 2, 4, 8, 16, 32] {
-            self.execute_with_splits(query, cache, batch, output, scale, candidate)?;
+            self.execute_with_splits(query, cache, batch, output, window, scale, candidate)?;
             let started = self.context.create_event(true)?;
             let completed = self.context.create_event(true)?;
             started.record(&self.stream)?;
             for _ in 0..3 {
-                self.execute_with_splits(query, cache, batch, output, scale, candidate)?;
+                self.execute_with_splits(query, cache, batch, output, window, scale, candidate)?;
             }
             completed.record(&self.stream)?;
             completed.synchronize()?;
@@ -181,6 +196,7 @@ impl PagedFmhaDecode {
             target: "libmir::cuda::tuning",
             rows = batch.active(),
             context_tokens = batch.maximum_tokens(),
+            window = ?window,
             query_heads = self.query_heads,
             head_dim = self.head_dim,
             num_splits = selected,

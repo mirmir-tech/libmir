@@ -115,11 +115,21 @@ fn execute_split(
     scale: f32,
 ) -> Result<()> {
     let active = operation.execute_partitions(
-        stream, query, key_pages, value_pages, table, workspace, output, tokens, blocks, window,
+        stream,
+        query,
+        key_pages,
+        value_pages,
+        table,
+        workspace,
+        output,
+        tokens,
+        blocks,
+        window
+            .and_then(std::num::NonZeroUsize::new)
+            .map(models::semantic::AttentionWindow::Sliding),
         scale,
     )?;
-    let query_heads = sinks.len();
-    let head_dim = output.len() / query_heads;
+    let (query_heads, head_dim) = super::super::merge_heads(operation.spec(), sinks)?;
     split.merge.launch(
         stream,
         operation.configs(active)?.merge,
@@ -129,8 +139,8 @@ fn execute_split(
             &workspace.denominators,
             sinks,
             output,
-            u32::try_from(query_heads)?,
-            u32::try_from(head_dim)?,
+            query_heads,
+            head_dim,
             u32::try_from(active)?,
             u32::try_from(operation.max_partitions())?,
         ),

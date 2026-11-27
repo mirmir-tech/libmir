@@ -1,7 +1,10 @@
 use mircuda::{DeviceBuffer, PinnedBuffer, Stream, bf16};
 use runtime::{backend::SamplingLogits, kv::BlockTable};
 
-use super::layer::{BatchedLayer, DecoderLayerTemplate, allocate_batch_attention_workspace};
+use super::{
+    layer::{BatchedLayer, DecoderLayerTemplate, allocate_batch_attention_workspace},
+    per_layer::{PerLayerInputs, PerLayerInputsTemplate},
+};
 use crate::{
     CudaBackend, CudaTensor, DecodeAttentionConfig, DeviceBatchSamplerBf16, Error,
     PagedDecodeBatch, PagedKvCache, Result, RmsNormBf16,
@@ -27,6 +30,7 @@ struct BatchResources {
     token_staging: PinnedBuffer<u32>,
     paging: PagedDecodeBatch,
     layers: Vec<BatchedLayer>,
+    per_layer: Option<PerLayerInputs>,
     final_norm: RmsNormBf16,
     final_norm_weight: CudaTensor,
     output_head: ModelBatchOutputHead,
@@ -35,7 +39,7 @@ struct BatchResources {
     second: DeviceBuffer<bf16>,
     normalized: DeviceBuffer<bf16>,
     logits: DeviceBuffer<bf16>,
-    logit_softcap: Option<crate::kernels::LogitSoftcap>,
+    logit_shaper: Option<crate::kernels::LogitShapingBf16>,
 }
 
 pub(super) struct DecodeBatchSource<'a> {
@@ -43,11 +47,12 @@ pub(super) struct DecodeBatchSource<'a> {
     pub(super) final_norm: CudaTensor,
     pub(super) output_head: &'a ModelOutputHeadTemplate,
     pub(super) layers: &'a [DecoderLayerTemplate],
+    pub(super) per_layer: Option<&'a PerLayerInputsTemplate>,
     pub(super) caches: &'a [PagedKvCache],
     pub(super) attention: DecodeAttentionConfig,
     pub(super) vocab: usize,
     pub(super) hidden: usize,
-    pub(super) logit_softcap: Option<f32>,
+    pub(super) logit_shaping: Option<crate::kernels::LogitShaping>,
 }
 
 impl CudaDecodeBatch {
@@ -64,11 +69,12 @@ impl CudaDecodeBatch {
             final_norm,
             output_head,
             layers,
+            per_layer,
             caches,
             attention,
             vocab,
             hidden,
-            logit_softcap,
+            logit_shaping,
         } = source;
         if layers.len() != caches.len() {
             return Err(Error::InvalidDecoderKernel("CUDA batch cache count differs from layers"));
@@ -97,11 +103,10 @@ impl CudaDecodeBatch {
                     layer.instantiate_batch(batch_size, cache.clone(), attention_workspace.clone())
                 })
                 .collect::<Result<Vec<_>>>()?,
-            final_norm: backend.prepare_rms_norm_bf16(
-                batch_size,
-                hidden,
-                attention.rms_norm_epsilon,
-            )?,
+            per_layer: per_layer
+                .map(|template| PerLayerInputs::new(backend, template, batch_size))
+                .transpose()?,
+            final_norm: RmsNormBf16::for_stream(backend, batch_size, &attention)?,
             final_norm_weight: final_norm,
             output_head: output_head.instantiate_batch(backend, batch_size)?,
             sampler: backend.prepare_device_batch_sampler_bf16(vocab, batch_size)?,
@@ -109,12 +114,12 @@ impl CudaDecodeBatch {
             second: backend.inner.pool.allocate(&backend.inner.stream, elements)?,
             normalized: backend.inner.pool.allocate(&backend.inner.stream, elements)?,
             logits: backend.inner.pool.allocate(&backend.inner.stream, logit_elements)?,
-            logit_softcap: logit_softcap
-                .map(|cap| {
-                    crate::kernels::LogitSoftcap::compile(
+            logit_shaper: logit_shaping
+                .map(|shaping| {
+                    crate::kernels::LogitShapingBf16::compile(
                         &backend.inner.compiler,
                         logit_elements,
-                        cap,
+                        shaping,
                     )
                 })
                 .transpose()?,
@@ -157,7 +162,11 @@ impl CudaDecodeBatch {
             resources.paging.prepare(tables)?;
             resources
                 .embedding
-                .execute_batch(&resources.tokens, 0, rows, &mut resources.first)
+                .execute_batch(&resources.tokens, 0, rows, &mut resources.first)?;
+            if let Some(inputs) = &mut resources.per_layer {
+                inputs.compute(&resources.tokens, 0, rows, &resources.first)?;
+            }
+            Ok(())
         })
     }
 
@@ -201,11 +210,18 @@ impl CudaDecodeBatch {
 }
 
 fn execute(resources: &mut BatchResources) -> Result<()> {
+    let rows = resources.paging.active();
     for (index, layer) in resources.layers.iter_mut().enumerate() {
+        let per_layer = resources
+            .per_layer
+            .as_ref()
+            .map(|inputs| inputs.layer(index, rows))
+            .transpose()?;
+        let (paging, per_layer) = (&resources.paging, per_layer.as_ref());
         if index.is_multiple_of(2) {
-            layer.execute(&resources.first, &resources.paging, &mut resources.second)?;
+            layer.execute(&resources.first, paging, per_layer, &mut resources.second)?;
         } else {
-            layer.execute(&resources.second, &resources.paging, &mut resources.first)?;
+            layer.execute(&resources.second, paging, per_layer, &mut resources.first)?;
         }
     }
     let source = if resources.layers.len().is_multiple_of(2) {
@@ -219,8 +235,8 @@ fn execute(resources: &mut BatchResources) -> Result<()> {
         &mut resources.normalized,
     )?;
     resources.output_head.execute(&resources.normalized, &mut resources.logits)?;
-    if let Some(softcap) = &resources.logit_softcap {
-        softcap.execute(resources.output_head.stream(), &mut resources.logits)?;
+    if let Some(shaper) = &resources.logit_shaper {
+        shaper.execute(resources.output_head.stream(), &mut resources.logits)?;
     }
     Ok(())
 }

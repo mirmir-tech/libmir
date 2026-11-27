@@ -56,6 +56,7 @@ impl MxFp4GatheredLinearKernel {
                 .zip(&indices_shape)
                 .all(|(input, selected)| *input == 1 || input == selected)
             || input_rows == 0
+            || assignments == 0
             || !assignments.is_multiple_of(input_rows)
         {
             return Err(Error::InvalidModel("gathered MXFP4 indices differ from input".into()));

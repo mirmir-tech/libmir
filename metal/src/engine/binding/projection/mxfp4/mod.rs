@@ -106,6 +106,44 @@ pub(super) fn linear(
     })
 }
 
+impl MxFp4Linear {
+    /// An expert bank from OCP blocks `[experts, rows, input / 32, 16]` (U8),
+    /// E8M0 scales `[experts, rows, input / 32]` and a BF16 bias `[experts,
+    /// rows]`: the bytes, read as little-endian words, are MLX's MXFP4 layout.
+    pub(in crate::engine) fn bank(
+        blocks: &Array,
+        scales: Array,
+        bias: Array,
+        stream: &Stream,
+    ) -> Result<Self> {
+        let shape = blocks.shape()?;
+        let [experts, rows, groups, 16] = *shape.as_slice() else {
+            return Err(Error::InvalidQuantization(format!(
+                "MXFP4 expert blocks {shape:?} are not [experts, rows, groups, 16]"
+            )));
+        };
+        let graph = stream.native().graph();
+        let packed = graph.view_dtype(blocks.native(), mirtal::DType::Uint32)?;
+        let weight = graph.reshape(
+            &packed,
+            &mirtal::Shape::new([
+                usize::try_from(experts)?,
+                usize::try_from(rows)?,
+                usize::try_from(groups * 4)?,
+            ])?,
+        )?;
+        Ok(Self {
+            weight: Array::from_native(weight)?,
+            scales,
+            bias,
+            input_features: usize::try_from(groups * 32)?,
+            output_features: usize::try_from(rows)?,
+            has_bias: true,
+            layout: MxFp4LinearLayout::Gathered,
+        })
+    }
+}
+
 pub(super) fn embedding(
     tensors: &ModelTensors,
     binding: &TensorBinding,

@@ -4,8 +4,9 @@ use crate::weights::binding::{
 };
 
 /// Accepts the `[channels, 1, kernel]` layout that checkpoints use for
-/// depthwise convolutions in place of the logical shape, and the MLX
-/// `[channels, kernel, 1]` layout of sanitized conversions.
+/// depthwise convolutions in place of the logical shape, the MLX
+/// `[channels, kernel, 1]` layout of sanitized conversions, and the squeezed
+/// `[channels, kernel]` of llama.cpp's GGUF conversion.
 pub(super) fn alternate(binding: &TensorBinding, expected: &[usize]) -> bool {
     if matches!(
         binding.role,
@@ -27,5 +28,6 @@ pub(super) fn alternate(binding: &TensorBinding, expected: &[usize]) -> bool {
             },
             ..
         }
-    ) && matches!(expected, [channels, kernel, 1] if binding.shape == [*channels, 1, *kernel])
+    ) && matches!(expected, [channels, kernel, 1]
+        if binding.shape == [*channels, 1, *kernel] || binding.shape == [*channels, *kernel])
 }

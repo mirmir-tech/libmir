@@ -13,7 +13,7 @@ fn compares_router_precision_across_layers() -> std::result::Result<(), Box<dyn 
     let catalog = models::weights::TensorCatalog::from_layout(&layout)?;
     let contract =
         models::execution::DecoderExecutionContract::discover(&layout, &decoder, &catalog)?;
-    let lowering = lowering::plan(&contract.semantic)?;
+    let lowering = lowering::plan(&decoder, &contract.semantic)?;
     let load_stream = Stream::new_cpu()?;
     let tensors = ModelTensors::load(root, &load_stream)?;
     let mut config = crate::MetalConfig::default();
@@ -23,6 +23,7 @@ fn compares_router_precision_across_layers() -> std::result::Result<(), Box<dyn 
     let model = HybridLinearMoeModel::load(
         &tensors,
         &decoder,
+        &contract.semantic.decoder,
         &contract.bindings,
         lowering.layers(),
         256,

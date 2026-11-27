@@ -3,12 +3,10 @@ use runtime::kv::{BlockTable, KvBackendStorage, KvWritePlan};
 
 use super::{
     AttentionOutputProjection, AttentionQkvProjection, DecodeAttentionBf16, DecodeAttentionConfig,
-    DecodeAttentionOutputWeight, DecodeAttentionWeights, ProjectionFormat, QkvProjectionBuffers,
-    validate,
+    DecodeAttentionWeights, ProjectionFormat, QkvProjectionBuffers, validate,
 };
 use crate::{
-    CudaBackend, DensePlanRequest, DenseRole, Error, ExecutionPhase, NvFp4Bf16Linear, Result,
-    RmsNormBf16,
+    CudaBackend, DensePlanRequest, DenseRole, Error, ExecutionPhase, Result, RmsNormBf16,
     kernels::{BatchedQkvPostprocess, CopyRowsBf16, QkvPostprocess, QkvPostprocessSpec},
 };
 mod batch;
@@ -71,6 +69,7 @@ impl PrefillAttentionBf16 {
             rotary: config.rotary,
             epsilon,
             normalization: config.qkv_normalization,
+            temperature: config.query_temperature,
         };
         let fmha = prepare_varlen_fmha(backend, config)?;
         let output_request = DensePlanRequest {
@@ -83,8 +82,11 @@ impl PrefillAttentionBf16 {
         let output_projection = match config.projection_format {
             ProjectionFormat::Affine
             | ProjectionFormat::DirectFp8
+            | ProjectionFormat::Ggml
             | ProjectionFormat::MxFp4
-            | ProjectionFormat::MxFp8 => AttentionOutputProjection::new(
+            | ProjectionFormat::MxFp8
+            | ProjectionFormat::PackedInteger
+            | ProjectionFormat::NvFp4 => AttentionOutputProjection::new(
                 backend,
                 config,
                 tokens,
@@ -93,33 +95,9 @@ impl PrefillAttentionBf16 {
             ProjectionFormat::Bf16 => {
                 AttentionOutputProjection::Bf16(backend.prepare_bf16_projection(output_request)?)
             },
-            ProjectionFormat::PackedInteger => {
-                let Some(DecodeAttentionOutputWeight::PackedInteger(weight)) =
-                    weights.map(|weights| weights.output)
-                else {
-                    return Err(Error::InvalidExecutionPlan(
-                        "packed integer prefill requires a packed output",
-                    ));
-                };
-                AttentionOutputProjection::PackedInteger(crate::PackedIntegerBf16Linear::new(
-                    backend, tokens, attention_width, hidden, weight,
-                )?)
-            },
-            ProjectionFormat::NvFp4 => {
-                let Some(DecodeAttentionOutputWeight::NvFp4(weight)) =
-                    weights.map(|weights| weights.output)
-                else {
-                    return Err(Error::InvalidExecutionPlan("NVFP4 prefill requires NVFP4 output"));
-                };
-                AttentionOutputProjection::NvFp4(NvFp4Bf16Linear::from_weight(
-                    backend,
-                    tokens,
-                    weight.clone(),
-                )?)
-            },
         };
         Ok(Self {
-            input_norm: RmsNormBf16::new(backend, tokens, hidden, epsilon)?,
+            input_norm: RmsNormBf16::for_stream(backend, tokens, &config)?,
             qkv: AttentionQkvProjection::new(
                 backend,
                 config,
@@ -223,10 +201,12 @@ impl PrefillAttentionBf16 {
                 start_position,
             )?;
         }
-        state
-            .cache
-            .store(write_plan, &self.scratch.key_rope, &self.scratch.value_norm)?;
-        let image = self.config.sliding_window.and(image);
+        if self.config.stores_key_values() {
+            state
+                .cache
+                .store(write_plan, &self.scratch.key_rope, &self.scratch.value_norm)?;
+        }
+        let image = image.filter(|_| self.config.opens_image_blocks());
         state.attention.execute_prefill_masked(
             &self.scratch.query_rope,
             &state.cache,
@@ -234,7 +214,7 @@ impl PrefillAttentionBf16 {
             &mut self.scratch.attention,
             self.tokens,
             start_position,
-            self.config.sliding_window,
+            self.config.window,
             self.config.attention_scale,
             image.map(|span| (span.start, span.end)),
         )?;

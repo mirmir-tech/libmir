@@ -64,12 +64,14 @@ impl HybridMoeModel {
             .embedding
             .lookup(token_ids, stream)?
             .multiply_scalar(self.embed_scale, stream)?;
-        hidden.slice_update(
+        let hidden = hidden.slice_update(
             image_embeddings,
             &[0, image.start, 0],
             &[1, image.end, self.hidden_size],
             stream,
-        )
+        )?;
+        self.prepare_step(token_ids, &hidden, stream)?;
+        Ok(hidden)
     }
 
     pub(super) fn forward_hidden(
@@ -86,6 +88,7 @@ impl HybridMoeModel {
             .embedding
             .lookup(token_ids, stream)?
             .multiply_scalar(self.embed_scale, stream)?;
+        self.prepare_step(token_ids, &hidden, stream)?;
         if profile {
             hidden.async_eval(stream)?;
             stream.synchronize()?;

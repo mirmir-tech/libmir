@@ -1,9 +1,5 @@
-use models::{
-    execution::DecoderExecutionContract,
-    layout::DecoderConfig,
-    semantic::MixerSpec,
-    weights::{TensorCatalog, TensorInfo},
-};
+use architecture::{cuda::CudaDecoderPlan, lowering::MixerLowering};
+use models::{execution::DecoderExecutionContract, layout::DecoderConfig, weights::TensorCatalog};
 use runtime::kv::CacheConfig;
 
 use super::{
@@ -17,6 +13,7 @@ impl CudaBackend {
     pub fn load_clamped_routed_model_template_with_progress(
         &self,
         decoder: &DecoderConfig,
+        plan: &CudaDecoderPlan,
         contract: &DecoderExecutionContract,
         catalog: &TensorCatalog,
         cache: CacheConfig,
@@ -24,50 +21,40 @@ impl CudaBackend {
         ring_sessions: usize,
         progress: &mut dyn FnMut(u64, String),
     ) -> Result<CudaClampedRoutedModelTemplate> {
-        let semantic = &contract.semantic;
         let bindings = &contract.bindings;
-        if semantic.decoder.layers.len() != decoder.num_hidden_layers {
-            return Err(Error::UnsupportedDecoderLayer(
-                "clamped-routed semantic layer count differs from decoder geometry".into(),
-            ));
+        // Admission checked the spec; the loader reads the admitted plan.
+        if plan.layers().len() != decoder.num_hidden_layers {
+            return Err(Error::PlanLayerCount {
+                plan: plan.layers().len(),
+                decoder: decoder.num_hidden_layers,
+            });
         }
-        let config = ClampedRoutedConfig::from_semantic(semantic)?;
+        let config = ClampedRoutedConfig::from_admitted(plan, &contract.semantic)?;
         let layout = ClampedRoutedLayout::discover(bindings)?;
         let capabilities = ClampedRoutedCapabilityPlan::lower(config, layout, cache.dtype)?;
         if ring_sessions == 0 {
             return Err(Error::InvalidPagedKv("windowed KV session capacity is empty"));
         }
         let boundary_bindings = bindings.decoder_boundary()?;
-        let boundary_names = owned_names(boundary_bindings.physical_sources());
-        let boundary = upload_names(self, catalog, &boundary_names)?;
+        let (boundary, mut completed) =
+            upload_names(self, catalog, &boundary_bindings.physical_sources())?;
         let (embedding, final_norm, output) =
             weights::boundary(self, layout, &boundary, boundary_bindings, config)?;
-        let mut completed = bytes_for_names(catalog, &boundary_names)?;
         progress(completed, "clamped-routed model boundary tensors".into());
         let mut layers = Vec::with_capacity(decoder.num_hidden_layers);
-        for (layer, semantic_layer) in semantic.decoder.layers.iter().enumerate() {
-            let MixerSpec::SoftmaxAttention(attention) = &semantic_layer.mixer else {
-                return Err(Error::UnsupportedDecoderLayer(format!(
-                    "clamped-routed layer {layer} requires softmax attention"
-                )));
+        for (layer, lowered) in plan.layers().iter().enumerate() {
+            let MixerLowering::Softmax { window, .. } = lowered.mixer else {
+                return Err(Error::PlanMixer { layer });
             };
-            if !attention.sinks {
-                return Err(Error::UnsupportedDecoderLayer(format!(
-                    "clamped-routed layer {layer} requires learned attention sinks"
-                )));
-            }
             let layer_bindings = bindings.routed_decoder_layer(layer)?;
-            let names = owned_names(layer_bindings.physical_sources());
-            let tensors = upload_names(self, catalog, &names)?;
-            completed = completed
-                .checked_add(bytes_for_names(catalog, &names)?)
-                .ok_or(Error::InvalidDecoderKernel("checkpoint progress byte overflow"))?;
+            let (tensors, bytes) = upload_names(self, catalog, &layer_bindings.physical_sources())?;
+            completed = add_bytes(completed, bytes)?;
             layers.push(ClampedRoutedLayerTemplate::new(
                 self,
                 config,
                 capabilities.qkv,
                 weights::layer(self, layout, config, &tensors, layer_bindings)?,
-                attention.window,
+                window.and_then(models::semantic::AttentionWindow::sliding),
             ));
             progress(
                 completed,
@@ -89,40 +76,26 @@ impl CudaBackend {
     }
 }
 
+/// Uploads the tensors `names` as BF16, each found once in the sorted
+/// catalog, and their payload bytes, for progress.
 fn upload_names(
     backend: &CudaBackend,
     catalog: &TensorCatalog,
-    names: &[String],
-) -> Result<CudaTensorSet> {
+    names: &[&str],
+) -> Result<(CudaTensorSet, u64)> {
     let cast = backend.prepare_dense_cast()?;
     let mut upload = backend.begin_tensor_upload();
-    for name in names {
-        upload.enqueue_float_as_bf16(required_any(catalog, &[name])?, &cast)?;
+    let mut bytes = 0;
+    for &name in names {
+        let tensor = catalog.get(name).ok_or_else(|| Error::MissingTensor(name.to_owned()))?;
+        upload.enqueue_float_as_bf16(tensor, &cast)?;
+        bytes = add_bytes(bytes, u64::try_from(tensor.payload_bytes()?)?)?;
     }
-    upload.finish()
+    Ok((upload.finish()?, bytes))
 }
 
-fn required_any<'a>(
-    catalog: &'a TensorCatalog,
-    names: &[impl AsRef<str>],
-) -> Result<&'a TensorInfo> {
-    names
-        .iter()
-        .find_map(|name| catalog.tensors.iter().find(|tensor| tensor.name == name.as_ref()))
-        .ok_or_else(|| {
-            Error::MissingTensor(names.iter().map(AsRef::as_ref).collect::<Vec<_>>().join(" | "))
-        })
-}
-
-fn owned_names(names: Vec<&str>) -> Vec<String> {
-    names.into_iter().map(str::to_owned).collect()
-}
-
-fn bytes_for_names(catalog: &TensorCatalog, names: &[String]) -> Result<u64> {
-    names.iter().try_fold(0_u64, |total, name| {
-        let bytes = required_any(catalog, &[name])?.payload_bytes()?;
-        total
-            .checked_add(u64::try_from(bytes)?)
-            .ok_or(Error::InvalidDecoderKernel("checkpoint progress byte overflow"))
-    })
+fn add_bytes(total: u64, bytes: u64) -> Result<u64> {
+    total
+        .checked_add(bytes)
+        .ok_or(Error::InvalidDecoderKernel("checkpoint progress byte overflow"))
 }

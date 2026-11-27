@@ -109,5 +109,5 @@ fn spec(vocab: usize, policy: &SamplingLogits) -> Result<SamplingSpec> {
     Ok(SamplingSpec { vocab, top_k, top_p, temperature, draw })
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests;

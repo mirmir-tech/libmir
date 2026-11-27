@@ -4,7 +4,8 @@ use serde_json::Value;
 
 use super::{
     HybridBlockKind, HybridBlockPattern, LatentRoutedConfig, Mamba2Config, PredictionModules,
-    StateSpaceHybridConfig, StateSpaceStateDType, TimeStepBound, TimeStepLimit,
+    STATE_SPACE_LAYOUT, STATE_SPACE_LAYOUT_LLAMA_CPP, StateSpaceHybridConfig, StateSpaceLayout,
+    StateSpaceStateDType, TimeStepBound, TimeStepLimit,
 };
 use crate::{
     error::Result,
@@ -18,10 +19,12 @@ use crate::{
 pub(in crate::layout::decoder) fn state_space_hybrid(
     decoder: &Value,
 ) -> Result<Option<StateSpaceHybridConfig>> {
-    let Some(raw) = decoder.get("layers_block_type") else {
-        return Ok(None);
+    let kinds = match (decoder.get("layers_block_type"), decoder.get("hybrid_override_pattern")) {
+        (Some(raw), _) => block_kinds(raw)?,
+        (None, Some(pattern)) => pattern_kinds(pattern)?,
+        (None, None) => return Ok(None),
     };
-    let blocks = HybridBlockPattern::pair(block_kinds(raw)?)?;
+    let blocks = HybridBlockPattern::pair(kinds)?;
     if let Some(declared) = optional_usize(decoder, &["num_hidden_layers"])?
         && declared != blocks.physical().len()
     {
@@ -31,7 +34,11 @@ pub(in crate::layout::decoder) fn state_space_hybrid(
         )));
     }
     let mamba = mamba(decoder)?;
-    let routed = routed(decoder)?;
+    let has = |kind| blocks.physical().contains(&kind);
+    let routed = has(HybridBlockKind::Moe).then(|| routed(decoder)).transpose()?;
+    if has(HybridBlockKind::Mlp) {
+        relu_squared(decoder, "hybrid MLP blocks")?;
+    }
     let prediction = prediction(decoder)?;
     Ok(Some(StateSpaceHybridConfig { blocks, mamba, routed, prediction }))
 }
@@ -63,8 +70,27 @@ fn block_kinds(raw: &Value) -> Result<Vec<HybridBlockKind>> {
             Some("mamba") => Ok(HybridBlockKind::Mamba),
             Some("attention") => Ok(HybridBlockKind::Attention),
             Some("moe") => Ok(HybridBlockKind::Moe),
+            Some("mlp") => Ok(HybridBlockKind::Mlp),
             Some(other) => Err(invalid(format!("unsupported hybrid block type {other}"))),
             None => Err(invalid("layers_block_type entries must be strings")),
+        })
+        .collect()
+}
+
+/// Nemotron-H's `hybrid_override_pattern`: `M` Mamba-2, `*` attention, `-`
+/// MLP and `E` routed experts, one character per block.
+fn pattern_kinds(pattern: &Value) -> Result<Vec<HybridBlockKind>> {
+    let pattern = pattern
+        .as_str()
+        .ok_or_else(|| invalid("hybrid_override_pattern must be a string"))?;
+    pattern
+        .chars()
+        .map(|block| match block {
+            'M' => Ok(HybridBlockKind::Mamba),
+            '*' => Ok(HybridBlockKind::Attention),
+            '-' => Ok(HybridBlockKind::Mlp),
+            'E' => Ok(HybridBlockKind::Moe),
+            other => Err(invalid(format!("unsupported hybrid_override_pattern block {other}"))),
         })
         .collect()
 }
@@ -81,6 +107,11 @@ fn mamba(decoder: &Value) -> Result<Mamba2Config> {
         chunk_size: positive(decoder, "chunk_size")?,
         time_step_limit: time_step_limit(decoder)?,
         state_dtype: state_dtype(decoder)?,
+        layout: match optional_string(decoder, STATE_SPACE_LAYOUT)?.as_deref() {
+            None => StateSpaceLayout::Checkpoint,
+            Some(STATE_SPACE_LAYOUT_LLAMA_CPP) => StateSpaceLayout::LlamaCpp,
+            Some(other) => return Err(invalid(format!("unknown {STATE_SPACE_LAYOUT} `{other}`"))),
+        },
     };
     let activation = optional_string(decoder, "mamba_hidden_act")?;
     if activation.as_deref().is_some_and(|name| name != "silu") {
@@ -92,14 +123,20 @@ fn mamba(decoder: &Value) -> Result<Mamba2Config> {
     Ok(config)
 }
 
-fn routed(decoder: &Value) -> Result<LatentRoutedConfig> {
+/// Nemotron-H's feed-forwards: unbiased `relu²` projections.
+fn relu_squared(decoder: &Value, what: &str) -> Result<()> {
     let activation = optional_string(decoder, "mlp_hidden_act")?;
     if activation.as_deref() != Some("relu2") {
-        return Err(invalid("hybrid routed experts require the relu2 activation"));
+        return Err(invalid(format!("{what} require the relu2 activation")));
     }
     if optional_bool(decoder, "mlp_bias")?.unwrap_or(false) {
-        return Err(invalid("hybrid routed experts with projection bias are not supported"));
+        return Err(invalid(format!("{what} with projection bias are not supported")));
     }
+    Ok(())
+}
+
+fn routed(decoder: &Value) -> Result<LatentRoutedConfig> {
+    relu_squared(decoder, "hybrid routed experts")?;
     if optional_bool(decoder, "norm_topk_prob")? != Some(true) {
         return Err(invalid("hybrid routed experts require renormalized top-k weights"));
     }

@@ -6,7 +6,8 @@
 //! the reference is written by `benchmarks/tools/nemotron/greedy_oracle.py`.
 //! Options: `draft=K` drafts `K` tokens per step with the checkpoint's
 //! prediction module; `tokens=N` caps each continuation; `temperature=T`
-//! samples with top-p 0.95 instead of greedy decoding; `rows=R` generates
+//! samples with top-p 0.95 instead of greedy decoding, and `top_k=K` bounds
+//! that nucleus by `K` tokens; `rows=R` generates
 //! the first `R` prompts at once and reports their aggregate rate; `out=PATH`
 //! writes the token ids; `compare=PATH` reports where they part from that
 //! file's; `tool` asks for a forced, schema-constrained tool call about each
@@ -44,7 +45,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let reference = args.next().map(PathBuf::from).ok_or("missing reference path")?;
     let reference: Reference = serde_json::from_slice(&fs::read(reference)?)?;
     let mut config = RuntimeConfig::default();
-    let (mut tokens, mut out, mut compare, mut temperature) = (256, None, None, 0.0);
+    let (mut tokens, mut out, mut compare) = (256, None, None);
+    let mut sampling = Sampling { temperature: 0.0, top_k: 0 };
     let (mut rows, mut tool, mut only) = (None, false, None);
     for option in args.filter_map(|option| option.into_string().ok()) {
         if let Some(draft) = option.strip_prefix("draft=") {
@@ -55,7 +57,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else if let Some(value) = option.strip_prefix("rows=") {
             rows = Some(value.parse::<usize>()?);
         } else if let Some(value) = option.strip_prefix("temperature=") {
-            temperature = value.parse()?;
+            sampling.temperature = value.parse()?;
+        } else if let Some(value) = option.strip_prefix("top_k=") {
+            sampling.top_k = value.parse()?;
         } else if let Some(index) = option.strip_prefix("only=") {
             only = Some(index.parse::<usize>()?);
         } else if option == "tool" {
@@ -71,7 +75,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let library = Library::new(config);
     let model = library.load(model, GenerationOverrides::default(), &mut |_| {})?;
     if let Some(rows) = rows {
-        concurrent(&model, &reference.records[..rows], tokens, temperature, tool)?;
+        concurrent(&model, &reference.records[..rows], tokens, sampling, tool)?;
         model.unload()?;
         return Ok(());
     }
@@ -80,7 +84,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if only.is_some_and(|only| only != index) {
             continue;
         }
-        let request = request(&record.prompt, tokens, temperature, tool);
+        let request = request(&record.prompt, tokens, sampling, tool);
         let output = match model.generate(&request, &mut |_| {}, &mut |_| {}) {
             Ok(output) => output,
             Err(error) => {
@@ -100,7 +104,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             output.metrics.throughput.decode.per_second.unwrap_or(f64::NAN),
             ratio(counts.decode_tokens, counts.decode_steps.max(1)),
         );
-        if temperature > 0.0 {
+        if sampling.temperature > 0.0 {
             println!("  text={:?}", output.text.chars().take(160).collect::<String>());
         }
         if tool {
@@ -120,7 +124,7 @@ fn concurrent(
     model: &libmir::Model,
     records: &[Record],
     tokens: usize,
-    temperature: f32,
+    sampling: Sampling,
     tool: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let started = std::time::Instant::now();
@@ -128,7 +132,7 @@ fn concurrent(
         // Every generation starts before the first is joined.
         let mut workers = Vec::with_capacity(records.len());
         for record in records {
-            let request = request(&record.prompt, tokens, temperature, tool);
+            let request = request(&record.prompt, tokens, sampling, tool);
             workers.push(scope.spawn(move || model.generate(&request, &mut |_| {}, &mut |_| {})));
         }
         workers
@@ -149,7 +153,15 @@ fn concurrent(
     Ok(())
 }
 
-fn request(prompt: &str, tokens: usize, temperature: f32, tool: bool) -> GenerationRequest {
+/// Greedy decoding at temperature 0; otherwise top-p 0.95 under `top_k`
+/// (`0` leaves the nucleus unbounded).
+#[derive(Clone, Copy)]
+struct Sampling {
+    temperature: f32,
+    top_k: usize,
+}
+
+fn request(prompt: &str, tokens: usize, sampling: Sampling, tool: bool) -> GenerationRequest {
     let (content, tools, tool_choice) = if tool {
         (
             format!("Record a summary and the key points of an answer to: {prompt}"),
@@ -180,13 +192,13 @@ fn request(prompt: &str, tokens: usize, temperature: f32, tool: bool) -> Generat
         },
         options: GenerationOverrides {
             max_tokens: Some(tokens),
-            temperature: Some(temperature),
-            top_p: Some(if temperature > 0.0 {
+            temperature: Some(sampling.temperature),
+            top_p: Some(if sampling.temperature > 0.0 {
                 0.95
             } else {
                 1.0
             }),
-            top_k: Some(0),
+            top_k: Some(sampling.top_k),
             repetition_penalty: Some(1.0),
             ..GenerationOverrides::default()
         },

@@ -1,6 +1,7 @@
 use mircuda::{DeviceBuffer, Stream, bf16};
 use models::weights::{TensorBinding, TensorStorage};
 
+use super::packed::integer::{PackedIntegerLayout, require_layout};
 use crate::{
     CudaBackend, CudaTensor, CudaTensorDType, CudaTensorSet, Error, Result,
     kernels::{AwqLaunch, AwqLinear, AwqSpec},
@@ -15,6 +16,10 @@ pub struct AwqWeight {
 }
 
 impl AwqWeight {
+    pub(in crate::backend) const fn layout(&self) -> PackedIntegerLayout {
+        PackedIntegerLayout::Awq { group_size: self.group_size }
+    }
+
     pub(crate) fn load_binding(
         tensors: &CudaTensorSet,
         binding: &TensorBinding,
@@ -56,6 +61,7 @@ pub struct AwqBf16Linear {
     stream: Stream,
     input: usize,
     output: usize,
+    layout: PackedIntegerLayout,
 }
 
 impl AwqBf16Linear {
@@ -75,6 +81,7 @@ impl AwqBf16Linear {
             stream: backend.inner.stream.clone(),
             input,
             output,
+            layout: weight.layout(),
         })
     }
 
@@ -84,6 +91,7 @@ impl AwqBf16Linear {
         weight: &AwqWeight,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
+        require_layout(self.layout, weight.layout())?;
         weight.validate(self.input, self.output)?;
         self.operation.execute(
             &self.stream,

@@ -92,7 +92,9 @@ impl FusedGateUp {
 
     pub(crate) fn forward(&self, input: &Array, stream: &Stream) -> Result<GateUpOutput> {
         let output = match &self.execution {
-            FusedGateUpExecution::Affine(arrays) => input.quantized_matmul(arrays, true, stream)?,
+            FusedGateUpExecution::Affine(arrays) => {
+                input.quantized_matmul(arrays, true, stream)?.astype_like(input, stream)?
+            },
             FusedGateUpExecution::MxFp4 { weight, scales } => {
                 Array::from_native(stream.native().graph().mxfp4_matmul(
                     input.native(),
@@ -102,6 +104,7 @@ impl FusedGateUp {
                     },
                     true,
                 )?)?
+                .astype_like(input, stream)?
             },
         };
         let (gate, up) = split_last(&output, self.gate_width, stream)?;

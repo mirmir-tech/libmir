@@ -1,12 +1,13 @@
 use mircuda::{DeviceBuffer, KernelNode, bf16};
 use runtime::kv::KvWritePlan;
 
-use super::PagedKvCache;
+use super::{PagedKvCache, key_value};
 use crate::{Error, PagedDecodeBatch, PagedPrefillBatch, Result, kernels::KvStoreKernel};
 
 impl PagedKvCache {
     pub(crate) fn copy_ring_slot(&mut self, source_slot: usize, target_slot: usize) -> Result<()> {
         let ring = self.ring.ok_or(Error::InvalidPagedKv("cannot copy a non-windowed KV ring"))?;
+        key_value(self.operation.as_ref())?;
         let physical_blocks = ring.physical_blocks()?;
         let source_blocks = ring.slot_blocks(source_slot)?;
         let target_blocks = ring.slot_blocks(target_slot)?;
@@ -36,7 +37,7 @@ impl PagedKvCache {
         let [write] = plan.writes() else {
             return Err(Error::InvalidPagedKv("captured decode requires one KV page write"));
         };
-        self.operation.execute_captured(
+        key_value(self.operation.as_ref())?.execute_captured(
             &self.stream,
             keys,
             values,
@@ -58,7 +59,7 @@ impl PagedKvCache {
         if batch.cache_config() != self.storage.cache || batch.active() == 0 {
             return Err(Error::InvalidPagedKv("batched KV metadata geometry differs"));
         }
-        self.operation.execute_batch(
+        key_value(self.operation.as_ref())?.execute_batch(
             &self.stream,
             keys,
             values,
@@ -81,7 +82,7 @@ impl PagedKvCache {
             return Err(Error::InvalidPagedKv("prefill KV metadata geometry differs"));
         }
         let windowed = self.is_windowed();
-        self.operation.execute_prefill_batch(
+        key_value(self.operation.as_ref())?.execute_prefill_batch(
             &self.stream,
             keys,
             values,
@@ -100,12 +101,13 @@ impl PagedKvCache {
         values: &DeviceBuffer<bf16>,
     ) -> Result<usize> {
         self.validate_plan(plan)?;
+        let operation = key_value(self.operation.as_ref())?;
         for write in plan.writes() {
             let block = match self.ring {
                 Some(ring) => ring.write_block(session_slot, *write)?,
                 None => usize::try_from(write.page.block.0)?,
             };
-            self.operation.execute(
+            operation.execute(
                 &self.stream,
                 keys,
                 values,

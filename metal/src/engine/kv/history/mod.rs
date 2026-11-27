@@ -4,6 +4,7 @@ mod append;
 mod attend;
 pub mod budget;
 mod buffer;
+mod shared;
 #[cfg(test)]
 mod stats;
 #[cfg(test)]
@@ -12,7 +13,8 @@ mod tests;
 use std::sync::Arc;
 
 pub use append::Append;
-pub use attend::{Attend, attend};
+pub use attend::{Attend, attend, attend_publishing};
+pub use shared::Attended;
 #[cfg(test)]
 pub use stats::counts;
 
@@ -101,6 +103,8 @@ pub fn take(caches: &mut [&mut KvCache]) -> Option<Arc<History>> {
         .then_some(first.history)
 }
 
+/// [`execute_publishing`]'s attention output alone.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub fn execute(
     previous: Option<&History>,
@@ -112,20 +116,54 @@ pub fn execute(
     sinks: Option<&Array>,
     stream: &Stream,
 ) -> Result<Array> {
+    execute_publishing(previous, caches, contexts, updates, queries, scale, sinks, stream)
+        .map(|(output, _)| output)
+}
+
+/// A new history of `contexts` extended by `updates`, attended over and
+/// handed to every row, also returned; per-row attention when the budget
+/// refuses one.
+#[allow(clippy::too_many_arguments)]
+fn execute_publishing(
+    previous: Option<&History>,
+    caches: &mut [&mut KvCache],
+    contexts: &[KvContext],
+    updates: [&Array; 2],
+    queries: &Array,
+    scale: f32,
+    sinks: Option<&Array>,
+    stream: &Stream,
+) -> Result<(Array, Option<Arc<History>>)> {
     let history = match History::next(previous, contexts, updates, stream) {
         Ok(history) => Arc::new(history),
         Err(crate::engine::Error::HistoryBudgetUnavailable) => {
-            return row_attention(queries, contexts, scale, sinks, stream);
+            return Ok((row_attention(queries, contexts, scale, sinks, stream)?, None));
         },
         Err(error) => return Err(error),
     };
-    attend_history(&history, caches, queries, scale, sinks, stream)
+    let output = attend_history(&history, caches, queries, scale, sinks, stream)?;
+    Ok((output, Some(history)))
 }
 
 /// Attends over `history` and hands every row its share of it.
 fn attend_history(
     history: &Arc<History>,
     caches: &mut [&mut KvCache],
+    queries: &Array,
+    scale: f32,
+    sinks: Option<&Array>,
+    stream: &Stream,
+) -> Result<Array> {
+    let output = attend_over(history, queries, scale, sinks, stream)?;
+    for (index, cache) in caches.iter_mut().enumerate() {
+        cache.history = Some(Row { index, history: Arc::clone(history) });
+    }
+    Ok(output)
+}
+
+/// `queries` attended over every row of `history` at once.
+fn attend_over(
+    history: &History,
     queries: &Array,
     scale: f32,
     sinks: Option<&Array>,
@@ -146,9 +184,6 @@ fn attend_history(
             queries.scaled_dot_product_attention(&keys, &values, scale, false, stream)?
         },
     };
-    for (index, cache) in caches.iter_mut().enumerate() {
-        cache.history = Some(Row { index, history: Arc::clone(history) });
-    }
     Ok(output)
 }
 

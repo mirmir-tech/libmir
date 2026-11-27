@@ -163,7 +163,7 @@ fn run_decode(model: &mut LoadedModel, prompt: &[u32], decode_tokens: usize) -> 
 
 fn greedy_token(output: &NativeOutput) -> Result<u32> {
     match output {
-        NativeOutput::Greedy(token) => Ok(*token),
+        NativeOutput::Greedy(token) | NativeOutput::Verified { next: token, .. } => Ok(*token),
         NativeOutput::Logits(_) => Err(Error::Benchmark("greedy pipeline returned logits".into())),
     }
 }

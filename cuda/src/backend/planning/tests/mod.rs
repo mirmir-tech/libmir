@@ -36,6 +36,23 @@ fn sm12_uses_validated_vectors_for_decode_output_and_attention() -> Result<()> {
     assert_eq!(attention.execution(), DenseExecution::Vector);
     assert_eq!(attention.source(), PlanSource::Heuristic);
     assert_eq!(planner(11)?.plan_dense(output)?.execution(), DenseExecution::Matrix);
+    // Widths the per-row kernel cannot load in 16-byte vectors take row groups.
+    let router = DensePlanRequest {
+        role: DenseRole::Router,
+        input_features: 2_050,
+        output_features: 128,
+        ..output
+    };
+    assert_eq!(planner(12)?.plan_dense(router)?.execution(), DenseExecution::RowGroupVector);
+    // Split-K is a tuner candidate only; router shapes plan one block per row.
+    for (output_features, input_features) in [(32, 2_048), (128, 4_096), (256, 7_168)] {
+        let router = DensePlanRequest {
+            input_features,
+            output_features,
+            ..router
+        };
+        assert_eq!(planner(12)?.plan_dense(router)?.execution(), DenseExecution::Vector);
+    }
     Ok(())
 }
 

@@ -1,10 +1,13 @@
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DecodeReservation {
-    #[default]
+    /// Reserve one page beyond the prompt; decode then grows a page at a time,
+    /// so concurrent sessions interleave their pages and read fragmented
+    /// history.
     OnePage,
     /// Reserve up to the request's generation budget using reclaimable spare
-    /// pages.
+    /// pages, keeping each session's history one contiguous run.
+    #[default]
     GenerationBudget,
     #[cfg(test)]
     #[serde(skip_deserializing)]

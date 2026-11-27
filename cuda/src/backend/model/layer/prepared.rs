@@ -1,6 +1,10 @@
 use crate::{
     DecodeMoeBlockConfig, DenseSwiGluConfig, PrefillDenseSwiGlu, PrefillMoeBlockBf16,
-    backend::{block::PreparedDecodeMoeBlock, dense::graph::PreparedDecodeDense},
+    backend::{
+        attention::AttentionLayout,
+        block::PreparedDecodeMoeBlock,
+        dense::{DenseLayerLayout, ExpertBankLayout, graph::PreparedDecodeDense},
+    },
 };
 
 pub(in crate::backend::model) enum PreparedLayer {
@@ -22,10 +26,16 @@ pub(in crate::backend::model) enum LayerPrefill<'a> {
     Dense(&'a mut PrefillDenseSwiGlu),
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "computed and compared per layer and prefill; a session keeps a few"
+)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(in crate::backend::model) enum PrefillSignature {
-    Moe(DecodeMoeBlockConfig),
-    Dense(DenseSwiGluConfig),
+    /// A layer's config and the layouts of its weights, which its plans
+    /// compile in: layers of other layouts take their own plans.
+    Moe(DecodeMoeBlockConfig, AttentionLayout, ExpertBankLayout),
+    Dense(DenseSwiGluConfig, DenseLayerLayout),
 }
 
 pub(in crate::backend::model) struct SharedLayerPrefill {
@@ -39,12 +49,12 @@ pub(in crate::backend::model) enum OwnedLayerPrefill {
 }
 
 impl SharedLayerPrefill {
-    pub const fn new(signature: PrefillSignature, plan: OwnedLayerPrefill) -> Self {
-        Self { signature, plan }
+    pub const fn new(signature: &PrefillSignature, plan: OwnedLayerPrefill) -> Self {
+        Self { signature: *signature, plan }
     }
 
-    pub fn supports(&self, signature: PrefillSignature) -> bool {
-        self.signature == signature
+    pub fn supports(&self, signature: &PrefillSignature) -> bool {
+        self.signature == *signature
     }
 
     pub const fn borrow(&mut self) -> LayerPrefill<'_> {

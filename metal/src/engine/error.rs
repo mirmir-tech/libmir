@@ -14,6 +14,16 @@ pub enum Error {
     InvalidQuantization(String),
     #[error("invalid native model configuration: {0}")]
     InvalidModel(String),
+    /// A GGUF file maps its names by its model's metadata and loads only by
+    /// its share of the model's weight catalog.
+    #[error("GGUF file {} is not in the model's weight catalog", .0.display())]
+    UncataloguedGguf(std::path::PathBuf),
+    /// Caches are indexed by layer, so the layers sharing an earlier
+    /// layer's keys and values, which keep none, must come last.
+    #[error("layer {layer} caches keys and values after a layer that shares them")]
+    CachingLayerAfterSharing { layer: usize },
+    #[error("multi-token attention cannot read a paged K/V context")]
+    MultiTokenPagedAttention,
     #[error(
         "Metal execution requires {required} K/V pages in layer {layer} but its capacity is {maximum}"
     )]
@@ -28,6 +38,8 @@ pub enum Error {
     Float(#[from] std::num::ParseFloatError),
     #[error("model layout error: {0}")]
     Model(#[from] models::ModelsError),
+    #[error("Metal does not run this architecture: {0}")]
+    Architecture(#[from] architecture::ArchitectureError),
     #[error("mirtal error: {0}")]
     Mirtal(#[from] mirtal::Error),
     #[error("integer conversion failed: {0}")]

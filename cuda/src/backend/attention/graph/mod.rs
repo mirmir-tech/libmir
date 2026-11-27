@@ -102,6 +102,7 @@ pub(in crate::backend) struct Geometry {
     pub(in crate::backend) scale: f32,
     pub(in crate::backend) split_threshold: u32,
     pub(in crate::backend) theta: f32,
+    pub(in crate::backend) rope_scaling: crate::kernels::RotaryScaling,
     pub(in crate::backend) epsilon: f32,
     pub(in crate::backend) normalization: crate::kernels::QkvNormalization,
     pub(in crate::backend) separate_qkv: bool,
@@ -110,7 +111,8 @@ pub(in crate::backend) struct Geometry {
 #[derive(Clone, Copy)]
 pub(in crate::backend) struct Nodes {
     pub(in crate::backend) qkv_postprocess: KernelNode<QkvPostprocessKernel>,
-    pub(in crate::backend) kv_store: KernelNode<KvStoreKernel>,
+    /// `None` for a layer reading another layer's keys and values.
+    pub(in crate::backend) kv_store: Option<KernelNode<KvStoreKernel>>,
     pub(in crate::backend) attention: CapturedPagedAttentionNodes,
 }
 
@@ -139,7 +141,7 @@ impl DecodeAttentionBf16 {
         let geometry = Geometry::new(&self)?;
         let dynamic = Dynamic::new(write_plan, table, geometry)?;
         self.attention.prepare_table(table)?;
-        let kernels = Kernels::new(&self);
+        let kernels = Kernels::new(&self)?;
         let configs = Configs::new(&self)?;
         let stream = self.stream.clone();
         let resources = Resources {
@@ -182,12 +184,14 @@ impl CapturedDecodeAttentionBf16 {
                 qkv_arguments(resources)
             },
         )?;
-        self.graph.update_kernel(
-            &self.nodes.kv_store,
-            &self.kernels.kv_store,
-            self.configs.kv_store,
-            kv_arguments,
-        )?;
+        if let Some(kv_store) = &self.nodes.kv_store {
+            self.graph.update_kernel(
+                kv_store,
+                &self.kernels.kv_store,
+                self.configs.kv_store,
+                kv_arguments,
+            )?;
+        }
         self.graph.update_kernel(
             &self.nodes.attention.direct,
             &self.kernels.attention.direct,

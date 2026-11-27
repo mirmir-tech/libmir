@@ -5,10 +5,12 @@ use models::weights::{TensorCatalog, TensorInfo};
 use serde_json::json;
 
 use super::*;
-use crate::{AdmissionCheckKind, AdmissionStatus};
+use crate::{AdmissionCheckKind, AdmissionStatus, EncodingKind};
 
+mod biased_dense;
 mod causal_scoring;
-mod clamped_routed_dense;
+mod clamped_routed;
+mod dense_runtimes;
 mod routed_dense;
 mod shared_routed_dense;
 mod vision;
@@ -35,7 +37,8 @@ fn builds_the_same_typed_contract_from_remote_headers() -> Result<()> {
     let cuda = contract.admission(BackendTarget::Cuda);
     assert_eq!(cuda.status, AdmissionStatus::Supported);
     assert!(cuda.checks.iter().any(|check| {
-        check.kind == AdmissionCheckKind::Architecture && check.status == AdmissionStatus::Supported
+        check.kind() == AdmissionCheckKind::Architecture
+            && check.status() == AdmissionStatus::Supported
     }));
     Ok(())
 }
@@ -52,8 +55,8 @@ fn admits_dense_decoder_storage_converted_by_cuda_on_load() -> Result<()> {
         let cuda = contract.admission(BackendTarget::Cuda);
         assert_eq!(cuda.status, AdmissionStatus::Supported);
         assert!(cuda.checks.iter().any(|check| {
-            check.kind == AdmissionCheckKind::Dense
-                && check.status == AdmissionStatus::Supported
+            check.kind() == AdmissionCheckKind::Encoding(EncodingKind::Dense)
+                && check.status() == AdmissionStatus::Supported
                 && check.detail.contains("converts dense storage")
         }));
     }

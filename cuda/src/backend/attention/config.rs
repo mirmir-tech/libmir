@@ -1,3 +1,4 @@
+use models::semantic::AttentionWindow;
 use runtime::kv::KvStorageSpec;
 
 use super::{
@@ -5,8 +6,8 @@ use super::{
     NvFp4LinearWeight, ProjectionFormat, bf16,
 };
 use crate::{
-    AffineQuantizedWeight, DirectFp8CheckpointWeight, Error, MxFp4CheckpointWeight,
-    MxFp8CheckpointWeight, PackedIntegerWeight, Result,
+    AffineQuantizedWeight, DirectFp8CheckpointWeight, Error, GgmlCheckpointWeight,
+    MxFp4CheckpointWeight, MxFp8CheckpointWeight, PackedIntegerWeight, Result,
 };
 
 /// Config-derived geometry for one fixed-shape decode attention layer.
@@ -19,18 +20,55 @@ pub struct DecodeAttentionConfig {
     /// layers without positional encoding.
     pub rotary: Option<crate::kernels::RotaryEmbedding>,
     pub rms_norm_epsilon: f32,
+    /// The formula of the residual-stream norms (input, feed-forward and
+    /// final); Q/K norms stay RMS.
+    pub stream_norm: crate::kernels::NormFormula,
     pub attention_scale: f32,
     pub projection_format: ProjectionFormat,
     pub qkv_normalization: crate::kernels::QkvNormalization,
-    pub sliding_window: Option<usize>,
+    /// The keys each query sees besides itself: a sliding window or its
+    /// chunk; `None` for the full history.
+    pub window: Option<AttentionWindow>,
+    /// Gemma 2's cap on attention scores before the softmax.
+    pub score_softcap: Option<crate::kernels::ScoreSoftcap>,
+    /// Llama 4's position-dependent query scale.
+    pub query_temperature: Option<crate::kernels::QueryTemperatureScale>,
     pub max_sequence_blocks: usize,
     pub cache: KvStorageSpec,
+    /// The earlier layer whose cached keys and values this layer attends
+    /// over (Gemma 4's E models): it projects and rotates only its queries,
+    /// stores nothing, and reads that layer's pages. `None` for a layer
+    /// that caches its own. Narrow, so the config stays small enough to
+    /// pass by value.
+    pub key_value_source: Option<u16>,
+}
+
+impl DecodeAttentionConfig {
+    /// The cache layer whose pages this layer attends over.
+    #[must_use]
+    pub fn cache_layer(&self) -> usize {
+        self.key_value_source.map_or(self.layer, usize::from)
+    }
+
+    /// Whether the layer projects and stores its own keys and values.
+    #[must_use]
+    pub const fn stores_key_values(&self) -> bool {
+        self.key_value_source.is_none()
+    }
+
+    /// Gemma 3 opens bidirectional image blocks in its sliding layers only.
+    #[must_use]
+    pub(in crate::backend) const fn opens_image_blocks(&self) -> bool {
+        matches!(self.window, Some(AttentionWindow::Sliding(_)))
+    }
 }
 
 /// Checkpoint tensors consumed by generic decode attention.
 #[derive(Clone, Copy)]
 pub struct DecodeAttentionWeights<'a> {
-    pub input_norm: &'a CudaTensor,
+    /// Normalizes the residual stream before the QKV projections; `None` in
+    /// post-norm layers, whose projections read the stream itself.
+    pub input_norm: Option<&'a CudaTensor>,
     pub qkv: DecodeQkvWeights<'a>,
     pub query_norm: &'a DeviceBuffer<bf16>,
     pub key_norm: &'a DeviceBuffer<bf16>,
@@ -43,9 +81,13 @@ pub enum DecodeQkvWeights<'a> {
     Bf16(&'a Bf16LinearPackWeights<3>),
     DirectFp8([&'a DirectFp8CheckpointWeight; 3]),
     MxFp4([&'a MxFp4CheckpointWeight; 3]),
+    Ggml([&'a GgmlCheckpointWeight; 3]),
     MxFp8([&'a MxFp8CheckpointWeight; 3]),
     PackedInteger([&'a PackedIntegerWeight; 3]),
     NvFp4([&'a NvFp4LinearWeight; 3]),
+    /// The query projection alone, of a layer that attends over another
+    /// layer's keys and values ([`DecodeAttentionConfig::key_value_source`]).
+    Query(DecodeAttentionOutputWeight<'a>),
 }
 
 impl<'a> DecodeQkvWeights<'a> {
@@ -55,9 +97,11 @@ impl<'a> DecodeQkvWeights<'a> {
             Self::Affine(_)
             | Self::DirectFp8(_)
             | Self::MxFp4(_)
+            | Self::Ggml(_)
             | Self::MxFp8(_)
             | Self::PackedInteger(_)
-            | Self::NvFp4(_) => {
+            | Self::NvFp4(_)
+            | Self::Query(_) => {
                 Err(Error::InvalidExecutionPlan("BF16 QKV operation received NVFP4 weights"))
             },
         }

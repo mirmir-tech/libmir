@@ -3,12 +3,24 @@ use super::{Array, ModelTensors, Result, Stream};
 #[derive(Debug)]
 pub struct NormWeight {
     weight: Array,
+    formula: Formula,
+}
+
+/// How a norm scales its input before the weight.
+#[derive(Debug)]
+enum Formula {
+    Rms,
+    /// Mean-centred `LayerNorm`; MLX takes the bias these norms do not have
+    /// as zeros.
+    Layer {
+        bias: Array,
+    },
 }
 
 impl NormWeight {
     #[cfg(test)]
     pub(in crate::engine) fn from_weight(weight: Array) -> Self {
-        Self { weight }
+        Self { weight, formula: Formula::Rms }
     }
 
     pub(in crate::engine) fn load(tensors: &ModelTensors, prefix: &str) -> Result<Self> {
@@ -16,7 +28,10 @@ impl NormWeight {
     }
 
     pub(in crate::engine) fn load_name(tensors: &ModelTensors, weight: &str) -> Result<Self> {
-        Ok(Self { weight: tensors.get(weight)? })
+        Ok(Self {
+            weight: tensors.get(weight)?,
+            formula: Formula::Rms,
+        })
     }
 
     pub(in crate::engine) fn load_shifted(
@@ -26,7 +41,7 @@ impl NormWeight {
         stream: &Stream,
     ) -> Result<Self> {
         let weight = tensors.get(&format!("{prefix}.weight"))?.add_scalar(shift, stream)?;
-        Ok(Self { weight })
+        Ok(Self { weight, formula: Formula::Rms })
     }
 
     pub(in crate::engine) fn load_adjusted(
@@ -53,7 +68,7 @@ impl NormWeight {
         } else {
             weight.add_scalar(shift, stream)?
         };
-        Ok(Self { weight })
+        Ok(Self { weight, formula: Formula::Rms })
     }
 
     pub(in crate::engine) fn load_optional(
@@ -62,7 +77,7 @@ impl NormWeight {
     ) -> Result<Option<Self>> {
         tensors
             .get_optional(&format!("{prefix}.weight"))
-            .map(|weight| weight.map(|weight| Self { weight }))
+            .map(|weight| weight.map(|weight| Self { weight, formula: Formula::Rms }))
     }
 
     pub(in crate::engine) fn apply(
@@ -71,7 +86,32 @@ impl NormWeight {
         eps: f32,
         stream: &Stream,
     ) -> Result<Array> {
-        input.rms_norm(&self.weight, eps, stream)
+        match &self.formula {
+            Formula::Rms => input.rms_norm(&self.weight, eps, stream),
+            Formula::Layer { bias } => Array::from_native(stream.native().graph().layer_norm(
+                input.native(),
+                self.weight.native(),
+                bias.native(),
+                eps,
+            )?),
+        }
+    }
+
+    /// The same weight in a mean-centred `LayerNorm` without bias (Cohere).
+    /// A `LayerNorm` with this weight and `bias`, zero when absent.
+    pub(in crate::engine) fn into_layer(
+        self,
+        bias: Option<Array>,
+        stream: &Stream,
+    ) -> Result<Self> {
+        let bias = match bias {
+            Some(bias) => bias,
+            None => self.weight.multiply_scalar(0.0, stream)?,
+        };
+        Ok(Self {
+            weight: self.weight,
+            formula: Formula::Layer { bias },
+        })
     }
 
     pub(super) fn native_clone(&self) -> mirtal::Array {

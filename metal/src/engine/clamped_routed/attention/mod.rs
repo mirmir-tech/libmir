@@ -78,6 +78,7 @@ impl ClampedRoutedAttention {
     pub fn load(
         tensors: &ModelTensors,
         bindings: RoutedDecoderLayerBindings<'_>,
+        attention: &models::semantic::AttentionSpec,
         config: ClampedRoutedConfig,
         stream: &Stream,
     ) -> Result<Self> {
@@ -92,16 +93,9 @@ impl ClampedRoutedAttention {
             value,
             output: BoundLinear::load(tensors, bindings.attention_output, stream)?,
             sinks: tensors.get(&bindings.attention_sinks.source)?,
-            frequencies: Array::yarn_rope_frequencies(
-                config.head_dim,
-                config.rope_base,
-                config.rope_factor,
-                config.beta_fast,
-                config.beta_slow,
-                config.original_context,
-                config.rope_truncate,
-                stream,
-            )?,
+            frequencies: Array::rope_periods(attention)?.ok_or_else(|| {
+                crate::engine::Error::InvalidModel("clamped-routed attention needs YaRN".into())
+            })?,
             config,
         })
     }

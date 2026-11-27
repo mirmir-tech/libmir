@@ -7,8 +7,5 @@ pub fn admit_architecture(
     task: &TaskExecutionPlan,
     semantic: Option<&SemanticModelSpec>,
 ) -> engine::Result<MetalArchitecture> {
-    match architecture::metal::admit(task, semantic) {
-        Ok(architecture) => Ok(architecture),
-        Err(error) => Err(engine::Error::InvalidModel(error.to_string())),
-    }
+    Ok(architecture::metal::admit(task, semantic)?)
 }

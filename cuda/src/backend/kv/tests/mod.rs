@@ -1,6 +1,8 @@
 mod batch;
+mod chunked;
 mod fmha;
 mod prefill_batch;
+mod softcap;
 mod split;
 
 use mircuda::{DeviceBuffer, DeviceElement, bf16};
@@ -44,7 +46,14 @@ fn paged_gqa_matches_cpu_across_physical_blocks()
     let expected = reference(&[0.5, 0.0, 0.5], None);
     assert_output(&actual, &expected);
 
-    attention.execute(&query, &cache, &table, &mut output, Some(2), 0.5)?;
+    attention.execute(
+        &query,
+        &cache,
+        &table,
+        &mut output,
+        std::num::NonZeroUsize::new(2).map(models::semantic::AttentionWindow::Sliding),
+        0.5,
+    )?;
     let actual = read(&backend, &output)?;
     let expected = reference(&[0.0, 0.5], Some(1));
     assert_output(&actual, &expected);

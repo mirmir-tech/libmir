@@ -4,13 +4,14 @@ use super::RouterSelection;
 use crate::{
     AffineQuantizedBf16Qmm, AffineQuantizedConfig, AffineQuantizedTensors, CudaBackend, Error,
     Result,
-    kernels::{RouterUnitSpec, RouterUnitTopK},
+    backend::router::LayerRouterTopK,
+    kernels::{RouterUnitScoring, RouterUnitSpec},
 };
 
 #[derive(Debug)]
 pub struct AffineRouterBf16 {
     projection: AffineQuantizedBf16Qmm,
-    top_k: RouterUnitTopK,
+    top_k: LayerRouterTopK,
     stream: Stream,
     scores: DeviceBuffer<bf16>,
     selected: DeviceBuffer<u32>,
@@ -23,8 +24,10 @@ impl CudaBackend {
         tokens: usize,
         projection: AffineQuantizedConfig,
         top_k: usize,
+        scoring: RouterUnitScoring,
+        correction_bias: Option<&DeviceBuffer<f32>>,
     ) -> Result<AffineRouterBf16> {
-        AffineRouterBf16::new(self, tokens, projection, top_k)
+        AffineRouterBf16::new(self, tokens, projection, (top_k, scoring), correction_bias)
     }
 }
 
@@ -33,7 +36,8 @@ impl AffineRouterBf16 {
         backend: &CudaBackend,
         tokens: usize,
         projection: AffineQuantizedConfig,
-        top_k: usize,
+        (top_k, scoring): (usize, RouterUnitScoring),
+        correction_bias: Option<&DeviceBuffer<f32>>,
     ) -> Result<Self> {
         let selections = tokens
             .checked_mul(top_k)
@@ -43,13 +47,15 @@ impl AffineRouterBf16 {
             .ok_or(Error::InvalidRouter("affine router score overflow"))?;
         Ok(Self {
             projection: backend.prepare_affine_quantized_bf16_qmm(tokens, projection, 1)?,
-            top_k: RouterUnitTopK::compile(
+            top_k: LayerRouterTopK::compile(
                 &backend.inner.compiler,
                 RouterUnitSpec {
                     tokens,
                     experts: projection.output_features,
                     top_k,
                 },
+                scoring,
+                correction_bias,
             )?,
             stream: backend.inner.stream.clone(),
             scores: backend.inner.pool.allocate(&backend.inner.stream, scores)?,

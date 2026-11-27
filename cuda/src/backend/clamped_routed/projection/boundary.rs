@@ -3,30 +3,37 @@ use mircuda::{DeviceBuffer, bf16};
 use super::super::ClampedRoutedConfig;
 use crate::{
     AffineQuantizedEmbedding, AffineQuantizedWeight, Bf16Embedding, CudaAffineOutputHead,
-    CudaBackend, CudaOutputHead, CudaTensor, Error, Result,
-    backend::output::CudaOutputHeadTemplate,
+    CudaBackend, CudaOutputHead, CudaTensor, DenseRole, Error, GgmlBf16Linear,
+    GgmlCheckpointWeight, GgmlEmbeddingLookup, Result, backend::output::CudaOutputHeadTemplate,
 };
 
 #[derive(Clone)]
 pub(in crate::backend::clamped_routed) enum ClampedRoutedBoundaryProjection {
     Native(CudaTensor),
     Mlx(AffineQuantizedWeight),
+    Ggml(GgmlCheckpointWeight),
 }
 
 pub(in crate::backend::clamped_routed) enum ClampedRoutedEmbedding {
     Native(Bf16Embedding),
     Mlx(AffineQuantizedEmbedding),
+    Ggml(GgmlEmbeddingLookup),
 }
 
 #[derive(Clone, Debug)]
 pub(in crate::backend::clamped_routed) enum ClampedRoutedOutputProjection {
     Native(Box<CudaOutputHeadTemplate>),
     Mlx(Box<AffineQuantizedWeight>),
+    Ggml(Box<GgmlCheckpointWeight>),
 }
 
 pub(in crate::backend::clamped_routed) enum ClampedRoutedOutput {
     Native(Box<CudaOutputHead>),
     Mlx(Box<CudaAffineOutputHead>),
+    Ggml {
+        operation: Box<GgmlBf16Linear>,
+        weight: Box<GgmlCheckpointWeight>,
+    },
 }
 
 impl ClampedRoutedEmbedding {
@@ -42,6 +49,9 @@ impl ClampedRoutedEmbedding {
             ClampedRoutedBoundaryProjection::Mlx(weight) => {
                 let quantized = weight.infer_config(1, config.hidden, config.vocab)?;
                 backend.prepare_affine_embedding(quantized, 1.0).map(Self::Mlx)
+            },
+            ClampedRoutedBoundaryProjection::Ggml(weight) => {
+                weight.prepare_embedding(backend, 1.0).map(Self::Ggml)
             },
         }
     }
@@ -60,6 +70,9 @@ impl ClampedRoutedEmbedding {
             (Self::Mlx(operation), ClampedRoutedBoundaryProjection::Mlx(weight)) => {
                 operation.execute_batch(tokens, 0, count, weight.tensors(), output)
             },
+            (Self::Ggml(operation), ClampedRoutedBoundaryProjection::Ggml(_)) => {
+                operation.execute_batch(tokens, 0, count, output)
+            },
             _ => Err(Error::InvalidExecutionPlan("clamped-routed embedding layout changed")),
         }
     }
@@ -68,6 +81,7 @@ impl ClampedRoutedEmbedding {
         match self {
             Self::Native(operation) => operation.validate_token(token),
             Self::Mlx(operation) => operation.validate_token(token),
+            Self::Ggml(operation) => operation.validate_token(token),
         }
     }
 }
@@ -87,6 +101,10 @@ impl ClampedRoutedOutput {
                     .map(Box::new)
                     .map(Self::Mlx)
             },
+            ClampedRoutedOutputProjection::Ggml(weight) => Ok(Self::Ggml {
+                operation: Box::new(weight.prepare(backend, 1, DenseRole::OutputHead)?),
+                weight: weight.clone(),
+            }),
         }
     }
 
@@ -99,6 +117,7 @@ impl ClampedRoutedOutput {
         match self {
             Self::Native(operation) => operation.execute(input, output, sampling),
             Self::Mlx(operation) => operation.execute(input, output),
+            Self::Ggml { operation, weight } => operation.execute(input, weight, output),
         }
     }
 }

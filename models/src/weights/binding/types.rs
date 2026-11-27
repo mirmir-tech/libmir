@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     AwqQuantization, BitsAndBytes4BitQuantization, BlockQuantization,
-    CompressedIntegerQuantization, Float8Quantization, GptqQuantization, GroupedAffineQuantization,
-    LogicalTensorRole,
+    CompressedIntegerQuantization, Float8Quantization, GgmlBlockQuantization, GgmlCompanion,
+    GptqQuantization, GroupedAffineQuantization, LogicalTensorRole,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,14 +45,9 @@ pub enum TensorStorage {
         biases: Option<String>,
         output_bias: Option<String>,
     },
-    PackedInt8 {
-        format: CompressedIntegerQuantization,
-        scales: String,
-        shape: String,
-        zero_points: Option<String>,
-        group_indices: Option<String>,
-    },
-    PackedInt4 {
+    /// Compressed-tensors `pack-quantized` integers; `format.bits` is the
+    /// width.
+    PackedInteger {
         format: CompressedIntegerQuantization,
         scales: String,
         shape: String,
@@ -93,6 +88,11 @@ pub enum TensorStorage {
         bias: Option<String>,
         packing: TensorPacking,
     },
+    /// GGML blocks from a GGUF file; scales live inside the blocks.
+    Ggml {
+        format: GgmlBlockQuantization,
+        companion: GgmlCompanion,
+    },
     Auxiliary {
         dtype: String,
     },
@@ -112,24 +112,63 @@ pub enum ExpertProjectionLayout {
 }
 
 impl TensorBinding {
+    /// The physical tensors runtimes upload in their checkpoint dtype rather
+    /// than as BF16: a quantized weight's companions (scales, zeros, FP8
+    /// `weight_scale` and `input_scale`), a GGML output scale, and a sigmoid
+    /// router's correction bias, which decides the expert selection.
+    #[must_use]
+    pub fn full_precision_sources(&self) -> Vec<&str> {
+        if matches!(
+            self.role.layer_tensor(),
+            Some(super::roles::LayerTensorRole::RouterCorrectionBias)
+        ) {
+            return vec![self.source.as_str()];
+        }
+        match &self.storage {
+            TensorStorage::AffineQuantized { .. }
+            | TensorStorage::BlockQuantized { .. }
+            | TensorStorage::Float8 { .. }
+            | TensorStorage::PackedInteger { .. }
+            | TensorStorage::Awq { .. }
+            | TensorStorage::Gptq { .. }
+            | TensorStorage::BitsAndBytes4Bit { .. } => self.physical_sources(),
+            _ => self.output_scale().into_iter().collect(),
+        }
+    }
+
+    /// The F32 output scale of a GGML projection (llama.cpp's `.scale`),
+    /// which runtimes keep in F32.
+    #[must_use]
+    pub fn output_scale(&self) -> Option<&str> {
+        match &self.storage {
+            TensorStorage::Ggml { companion, .. } => companion.scale(),
+            _ => None,
+        }
+    }
+
+    /// The dense companion bias of a dense tensor (a `LayerNorm`'s `bias`).
+    #[must_use]
+    pub fn dense_bias(&self) -> Option<&str> {
+        match &self.storage {
+            TensorStorage::Dense { bias, .. } => bias.as_deref(),
+            _ => None,
+        }
+    }
+
     #[must_use]
     pub fn physical_sources(&self) -> Vec<&str> {
         let mut sources = vec![self.source.as_str()];
         match &self.storage {
             TensorStorage::Dense { bias, .. } => sources.extend(bias.as_deref()),
+            TensorStorage::Ggml { companion, .. } => {
+                sources.extend(companion.bias().or_else(|| companion.scale()));
+            },
             TensorStorage::AffineQuantized { scales, biases, output_bias, .. } => {
                 sources.push(scales);
                 sources.extend(biases.as_deref());
                 sources.extend(output_bias.as_deref());
             },
-            TensorStorage::PackedInt8 {
-                scales,
-                shape,
-                zero_points,
-                group_indices,
-                ..
-            }
-            | TensorStorage::PackedInt4 {
+            TensorStorage::PackedInteger {
                 scales,
                 shape,
                 zero_points,

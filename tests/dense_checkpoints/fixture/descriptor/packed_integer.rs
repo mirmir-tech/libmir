@@ -74,8 +74,9 @@ fn validate_packed_integer_storage(
             WeightEncoding::Dense { dtype } => {
                 dense.insert(dtype);
             },
-            WeightEncoding::PackedInt8 { format } if bits == 8 => packed.push(format),
-            WeightEncoding::PackedInt4 { format } if bits == 4 => packed.push(format),
+            WeightEncoding::PackedInteger { format } if format.bits.get() == bits => {
+                packed.push(format);
+            },
             _ => return Err(validation_error("MF-120 fixture contains another packed encoding")),
         }
     }

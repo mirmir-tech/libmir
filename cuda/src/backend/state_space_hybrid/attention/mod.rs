@@ -1,10 +1,10 @@
 //! Attention layer without positional encoding: the paged decode attention
-//! (its own `RMSNorm`, FP8 or BF16 Q/K/V, attention, output projection)
+//! (its own `RMSNorm`, FP8, GGML or BF16 Q/K/V, attention, output projection)
 //! followed by the residual and the optional feed-forward.
 
 mod batch;
 mod execution;
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests;
 
 pub use execution::CudaAttentionHybridExecution;
@@ -19,7 +19,8 @@ use crate::{
     AttentionLayerPolicy, Bf16LinearPackWeights, CudaBackend, CudaTensor, CudaTensorSet,
     DecodeAttentionBf16, DecodeAttentionConfig, DecodeAttentionOutputWeight,
     DecodeAttentionWeights, DecodeQkvWeights, DirectFp8CheckpointWeight, Error, ExecutionPhase,
-    PagedKvCache, ProjectionFormat, Result, backend::feed_forward::LayerNormConfig,
+    GgmlCheckpointWeight, PagedKvCache, ProjectionFormat, Result,
+    backend::feed_forward::LayerNormConfig,
 };
 
 #[derive(Clone, Debug)]
@@ -40,12 +41,14 @@ struct AttentionWeights {
     unused_norm: DeviceBuffer<bf16>,
 }
 
-/// Decoder layers carry FP8 projections; the multi-token prediction
-/// module's attention is BF16.
+/// Nemotron-H checkpoints carry FP8 projections, GGUF imports GGML blocks;
+/// the multi-token prediction module's attention is BF16.
 #[derive(Clone, Debug)]
 enum Projections {
     /// Q, K, V, then the output projection.
     DirectFp8(Box<[DirectFp8CheckpointWeight; 4]>),
+    /// Q, K, V, then the output projection.
+    Ggml(Box<[GgmlCheckpointWeight; 4]>),
     Bf16 {
         qkv: Bf16LinearPackWeights<3>,
         output: CudaTensor,
@@ -144,12 +147,19 @@ impl AttentionWeights {
                     DecodeAttentionOutputWeight::DirectFp8(output),
                 )
             },
+            Projections::Ggml(weights) => {
+                let [query, key, value, output] = &**weights;
+                (
+                    DecodeQkvWeights::Ggml([query, key, value]),
+                    DecodeAttentionOutputWeight::Ggml(output),
+                )
+            },
             Projections::Bf16 { qkv, output } => {
                 (DecodeQkvWeights::Bf16(qkv), DecodeAttentionOutputWeight::Bf16(output))
             },
         };
         DecodeAttentionWeights {
-            input_norm: &self.input_norm,
+            input_norm: Some(&self.input_norm),
             qkv,
             query_norm: &self.unused_norm,
             key_norm: &self.unused_norm,
@@ -175,6 +185,15 @@ impl Projections {
                     load(bindings.output)?,
                 ])))
             },
+            ProjectionFormat::Ggml => {
+                let load = |binding| GgmlCheckpointWeight::load_binding(tensors, binding);
+                Ok(Self::Ggml(Box::new([
+                    load(bindings.query)?,
+                    load(bindings.key)?,
+                    load(bindings.value)?,
+                    load(bindings.output)?,
+                ])))
+            },
             ProjectionFormat::Bf16 => {
                 let get = |binding: &TensorBinding| {
                     tensors
@@ -191,7 +210,7 @@ impl Projections {
                 })
             },
             _ => Err(Error::UnsupportedDecoderLayer(
-                "hybrid attention requires direct FP8 or BF16 projections".into(),
+                "hybrid attention requires direct FP8, GGML or BF16 projections".into(),
             )),
         }
     }

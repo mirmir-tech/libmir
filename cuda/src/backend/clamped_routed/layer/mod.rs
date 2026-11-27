@@ -18,6 +18,7 @@ use crate::{
 };
 
 mod attention;
+mod decode;
 mod execution;
 
 #[derive(Clone)]

@@ -1,14 +1,11 @@
-pub use architecture::cuda::{CudaArchitecture, CudaDecoderRuntime};
+pub use architecture::cuda::{CudaAdmitted, CudaArchitecture, CudaDecoderRuntime};
 use models::{execution::TaskExecutionPlan, semantic::SemanticModelSpec};
 
-use crate::{Error, Result};
+use crate::Result;
 
 pub fn admit_architecture(
     task: &TaskExecutionPlan,
     semantic: Option<&SemanticModelSpec>,
 ) -> Result<CudaArchitecture> {
-    match architecture::cuda::admit(task, semantic) {
-        Ok(architecture) => Ok(architecture),
-        Err(error) => Err(Error::UnsupportedDecoderLayer(error.to_string())),
-    }
+    Ok(architecture::cuda::admit(task, semantic)?)
 }

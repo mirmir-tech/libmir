@@ -3,7 +3,8 @@ use crate::{
     AffineQuantizedWeight, BlockFp8LinearWeight, CudaBackend, CudaTensor,
     DecodeAttentionOutputWeight, DenseExecution, DensePlanRequest, DenseRole,
     DirectFp8CheckpointWeight, Error, ExecutionPhase, Fp8ResidualLinearWeight,
-    MxFp4CheckpointWeight, MxFp8CheckpointWeight, NvFp4LinearWeight, PackedIntegerWeight, Result,
+    GgmlCheckpointWeight, MxFp4CheckpointWeight, MxFp8CheckpointWeight, NvFp4LinearWeight,
+    PackedIntegerWeight, Result,
 };
 
 #[derive(Clone)]
@@ -12,6 +13,7 @@ pub(super) enum DenseOutputOwned {
     Bf16(CudaTensor),
     DirectFp8(DirectFp8CheckpointWeight),
     MxFp4(MxFp4CheckpointWeight),
+    Ggml(GgmlCheckpointWeight),
     MxFp8(MxFp8CheckpointWeight),
     PackedInteger(PackedIntegerWeight),
     NvFp4(NvFp4LinearWeight),
@@ -33,6 +35,7 @@ impl DenseOutputOwned {
                 DenseOutputSource::PackedInteger(weight) => Self::PackedInteger(weight.clone()),
                 DenseOutputSource::DirectFp8(weight) => Self::DirectFp8(weight.clone()),
                 DenseOutputSource::MxFp4(weight) => Self::MxFp4(weight.clone()),
+                DenseOutputSource::Ggml(weight) => Self::Ggml(weight.clone()),
                 DenseOutputSource::MxFp8(weight) => Self::MxFp8(weight.clone()),
                 DenseOutputSource::NvFp4(weight) => Self::NvFp4(weight.clone()),
                 DenseOutputSource::Bf16(_) => unreachable!(),
@@ -66,11 +69,27 @@ impl DenseOutputOwned {
                     exact: weight.clone(),
                     quantized: backend.prepare_fp8_residual_linear_weight(weight)?,
                 },
-                DenseExecution::Matrix | DenseExecution::Vector | DenseExecution::CublasLt => {
-                    Self::Bf16(weight.clone())
-                },
+                DenseExecution::Matrix
+                | DenseExecution::Vector
+                | DenseExecution::RowGroupVector
+                | DenseExecution::SplitKVector { .. }
+                | DenseExecution::CublasLt => Self::Bf16(weight.clone()),
             },
         )
+    }
+
+    /// A query projection, executed as it is stored.
+    pub(super) fn query(source: DenseOutputSource<'_>) -> Self {
+        match source {
+            DenseOutputSource::Affine(weight) => Self::Affine(weight.clone()),
+            DenseOutputSource::Bf16(weight) => Self::Bf16(weight.clone()),
+            DenseOutputSource::PackedInteger(weight) => Self::PackedInteger(weight.clone()),
+            DenseOutputSource::DirectFp8(weight) => Self::DirectFp8(weight.clone()),
+            DenseOutputSource::MxFp4(weight) => Self::MxFp4(weight.clone()),
+            DenseOutputSource::Ggml(weight) => Self::Ggml(weight.clone()),
+            DenseOutputSource::MxFp8(weight) => Self::MxFp8(weight.clone()),
+            DenseOutputSource::NvFp4(weight) => Self::NvFp4(weight.clone()),
+        }
     }
 
     pub(super) fn borrow(&self) -> DecodeAttentionOutputWeight<'_> {
@@ -79,6 +98,7 @@ impl DenseOutputOwned {
             Self::Bf16(weight) => DecodeAttentionOutputWeight::Bf16(weight),
             Self::DirectFp8(weight) => DecodeAttentionOutputWeight::DirectFp8(weight),
             Self::MxFp4(weight) => DecodeAttentionOutputWeight::MxFp4(weight),
+            Self::Ggml(weight) => DecodeAttentionOutputWeight::Ggml(weight),
             Self::MxFp8(weight) => DecodeAttentionOutputWeight::MxFp8(weight),
             Self::PackedInteger(weight) => DecodeAttentionOutputWeight::PackedInteger(weight),
             Self::NvFp4(weight) => DecodeAttentionOutputWeight::NvFp4(weight),

@@ -1,0 +1,212 @@
+mod shared;
+
+use mircuda::{DeviceBuffer, Event, Stream, bf16};
+
+use super::{
+    AffineSharedExpertMoeConfig, AffineSharedExpertMoeWeights,
+    gate_up::{SharedGateUp, prepare_shared_gate_up},
+    routed::SharedRoutedExecution,
+    scratch::AffineSharedMoeScratch,
+};
+use crate::{
+    CudaBackend, DenseRole, Error, ExecutionPhase, Result,
+    backend::linear::CheckpointProjection,
+    kernels::{ElementwiseBf16, ShiftedRmsNorm, SigmoidMultiplyBf16},
+};
+
+#[derive(Debug)]
+pub struct CudaAffineSharedExpertMoeExecution {
+    backend: CudaBackend,
+    config: AffineSharedExpertMoeConfig,
+    tokens: usize,
+    routed: SharedRoutedExecution,
+    shared_gate_up: SharedGateUp,
+    shared_down: CheckpointProjection,
+    shared_output_gate: Option<CheckpointProjection>,
+    shared_activation: ElementwiseBf16,
+    output_add: ElementwiseBf16,
+    sigmoid_multiply: SigmoidMultiplyBf16,
+    weights: AffineSharedExpertMoeWeights,
+    scratch: AffineSharedMoeScratch,
+    parallel: Option<ParallelSharedExpert>,
+}
+
+#[derive(Debug)]
+struct ParallelSharedExpert {
+    stream: Stream,
+    input_ready: Event,
+    output_ready: Event,
+}
+
+impl CudaAffineSharedExpertMoeExecution {
+    pub(super) fn new(
+        backend: &CudaBackend,
+        config: AffineSharedExpertMoeConfig,
+        weights: &AffineSharedExpertMoeWeights,
+        tokens: usize,
+        phase: ExecutionPhase,
+    ) -> Result<Self> {
+        let parallel = (phase == ExecutionPhase::Decode).then(|| {
+            let stream = backend.inner.auxiliary_stream.clone();
+            Ok::<_, Error>(ParallelSharedExpert {
+                stream,
+                input_ready: backend.inner.context.create_event(false)?,
+                output_ready: backend.inner.context.create_event(false)?,
+            })
+        });
+        let parallel = parallel.transpose()?;
+        let shared_backend = parallel
+            .as_ref()
+            .map_or_else(|| backend.clone(), |_| backend.auxiliary_backend());
+        let shared = |input, output, role, weight| {
+            CheckpointProjection::new(&shared_backend, tokens, input, output, role, weight)
+        };
+        let shared_gate_up = prepare_shared_gate_up(&shared_backend, config, weights, tokens)?;
+        Ok(Self {
+            backend: backend.clone(),
+            config,
+            tokens,
+            routed: SharedRoutedExecution::new(backend, config, weights, tokens, phase)?,
+            shared_gate_up,
+            shared_down: shared(
+                config.shared_intermediate_size,
+                config.hidden_size,
+                DenseRole::DenseDown,
+                &weights.shared_down,
+            )?,
+            shared_output_gate: weights
+                .shared_output_gate
+                .as_ref()
+                .map(|gate| {
+                    CheckpointProjection::new(
+                        &shared_backend,
+                        tokens,
+                        config.hidden_size,
+                        1,
+                        DenseRole::Router,
+                        gate,
+                    )
+                })
+                .transpose()?,
+            shared_activation: ElementwiseBf16::compile(
+                &backend.inner.compiler,
+                tokens * config.shared_intermediate_size,
+            )?,
+            output_add: ElementwiseBf16::compile(
+                &backend.inner.compiler,
+                tokens * config.hidden_size,
+            )?,
+            sigmoid_multiply: SigmoidMultiplyBf16::compile(
+                &backend.inner.compiler,
+                tokens,
+                config.hidden_size,
+            )?,
+            weights: weights.clone(),
+            scratch: AffineSharedMoeScratch::new(backend, config, tokens)?,
+            parallel,
+        })
+    }
+
+    pub fn execute(
+        &mut self,
+        input: &DeviceBuffer<bf16>,
+        output: &mut DeviceBuffer<bf16>,
+    ) -> Result<()> {
+        self.validate(input, output)?;
+        let staged = if self.parallel.is_some() {
+            self.routed.prepare_parallel(&self.backend, input)?
+        } else {
+            false
+        };
+        if let Some(parallel) = &self.parallel {
+            parallel.input_ready.record(&self.backend.inner.stream)?;
+            parallel.stream.wait(&parallel.input_ready)?;
+        } else {
+            self.routed.execute(&self.backend, &self.weights, input, &mut self.scratch)?;
+        }
+        self.shared(input)?;
+        if let Some(parallel) = &self.parallel {
+            parallel.output_ready.record(&parallel.stream)?;
+            if staged {
+                self.routed.execute_parallel_prepared(&self.weights, input, &mut self.scratch)?;
+            } else {
+                self.routed.execute(&self.backend, &self.weights, input, &mut self.scratch)?;
+            }
+        }
+        if let Some(parallel) = &self.parallel {
+            self.backend.inner.stream.wait(&parallel.output_ready)?;
+        }
+        self.output_add.add(
+            &self.backend.inner.stream,
+            &self.scratch.routed_output,
+            &self.scratch.gated_shared_output,
+            output,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn execute_residual_norm(
+        &mut self,
+        norm: &ShiftedRmsNorm,
+        input: &DeviceBuffer<bf16>,
+        update: &DeviceBuffer<bf16>,
+        weight: &DeviceBuffer<bf16>,
+        residual: &mut DeviceBuffer<bf16>,
+        normalized: &mut DeviceBuffer<bf16>,
+        moe_output: &mut DeviceBuffer<bf16>,
+        output: &mut DeviceBuffer<bf16>,
+        residual_add: &ElementwiseBf16,
+    ) -> Result<()> {
+        let scale = self.parallel.is_none().then(|| self.routed.nvfp4_prequant_scale()).flatten();
+        let Some(scale) = scale else {
+            norm.execute_residual(
+                &self.backend.inner.stream,
+                input,
+                update,
+                weight,
+                residual,
+                normalized,
+            )?;
+            self.execute(normalized, moe_output)?;
+            return residual_add.add(&self.backend.inner.stream, residual, moe_output, output);
+        };
+        {
+            let prequant = self.scratch.nvfp4_input.as_mut().ok_or(Error::InvalidExecutionPlan(
+                "NVFP4 prequantized input scratch is unavailable",
+            ))?;
+            norm.execute_residual_nvfp4(
+                &self.backend.inner.stream,
+                input,
+                update,
+                weight,
+                &scale,
+                residual,
+                normalized,
+                &mut prequant.packed,
+                &mut prequant.scales,
+            )?;
+        }
+        self.shared(normalized)?;
+        let prequant = self.scratch.nvfp4_input.as_ref().ok_or(Error::InvalidExecutionPlan(
+            "NVFP4 prequantized input scratch is unavailable",
+        ))?;
+        self.routed.execute_nvfp4_prequantized_residual_shared(
+            &self.backend,
+            &self.weights,
+            normalized,
+            &prequant.packed,
+            &prequant.scales,
+            residual,
+            &self.scratch.gated_shared_output,
+            output,
+        )
+    }
+
+    fn validate(&self, input: &DeviceBuffer<bf16>, output: &DeviceBuffer<bf16>) -> Result<()> {
+        let expected = self.tokens * self.config.hidden_size;
+        if input.len() != expected || output.len() != expected {
+            return Err(Error::InvalidDecoderKernel("affine shared-expert MoE buffer mismatch"));
+        }
+        Ok(())
+    }
+}

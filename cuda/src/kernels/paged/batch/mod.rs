@@ -2,10 +2,11 @@ mod split;
 mod store;
 
 use mircuda::{
-    Compiler, DeviceBuffer, LaunchConfig, Stream, TypedKernel, bf16, cuda_export, cuda_kernel_file,
+    Compiler, DeviceBuffer, LaunchConfig, Stream, TypedKernel, bf16, cuda_export, cuda_kernel_files,
 };
+use models::semantic::AttentionWindow;
 
-use super::{PagedAttentionSpec, compile_options, validate_attention};
+use super::{PagedAttentionSpec, validate_attention};
 use crate::{
     Error, Result,
     kernels::geometry::{narrow, product, require},
@@ -40,8 +41,12 @@ impl BatchedPagedAttention {
         if max_batch == 0 {
             return Err(Error::InvalidPagedKv("paged attention batch cannot be empty"));
         }
-        let source = cuda_kernel_file!("../../../../kernels/paged_attention_batch_bf16.cu");
-        let module = compiler.compile(source, &compile_options(spec.dtype)?)?;
+        let source = cuda_kernel_files!(
+            "paged_attention_batch_bf16.cu";
+            "../../../../kernels/attention_window_bf16.cu",
+            "../../../../kernels/paged_attention_batch_bf16.cu",
+        );
+        let module = compiler.compile(source, &super::attention_compile_options(spec)?)?;
         Ok(Self {
             kernel: module.kernel()?,
             spec,
@@ -61,7 +66,7 @@ impl BatchedPagedAttention {
         block_counts: &DeviceBuffer<u32>,
         output: &mut DeviceBuffer<bf16>,
         batch_size: usize,
-        window: Option<usize>,
+        window: Option<AttentionWindow>,
         scale: f32,
         split_threshold: usize,
     ) -> Result<()> {
@@ -101,7 +106,7 @@ impl BatchedPagedAttention {
                 narrow(self.spec.kv_heads)?,
                 narrow(self.spec.head_dim)?,
                 narrow(self.spec.value_head_dim)?,
-                narrow(window.unwrap_or(0))?,
+                crate::kernels::paged::window::argument(window)?,
                 scale,
                 narrow(split_threshold)?,
             ),

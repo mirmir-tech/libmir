@@ -1,4 +1,4 @@
-use models::layout::RotaryEmbeddingLayout;
+use models::semantic::RotaryLayoutSpec;
 
 use crate::engine::{Array, Dtype, Error, Result, Stream};
 
@@ -7,13 +7,13 @@ pub fn apply_mrope(
     positions: &Array,
     dimensions: usize,
     base: f32,
-    layout: &RotaryEmbeddingLayout,
+    layout: &RotaryLayoutSpec,
     stream: &Stream,
 ) -> Result<Array> {
     let sections = match layout {
-        RotaryEmbeddingLayout::MultiSection(sections)
-        | RotaryEmbeddingLayout::InterleavedMultiSection(sections) => sections,
-        RotaryEmbeddingLayout::Standard => {
+        RotaryLayoutSpec::MultiSection(sections)
+        | RotaryLayoutSpec::InterleavedMultiSection(sections) => sections,
+        RotaryLayoutSpec::Standard => {
             return Err(Error::InvalidModel("MRoPE requires multimodal sections".into()));
         },
     };
@@ -43,11 +43,11 @@ pub fn apply_mrope(
     rotate(input, &cos, &sin, dimensions, stream)
 }
 
-fn selectors(half: usize, sections: &[usize], layout: &RotaryEmbeddingLayout) -> Result<Vec<f32>> {
+fn selectors(half: usize, sections: &[usize], layout: &RotaryLayoutSpec) -> Result<Vec<f32>> {
     let mut values = vec![0.0; 3 * half];
     for frequency in 0..half {
         let axis = match layout {
-            RotaryEmbeddingLayout::MultiSection(_) => {
+            RotaryLayoutSpec::MultiSection(_) => {
                 if frequency < sections[0] {
                     0
                 } else if frequency < sections[0] + sections[1] {
@@ -56,7 +56,7 @@ fn selectors(half: usize, sections: &[usize], layout: &RotaryEmbeddingLayout) ->
                     2
                 }
             },
-            RotaryEmbeddingLayout::InterleavedMultiSection(_) => {
+            RotaryLayoutSpec::InterleavedMultiSection(_) => {
                 if frequency % 3 == 1 && frequency < 3 * sections[1] {
                     1
                 } else if frequency % 3 == 2 && frequency < 3 * sections[2] {
@@ -65,7 +65,7 @@ fn selectors(half: usize, sections: &[usize], layout: &RotaryEmbeddingLayout) ->
                     0
                 }
             },
-            RotaryEmbeddingLayout::Standard => return Err(Error::ShapeOverflow),
+            RotaryLayoutSpec::Standard => return Err(Error::ShapeOverflow),
         };
         values[axis * half + frequency] = 1.0;
     }
@@ -132,7 +132,7 @@ mod tests {
             &[1, 1, 2, 8],
         )?;
         let positions = Array::from_u32(&[0, 1, 0, 1, 0, 1], &[3, 2])?;
-        let layout = RotaryEmbeddingLayout::InterleavedMultiSection(vec![1, 1, 1]);
+        let layout = RotaryLayoutSpec::InterleavedMultiSection(vec![1, 1, 1]);
         let actual = apply_mrope(&input, &positions, 6, 10_000.0, &layout, &stream)?;
         let expected = input.rope(
             RopeOptions {

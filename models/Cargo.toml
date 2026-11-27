@@ -7,7 +7,8 @@ description = "Model discovery, tokenization, and generation policy for libmir"
 repository.workspace = true
 
 [dependencies]
-foundation = { package = "libmir-core", version = "0.6.2", path = "../core" }
+blake3.workspace = true
+foundation = { package = "libmir-core", version = "0.7.0", path = "../core" }
 image.workspace = true
 minijinja.workspace = true
 minijinja-contrib.workspace = true
@@ -17,6 +18,12 @@ thiserror.workspace = true
 time.workspace = true
 toml.workspace = true
 tokenizers.workspace = true
+
+[target.'cfg(not(unix))'.dependencies]
+same-file.workspace = true
+
+[target.'cfg(any(target_os = "android", target_os = "linux", target_vendor = "apple"))'.dependencies]
+rustix.workspace = true
 
 [lints]
 workspace = true

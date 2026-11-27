@@ -1,21 +1,22 @@
-use models::weights::{
-    RoutedExpertBindings, SharedRoutedFeedForwardBindings, TensorCatalog, TensorStorage,
-};
+use mircuda::DeviceBuffer;
+use models::weights::{SharedRoutedFeedForwardBindings, TensorCatalog};
 
-use self::{
-    format::{merge_format, mixed_storage},
-    storage::{routed_is_dense, routed_is_mxfp4, routed_is_mxfp8},
-};
+use self::format::{merge_format, mixed_storage};
 use super::AffineSharedExpertMoeConfig;
 use crate::{
-    AffineQuantizedWeight, CudaBackend, CudaTensorSet, Error, Result,
-    backend::linear::{
-        CheckpointProjectionWeight, DenseExpertWeights, MxFp4ExpertWeights, MxFp8ExpertWeights,
+    AffineQuantizedWeight, CudaBackend, CudaTensorSet, Result,
+    backend::{
+        dense::GgmlExpertWeights,
+        linear::{
+            CheckpointProjectionWeight, DenseExpertWeights, MxFp4ExpertWeights, MxFp8ExpertWeights,
+        },
     },
 };
 
+mod bias;
 mod format;
 mod nvfp4;
+mod routed;
 mod storage;
 
 #[derive(Clone, Debug)]
@@ -25,6 +26,7 @@ pub(super) enum RoutedSharedMoeWeights {
     MxFp4(Box<MxFp4ExpertWeights>),
     MxFp8(Box<MxFp8ExpertWeights>),
     NvFp4(Box<crate::backend::block::experts::ExpertWeights>),
+    Ggml(Box<GgmlExpertWeights>),
 }
 
 #[derive(Clone, Debug)]
@@ -37,11 +39,14 @@ pub(super) struct AffineRoutedMoeWeights {
 #[derive(Clone, Debug)]
 pub struct AffineSharedExpertMoeWeights {
     pub(super) router: CheckpointProjectionWeight,
+    /// `[experts]` FP32 selection bias of a sigmoid router.
+    pub(super) router_correction_bias: Option<DeviceBuffer<f32>>,
     pub(super) routed: RoutedSharedMoeWeights,
     pub(super) shared_gate: CheckpointProjectionWeight,
     pub(super) shared_up: CheckpointProjectionWeight,
     pub(super) shared_down: CheckpointProjectionWeight,
-    pub(super) shared_output_gate: CheckpointProjectionWeight,
+    /// Sigmoid gate on the shared expert output; absent when it adds ungated.
+    pub(super) shared_output_gate: Option<CheckpointProjectionWeight>,
 }
 
 impl AffineSharedExpertMoeWeights {
@@ -49,6 +54,7 @@ impl AffineSharedExpertMoeWeights {
         let affine = |name: &str| AffineQuantizedWeight::load(tensors, &format!("{prefix}.{name}"));
         Ok(Self {
             router: CheckpointProjectionWeight::Affine(affine("gate")?),
+            router_correction_bias: None,
             routed: RoutedSharedMoeWeights::Affine(Box::new(AffineRoutedMoeWeights {
                 gate: affine("switch_mlp.gate_proj")?,
                 up: affine("switch_mlp.up_proj")?,
@@ -57,7 +63,9 @@ impl AffineSharedExpertMoeWeights {
             shared_gate: CheckpointProjectionWeight::Affine(affine("shared_expert.gate_proj")?),
             shared_up: CheckpointProjectionWeight::Affine(affine("shared_expert.up_proj")?),
             shared_down: CheckpointProjectionWeight::Affine(affine("shared_expert.down_proj")?),
-            shared_output_gate: CheckpointProjectionWeight::Affine(affine("shared_expert_gate")?),
+            shared_output_gate: Some(CheckpointProjectionWeight::Affine(affine(
+                "shared_expert_gate",
+            )?)),
         })
     }
 
@@ -70,40 +78,22 @@ impl AffineSharedExpertMoeWeights {
         hidden: usize,
         intermediate: usize,
     ) -> Result<Self> {
-        let routed = match bindings.routed {
-            RoutedExpertBindings::SeparateGateUp { gate, up, down }
-                if matches!(gate.storage, TensorStorage::AffineQuantized { .. })
-                    && matches!(up.storage, TensorStorage::AffineQuantized { .. })
-                    && matches!(down.storage, TensorStorage::AffineQuantized { .. }) =>
-            {
-                RoutedSharedMoeWeights::Affine(Box::new(AffineRoutedMoeWeights {
-                    gate: AffineQuantizedWeight::load_binding(tensors, gate)?,
-                    up: AffineQuantizedWeight::load_binding(tensors, up)?,
-                    down: AffineQuantizedWeight::load_binding(tensors, down)?,
-                }))
-            },
-            routed if routed_is_dense(routed) => RoutedSharedMoeWeights::Dense(Box::new(
-                DenseExpertWeights::load(backend, tensors, routed, experts, hidden, intermediate)?,
-            )),
-            routed if routed_is_mxfp4(routed) => RoutedSharedMoeWeights::MxFp4(Box::new(
-                MxFp4ExpertWeights::load(tensors, routed, experts, hidden, intermediate)?,
-            )),
-            routed if routed_is_mxfp8(routed) => RoutedSharedMoeWeights::MxFp8(Box::new(
-                MxFp8ExpertWeights::load(tensors, routed, experts, hidden, intermediate)?,
-            )),
-            RoutedExpertBindings::Individual { .. } => RoutedSharedMoeWeights::NvFp4(Box::new(
-                nvfp4::load(backend, catalog, bindings.routed, experts, hidden, intermediate)?,
-            )),
-            _ => {
-                return Err(Error::UnsupportedDecoderLayer(
-                    "CUDA shared-routed experts mix incompatible checkpoint storage".into(),
-                ));
-            },
-        };
+        let routed = routed::load(
+            backend,
+            tensors,
+            catalog,
+            bindings.routed,
+            (experts, hidden, intermediate),
+        )?;
+        let router_correction_bias = bindings
+            .router_correction_bias
+            .map(|binding| bias::correction_bias(backend, tensors, binding))
+            .transpose()?;
         Ok(Self {
             router: CheckpointProjectionWeight::load_binding_prepared(
                 backend, tensors, bindings.router,
             )?,
+            router_correction_bias,
             routed,
             shared_gate: CheckpointProjectionWeight::load_binding_prepared(
                 backend,
@@ -120,11 +110,12 @@ impl AffineSharedExpertMoeWeights {
                 tensors,
                 bindings.shared_down,
             )?,
-            shared_output_gate: CheckpointProjectionWeight::load_binding_prepared(
-                backend,
-                tensors,
-                bindings.shared_output_gate,
-            )?,
+            shared_output_gate: bindings
+                .shared_output_gate
+                .map(|gate| {
+                    CheckpointProjectionWeight::load_binding_prepared(backend, tensors, gate)
+                })
+                .transpose()?,
         })
     }
 
@@ -160,7 +151,8 @@ impl AffineSharedExpertMoeWeights {
             },
             RoutedSharedMoeWeights::MxFp4(_)
             | RoutedSharedMoeWeights::MxFp8(_)
-            | RoutedSharedMoeWeights::NvFp4(_) => {},
+            | RoutedSharedMoeWeights::NvFp4(_)
+            | RoutedSharedMoeWeights::Ggml(_) => {},
         }
         for weight in [&self.shared_gate, &self.shared_up] {
             weight.validate(
@@ -178,13 +170,9 @@ impl AffineSharedExpertMoeWeights {
             config.group_size,
             config.expert_bits,
         )?;
-        self.shared_output_gate.validate(
-            1,
-            config.hidden_size,
-            1,
-            config.group_size,
-            config.router_bits,
-        )
+        self.shared_output_gate.as_ref().map_or(Ok(()), |gate| {
+            gate.validate(1, config.hidden_size, 1, config.group_size, config.router_bits)
+        })
     }
 
     pub(in crate::backend) fn storage_format(
@@ -202,7 +190,8 @@ impl AffineSharedExpertMoeWeights {
             RoutedSharedMoeWeights::Dense(_)
             | RoutedSharedMoeWeights::MxFp4(_)
             | RoutedSharedMoeWeights::MxFp8(_)
-            | RoutedSharedMoeWeights::NvFp4(_) => None,
+            | RoutedSharedMoeWeights::NvFp4(_)
+            | RoutedSharedMoeWeights::Ggml(_) => None,
         };
         for format in [
             self.shared_gate.affine_format(1, hidden, shared)?,
@@ -212,11 +201,9 @@ impl AffineSharedExpertMoeWeights {
             merge_format(&mut expert_format, format, "shared expert")?;
         }
         let mut router_format = self.router.affine_format(1, hidden, experts)?;
-        merge_format(
-            &mut router_format,
-            self.shared_output_gate.affine_format(1, hidden, 1)?,
-            "shared router",
-        )?;
+        if let Some(gate) = &self.shared_output_gate {
+            merge_format(&mut router_format, gate.affine_format(1, hidden, 1)?, "shared router")?;
+        }
         if matches!(self.routed, RoutedSharedMoeWeights::Affine(_)) && router_format.is_none() {
             return Err(mixed_storage());
         }

@@ -85,6 +85,9 @@ fn compare(
             .logits
             .ok_or("backend did not return full logits")?
             .values;
+        if env::var_os("MIRMIR_PREFILL_DETERMINISM_TOP").is_some() {
+            println!("repeat={repeat} top={:?}", top_logprobs(&logits, 5));
+        }
         if repeat == 0 {
             let digest = logits.iter().map(|value| f64::from(*value)).sum::<f64>();
             println!(
@@ -102,8 +105,16 @@ fn compare(
             .zip(&logits)
             .map(|(left, right)| (left - right).abs())
             .fold(0.0_f32, f32::max);
+        // The candidates sampling can pick: the first prefill's 20 best tokens.
+        let mut order = (0..first.len()).collect::<Vec<_>>();
+        order.sort_unstable_by(|&a, &b| first[b].total_cmp(&first[a]));
+        let top = order[..20.min(order.len())]
+            .iter()
+            .map(|&index| (first[index] - logits[index]).abs())
+            .fold(0.0_f32, f32::max);
         println!(
-            "load={load} repeat={repeat} argmax={} max_abs_logit_difference={difference:.4}",
+            "load={load} repeat={repeat} argmax={} max_abs_logit_difference={difference:.4} \
+             top20_max_abs_difference={top:.4}",
             argmax(&logits)
         );
     }
@@ -118,4 +129,17 @@ fn argmax(values: &[f32]) -> usize {
             best
         }
     })
+}
+
+/// The `count` most likely tokens and their log probabilities.
+fn top_logprobs(logits: &[f32], count: usize) -> Vec<(usize, f32)> {
+    let maximum = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let total = logits.iter().map(|value| (value - maximum).exp()).sum::<f32>().ln() + maximum;
+    let mut order = (0..logits.len()).collect::<Vec<_>>();
+    order.sort_unstable_by(|&a, &b| logits[b].total_cmp(&logits[a]));
+    order
+        .into_iter()
+        .take(count)
+        .map(|index| (index, logits[index] - total))
+        .collect()
 }

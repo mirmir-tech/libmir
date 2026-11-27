@@ -1,10 +1,11 @@
-use models::weights::{BlockQuantization, DenseDecoderLayerBindings, TensorBinding, TensorStorage};
+use models::weights::{BlockQuantization, TensorBinding, TensorStorage};
 
 use super::tensor;
 use crate::{
-    CudaBackend, CudaTensorSet, DenseDownSource, DenseGateUpSource, DenseOutputSource,
-    DenseQkvSource, DenseSwiGluLayerTemplate, Error, NvFp4Config, NvFp4LinearWeight,
-    NvFp4ScaleMode, NvFp4Tensors, ProjectionFormat, Result,
+    CudaBackend, CudaTensorSet, DenseDownSource, DenseFeedForwardSource, DenseGateUpSource,
+    DenseOutputSource, DenseQkvSource, DenseSwiGluLayerTemplate, Error, NvFp4Config,
+    NvFp4LinearWeight, NvFp4ScaleMode, NvFp4Tensors, ProjectionFormat, Result,
+    checkpoint::dense::DenseLayerBindings,
 };
 
 /// NVFP4 feed-forward projections with NVFP4 or BF16 attention projections;
@@ -13,16 +14,19 @@ pub(super) fn load(
     backend: &CudaBackend,
     mut block: crate::DenseSwiGluConfig,
     tensors: &CudaTensorSet,
-    bindings: DenseDecoderLayerBindings<'_>,
+    bindings: DenseLayerBindings<'_>,
 ) -> Result<DenseSwiGluLayerTemplate> {
+    let feed_forward = bindings.feed_forward.gated()?;
     let hidden = block.attention.hidden_size;
     let intermediate = block.intermediate_size;
-    let gate = weight(backend, tensors, bindings.gate, hidden, intermediate)?;
-    let up = weight(backend, tensors, bindings.up, hidden, intermediate)?;
-    let down = weight(backend, tensors, bindings.down, intermediate, hidden)?;
-    let gate_up = DenseGateUpSource::NvFp4 { gate: &gate, up: &up };
-    let down = DenseDownSource::NvFp4(&down);
-    let attention = bindings.attention;
+    let gate = weight(backend, tensors, feed_forward.gate, hidden, intermediate)?;
+    let up = weight(backend, tensors, feed_forward.up, hidden, intermediate)?;
+    let down = weight(backend, tensors, feed_forward.down, intermediate, hidden)?;
+    let feed_forward = DenseFeedForwardSource::Gated {
+        gate_up: DenseGateUpSource::NvFp4 { gate: &gate, up: &up },
+        down: DenseDownSource::NvFp4(&down),
+    };
+    let attention = bindings.attention.projected()?;
     if matches!(attention.query.storage, TensorStorage::Dense { .. }) {
         block.attention.projection_format = ProjectionFormat::Bf16;
         let qkv = backend.pack_bf16_linears([
@@ -36,8 +40,7 @@ pub(super) fn load(
             bindings,
             DenseQkvSource::Bf16(&qkv),
             output,
-            gate_up,
-            down,
+            feed_forward,
         )?;
         return backend.prepare_dense_swiglu_layer_template(block, source);
     }
@@ -53,8 +56,7 @@ pub(super) fn load(
         bindings,
         DenseQkvSource::NvFp4([&q, &k, &v]),
         DenseOutputSource::NvFp4(&output),
-        gate_up,
-        down,
+        feed_forward,
     )?;
     backend.prepare_dense_swiglu_layer_template(block, source)
 }

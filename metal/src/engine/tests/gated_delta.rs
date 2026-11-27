@@ -110,6 +110,7 @@ fn snapshots_mixed_linear_and_key_value_cache_at_a_common_offset() -> Result<()>
                 normalization: models::semantic::QkNormalization::None,
                 sinks: false,
                 window: None,
+                key_value_relation: models::semantic::KeyValueRelation::Separate,
             },
         ],
         16,

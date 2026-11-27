@@ -12,6 +12,7 @@ impl CudaTensor {
             TensorStorage::F8E4M3(buffer)
             | TensorStorage::F8E5M2(buffer)
             | TensorStorage::U8(buffer) => buffer.clone(),
+            TensorStorage::GgmlBlocks(blocks) => blocks.view().clone(),
             TensorStorage::U32(buffer) => buffer.reinterpret()?,
             TensorStorage::I32(buffer) => buffer.reinterpret()?,
             TensorStorage::I8(buffer) => buffer.reinterpret()?,

@@ -70,12 +70,14 @@ impl CapturedModelDecode {
                     resources.layers[index].qkv_arguments()
                 },
             )?;
-            self.graph.update_kernel(
-                &binding.nodes.kv_store,
-                &binding.kernels.kv_store,
-                binding.configs.kv_store,
-                move |resources| resources.layers[index].kv_arguments(),
-            )?;
+            if let Some(kv_store) = &binding.nodes.kv_store {
+                self.graph.update_kernel(
+                    kv_store,
+                    &binding.kernels.kv_store,
+                    binding.configs.kv_store,
+                    move |resources| resources.layers[index].kv_arguments(),
+                )?;
+            }
             self.graph.update_kernel(
                 &binding.nodes.attention.direct,
                 &binding.kernels.attention.direct,
@@ -107,12 +109,20 @@ impl CapturedModelDecode {
         input: &DeviceBuffer<bf16>,
         write_plan: &KvWritePlan,
         table: &BlockTable,
-        start_position: usize,
+        (start_position, per_layer): (usize, Option<&DeviceBuffer<bf16>>),
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
-        self.execute_prefill_masked(
-            index, prefill, input, write_plan, table, start_position, output, None,
-        )
+        self.graph.with_resources_mut(|resources| {
+            resources.layers[index].execute_prefill(
+                prefill,
+                input,
+                write_plan,
+                table,
+                (start_position, per_layer),
+                output,
+                None,
+            )
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -128,8 +138,14 @@ impl CapturedModelDecode {
         image: Option<crate::backend::attention::ImageAttentionSpan>,
     ) -> Result<()> {
         self.graph.with_resources_mut(|resources| {
-            resources.layers[index].execute_prefill_masked(
-                prefill, input, write_plan, table, start_position, output, image,
+            resources.layers[index].execute_prefill(
+                prefill,
+                input,
+                write_plan,
+                table,
+                (start_position, None),
+                output,
+                image,
             )
         })
     }
@@ -140,10 +156,11 @@ impl CapturedModelDecode {
         prefill: LayerPrefill<'_>,
         input: &DeviceBuffer<bf16>,
         batch: &PagedPrefillBatch,
+        per_layer: Option<&DeviceBuffer<bf16>>,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
         self.graph.with_resources_mut(|resources| {
-            resources.layers[index].execute_prefill_batch(prefill, input, batch, output)
+            resources.layers[index].execute_prefill_batch(prefill, input, batch, per_layer, output)
         })
     }
 }
@@ -192,7 +209,7 @@ fn capture(stream: Stream, layers: Vec<CapturedModelLayer>) -> Result<CapturedMo
         .map(|(layer, nodes)| {
             Ok(Binding {
                 nodes: *nodes,
-                kernels: layer.kernels(),
+                kernels: layer.kernels()?,
                 configs: layer.configs()?,
             })
         })

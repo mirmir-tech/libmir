@@ -1,26 +1,31 @@
-use models::weights::{DenseDecoderLayerBindings, HybridMoeLayerBindings};
+use models::{
+    semantic::DecoderLayerSpec,
+    weights::{DenseDecoderLayerBindings, HybridMoeLayerBindings},
+};
 
-use super::{HybridMoeLayerConfig, weights::LayerWeights};
+use super::{
+    HybridMoeLayerConfig,
+    sharing::PerLayerGate,
+    weights::{LayerWeights, Publish},
+};
 #[cfg(test)]
 use super::{
     attention::{self, DecodeContext},
     feed_forward,
 };
 #[cfg(test)]
+use crate::engine::KvCache;
 use crate::engine::{
-    Array, KvCache,
-    lowering::{FeedForwardLowering, MixerLowering, NormalizationLowering},
-};
-use crate::engine::{
-    ExpertFusion, FusedAttention, FusedExpertGateUp, FusedGateUp, FusedKeyValue, ModelTensors,
-    Result, Stream,
+    Array, ExpertFusion, FusedAttention, FusedExpertGateUp, FusedGateUp, FusedKeyValue,
+    ModelTensors, Result, Stream,
     binding::BoundLinear,
     fusion_planner::{FusionPlanner, ProjectionBiases},
-    lowering::LayerLowering,
 };
 
+mod cache;
 mod forward;
 mod lowered;
+mod shared;
 #[cfg(test)]
 mod tests;
 
@@ -34,82 +39,73 @@ pub struct HybridMoeLayer {
     pub(super) fused_key_value: Option<FusedKeyValue>,
     pub(super) fused_gate_up: Option<FusedGateUp>,
     pub(super) fused_expert_gate_up: Option<FusedExpertGateUp>,
+    /// Gates the layer's per-layer input into its output (Gemma 4's E
+    /// models).
+    pub(super) per_layer_gate: Option<PerLayerGate>,
 }
 
 impl HybridMoeLayer {
     pub fn load_bindings(
         tensors: &ModelTensors,
         bindings: &HybridMoeLayerBindings<'_>,
-        lowering: LayerLowering,
+        layer: &DecoderLayerSpec,
         config: HybridMoeLayerConfig,
         stream: &Stream,
     ) -> Result<Self> {
         let config = config.validate()?;
-        let weights = LayerWeights::load_bindings(tensors, bindings, config, stream)?;
-        Self::finish_load(weights, lowering, config, stream)
+        let frequencies = Array::rope_periods(super::attention(layer)?)?;
+        let weights = LayerWeights::load_bindings(tensors, bindings, frequencies, config, stream)?;
+        Self::finish_load(weights, config, stream)
     }
 
-    pub fn load_dense_bindings(
+    pub(in crate::engine::hybrid::moe) fn load_dense_bindings(
         tensors: &ModelTensors,
         bindings: &DenseDecoderLayerBindings<'_>,
-        lowering: LayerLowering,
+        layer: &DecoderLayerSpec,
+        publish: Option<Publish>,
         config: HybridMoeLayerConfig,
         stream: &Stream,
     ) -> Result<Self> {
         let config = config.validate()?;
-        let weights = LayerWeights::load_dense_bindings(tensors, bindings, config, stream)?;
-        Self::finish_load(weights, lowering, config, stream)
+        let frequencies = Array::rope_periods(super::attention(layer)?)?;
+        let weights = LayerWeights::load_dense_bindings(
+            tensors, bindings, frequencies, publish, config, stream,
+        )?;
+        Self::finish_load(weights, config, stream)
     }
 
     #[cfg(test)]
     pub fn load(
         tensors: &ModelTensors,
-        config: HybridMoeLayerConfig,
+        layer: &super::CheckpointLayer,
         stream: &Stream,
     ) -> Result<Self> {
-        let config = config.validate()?;
-        let weights = LayerWeights::load(tensors, config, stream)?;
-        let lowering = LayerLowering {
-            index: config.layer_index,
-            input_norm: NormalizationLowering::Rms,
-            post_attention_norm: NormalizationLowering::Rms,
-            mixer: MixerLowering::Softmax {
-                normalization: models::semantic::QkNormalization::QueryKeyValueRms,
-                sinks: false,
-                window: config.max_context,
-            },
-            feed_forward: FeedForwardLowering::DenseAndRouted,
-        };
-        Self::finish_load(weights, lowering, config, stream)
+        let config = layer.config.validate()?;
+        let frequencies = Array::rope_periods(super::attention(&layer.spec)?)?;
+        let weights = LayerWeights::load(tensors, frequencies, config, stream)?;
+        Self::finish_load(weights, config, stream)
     }
 
     fn finish_load(
         weights: LayerWeights,
-        lowering: LayerLowering,
         config: HybridMoeLayerConfig,
         stream: &Stream,
     ) -> Result<Self> {
-        let fusion = FusionPlanner::new(stream).projections(
-            lowering.feed_forward,
-            ProjectionBiases::new(
-                [weights.attention.query.has_bias(), weights.attention.key.has_bias()],
-                weights.attention.value.as_ref().map(BoundLinear::has_bias),
-                [weights.dense.gate.has_bias(), weights.dense.up.has_bias()],
-            ),
-        );
-        let fused_attention = fusion
-            .attention
-            .then(|| {
-                weights.attention.query.fuse_attention(
-                    &weights.attention.key,
-                    weights.attention.value.as_ref(),
-                    stream,
-                )
-            })
+        let key_values = weights.attention.key_values.projections();
+        let fusion = FusionPlanner::new(stream).hybrid_projections(ProjectionBiases::new(
+            [weights.attention.query.has_bias(), key_values.is_some_and(|(key, _)| key.has_bias())],
+            key_values.and_then(|(_, value)| value).map(BoundLinear::has_bias),
+            [weights.dense.gate.has_bias(), weights.dense.up.has_bias()],
+        ));
+        // A layer reading another's keys and values projects queries alone.
+        let fused_attention = key_values
+            .filter(|_| fusion.attention)
+            .map(|(key, value)| weights.attention.query.fuse_attention(key, value, stream))
             .transpose()?
             .flatten();
-        let fused_key_value = (fusion.key_value && fused_attention.is_none())
-            .then(|| weights.attention.key.fuse_key_value(weights.attention.value.as_ref(), stream))
+        let fused_key_value = key_values
+            .filter(|_| fusion.key_value && fused_attention.is_none())
+            .map(|(key, value)| key.fuse_key_value(value, stream))
             .transpose()?
             .flatten();
         let fused_gate_up = fusion
@@ -124,6 +120,7 @@ impl HybridMoeLayer {
             fused_key_value,
             fused_gate_up,
             fused_expert_gate_up: None,
+            per_layer_gate: None,
         })
     }
 

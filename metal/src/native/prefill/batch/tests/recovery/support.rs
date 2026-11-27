@@ -72,7 +72,7 @@ pub(super) fn continue_and_release(
 
 fn token(model: &LoadedModel, output: NativeOutput) -> Result<u32> {
     match output {
-        NativeOutput::Greedy(token) => Ok(token),
+        NativeOutput::Greedy(token) | NativeOutput::Verified { next: token, .. } => Ok(token),
         NativeOutput::Logits(logits) => Ok(logits.argmax_u32(model.stream())?),
     }
 }

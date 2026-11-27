@@ -1,9 +1,8 @@
-use super::{
-    super::{AttentionWeights, DenseWeights, RouterWeights},
-    rope_frequencies,
+use super::super::{
+    AttentionWeights, DenseWeights, KeyValueWeights, ProjectedKeyValues, RouterWeights,
 };
 use crate::engine::{
-    ModelTensors, NormWeight, QuantizedLinear, Result, Stream, binding::BoundLinear,
+    Array, ModelTensors, NormWeight, QuantizedLinear, Result, Stream, binding::BoundLinear,
     hybrid::moe::HybridMoeLayerConfig,
 };
 
@@ -14,22 +13,22 @@ pub(super) fn legacy_norm(tensors: &ModelTensors, prefix: &str, name: &str) -> R
 pub(super) fn legacy_attention(
     tensors: &ModelTensors,
     prefix: &str,
+    rope_frequencies: Option<Array>,
     config: HybridMoeLayerConfig,
-    stream: &Stream,
 ) -> Result<AttentionWeights> {
     Ok(AttentionWeights {
         query: legacy_linear(tensors, prefix, "q_proj", config.group_size)?,
-        key: legacy_linear(tensors, prefix, "k_proj", config.group_size)?,
-        value: (!config.use_k_eq_v)
-            .then(|| legacy_linear(tensors, prefix, "v_proj", config.group_size))
-            .transpose()?,
+        key_values: KeyValueWeights::Projected(Box::new(ProjectedKeyValues {
+            key: legacy_linear(tensors, prefix, "k_proj", config.group_size)?,
+            value: (!config.use_k_eq_v)
+                .then(|| legacy_linear(tensors, prefix, "v_proj", config.group_size))
+                .transpose()?,
+            norm: legacy_norm(tensors, prefix, "k_norm")?,
+            publish: None,
+        })),
         output: legacy_linear(tensors, prefix, "o_proj", config.group_size)?,
         query_norm: legacy_norm(tensors, prefix, "q_norm")?,
-        key_norm: legacy_norm(tensors, prefix, "k_norm")?,
-        rope_frequencies: config
-            .proportional_rope
-            .then(|| rope_frequencies(config, stream))
-            .transpose()?,
+        rope_frequencies,
     })
 }
 

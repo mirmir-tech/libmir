@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, fs};
+use std::collections::BTreeSet;
 
 use serde_json::Value;
 
@@ -8,7 +8,6 @@ use super::super::{
 };
 use crate::{
     error::{ModelsError, Result},
-    layout::ModelLayout,
     weights::{TensorCatalog, TensorInfo},
 };
 
@@ -21,9 +20,7 @@ pub(super) struct GptqHint {
     activation_order: bool,
 }
 
-pub(super) fn hint(layout: &ModelLayout) -> Result<Option<GptqHint>> {
-    let source = fs::read_to_string(&layout.config_path)?;
-    let root: Value = serde_json::from_str(&source)?;
+pub(super) fn hint(root: &Value) -> Result<Option<GptqHint>> {
     let Some(config) = ["quantization_config", "quantization"]
         .into_iter()
         .find_map(|key| root.get(key))

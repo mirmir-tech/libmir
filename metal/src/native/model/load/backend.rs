@@ -1,5 +1,6 @@
 use models::{
     layout::{DecoderConfig, VisionConfig},
+    semantic::DecoderSpec,
     weights::WeightBindingPlan,
 };
 
@@ -40,6 +41,15 @@ pub(super) fn validate_kv_storage(
     {
         return Err(Error::UnsupportedModel(
             "INT8 Metal K/V does not yet support sliding-window layers".into(),
+        ));
+    }
+    if lowering
+        .layers()
+        .iter()
+        .any(|layer| matches!(layer.mixer, MixerLowering::Latent(_)))
+    {
+        return Err(Error::UnsupportedModel(
+            "INT8 Metal K/V does not yet support latent attention rows".into(),
         ));
     }
     for layer in lowering.layers() {
@@ -98,6 +108,7 @@ pub(super) fn load_decoder_model(
     lowering: &DecoderLowering,
     tensors: &ModelTensors,
     decoder: &DecoderConfig,
+    spec: &DecoderSpec,
     bindings: &WeightBindingPlan,
     stream: &Stream,
 ) -> Result<DecoderModel> {
@@ -111,34 +122,36 @@ pub(super) fn load_decoder_model(
     match lowering.runtime() {
         DecoderRuntime::ClampedRouted => Ok(DecoderModel::new(ClampedRoutedModel::load(
             tensors,
-            decoder,
+            spec,
             bindings,
             lowering.layers(),
             KV_CACHE_STEP,
             stream,
         )?)),
         DecoderRuntime::DenseAndRouted | DecoderRuntime::DenseGelu => {
-            load_dense_routed(lowering, tensors, decoder, bindings, stream)
+            load_dense_routed(lowering, tensors, decoder, spec, bindings, stream)
         },
-        DecoderRuntime::Dense => load_dense(lowering, tensors, decoder, bindings, stream),
+        DecoderRuntime::Dense => load_dense(lowering, tensors, decoder, spec, bindings, stream),
         DecoderRuntime::StateSpaceHybrid => Ok(DecoderModel::new(StateSpaceHybridModel::load(
             tensors,
             decoder,
+            spec,
             bindings,
             lowering.layers(),
             KV_CACHE_STEP,
             stream,
         )?)),
-        DecoderRuntime::SharedRouted | DecoderRuntime::DenseMixed => {
-            Ok(DecoderModel::new(HybridLinearMoeModel::load(
-                tensors,
-                decoder,
-                bindings,
-                lowering.layers(),
-                KV_CACHE_STEP,
-                stream,
-            )?))
-        },
+        DecoderRuntime::SharedRouted
+        | DecoderRuntime::DenseMixed
+        | DecoderRuntime::LatentAttention => Ok(DecoderModel::new(HybridLinearMoeModel::load(
+            tensors,
+            decoder,
+            spec,
+            bindings,
+            lowering.layers(),
+            KV_CACHE_STEP,
+            stream,
+        )?)),
     }
 }
 
@@ -146,12 +159,14 @@ fn load_dense_routed(
     lowering: &DecoderLowering,
     tensors: &ModelTensors,
     decoder: &DecoderConfig,
+    spec: &DecoderSpec,
     bindings: &WeightBindingPlan,
     stream: &Stream,
 ) -> Result<DecoderModel> {
     Ok(DecoderModel::new(HybridMoeModel::load_bindings(
         tensors,
         decoder,
+        spec,
         bindings,
         lowering.layers(),
         KV_CACHE_STEP,
@@ -163,14 +178,17 @@ fn load_dense(
     lowering: &DecoderLowering,
     tensors: &ModelTensors,
     decoder: &DecoderConfig,
+    spec: &DecoderSpec,
     bindings: &WeightBindingPlan,
     stream: &Stream,
 ) -> Result<DecoderModel> {
     Ok(DecoderModel::new(DenseSwiGluModel::load(
         tensors,
         decoder,
+        spec,
         bindings,
         lowering.layers(),
+        lowering.final_norm(),
         KV_CACHE_STEP,
         stream,
     )?))

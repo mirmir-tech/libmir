@@ -36,6 +36,8 @@ pub(super) struct LoadedModel {
     pub catalog: TensorCatalog,
     pub contract: Option<DecoderExecutionContract>,
     pub task_plan: TaskExecutionPlan,
+    /// The generation plan and runtime admission chose, which loaded it.
+    pub admitted: Option<crate::CudaAdmitted>,
     pub vision: Option<VisionConfig>,
     pub vision_readiness: Option<TensorReadiness>,
     pub vision_model: Option<LoadedVisionModel>,

@@ -33,6 +33,9 @@ pub struct PagedDecodeBatch {
     query_starts: U32Metadata,
     context_starts: U32Metadata,
     positions: U32Metadata,
+    /// Cache row of every row's new token, for layers that store it
+    /// themselves; `u32::MAX` in tuning samples, which must not write.
+    slot_mapping: U32Metadata,
     block_counts: U32Metadata,
     stream: Stream,
     cache: CacheConfig,
@@ -60,6 +63,7 @@ impl PagedDecodeBatch {
             query_starts: U32Metadata::new(backend, max_batch + 1, 0)?,
             context_starts: U32Metadata::new(backend, max_batch + 1, 0)?,
             positions: U32Metadata::new(backend, max_batch, 0)?,
+            slot_mapping: U32Metadata::new(backend, max_batch, u32::MAX)?,
             block_counts: U32Metadata::new(backend, max_batch, 0)?,
             stream: backend.inner.stream.clone(),
             cache: storage.cache,
@@ -79,6 +83,7 @@ impl PagedDecodeBatch {
         self.query_starts.host.fill(0);
         self.context_starts.host.fill(0);
         self.positions.host.fill(0);
+        self.slot_mapping.host.fill(u32::MAX);
         self.block_counts.host.fill(0);
         let mut packed_context = 0_u32;
         for (sequence, table) in batch.iter().copied().enumerate() {
@@ -93,7 +98,15 @@ impl PagedDecodeBatch {
                 .checked_add(u32::try_from(table.token_len())?)
                 .ok_or(Error::InvalidPagedKv("batched context offsets overflow"))?;
             self.context_starts.host[sequence + 1] = packed_context;
-            self.positions.host[sequence] = u32::try_from(table.token_len() - 1)?;
+            let position = table.token_len() - 1;
+            self.positions.host[sequence] = u32::try_from(position)?;
+            self.slot_mapping.host[sequence] = table.blocks()[position / self.cache.block_size]
+                .0
+                .checked_mul(u32::try_from(self.cache.block_size)?)
+                .and_then(|row| {
+                    row.checked_add(u32::try_from(position % self.cache.block_size).ok()?)
+                })
+                .ok_or(Error::InvalidPagedKv("decode slot mapping overflow"))?;
             self.block_counts.host[sequence] = u32::try_from(table.blocks().len())?;
         }
         self.tables.upload(&self.stream)?;
@@ -101,6 +114,7 @@ impl PagedDecodeBatch {
         self.query_starts.upload(&self.stream)?;
         self.context_starts.upload(&self.stream)?;
         self.positions.upload(&self.stream)?;
+        self.slot_mapping.upload(&self.stream)?;
         self.block_counts.upload(&self.stream)?;
         self.active = batch.len();
         Ok(())
@@ -129,6 +143,10 @@ impl PagedDecodeBatch {
 
     pub(crate) const fn positions(&self) -> &DeviceBuffer<u32> {
         &self.positions.device
+    }
+
+    pub(crate) const fn slot_mapping(&self) -> &DeviceBuffer<u32> {
+        &self.slot_mapping.device
     }
 
     pub(crate) const fn block_counts(&self) -> &DeviceBuffer<u32> {
@@ -161,6 +179,7 @@ impl PagedDecodeBatch {
             query_starts: U32Metadata::new(backend, self.max_batch + 1, 0)?,
             context_starts: U32Metadata::new(backend, self.max_batch + 1, 0)?,
             positions: U32Metadata::new(backend, self.max_batch, 0)?,
+            slot_mapping: U32Metadata::new(backend, self.max_batch, u32::MAX)?,
             block_counts: U32Metadata::new(backend, self.max_batch, 0)?,
             stream: backend.inner.stream.clone(),
             cache: self.cache,
@@ -184,6 +203,7 @@ impl PagedDecodeBatch {
         sample.query_starts.upload(&sample.stream)?;
         sample.context_starts.upload(&sample.stream)?;
         sample.positions.upload(&sample.stream)?;
+        sample.slot_mapping.upload(&sample.stream)?;
         sample.block_counts.upload(&sample.stream)?;
         Ok(sample)
     }

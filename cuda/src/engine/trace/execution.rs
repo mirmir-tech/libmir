@@ -1,3 +1,4 @@
+use architecture::capability::FeedForwardShape;
 use models::{
     execution::TaskExecutionPlan,
     weights::{
@@ -7,7 +8,7 @@ use models::{
 use runtime::{kv::CacheConfig, trace::TraceAction};
 
 use super::LoadedModel;
-use crate::engine::lowering::CudaDecoderPlan;
+use crate::{CudaAdmitted, CudaDecoderRuntime};
 
 pub(super) fn acceleration(model: &LoadedModel) -> Vec<String> {
     if !matches!(
@@ -32,37 +33,41 @@ pub(super) fn acceleration(model: &LoadedModel) -> Vec<String> {
 }
 
 pub(super) fn mlp_layout(model: &LoadedModel) -> &'static str {
-    let Some(plan) = decoder_plan(model) else {
+    let Some(admitted) = &model.admitted else {
         return "packed gated exact-GELU encoder feed-forward";
     };
-    if plan.all_dense_and_routed() && uses_nvfp4(model) {
-        "dense gated MLP plus routed NVFP4 experts"
-    } else if plan.all_dense_and_routed() {
-        "dense gated MLP plus routed BF16 experts"
-    } else if plan.all_dense() && uses_nvfp4(model) {
-        "native NVFP4 gate/up and down projections"
-    } else if plan.all_dense() {
-        "paired BF16 gate/up plus BF16 down projection"
-    } else if plan.all_shared_routed() && routed_experts_dense(model) {
-        "BF16 shared expert plus routed BF16 SwiGLU experts"
-    } else if plan.all_shared_routed() {
-        "shared expert plus routed SwiGLU experts"
-    } else if plan.all_unshared_clamped_routed() && routed_experts_dense(model) {
-        "clamped routed SwiGLU over BF16 experts"
-    } else if plan.all_unshared_clamped_routed() && clamped_routed_mlx(model) {
-        "clamped routed SwiGLU over split MLX MXFP4 experts"
-    } else if plan.all_unshared_clamped_routed() {
-        "clamped routed SwiGLU over native MXFP4 blocks"
-    } else {
-        "composed semantic feed-forward operations"
+    let dense = every(admitted, FeedForwardShape::Dense);
+    let shared = every(admitted, FeedForwardShape::SharedRouted);
+    match admitted.runtime {
+        CudaDecoderRuntime::DenseAndRouted if uses_nvfp4(model) => {
+            "dense gated MLP plus routed NVFP4 experts"
+        },
+        CudaDecoderRuntime::DenseAndRouted => "dense gated MLP plus routed BF16 experts",
+        CudaDecoderRuntime::Dense if dense && uses_nvfp4(model) => {
+            "native NVFP4 gate/up and down projections"
+        },
+        CudaDecoderRuntime::Dense if dense => "paired BF16 gate/up plus BF16 down projection",
+        CudaDecoderRuntime::Dense => "routed SwiGLU experts without a shared expert",
+        CudaDecoderRuntime::ClampedRouted if routed_experts_dense(model) => {
+            "clamped routed SwiGLU over BF16 experts"
+        },
+        CudaDecoderRuntime::ClampedRouted if clamped_routed_mlx(model) => {
+            "clamped routed SwiGLU over split MLX MXFP4 experts"
+        },
+        CudaDecoderRuntime::ClampedRouted => "clamped routed SwiGLU over native MXFP4 blocks",
+        _ if shared && routed_experts_dense(model) => {
+            "BF16 shared expert plus routed BF16 SwiGLU experts"
+        },
+        _ if shared => "shared expert plus routed SwiGLU experts",
+        _ => "composed semantic feed-forward operations",
     }
 }
 
 pub(super) fn warnings(model: &LoadedModel) -> Vec<String> {
-    let Some(plan) = decoder_plan(model) else {
+    let Some(admitted) = &model.admitted else {
         return Vec::new();
     };
-    if plan.all_dense_and_routed() {
+    if admitted.runtime == CudaDecoderRuntime::DenseAndRouted {
         Vec::new()
     } else {
         vec![
@@ -115,34 +120,37 @@ fn model_kernels(model: &LoadedModel) -> &'static str {
     if matches!(&model.task_plan, TaskExecutionPlan::Embedding { .. }) {
         return "CUTLASS BF16 projections with causal attention and device L2 normalization";
     }
-    let Some(plan) = decoder_plan(model) else {
+    let Some(admitted) = &model.admitted else {
         return "CUTLASS F16 encoder projections and native bidirectional attention";
     };
-    if plan.all_dense_and_routed() && uses_nvfp4(model) {
-        "CUTLASS NVFP4 routed-MoE kernels"
-    } else if plan.all_dense_and_routed() {
-        "CUDA BF16 dense and selected-expert kernels"
-    } else if plan.all_dense() && uses_nvfp4(model) {
-        "CUTLASS native NVFP4 dense SwiGLU kernels"
-    } else if plan.all_dense() {
-        "CUTLASS BF16 dense SwiGLU kernels"
-    } else if plan.all_shared_routed() && routed_experts_dense(model) {
-        "CUDA mixed attention with BF16 shared and routed experts"
-    } else if plan.all_shared_routed() {
-        "CUDA mixed softmax/linear attention with shared routed experts"
-    } else if plan.all_unshared_clamped_routed() && routed_experts_dense(model) {
-        "CUDA BF16, YaRN, sink-attention, and clamped SwiGLU kernels"
-    } else if plan.all_unshared_clamped_routed() {
-        "CUDA MXFP4, YaRN, sink-attention, and clamped SwiGLU kernels"
-    } else {
-        "CUDA composed semantic operators"
+    let dense = every(admitted, FeedForwardShape::Dense);
+    let shared = every(admitted, FeedForwardShape::SharedRouted);
+    match admitted.runtime {
+        CudaDecoderRuntime::DenseAndRouted if uses_nvfp4(model) => {
+            "CUTLASS NVFP4 routed-MoE kernels"
+        },
+        CudaDecoderRuntime::DenseAndRouted => "CUDA BF16 dense and selected-expert kernels",
+        CudaDecoderRuntime::Dense if dense && uses_nvfp4(model) => {
+            "CUTLASS native NVFP4 dense SwiGLU kernels"
+        },
+        CudaDecoderRuntime::Dense if dense => "CUTLASS BF16 dense SwiGLU kernels",
+        CudaDecoderRuntime::Dense => "CUDA softmax attention with routed selected-expert kernels",
+        CudaDecoderRuntime::ClampedRouted if routed_experts_dense(model) => {
+            "CUDA BF16, YaRN, sink-attention, and clamped SwiGLU kernels"
+        },
+        CudaDecoderRuntime::ClampedRouted => {
+            "CUDA MXFP4, YaRN, sink-attention, and clamped SwiGLU kernels"
+        },
+        _ if shared && routed_experts_dense(model) => {
+            "CUDA mixed attention with BF16 shared and routed experts"
+        },
+        _ if shared => "CUDA mixed softmax/linear attention with shared routed experts",
+        _ => "CUDA composed semantic operators",
     }
 }
 
 fn decode_acceleration(model: &LoadedModel) -> &'static str {
-    if decoder_plan(model)
-        .is_some_and(|plan| plan.all_unshared_clamped_routed() || plan.all_shared_routed())
-    {
+    if per_layer(model) {
         "device-resident per-layer operation execution"
     } else {
         "full-model CUDA Graph decode replay"
@@ -150,9 +158,7 @@ fn decode_acceleration(model: &LoadedModel) -> &'static str {
 }
 
 fn decode_action(model: &LoadedModel) -> &'static str {
-    if decoder_plan(model)
-        .is_some_and(|plan| plan.all_unshared_clamped_routed() || plan.all_shared_routed())
-    {
+    if per_layer(model) {
         "device-resident decode with token feedback"
     } else {
         "captured model replay with device token feedback"
@@ -180,8 +186,17 @@ fn routed_experts_dense(model: &LoadedModel) -> bool {
     })
 }
 
-fn decoder_plan(model: &LoadedModel) -> Option<CudaDecoderPlan> {
-    model.semantic().map(CudaDecoderPlan::lower)
+/// Whether every layer's feed-forward has `shape`.
+fn every(admitted: &CudaAdmitted, shape: FeedForwardShape) -> bool {
+    admitted.plan.layers().iter().all(|layer| layer.feed_forward.shape() == shape)
+}
+
+/// Decode runs layer by layer rather than as one captured graph.
+fn per_layer(model: &LoadedModel) -> bool {
+    model.admitted.as_ref().is_some_and(|admitted| {
+        admitted.runtime == CudaDecoderRuntime::ClampedRouted
+            || every(admitted, FeedForwardShape::SharedRouted)
+    })
 }
 
 fn clamped_routed_mlx(model: &LoadedModel) -> bool {

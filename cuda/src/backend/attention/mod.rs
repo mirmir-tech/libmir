@@ -12,7 +12,9 @@ use crate::{
 
 mod batch;
 mod config;
+mod ggml;
 pub(in crate::backend) mod graph;
+mod layout;
 mod mxfp4;
 mod mxfp8;
 mod output;
@@ -20,13 +22,14 @@ mod prefill;
 mod qkv;
 mod rebind;
 mod semantic;
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests;
 
 pub use batch::BatchedDecodeAttentionBf16;
 use config::validate;
 pub use config::{DecodeAttentionConfig, DecodeAttentionWeights, DecodeQkvWeights};
 pub use graph::CapturedDecodeAttentionBf16;
+pub(in crate::backend) use layout::AttentionLayout;
 use output::AttentionOutputProjection;
 pub use output::DecodeAttentionOutputWeight;
 pub(in crate::backend) use prefill::ImageAttentionSpan;
@@ -91,13 +94,15 @@ impl DecodeAttentionBf16 {
         weights: Option<DecodeAttentionWeights<'_>>,
     ) -> Result<Self> {
         validate(config)?;
-        if cache.layer() != config.layer || cache.storage_spec() != config.cache {
+        if cache.layer() != config.cache_layer() || cache.storage_spec() != config.cache {
             return Err(Error::InvalidPagedKv("shared cache differs from attention layer"));
         }
-        let attention = backend.prepare_paged_attention_bf16(
+        let attention = PagedAttentionBf16::new(
+            backend,
             &cache,
             config.query_heads,
             config.max_sequence_blocks,
+            config.score_softcap,
         )?;
         let qkv_postprocess = QkvPostprocessSpec {
             tokens: 1,
@@ -108,11 +113,12 @@ impl DecodeAttentionBf16 {
             rotary: config.rotary,
             epsilon: config.rms_norm_epsilon,
             normalization: config.qkv_normalization,
+            temperature: config.query_temperature,
         };
         let output_projection =
             AttentionOutputProjection::new(backend, config, 1, weights.map(|value| value.output))?;
         Ok(Self {
-            input_norm: RmsNormBf16::new(backend, 1, config.hidden_size, config.rms_norm_epsilon)?,
+            input_norm: RmsNormBf16::for_stream(backend, 1, &config)?,
             qkv: AttentionQkvProjection::new(backend, config, 1, weights.map(|value| value.qkv))?,
             qkv_postprocess: QkvPostprocess::compile(&backend.inner.compiler, qkv_postprocess)?,
             output_projection,
@@ -176,13 +182,15 @@ impl DecodeAttentionBf16 {
                 position,
             )?;
         }
-        self.cache.store(write_plan, &self.scratch.key_rope, &self.scratch.value_norm)?;
+        if self.config.stores_key_values() {
+            self.cache.store(write_plan, &self.scratch.key_rope, &self.scratch.value_norm)?;
+        }
         self.attention.execute(
             &self.scratch.query_rope,
             &self.cache,
             table,
             &mut self.scratch.attention,
-            self.config.sliding_window,
+            self.config.window,
             self.config.attention_scale,
         )?;
         self.output_projection.execute(

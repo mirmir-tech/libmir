@@ -3,10 +3,52 @@ use runtime::backend::SamplingLogits;
 
 use super::CudaClampedRoutedModelSession;
 use crate::{
-    CudaBackend, CudaTensor, DeviceBatchSamplerBf16, Error, Result, RmsNormBf16,
-    backend::output::{CudaBatchOutputHead, CudaOutputHeadTemplate},
+    CudaBackend, CudaTensor, DenseRole, DeviceBatchSamplerBf16, Error, GgmlBf16Linear,
+    GgmlCheckpointWeight, Result, RmsNormBf16,
+    backend::{
+        clamped_routed::projection::ClampedRoutedOutputProjection, output::CudaBatchOutputHead,
+    },
     kernels::GatherRowsBf16,
 };
+
+/// The vocabulary projection of a packed output batch.
+enum PackedHead {
+    Native(CudaBatchOutputHead),
+    Ggml {
+        operation: Box<GgmlBf16Linear>,
+        weight: GgmlCheckpointWeight,
+    },
+}
+
+impl PackedHead {
+    fn new(
+        backend: &CudaBackend,
+        output: &ClampedRoutedOutputProjection,
+        rows: usize,
+    ) -> Result<Option<Self>> {
+        Ok(match output {
+            ClampedRoutedOutputProjection::Native(template) => {
+                Some(Self::Native(CudaBatchOutputHead::new(backend, template, rows)?))
+            },
+            ClampedRoutedOutputProjection::Ggml(weight) => Some(Self::Ggml {
+                operation: Box::new(weight.prepare(backend, rows, DenseRole::OutputHead)?),
+                weight: (**weight).clone(),
+            }),
+            ClampedRoutedOutputProjection::Mlx(_) => None,
+        })
+    }
+
+    fn execute(
+        &mut self,
+        input: &DeviceBuffer<bf16>,
+        output: &mut DeviceBuffer<bf16>,
+    ) -> Result<()> {
+        match self {
+            Self::Native(head) => head.execute(input, output),
+            Self::Ggml { operation, weight } => operation.execute(input, weight, output),
+        }
+    }
+}
 
 pub struct ClampedRoutedBatchResult {
     pub(crate) selected: Vec<u32>,
@@ -20,7 +62,7 @@ pub(super) struct ClampedRoutedPackedOutput {
     index_staging: PinnedBuffer<u32>,
     token_staging: PinnedBuffer<u32>,
     final_norm: RmsNormBf16,
-    output_head: CudaBatchOutputHead,
+    output_head: PackedHead,
     sampler: DeviceBatchSamplerBf16,
     selected: DeviceBuffer<bf16>,
     normalized: DeviceBuffer<bf16>,
@@ -30,7 +72,7 @@ pub(super) struct ClampedRoutedPackedOutput {
 impl ClampedRoutedPackedOutput {
     fn new(
         backend: &CudaBackend,
-        template: &CudaOutputHeadTemplate,
+        output_head: PackedHead,
         rows: usize,
         hidden: usize,
         vocab: usize,
@@ -44,7 +86,7 @@ impl ClampedRoutedPackedOutput {
             index_staging: backend.inner.context.allocate_pinned(rows)?,
             token_staging: backend.inner.context.allocate_pinned(rows)?,
             final_norm: backend.prepare_rms_norm_bf16(rows, hidden, epsilon)?,
-            output_head: CudaBatchOutputHead::new(backend, template, rows)?,
+            output_head,
             sampler: backend.prepare_device_batch_sampler_bf16(vocab, rows)?,
             selected: backend.inner.pool.allocate(&backend.inner.stream, activations)?,
             normalized: backend.inner.pool.allocate(&backend.inner.stream, activations)?,
@@ -90,11 +132,9 @@ impl CudaClampedRoutedModelSession {
         policies: &[SamplingLogits],
         read_logits: bool,
     ) -> Result<Option<ClampedRoutedBatchResult>> {
-        let super::super::projection::ClampedRoutedOutputProjection::Native(template) =
-            &self.template.output
-        else {
+        if matches!(self.template.output, ClampedRoutedOutputProjection::Mlx(_)) {
             return Ok(None);
-        };
+        }
         if rows.is_empty() || rows.len() != policies.len() || rows.iter().any(|row| *row >= tokens)
         {
             return Err(Error::InvalidDecoderKernel("invalid clamped-routed packed output batch"));
@@ -106,9 +146,13 @@ impl CudaClampedRoutedModelSession {
         let count = rows.len();
         let mut output = self.packed_outputs.remove(&count).map_or_else(
             || {
+                let head = PackedHead::new(&self.template.backend, &self.template.output, count)?
+                    .ok_or(Error::InvalidDecoderKernel(
+                    "clamped-routed output has no packed head",
+                ))?;
                 ClampedRoutedPackedOutput::new(
                     &self.template.backend,
-                    template,
+                    head,
                     count,
                     self.template.config.hidden,
                     self.template.config.vocab,

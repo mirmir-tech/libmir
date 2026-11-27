@@ -30,6 +30,9 @@ pub struct MetalTuner {
     decode_plans: HashMap<DecodePlanKey, DecodePlan>,
     active_decode_plan: Option<DecodePlan>,
     suppress_operator_tuning: bool,
+    /// What this tuner measured itself, which its persist writes over
+    /// another writer's decisions for the same keys.
+    measured: storage::StoredProfile,
 }
 
 #[derive(Debug)]
@@ -95,6 +98,7 @@ impl MetalTuner {
             decode_plans: stored.decode_plans,
             active_decode_plan: None,
             suppress_operator_tuning: false,
+            measured: storage::StoredProfile::default(),
         }
     }
 
@@ -118,21 +122,22 @@ impl MetalTuner {
     pub fn record(&mut self, key: GateUpKey, execution: GateUpExecution, elapsed: Duration) {
         self.budgets.gate_up.consume(elapsed);
         self.decisions.insert(key, execution);
+        self.measured.gate_up.insert(key, execution);
     }
 
     pub fn persist(&self) {
         let Some(path) = &self.cache_path else {
             return;
         };
-        if let Err(error) = storage::persist(
-            path,
-            &self.decisions,
-            &self.attention,
-            &self.batch_attention,
-            &self.experts,
-            &self.routing,
-            &self.decode_plans,
-        ) {
+        let known = storage::StoredProfile {
+            gate_up: self.decisions.clone(),
+            attention: self.attention.clone(),
+            batch_attention: self.batch_attention.clone(),
+            experts: self.experts.clone(),
+            routing: self.routing.clone(),
+            decode_plans: self.decode_plans.clone(),
+        };
+        if let Err(error) = storage::persist_merged(path, known, &self.measured) {
             tracing::warn!(
                 target: "libmir::metal::tuning",
                 path = %path.display(),
@@ -182,6 +187,7 @@ impl MetalTuner {
     ) {
         self.budgets.attention.consume(elapsed);
         self.attention.insert(key, execution);
+        self.measured.attention.insert(key, execution);
     }
 
     pub fn batch_attention_decision(
@@ -199,6 +205,7 @@ impl MetalTuner {
     ) {
         self.budgets.consume_batch_attention(key.causal, elapsed);
         self.batch_attention.insert(key, execution);
+        self.measured.batch_attention.insert(key, execution);
     }
 
     pub fn expert_decision(&self, key: ExpertKey) -> Option<ExpertExecution> {
@@ -208,6 +215,7 @@ impl MetalTuner {
     pub fn record_expert(&mut self, key: ExpertKey, execution: ExpertExecution, elapsed: Duration) {
         self.budgets.experts.consume(elapsed);
         self.experts.insert(key, execution);
+        self.measured.experts.insert(key, execution);
     }
 
     pub fn routing_decision(&self, key: RoutingKey) -> Option<RoutingExecution> {
@@ -222,6 +230,7 @@ impl MetalTuner {
     ) {
         self.budgets.routing.consume(elapsed);
         self.routing.insert(key, execution);
+        self.measured.routing.insert(key, execution);
     }
 }
 

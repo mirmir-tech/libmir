@@ -1,20 +1,14 @@
-use std::{collections::BTreeSet, fs};
+use std::collections::BTreeSet;
 
 use serde_json::Value;
 
 use super::{BlockQuantization, TensorCatalog, TensorStorage, companion};
 use crate::{
     error::{ModelsError, Result},
-    layout::ModelLayout,
     weights::{BlockFormat, TensorPacking},
 };
 
-pub(super) fn hint(layout: &ModelLayout) -> Result<Option<BlockQuantization>> {
-    let root: Value = serde_json::from_str(&fs::read_to_string(&layout.config_path)?)?;
-    hint_from(&root)
-}
-
-fn hint_from(root: &Value) -> Result<Option<BlockQuantization>> {
+pub(super) fn hint(root: &Value) -> Result<Option<BlockQuantization>> {
     let layers = root
         .get("quantization_config")
         .or_else(|| root.get("quantization"))
@@ -165,7 +159,7 @@ mod tests {
                 }
             }
         });
-        assert_eq!(hint_from(&root)?, Some(BlockQuantization::NVFP4_W4A16));
+        assert_eq!(hint(&root)?, Some(BlockQuantization::NVFP4_W4A16));
         Ok(())
     }
 
@@ -179,6 +173,6 @@ mod tests {
                 }
             }
         });
-        assert!(hint_from(&root).is_err());
+        assert!(hint(&root).is_err());
     }
 }

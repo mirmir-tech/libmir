@@ -11,7 +11,7 @@ use mircuda::bf16;
 use models::{
     execution::DecoderExecutionContract,
     layout::{DecoderConfig, ModelLayout},
-    weights::TensorCatalog,
+    weights::{StateSpaceHybridFeedForwardBindings, TensorCatalog},
 };
 
 use super::{copy, read};
@@ -48,12 +48,12 @@ fn matches_the_reference_on_a_real_latent_block() -> Result<()> {
         .bindings
         .state_space_hybrid_layer(logical)?
         .feed_forward
+        .and_then(StateSpaceHybridFeedForwardBindings::routed)
         .ok_or(Error::InvalidExecutionPlan("oracle layer has no routed block"))?;
-    let hybrid = decoder
-        .state_space
-        .as_ref()
-        .ok_or(Error::InvalidExecutionPlan("model is not a state-space hybrid"))?;
-    let config = LatentMoeConfig::from_hybrid(decoder.hidden_size, &hybrid.routed);
+    let config = LatentMoeConfig::from_spec(
+        decoder.hidden_size,
+        &contract.semantic.decoder.layer(logical)?.feed_forward,
+    )?;
     let backend = CudaBackend::new(CudaConfig::default())?;
     let mut upload = backend.begin_tensor_upload();
     let latent = routed.latent.ok_or(Error::InvalidExecutionPlan("oracle layer has no latent"))?;

@@ -1,3 +1,5 @@
+mod bias;
+mod latent;
 mod metal;
 use std::collections::BTreeSet;
 
@@ -12,7 +14,8 @@ use models::{
     },
 };
 
-use super::{AdmissionCheck, AdmissionCheckKind, AdmissionStatus};
+use super::{AdmissionCheck, AdmissionStatus, CheckSubject};
+use crate::EncodingKind;
 
 pub(super) fn assess(
     backend: &BackendTarget,
@@ -33,8 +36,7 @@ pub(super) fn assess(
         ),
     };
     Some(AdmissionCheck {
-        kind: AdmissionCheckKind::Dense,
-        status,
+        subject: CheckSubject::Encoding { kind: EncodingKind::Dense, status },
         detail,
     })
 }
@@ -78,7 +80,7 @@ fn metal(
     if matches!(
         task,
         TaskExecutionPlan::Generation { .. } | TaskExecutionPlan::CausalScoring { .. }
-    ) && !execution.is_some_and(metal_generation_supported)
+    ) && !execution.is_some_and(|contract| metal_generation_supported(task, contract))
     {
         return (
             AdmissionStatus::Unsupported,
@@ -99,8 +101,19 @@ fn cuda(
     dtypes: &BTreeSet<&str>,
     actual: &str,
 ) -> (AdmissionStatus, String) {
+    if let Some(binding) = bias::unapplied(execution, task) {
+        return (
+            AdmissionStatus::Unsupported,
+            format!(
+                "CUDA adds projection biases only to GGML dense layers; {} has one",
+                binding.source
+            ),
+        );
+    }
     if execution.is_some_and(|contract| {
-        has_dense_routed_experts(contract) && !supports_dense_selected_experts(contract)
+        has_dense_routed_experts(contract)
+            && !supports_dense_selected_experts(contract)
+            && !latent::supported(contract)
     }) {
         return (
             AdmissionStatus::Unsupported,
@@ -159,7 +172,8 @@ fn supports_dense_selected_experts(contract: &DecoderExecutionContract) -> bool 
         FeedForwardSpec::Routed {
             routed:
                 models::semantic::RoutedExpertsSpec {
-                    activation: models::semantic::ActivationSpec::SwiGlu { clamp: Some(_), .. },
+                    activation: models::semantic::ActivationSpec::ClampedSwiGlu { .. },
+                    group_limit: None,
                     ..
                 },
             shared: None,
@@ -170,6 +184,7 @@ fn supports_dense_selected_experts(contract: &DecoderExecutionContract) -> bool 
                 models::semantic::RoutedExpertsSpec {
                     activation: models::semantic::ActivationSpec::GeluTanh,
                     router_normalization: models::semantic::RouterNormalization::SoftmaxTopK,
+                    group_limit: None,
                     ..
                 },
             ..
@@ -182,15 +197,14 @@ fn supports_dense_selected_experts(contract: &DecoderExecutionContract) -> bool 
         FeedForwardSpec::Routed {
             routed:
                 models::semantic::RoutedExpertsSpec {
-                    activation: models::semantic::ActivationSpec::SwiGlu { clamp: None, .. },
+                    activation: models::semantic::ActivationSpec::SwiGlu,
                     router_normalization: models::semantic::RouterNormalization::SoftmaxTopK,
+                    group_limit: None,
                     ..
                 },
             shared: Some(shared),
-        } if matches!(
-            shared.activation,
-            models::semantic::ActivationSpec::SwiGlu { clamp: None, .. }
-        ) && shared.gated_output =>
+        } if matches!(shared.activation, models::semantic::ActivationSpec::SwiGlu)
+            && shared.gated_output =>
         {
             contract
                 .bindings

@@ -19,7 +19,7 @@ pub(in crate::backend) struct NormedFeedForward {
 /// Residual tail of one prepared layer: `output = input + update`, or with a
 /// feed-forward `h = input + update; output = h + ff(norm(h))`.
 #[derive(Debug)]
-pub(super) struct TailExecution {
+pub(in crate::backend) struct TailExecution {
     stream: Stream,
     norm: ShiftedRmsNorm,
     add: ElementwiseBf16,
@@ -27,7 +27,7 @@ pub(super) struct TailExecution {
 }
 
 impl TailExecution {
-    pub(super) fn new(
+    pub(in crate::backend) fn new(
         backend: &CudaBackend,
         config: LayerNormConfig,
         feed_forward: Option<&NormedFeedForward>,
@@ -57,7 +57,7 @@ impl TailExecution {
 
     /// Adds `scratch.attention`, the mixer's output projection, to `input`
     /// and applies the feed-forward.
-    pub(super) fn execute(
+    pub(in crate::backend) fn execute(
         &mut self,
         input: &DeviceBuffer<bf16>,
         scratch: &mut LayerScratch,

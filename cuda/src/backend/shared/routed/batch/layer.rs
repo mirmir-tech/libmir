@@ -2,12 +2,13 @@ use mircuda::{DeviceBuffer, bf16};
 
 use super::{
     super::{CudaSharedRoutedLayerState, SharedRoutedLayerTemplate},
-    states::{attention_states, full_states, linear_states, mamba_states},
+    states::{attention_states, full_states, latent_states, linear_states, mamba_states},
 };
 use crate::{
     CudaAffineGatedDeltaMoeExecution, CudaAffineGatedFullAttentionMoeExecution,
-    CudaAttentionHybridExecution, CudaMamba2HybridExecution, CudaSharedRoutedModelSession, Error,
-    ExecutionPhase, PagedDecodeBatch, Result, kernels::BatchedSplitAttentionWorkspace,
+    CudaAttentionHybridExecution, CudaLatentAttentionExecution, CudaMamba2HybridExecution,
+    CudaSharedRoutedModelSession, Error, ExecutionPhase, PagedDecodeBatch, Result,
+    kernels::BatchedSplitAttentionWorkspace,
 };
 
 #[derive(Debug)]
@@ -16,6 +17,7 @@ pub(super) enum SharedRoutedBatchLayer {
     Full(Box<CudaAffineGatedFullAttentionMoeExecution>),
     Mamba2(Box<CudaMamba2HybridExecution>),
     Attention(Box<CudaAttentionHybridExecution>),
+    Latent(Box<CudaLatentAttentionExecution>),
 }
 
 impl SharedRoutedBatchLayer {
@@ -47,6 +49,9 @@ impl SharedRoutedBatchLayer {
                 execution.set_workspace(workspace);
                 Self::Attention(Box::new(execution))
             },
+            SharedRoutedLayerTemplate::Latent(layer) => {
+                Self::Latent(Box::new(layer.prepare_phase(rows, phase)?))
+            },
         })
     }
 
@@ -76,6 +81,9 @@ impl SharedRoutedBatchLayer {
             Self::Attention(execution) => {
                 execution.prepare_packed(&attention_states(sessions, layer)?, paging)
             },
+            Self::Latent(execution) => {
+                execution.prepare_packed(&latent_states(sessions, layer)?, paging)
+            },
         }
     }
 
@@ -93,6 +101,9 @@ impl SharedRoutedBatchLayer {
             },
             Self::Mamba2(execution) => execution.execute_prepared_packed(input, output),
             Self::Attention(execution) => execution.execute_prepared_packed(input, paging, output),
+            Self::Latent(execution) => {
+                execution.execute_prepared_packed(input, positions, paging, output)
+            },
         }
     }
 
@@ -106,7 +117,7 @@ impl SharedRoutedBatchLayer {
                 execution.commit_packed(&mut linear_states(sessions, layer)?)
             },
             Self::Mamba2(execution) => execution.commit_packed(&mut mamba_states(sessions, layer)?),
-            Self::Full(_) | Self::Attention(_) => Ok(()),
+            Self::Full(_) | Self::Attention(_) | Self::Latent(_) => Ok(()),
         }
     }
 
@@ -139,7 +150,7 @@ impl SharedRoutedBatchLayer {
         match self {
             Self::Mamba2(execution) => execution.execute_prepared_verify(input, output),
             Self::Attention(execution) => execution.execute_prepared_packed(input, paging, output),
-            Self::Linear(_) | Self::Full(_) => {
+            Self::Linear(_) | Self::Full(_) | Self::Latent(_) => {
                 Err(Error::InvalidDecoderKernel("verification graphs need Mamba-2 and attention"))
             },
         }
@@ -162,7 +173,9 @@ impl SharedRoutedBatchLayer {
 
     pub(super) fn capture_partitions(&self, paging: &PagedDecodeBatch) -> usize {
         match self {
-            Self::Linear(_) | Self::Mamba2(_) => 0,
+            // Latent attention splits every query into a fixed number of
+            // partitions, so its launch geometry never changes.
+            Self::Linear(_) | Self::Mamba2(_) | Self::Latent(_) => 0,
             Self::Full(execution) => execution.packed_capture_partitions(paging),
             Self::Attention(execution) => execution.packed_capture_partitions(paging),
         }

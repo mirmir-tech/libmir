@@ -97,6 +97,25 @@ impl DecoderModel {
         self.execution.forward_greedy_decode(token_ids, cache, position, stream)
     }
 
+    pub(crate) fn new_prediction_cache(&self, stream: &Stream) -> Result<Option<DecoderCache>> {
+        self.execution.new_prediction_cache(stream)
+    }
+
+    pub(crate) fn forward_prediction(
+        &self,
+        hidden: &Array,
+        next_tokens: &Array,
+        cache: &mut DecoderCache,
+        position: i32,
+        stream: &Stream,
+    ) -> Result<Array> {
+        self.execution.forward_prediction(hidden, next_tokens, cache, position, stream)
+    }
+
+    pub(crate) fn project_hidden(&self, hidden: &Array, stream: &Stream) -> Result<Array> {
+        self.execution.project_hidden(hidden, stream)
+    }
+
     pub(crate) fn forward_prefill_state(
         &self,
         token_ids: &Array,

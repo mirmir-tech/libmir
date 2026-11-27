@@ -41,20 +41,23 @@ fn execute_model(
             }
         }
     }
-    let lowering = lowering::plan(&contract.semantic)?;
+    let lowering = lowering::plan(&decoder, &contract.semantic)?;
     let stream = Stream::new_cpu()?;
     let tensors = ModelTensors::load(&root, &stream)?;
     let model = DenseSwiGluModel::load(
         &tensors,
         &decoder,
+        &contract.semantic.decoder,
         &contract.bindings,
         lowering.layers(),
+        lowering.final_norm(),
         16,
         &stream,
     )?;
     let normalized = normalization != Some(models::semantic::QkNormalization::None);
-    assert_eq!(model.layers[0].weights.attention.query_norm.is_some(), normalized);
-    assert_eq!(model.layers[0].weights.attention.key_norm.is_some(), normalized);
+    let qk_norm = &model.layers[0].weights.attention.qk_norm;
+    assert_eq!(qk_norm.weight(super::weights::QkSide::Query).is_some(), normalized);
+    assert_eq!(qk_norm.weight(super::weights::QkSide::Key).is_some(), normalized);
     let mut cache = model.new_cache(&stream)?;
     let logits = model.forward_decode(&Array::from_u32(&[1], &[1, 1])?, &mut cache, 0, &stream)?;
 
@@ -155,4 +158,31 @@ fn honors_explicit_dense_normalization_even_when_checkpoint_contains_norm_weight
         execute_model("F32", Some(normalization))?;
     }
     Ok(())
+}
+
+/// The first layer's configuration, compiled through the semantic spec.
+pub(super) fn layer_config(
+    decoder: &DecoderConfig,
+) -> Result<super::config::DenseSwiGluLayerConfig> {
+    let catalog = TensorCatalog {
+        tensors: vec![models::weights::TensorInfo {
+            name: "model.layers.0.input_layernorm.weight".into(),
+            file: std::path::PathBuf::new(),
+            dtype: "BF16".into(),
+            shape: vec![decoder.hidden_size],
+            data_start: 0,
+            data_offsets: [0, 0],
+        }],
+    };
+    let spec = models::semantic::SemanticModelSpec::discover(decoder, &catalog)?;
+    let layer = spec
+        .decoder
+        .layers
+        .first()
+        .ok_or(crate::engine::Error::InvalidModel("the decoder has no layers".into()))?;
+    super::config::DenseSwiGluLayerConfig::from_spec(
+        &spec.decoder,
+        layer,
+        decoder.query_key_rows_interleaved,
+    )
 }

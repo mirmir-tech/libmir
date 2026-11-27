@@ -9,6 +9,7 @@ use self::prefill::shapes::PrefillShapeCache;
 use super::{
     graph::{CapturedModelDecode, execute_layers},
     layer::{SessionLayer, SharedLayerPrefill},
+    per_layer::SessionPerLayerInputs,
     prefill::PrefillTokenBuffer,
 };
 use crate::{
@@ -46,8 +47,9 @@ pub struct CudaMoeModelSession {
     prefill_first: DeviceBuffer<bf16>,
     prefill_second: DeviceBuffer<bf16>,
     logits: DeviceBuffer<bf16>,
-    logit_softcap: Option<crate::kernels::LogitSoftcap>,
-    logit_softcap_cap: Option<f32>,
+    logit_shaper: Option<crate::kernels::LogitShapingBf16>,
+    logit_shaping: Option<crate::kernels::LogitShaping>,
+    per_layer: Option<SessionPerLayerInputs>,
 }
 
 impl CudaMoeModelSession {
@@ -72,14 +74,19 @@ impl CudaMoeModelSession {
         prefill_first: DeviceBuffer<bf16>,
         prefill_second: DeviceBuffer<bf16>,
         logits: DeviceBuffer<bf16>,
-        logit_softcap_cap: Option<f32>,
+        logit_shaping: Option<crate::kernels::LogitShaping>,
+        per_layer: Option<SessionPerLayerInputs>,
     ) -> Result<Self> {
         if layers.is_empty() {
             return Err(Error::InvalidDecoderKernel("CUDA model session requires layers"));
         }
-        let logit_softcap = logit_softcap_cap
-            .map(|cap| {
-                crate::kernels::LogitSoftcap::compile(&backend.inner.compiler, logits.len(), cap)
+        let logit_shaper = logit_shaping
+            .map(|shaping| {
+                crate::kernels::LogitShapingBf16::compile(
+                    &backend.inner.compiler,
+                    logits.len(),
+                    shaping,
+                )
             })
             .transpose()?;
         Ok(Self {
@@ -106,8 +113,9 @@ impl CudaMoeModelSession {
             prefill_first,
             prefill_second,
             logits,
-            logit_softcap,
-            logit_softcap_cap,
+            logit_shaper,
+            logit_shaping,
+            per_layer,
         })
     }
 
@@ -132,6 +140,9 @@ impl CudaMoeModelSession {
         self.token_staging.copy_from_slice(&[token])?;
         self.stream.copy_to_device(&mut self.token_staging, &mut self.input_token)?;
         self.embedding.execute(&self.input_token, 0, &mut self.first)?;
+        if let Some(inputs) = &mut self.per_layer {
+            inputs.decode.compute(&self.input_token, 0, 1, &self.first)?;
+        }
         self.forward(session_id, table, sampling)
     }
 
@@ -156,6 +167,9 @@ impl CudaMoeModelSession {
         sampling: &SamplingLogits,
     ) -> Result<&DeviceBuffer<bf16>> {
         self.embedding.execute(self.sampler.selected(), 0, &mut self.first)?;
+        if let Some(inputs) = &mut self.per_layer {
+            inputs.decode.compute(self.sampler.selected(), 0, 1, &self.first)?;
+        }
         self.forward(session_id, table, sampling)
     }
 
@@ -180,9 +194,9 @@ impl CudaMoeModelSession {
             self.output_projection.execute(&self.first, &mut self.logits, sampling)?;
         }
         if !matches!(*sampling, SamplingLogits::None)
-            && let Some(softcap) = &self.logit_softcap
+            && let Some(shaper) = &self.logit_shaper
         {
-            softcap.execute(&self.stream, &mut self.logits)?;
+            shaper.execute(&self.stream, &mut self.logits)?;
         }
         Ok(&self.logits)
     }

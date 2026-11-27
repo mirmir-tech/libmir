@@ -67,7 +67,7 @@ impl PagedStore {
             scratch: Arc::clone(&self.attention_scratch),
             page_size: self.page_size,
             context_tokens: tokens,
-            fragmented: !storage.identity,
+            fragmented: !storage.contiguous,
         })
     }
 }

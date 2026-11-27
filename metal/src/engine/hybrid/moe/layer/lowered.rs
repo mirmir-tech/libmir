@@ -19,24 +19,20 @@ impl LoweredLayer for HybridMoeLayer {
     ) -> Result<Array> {
         let mask = context
             .image
-            .filter(|_| self.config.max_context.is_some())
+            .filter(|_| self.config.sliding_window.is_some())
             .map(|image| {
                 let sequence = input.shape()?.get(1).copied().ok_or(Error::ShapeOverflow)?;
                 prefix_attention_mask(
                     usize::try_from(sequence)?,
                     image,
-                    self.config.max_context,
+                    self.config.max_context(),
                     context.stream,
                 )
             })
             .transpose()?;
-        let cache = cache
-            .attention_caches_mut()?
-            .get_mut(index)
-            .ok_or_else(|| Error::InvalidModel(format!("missing cache for layer {index}")))?;
         self.mix(
             input,
-            Some(cache),
+            self.own_cache(cache, index)?,
             context.position,
             context.causal,
             mask.as_ref(),

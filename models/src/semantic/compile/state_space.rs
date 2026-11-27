@@ -4,7 +4,8 @@ use super::{CURRENT_SCHEMA_VERSION, invalid};
 use crate::{
     error::Result,
     layout::{
-        DecoderConfig, HybridLayer, StateSpaceHybridConfig, StateSpaceStateDType, TimeStepBound,
+        DecoderConfig, HybridFeedForward, HybridLayer, StateSpaceHybridConfig,
+        StateSpaceStateDType, TimeStepBound,
     },
     semantic::{
         ActivationSpec, AttentionOutputSpec, AttentionSpec, BlockLayoutSpec, DecoderLayerSpec,
@@ -31,9 +32,15 @@ pub(super) fn compile(
                 index,
                 input_norm: norm,
                 post_attention_norm: norm,
+                norm_placement: crate::semantic::NormPlacement::Pre,
                 mixer: mixer(decoder, hybrid, *layer)?,
-                feed_forward: match layer.feed_forward_block() {
-                    Some(_) => latent_routed(hybrid),
+                feed_forward: match layer.feed_forward() {
+                    Some(HybridFeedForward::Moe) => latent_routed(hybrid)?,
+                    // Nemotron-H's ungated `relu²` MLP block.
+                    Some(HybridFeedForward::Mlp) => FeedForwardSpec::Dense {
+                        intermediate_size: decoder.intermediate_size,
+                        activation: ActivationSpec::ReluSquared,
+                    },
                     None => FeedForwardSpec::None,
                 },
             })
@@ -46,8 +53,9 @@ pub(super) fn compile(
                     index,
                     input_norm: norm,
                     post_attention_norm: norm,
+                    norm_placement: crate::semantic::NormPlacement::Pre,
                     mixer: attention(decoder)?,
-                    feed_forward: latent_routed(hybrid),
+                    feed_forward: latent_routed(hybrid)?,
                 })
             })
             .collect::<Result<Vec<_>>>()?,
@@ -61,6 +69,8 @@ pub(super) fn compile(
             tie_word_embeddings: decoder.tie_word_embeddings,
             final_norm: norm,
             embedding_multiplier: decoder.embedding_multiplier.unwrap_or(1.0),
+            residual_multiplier: decoder.residual_multiplier.unwrap_or(1.0),
+            logit_divisor: decoder.logits_divisor.unwrap_or(1.0),
             layers,
             block_layout: BlockLayoutSpec::Paired {
                 physical_blocks: hybrid.blocks.physical().len(),
@@ -72,6 +82,7 @@ pub(super) fn compile(
                     .collect(),
             },
             prediction_layers,
+            per_layer_input: None,
         },
     })
 }
@@ -134,12 +145,18 @@ fn attention(decoder: &DecoderConfig) -> Result<MixerSpec> {
         window: None,
         // The family relies on the recurrent mixers for order information.
         position: PositionEncodingSpec::None,
+        logit_softcap: None,
+        query_temperature: None,
+        key_value_source: None,
     }))
 }
 
-fn latent_routed(hybrid: &StateSpaceHybridConfig) -> FeedForwardSpec {
-    let routed = &hybrid.routed;
-    FeedForwardSpec::LatentRouted {
+fn latent_routed(hybrid: &StateSpaceHybridConfig) -> Result<FeedForwardSpec> {
+    let routed = hybrid
+        .routed
+        .as_ref()
+        .ok_or_else(|| invalid("hybrid routed blocks need the routed-expert configuration"))?;
+    Ok(FeedForwardSpec::LatentRouted {
         latent_size: routed.latent_size,
         routed: RoutedExpertsSpec {
             expert_count: routed.expert_count,
@@ -147,12 +164,13 @@ fn latent_routed(hybrid: &StateSpaceHybridConfig) -> FeedForwardSpec {
             intermediate_size: routed.expert_intermediate_size,
             activation: ActivationSpec::ReluSquared,
             router_normalization: RouterNormalization::SigmoidBiasedTopK,
+            group_limit: None,
+            output_scale: routed.routed_scale,
         },
         shared: routed.shared_intermediate_size.map(|intermediate_size| SharedExpertSpec {
             intermediate_size,
             activation: ActivationSpec::ReluSquared,
             gated_output: false,
         }),
-        routed_scale: routed.routed_scale,
-    }
+    })
 }

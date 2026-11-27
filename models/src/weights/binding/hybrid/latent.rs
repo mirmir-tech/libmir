@@ -1,0 +1,148 @@
+//! Typed bindings of one multi-head latent attention decoder layer.
+
+use super::{
+    MixedFeedForwardBindings, attention, invalid, layer, mixed::mixed_feed_forward, optional,
+};
+use crate::{
+    error::Result,
+    weights::{
+        AttentionProjectionRole, LatentAttentionTensorRole, LayerTensorRole, TensorBinding,
+        WeightBindingPlan, binding::slot::LayerSlot,
+    },
+};
+
+#[derive(Debug, Clone, Copy)]
+pub struct LatentDecoderLayerBindings<'a> {
+    pub input_norm: &'a TensorBinding,
+    pub attention: LatentAttentionBindings<'a>,
+    pub post_attention_norm: &'a TensorBinding,
+    pub feed_forward: MixedFeedForwardBindings<'a>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LatentAttentionBindings<'a> {
+    pub query: LatentQueryBindings<'a>,
+    /// `kv_a_proj_with_mqa`: hidden state to the latent and the rotary key.
+    pub key_value_down: &'a TensorBinding,
+    pub key_value_norm: &'a TensorBinding,
+    pub key_value_up: LatentUpBindings<'a>,
+    pub output: &'a TensorBinding,
+}
+
+/// How a layer stores the latent's per-head key and value up-projections.
+#[derive(Debug, Clone, Copy)]
+pub enum LatentUpBindings<'a> {
+    /// `kv_b_proj`: `[heads · (nope + value), latent]`.
+    Fused(&'a TensorBinding),
+    /// GGUF `attn_k_b` (`[heads, latent, nope]`) and `attn_v_b`
+    /// (`[heads, value, latent]`).
+    Split {
+        key: &'a TensorBinding,
+        value: &'a TensorBinding,
+    },
+}
+
+/// How a layer projects its queries.
+#[derive(Debug, Clone, Copy)]
+pub enum LatentQueryBindings<'a> {
+    /// One projection from the hidden state (`q_proj`).
+    Direct(&'a TensorBinding),
+    /// Down-projection, normalized query latent, up-projection.
+    Latent {
+        down: &'a TensorBinding,
+        norm: &'a TensorBinding,
+        up: &'a TensorBinding,
+    },
+}
+
+impl WeightBindingPlan {
+    pub fn latent_decoder_layer(&self, index: usize) -> Result<LatentDecoderLayerBindings<'_>> {
+        let get = |tensor| {
+            layer(self, LayerSlot::Decoder(index), LayerTensorRole::LatentAttention { tensor })
+        };
+        let direct = optional(
+            self,
+            LayerSlot::Decoder(index),
+            LayerTensorRole::AttentionProjection {
+                projection: AttentionProjectionRole::Query,
+            },
+        );
+        let latent_down = optional(
+            self,
+            LayerSlot::Decoder(index),
+            LayerTensorRole::LatentAttention {
+                tensor: LatentAttentionTensorRole::QueryDown,
+            },
+        );
+        let query = match (direct, latent_down) {
+            (Some(query), None) => LatentQueryBindings::Direct(query),
+            (None, Some(down)) => LatentQueryBindings::Latent {
+                down,
+                norm: get(LatentAttentionTensorRole::QueryLatentNorm)?,
+                up: get(LatentAttentionTensorRole::QueryUp)?,
+            },
+            _ => {
+                return Err(invalid(
+                    LayerSlot::Decoder(index),
+                    "latent attention needs exactly one query path",
+                ));
+            },
+        };
+        Ok(LatentDecoderLayerBindings {
+            input_norm: layer(self, LayerSlot::Decoder(index), LayerTensorRole::InputNorm)?,
+            attention: LatentAttentionBindings {
+                query,
+                key_value_down: get(LatentAttentionTensorRole::KeyValueDown)?,
+                key_value_norm: get(LatentAttentionTensorRole::KeyValueLatentNorm)?,
+                key_value_up: match optional(
+                    self,
+                    LayerSlot::Decoder(index),
+                    LayerTensorRole::LatentAttention {
+                        tensor: LatentAttentionTensorRole::KeyValueUp,
+                    },
+                ) {
+                    Some(fused) => LatentUpBindings::Fused(fused),
+                    None => LatentUpBindings::Split {
+                        key: get(LatentAttentionTensorRole::KeyUp)?,
+                        value: get(LatentAttentionTensorRole::ValueUp)?,
+                    },
+                },
+                output: attention(
+                    self,
+                    LayerSlot::Decoder(index),
+                    AttentionProjectionRole::Output,
+                )?,
+            },
+            post_attention_norm: layer(
+                self,
+                LayerSlot::Decoder(index),
+                LayerTensorRole::PostAttentionNorm,
+            )?,
+            feed_forward: mixed_feed_forward(self, LayerSlot::Decoder(index))?,
+        })
+    }
+}
+
+impl<'a> LatentDecoderLayerBindings<'a> {
+    #[must_use]
+    pub fn physical_sources(self) -> Vec<&'a str> {
+        let attention = self.attention;
+        let mut bindings = vec![
+            self.input_norm,
+            self.post_attention_norm,
+            attention.key_value_down,
+            attention.key_value_norm,
+            attention.output,
+        ];
+        match attention.key_value_up {
+            LatentUpBindings::Fused(up) => bindings.push(up),
+            LatentUpBindings::Split { key, value } => bindings.extend([key, value]),
+        }
+        match attention.query {
+            LatentQueryBindings::Direct(query) => bindings.push(query),
+            LatentQueryBindings::Latent { down, norm, up } => bindings.extend([down, norm, up]),
+        }
+        bindings.extend(self.feed_forward.bindings());
+        super::sources(bindings)
+    }
+}

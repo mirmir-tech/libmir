@@ -11,11 +11,11 @@ pub(super) fn persistent(
     [queries, keys, values]: [&Array; 3],
     caches: &mut [&mut KvCache],
     context: AttentionRows<'_>,
-) -> Result<Option<Array>> {
+) -> Result<Option<(Array, persistent_history::Attended)>> {
     if context.causal {
         return Ok(None);
     }
-    persistent_history::attend(
+    persistent_history::attend_publishing(
         &persistent_history::Attend {
             queries,
             keys,
@@ -45,7 +45,8 @@ pub(super) fn project(
         .forward(&output.reshape(&[batch, sequence, width], stream)?, stream)
 }
 
-fn rotate(input: &Array, context: AttentionRows<'_>) -> Result<Array> {
+/// `[B, S, H, D]` rows rotated to `[B, H, S, D]` at their positions.
+pub(super) fn rotate(input: &Array, context: AttentionRows<'_>) -> Result<Array> {
     let AttentionRows { weights, config, positions, stream, .. } = context;
     let frequencies = weights.rope_frequencies.as_ref();
     if let Some(&first) = positions.first()
@@ -62,8 +63,8 @@ fn rotate(input: &Array, context: AttentionRows<'_>) -> Result<Array> {
             input.native(),
             frequencies.native(),
             mirtal::FrequencyRopeOptions {
-                dimensions: usize::try_from(config.head_dim)?,
-                traditional: false,
+                dimensions: usize::try_from(config.rope_dimensions)?,
+                traditional: config.rope_traditional,
                 offset: &offsets,
             },
         )?,
@@ -71,9 +72,9 @@ fn rotate(input: &Array, context: AttentionRows<'_>) -> Result<Array> {
             input.native(),
             mirtal::RopeOptions {
                 dimensions: usize::try_from(config.rope_dimensions)?,
-                traditional: false,
+                traditional: config.rope_traditional,
                 base: Some(config.rope_base),
-                scale: 1.0,
+                scale: config.rope_position_scale,
                 offset: &offsets,
             },
         )?,

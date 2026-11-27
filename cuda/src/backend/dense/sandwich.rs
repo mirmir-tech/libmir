@@ -8,16 +8,18 @@ use crate::{CudaTensor, Error, Result, RmsNormBf16};
 pub(in crate::backend::dense) struct DenseSandwichOwned {
     attention_output_norm: CudaTensor,
     feed_forward_output_norm: CudaTensor,
-    layer_scalar: CudaTensor,
+    layer_scalar: Option<CudaTensor>,
 }
 
 impl DenseSandwichOwned {
     pub(in crate::backend::dense) fn new(weights: DenseSandwichWeights<'_>) -> Result<Self> {
-        scalar(weights.layer_scalar)?;
+        if let Some(layer_scalar) = weights.layer_scalar {
+            scalar(layer_scalar)?;
+        }
         Ok(Self {
             attention_output_norm: weights.attention_output_norm.clone(),
             feed_forward_output_norm: weights.feed_forward_output_norm.clone(),
-            layer_scalar: weights.layer_scalar.clone(),
+            layer_scalar: weights.layer_scalar.cloned(),
         })
     }
 
@@ -25,7 +27,7 @@ impl DenseSandwichOwned {
         DenseSandwichWeights {
             attention_output_norm: &self.attention_output_norm,
             feed_forward_output_norm: &self.feed_forward_output_norm,
-            layer_scalar: &self.layer_scalar,
+            layer_scalar: self.layer_scalar.as_ref(),
         }
     }
 }

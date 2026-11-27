@@ -21,6 +21,25 @@ impl DecoderExecution for HybridLinearMoeModel {
         self.new_cache(stream)
     }
 
+    fn new_prediction_cache(&self, stream: &Stream) -> Result<Option<DecoderCache>> {
+        self.new_prediction_cache(stream)
+    }
+
+    fn forward_prediction(
+        &self,
+        hidden: &Array,
+        next_tokens: &Array,
+        cache: &mut DecoderCache,
+        position: i32,
+        stream: &Stream,
+    ) -> Result<Array> {
+        self.forward_prediction(hidden, next_tokens, cache, position, stream)
+    }
+
+    fn project_hidden(&self, hidden: &Array, stream: &Stream) -> Result<Array> {
+        self.project_logits(hidden, stream)
+    }
+
     fn forward_decode(
         &self,
         token_ids: &Array,
@@ -41,8 +60,10 @@ impl DecoderExecution for HybridLinearMoeModel {
         self.forward_packed_decode(token_ids, caches, positions, stream)
     }
 
+    // Speculating sessions prefill one at a time, feeding the prediction
+    // module every prompt row.
     fn supports_packed_prefill(&self) -> bool {
-        true
+        self.prediction.is_none()
     }
 
     fn forward_packed_prefill_state(

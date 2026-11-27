@@ -56,6 +56,7 @@ impl CudaMoeModelSession {
             total,
             &mut self.prefill_first,
         )?;
+        self.compute_prefill_inputs(total)?;
         let mut plans = self.packed_prefill.take(total).unwrap_or_default();
         let result = (|| {
             for (index, layer) in self.layers.iter_mut().enumerate() {
@@ -65,7 +66,7 @@ impl CudaMoeModelSession {
                     (&self.prefill_second, &mut self.prefill_first)
                 };
                 let signature = layer.prefill_signature();
-                let plan_index = plans.iter().position(|plan| plan.supports(signature));
+                let plan_index = plans.iter().position(|plan| plan.supports(&signature));
                 let plan_index = if let Some(index) = plan_index {
                     index
                 } else {
@@ -73,10 +74,14 @@ impl CudaMoeModelSession {
                     plans.len() - 1
                 };
                 let prefill = plans[plan_index].borrow();
+                let per_layer = super::per_layer_view(self.per_layer.as_ref(), index, total)?;
+                let per_layer = per_layer.as_ref();
                 if let Some(graph) = self.decode_graph.as_mut() {
-                    graph.execute_prefill_batch(index, prefill, input, &batch, output)?;
+                    graph
+                        .execute_prefill_batch(index, prefill, input, &batch, per_layer, output)?;
                 } else {
-                    layer.execute_shared_prefill_batch(prefill, input, output, &batch)?;
+                    layer
+                        .execute_shared_prefill_batch(prefill, input, output, &batch, per_layer)?;
                 }
             }
             Ok(())

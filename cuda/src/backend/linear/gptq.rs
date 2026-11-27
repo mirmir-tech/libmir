@@ -3,6 +3,7 @@ use models::weights::{
     GptqBits, GptqCheckpointFormat, GptqScaleDType, TensorBinding, TensorStorage,
 };
 
+use super::packed::integer::{PackedIntegerLayout, require_layout};
 use crate::{
     CudaBackend, CudaTensor, CudaTensorDType, CudaTensorSet, Error, Result,
     kernels::{GptqLaunch, GptqLinear, GptqSpec},
@@ -19,6 +20,13 @@ pub struct GptqWeight {
 }
 
 impl GptqWeight {
+    pub(in crate::backend) const fn layout(&self) -> PackedIntegerLayout {
+        PackedIntegerLayout::Gptq {
+            group_size: self.group_size,
+            legacy: self.legacy,
+        }
+    }
+
     pub(crate) fn load_binding(
         tensors: &CudaTensorSet,
         binding: &TensorBinding,
@@ -76,6 +84,7 @@ pub struct GptqBf16Linear {
     stream: Stream,
     input: usize,
     output: usize,
+    layout: PackedIntegerLayout,
 }
 
 impl GptqBf16Linear {
@@ -95,6 +104,7 @@ impl GptqBf16Linear {
             stream: backend.inner.stream.clone(),
             input,
             output,
+            layout: weight.layout(),
         })
     }
 
@@ -104,6 +114,7 @@ impl GptqBf16Linear {
         weight: &GptqWeight,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
+        require_layout(self.layout, weight.layout())?;
         weight.validate(self.input, self.output)?;
         self.operation.execute(
             &self.stream,

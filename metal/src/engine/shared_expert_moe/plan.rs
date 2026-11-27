@@ -1,53 +1,89 @@
-use super::{Array, Result, SharedExpertMoe, Stream};
-use crate::{FusionMode, engine::gate_up_tuning};
+//! The always-active shared expert beside the routed ones (Qwen2-MoE,
+//! GLM-4.5), and its decode-time gate/up fusion.
 
-impl SharedExpertMoe {
-    pub(crate) fn decode_plan_candidate_bytes(&self) -> Result<Option<usize>> {
-        self.shared_gate.fused_gate_up_bytes(&self.shared_up)
+use super::{Array, FusedGateUp, Result, SharedExpertMoe, Stream};
+use crate::{
+    FusionMode,
+    engine::{binding::BoundLinear, fusion_planner::FusionPlanner, gate_up_tuning},
+};
+
+#[derive(Debug)]
+pub(super) struct SharedExpert {
+    pub(super) gate: BoundLinear,
+    pub(super) up: BoundLinear,
+    pub(super) fused_gate_up: Option<FusedGateUp>,
+    pub(super) down: BoundLinear,
+    /// Sigmoid gate on the shared expert's output; `None` adds it ungated.
+    pub(super) output_gate: Option<BoundLinear>,
+    pub(super) gate_up_mode: FusionMode,
+}
+
+impl SharedExpert {
+    pub(super) fn new(
+        [gate, up, down]: [BoundLinear; 3],
+        output_gate: Option<BoundLinear>,
+        stream: &Stream,
+    ) -> Self {
+        let gate_up_mode = FusionPlanner::new(stream)
+            .shared_expert_gate_up_mode(super::load::projection_biases(&gate, &up));
+        Self {
+            gate,
+            up,
+            fused_gate_up: None,
+            down,
+            output_gate,
+            gate_up_mode,
+        }
     }
 
-    pub(crate) fn enable_decode_plan_candidate(&mut self, stream: &Stream) -> Result<bool> {
-        self.fused_shared_gate_up = self.shared_gate.fuse_gate_up(&self.shared_up, stream)?;
-        self.fused_shared_gate_up.as_ref().map_or(Ok(()), |fused| fused.warm(stream))?;
-        Ok(self.fused_shared_gate_up.is_some())
-    }
-
-    pub(super) fn shared(&self, input: &Array, stream: &Stream) -> Result<Array> {
-        let fused = self.fused_shared_gate_up.as_ref();
+    pub(super) fn forward(&self, input: &Array, stream: &Stream) -> Result<Array> {
+        let fused = self.fused_gate_up.as_ref();
         let (gate, up) = if gate_up_tuning::is_single_token(input)? {
-            match (self.shared_gate_up_mode, fused) {
-                (FusionMode::Auto, Some(fused)) => gate_up_tuning::forward_decode_plan(
-                    &self.shared_gate,
-                    &self.shared_up,
-                    fused,
-                    input,
-                    stream,
-                )?,
-                _ => gate_up_tuning::forward(
-                    &self.shared_gate,
-                    &self.shared_up,
-                    fused,
-                    input,
-                    stream,
-                )?,
+            match (self.gate_up_mode, fused) {
+                (FusionMode::Auto, Some(fused)) => {
+                    gate_up_tuning::forward_decode_plan(&self.gate, &self.up, fused, input, stream)?
+                },
+                _ => gate_up_tuning::forward(&self.gate, &self.up, fused, input, stream)?,
             }
-        } else if self.shared_gate_up_mode == FusionMode::Enabled {
+        } else if self.gate_up_mode == FusionMode::Enabled {
             fused.map_or_else(
-                || self.separate_shared(input, stream),
+                || self.separate(input, stream),
                 |fused| fused.forward_pair(input, stream),
             )?
         } else {
-            self.separate_shared(input, stream)?
+            self.separate(input, stream)?
         };
-        let output = self.shared_down.forward(&gate.silu_mul(&up, stream)?, stream)?;
-        self.shared_output_gate.forward(input, stream)?.sigmoid_mul(&output, stream)
+        let output = self.down.forward(&gate.silu_mul(&up, stream)?, stream)?;
+        match &self.output_gate {
+            Some(gate) => gate.forward(input, stream)?.sigmoid_mul(&output, stream),
+            None => Ok(output),
+        }
+    }
+
+    fn separate(&self, input: &Array, stream: &Stream) -> Result<(Array, Array)> {
+        Ok((self.gate.forward(input, stream)?, self.up.forward(input, stream)?))
+    }
+}
+
+impl SharedExpertMoe {
+    pub(crate) fn decode_plan_candidate_bytes(&self) -> Result<Option<usize>> {
+        self.shared
+            .as_ref()
+            .map_or(Ok(None), |shared| shared.gate.fused_gate_up_bytes(&shared.up))
+    }
+
+    pub(crate) fn enable_decode_plan_candidate(&mut self, stream: &Stream) -> Result<bool> {
+        let Some(shared) = self.shared.as_mut() else {
+            return Ok(false);
+        };
+        shared.fused_gate_up = shared.gate.fuse_gate_up(&shared.up, stream)?;
+        shared.fused_gate_up.as_ref().map_or(Ok(()), |fused| fused.warm(stream))?;
+        Ok(shared.fused_gate_up.is_some())
     }
 
     pub(crate) fn has_decode_plan_candidates(&self) -> bool {
-        self.shared_gate_up_mode == FusionMode::Auto && self.fused_shared_gate_up.is_some()
-    }
-
-    fn separate_shared(&self, input: &Array, stream: &Stream) -> Result<(Array, Array)> {
-        Ok((self.shared_gate.forward(input, stream)?, self.shared_up.forward(input, stream)?))
+        self.shared.as_ref().is_some_and(|shared| {
+            shared.gate_up_mode == FusionMode::Auto && shared.fused_gate_up.is_some()
+        })
     }
 }

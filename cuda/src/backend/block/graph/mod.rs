@@ -62,12 +62,14 @@ impl CapturedDecodeMoeBlockBf16 {
                 resources.layer.qkv_arguments()
             },
         )?;
-        self.graph.update_kernel(
-            &self.nodes.kv_store,
-            &self.kernels.kv_store,
-            self.configs.kv_store,
-            |resources| resources.layer.kv_arguments(),
-        )?;
+        if let Some(kv_store) = &self.nodes.kv_store {
+            self.graph.update_kernel(
+                kv_store,
+                &self.kernels.kv_store,
+                self.configs.kv_store,
+                |resources| resources.layer.kv_arguments(),
+            )?;
+        }
         self.graph.update_kernel(
             &self.nodes.attention.direct,
             &self.kernels.attention.direct,
@@ -134,7 +136,7 @@ pub(super) fn capture_block(
     table: &BlockTable,
     output: DeviceBuffer<bf16>,
 ) -> Result<CapturedDecodeMoeBlockBf16> {
-    let kernels = Kernels::new(&block.attention);
+    let kernels = Kernels::new(&block.attention)?;
     let configs = Configs::new(&block.attention)?;
     let stream = block.stream.clone();
     let resources = Resources {

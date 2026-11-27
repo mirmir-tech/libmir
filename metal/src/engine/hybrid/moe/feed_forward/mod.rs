@@ -7,7 +7,7 @@ use super::{
 };
 use crate::engine::{
     Array, FusedExpertGateUp, FusedGateUp, Result, Stream, fusion_planner::FusionPlanner,
-    gate_up_tuning, lowering::FeedForwardLowering,
+    gate_up_tuning,
 };
 
 mod expert;
@@ -64,20 +64,20 @@ pub(super) fn routing(
     config: HybridMoeLayerConfig,
     stream: &Stream,
 ) -> Result<crate::engine::RouterOutput> {
-    if FusionPlanner::new(stream).native_router(FeedForwardLowering::DenseAndRouted) {
+    if FusionPlanner::new(stream).native_router() {
         return weights.routed()?.router.projection.route(
             input,
             &weights.routed()?.router.norm_scale,
             &weights.routed()?.router.expert_scale,
             config.rms_norm_eps,
-            config.top_k,
+            config.experts()?.top_k,
             stream,
         );
     }
     let normalized =
         input.rms_norm(&weights.routed()?.router.norm_scale, config.rms_norm_eps, stream)?;
     let scores = weights.routed()?.router.projection.forward(&normalized, stream)?;
-    scores.router_top_k(&weights.routed()?.router.expert_scale, config.top_k, stream)
+    scores.router_top_k(&weights.routed()?.router.expert_scale, config.experts()?.top_k, stream)
 }
 
 #[cfg(test)]
@@ -100,8 +100,9 @@ mod tests {
         let tensors = ModelTensors::load(root, &load_stream)?;
         let stream = Stream::new_gpu()?;
         let index = env_usize("MIRMIR_BENCH_LAYER", 0)?;
-        let config = HybridMoeLayerConfig::from_decoder(index, &decoder, 64)?;
-        let weights = LayerWeights::load(&tensors, config, &stream)?;
+        let layer = crate::engine::hybrid::moe::CheckpointLayer::discover(&decoder, index, 64)?;
+        let config = layer.config;
+        let weights = LayerWeights::load(&tensors, None, config, &stream)?;
         let input = Array::from_f32(&vec![0.25; decoder.hidden_size], &[1, 1, config.hidden_size])?
             .astype_like(&weights.routed()?.router.expert_scale, &stream)?;
         let iters = env_usize("MIRMIR_BENCH_ITERS", 12)?;
@@ -169,7 +170,7 @@ mod tests {
     ) -> Result<crate::engine::RouterOutput> {
         router_logits(input, weights, config, stream)?.router_top_k(
             &weights.routed()?.router.expert_scale,
-            config.top_k,
+            config.experts()?.top_k,
             stream,
         )
     }

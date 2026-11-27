@@ -32,10 +32,7 @@ pub(super) fn execute(
     execution.prefill_batches.clear();
     execution.combined.prepare(&execution.template, &counts)?;
     for row in chunks {
-        if row.offset == 0 {
-            let session = execution.template.instantiate_with_caches(&execution.caches)?;
-            execution.sessions.insert(row.request.session_id, session);
-        }
+        execution.open_session(row.request.session_id, row.offset)?;
         execution.arm_terminal_checkpoint(row.request, row.offset, row.tokens.len())?;
     }
     let ids = chunks
@@ -127,7 +124,10 @@ fn supported(
         return Err(Error::InvalidDecoderKernel("mixed step repeats a session"));
     }
     for row in chunks {
-        if row.offset != 0 && !execution.sessions.contains_key(&row.request.session_id) {
+        if row.offset != 0
+            && !execution.sessions.contains_key(&row.request.session_id)
+            && !execution.template.pages_hold_state()
+        {
             return Err(Error::InvalidDecoderKernel("mixed prefill session is missing"));
         }
     }

@@ -145,6 +145,8 @@ fn finish(batch: &MetalPrefillBatch, model: &mut LoadedModel, budget: usize) -> 
 fn values(model: &LoadedModel, output: NativeOutput) -> Result<Vec<f32>> {
     match output {
         NativeOutput::Logits(array) => Ok(array.to_vec_f32(model.stream())?),
-        NativeOutput::Greedy(_) => Err(crate::engine::Error::ShapeOverflow.into()),
+        NativeOutput::Greedy(_) | NativeOutput::Verified { .. } => {
+            Err(crate::engine::Error::ShapeOverflow.into())
+        },
     }
 }

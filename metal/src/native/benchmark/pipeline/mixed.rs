@@ -37,11 +37,8 @@ fn compares_mixed_grouped_decode_against_scalar_fallback() -> Result<()> {
             let session = Uuid::new_v4();
             let output =
                 model.prefill(session, &prompt, &[], &SamplingLogits::None, None, &mut |_| {})?;
-            cohort.push(DecodeInput {
-                session,
-                token: output_token(&model, output.output)?,
-                sampling: SamplingLogits::None,
-            });
+            let token = output_token(&model, output.output)?;
+            cohort.push(DecodeInput::single(session, token, SamplingLogits::None));
         }
     }
     let mut timings = [Vec::new(), Vec::new()];

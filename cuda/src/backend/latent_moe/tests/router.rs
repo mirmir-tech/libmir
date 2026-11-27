@@ -1,4 +1,5 @@
 use mircuda::bf16;
+use models::semantic::{ActivationSpec, RoutedExpertsSpec, RouterNormalization};
 
 use super::{copy, read};
 use crate::{
@@ -29,40 +30,30 @@ fn pattern(elements: usize, seed: u64, scale: f32) -> Vec<bf16> {
         .collect()
 }
 
-/// Host routing of one token: logits in FP64, selection by sigmoid + bias
-/// with the lower index winning ties, renormalized and scaled weights.
-fn reference(
-    input: &[bf16],
-    weight: &[bf16],
-    bias: &[f32],
-    token: usize,
-) -> (Vec<u32>, Vec<f64>, Vec<f64>) {
+/// One token's router logits in FP64.
+fn host_logits(input: &[bf16], weight: &[bf16], token: usize) -> Vec<f64> {
     let hidden = SPEC.hidden;
-    let logits = (0..SPEC.experts)
+    (0..SPEC.experts)
         .map(|expert| {
             (0..hidden).fold(0.0, |sum, column| {
                 f64::from(input[token * hidden + column].to_f32())
                     .mul_add(f64::from(weight[expert * hidden + column].to_f32()), sum)
             })
         })
-        .collect::<Vec<f64>>();
-    let scores = logits.iter().map(|logit| 1.0 / (1.0 + (-logit).exp())).collect::<Vec<_>>();
-    let mut order = (0..SPEC.experts).collect::<Vec<_>>();
-    order.sort_by(|left, right| {
-        let choice = |expert: &usize| scores[*expert] + f64::from(bias[*expert]);
-        choice(right).total_cmp(&choice(left)).then(left.cmp(right))
-    });
-    let chosen = &order[..SPEC.top_k];
-    let total = chosen.iter().map(|expert| scores[*expert]).sum::<f64>();
-    let weights = chosen
-        .iter()
-        .map(|expert| scores[*expert] / total * f64::from(SPEC.routed_scale))
-        .collect();
-    (
-        chosen.iter().map(|expert| u32::try_from(*expert).unwrap_or(u32::MAX)).collect(),
-        weights,
-        logits,
-    )
+        .collect()
+}
+
+/// The `models` host routing of the latent block's sigmoid router.
+fn routed() -> RoutedExpertsSpec {
+    RoutedExpertsSpec {
+        expert_count: SPEC.experts,
+        top_k: SPEC.top_k,
+        intermediate_size: 1,
+        activation: ActivationSpec::ReluSquared,
+        router_normalization: RouterNormalization::SigmoidBiasedTopK,
+        group_limit: None,
+        output_scale: f64::from(SPEC.routed_scale),
+    }
 }
 
 #[test]
@@ -97,14 +88,21 @@ fn route(tokens: usize) -> Result<()> {
     let (logits, selected, weights) =
         (read(&backend, &logits)?, read(&backend, &selected)?, read(&backend, &weights)?);
     for token in 0..tokens {
-        let (expected_selected, expected_weights, expected_logits) =
-            reference(&input, &weight, &bias, token);
+        let expected_logits = host_logits(&input, &weight, token);
+        #[allow(clippy::cast_possible_truncation)]
+        let narrow = expected_logits.iter().map(|&logit| logit as f32).collect::<Vec<_>>();
+        let route = routed().route(&narrow, Some(&bias))?;
+        let expected_selected = route
+            .iter()
+            .map(|selected| u32::try_from(selected.expert))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let expected_weights = route.iter().map(|selected| f64::from(selected.weight));
         for (actual, expected) in logits[token * SPEC.experts..].iter().zip(&expected_logits) {
             assert!((f64::from(*actual) - expected).abs() < 1e-3, "logit {actual} vs {expected}");
         }
         let range = token * SPEC.top_k..(token + 1) * SPEC.top_k;
         assert_eq!(selected[range.clone()], expected_selected[..], "token {token}");
-        for (actual, expected) in weights[range].iter().zip(&expected_weights) {
+        for (actual, expected) in weights[range].iter().zip(expected_weights) {
             assert!((f64::from(actual.to_f32()) - expected).abs() < expected * 0.01);
         }
     }

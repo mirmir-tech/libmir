@@ -51,8 +51,7 @@ impl EncoderConfig {
     }
 
     pub fn from_config_path(path: impl AsRef<Path>) -> Result<Self> {
-        let json = fs::read_to_string(path)?;
-        Self::from_value(&serde_json::from_str(&json)?)
+        Self::from_value(&crate::layout::json::read(path)?)
     }
 
     pub fn from_value(value: &Value) -> Result<Self> {

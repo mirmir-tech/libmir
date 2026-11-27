@@ -4,6 +4,7 @@ use super::*;
 mod checkpoint;
 mod clamped_routed;
 mod gated_delta;
+mod mlp_gate;
 mod page_write;
 mod quantized_kv;
 mod rope;

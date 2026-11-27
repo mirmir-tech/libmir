@@ -1,7 +1,7 @@
 use runtime::kv::{BlockTable, KvWritePlan};
 use uuid::Uuid;
 
-use super::CudaMoeModelSession;
+use super::{CudaMoeModelSession, per_layer_view};
 use crate::Result;
 
 impl CudaMoeModelSession {
@@ -23,7 +23,7 @@ impl CudaMoeModelSession {
                     (&self.prefill_second, &mut self.prefill_first)
                 };
                 let signature = layer.prefill_signature();
-                let plan_index = plans.iter().position(|plan| plan.supports(signature));
+                let plan_index = plans.iter().position(|plan| plan.supports(&signature));
                 let plan_index = if let Some(index) = plan_index {
                     index
                 } else {
@@ -31,14 +31,12 @@ impl CudaMoeModelSession {
                     plans.len() - 1
                 };
                 let prefill = plans[plan_index].borrow();
+                let per_layer = per_layer_view(self.per_layer.as_ref(), index, tokens)?;
+                let start = (write_offset, per_layer.as_ref());
                 if let Some(graph) = self.decode_graph.as_mut() {
-                    graph.execute_prefill(
-                        index, prefill, input, &plan, table, write_offset, output,
-                    )?;
+                    graph.execute_prefill(index, prefill, input, &plan, table, start, output)?;
                 } else {
-                    layer.execute_shared_prefill(
-                        prefill, input, output, &plan, table, write_offset,
-                    )?;
+                    layer.execute_shared_prefill(prefill, input, output, &plan, table, start)?;
                 }
             }
             Ok(())

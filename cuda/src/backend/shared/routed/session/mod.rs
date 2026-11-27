@@ -148,6 +148,18 @@ impl CudaSharedRoutedModelSession {
         SharedRoutedCheckpoint::capture(&self.states, self.position, self.position_delta)
     }
 
+    /// Continues a prefix whose `position` tokens the shared pages already
+    /// hold; only valid when the template's pages hold every layer's state.
+    pub(crate) fn continue_shared_prefix(&mut self, position: usize) -> Result<()> {
+        if !self.template.pages_hold_state() {
+            return Err(Error::InvalidExecutionPlan(
+                "a session with recurrent state cannot continue a prefix from its pages",
+            ));
+        }
+        self.position = position;
+        Ok(())
+    }
+
     pub(crate) fn restore_checkpoint(&mut self, checkpoint: &SharedRoutedCheckpoint) -> Result<()> {
         checkpoint.restore(&mut self.states)?;
         self.position = checkpoint.position;

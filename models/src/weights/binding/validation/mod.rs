@@ -13,6 +13,7 @@ mod affine;
 mod awq;
 mod bitsandbytes;
 mod convolution;
+mod dense;
 mod float8;
 mod gptq;
 mod packed_integer;
@@ -34,7 +35,7 @@ pub(super) fn validate(plan: &WeightBindingPlan, catalog: &TensorCatalog) -> Res
                     && logical.len() > 1
                 {
                     companion(catalog, bias, &logical[..logical.len() - 1])?;
-                    companion_dtype(catalog, bias, dtype)?;
+                    dense::bias_dtype(catalog, bias, dtype)?;
                 }
             },
             TensorStorage::AffineQuantized { format, scales, biases, output_bias, .. } => {
@@ -45,7 +46,7 @@ pub(super) fn validate(plan: &WeightBindingPlan, catalog: &TensorCatalog) -> Res
                     companion(catalog, output_bias, &logical[..logical.len() - 1])?;
                 }
             },
-            TensorStorage::PackedInt8 { .. } | TensorStorage::PackedInt4 { .. } => {
+            TensorStorage::PackedInteger { .. } => {
                 packed_integer::validate(binding, logical, &binding.storage, catalog)?;
             },
             TensorStorage::Awq { format, scales, zero_points } => {
@@ -82,6 +83,9 @@ pub(super) fn validate(plan: &WeightBindingPlan, catalog: &TensorCatalog) -> Res
                 bias.as_deref(),
                 catalog,
             )?,
+            TensorStorage::Ggml { format, .. } => {
+                super::ggml::validate(binding, logical, *format, catalog)?;
+            },
             TensorStorage::Auxiliary { .. } => shape(&binding.source, &binding.shape, logical)?,
         }
     }

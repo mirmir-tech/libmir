@@ -1,7 +1,8 @@
 pub(super) mod batch;
 use mircuda::{
-    Compiler, DeviceBuffer, LaunchConfig, Stream, TypedKernel, bf16, cuda_export, cuda_kernel_file,
+    Compiler, DeviceBuffer, LaunchConfig, Stream, TypedKernel, bf16, cuda_export, cuda_kernel_files,
 };
+use models::semantic::AttentionWindow;
 
 use super::{PagedAttentionSpec, validate_attention};
 use crate::{
@@ -27,8 +28,12 @@ pub struct PagedPrefillAttention {
 impl PagedPrefillAttention {
     pub fn compile(compiler: &Compiler, spec: PagedAttentionSpec) -> Result<Self> {
         validate_attention(spec)?;
-        let source = cuda_kernel_file!("../../../../kernels/paged_prefill_attention_bf16.cu");
-        let module = compiler.compile(source, &super::compile_options(spec.dtype)?)?;
+        let source = cuda_kernel_files!(
+            "paged_prefill_attention_bf16.cu";
+            "../../../../kernels/attention_window_bf16.cu",
+            "../../../../kernels/paged_prefill_attention_bf16.cu",
+        );
+        let module = compiler.compile(source, &super::attention_compile_options(spec)?)?;
         Ok(Self { kernel: module.kernel()?, spec })
     }
 
@@ -44,7 +49,7 @@ impl PagedPrefillAttention {
         query_tokens: usize,
         start_position: usize,
         block_count: usize,
-        window: Option<usize>,
+        window: Option<AttentionWindow>,
         scale: f32,
         image: Option<(usize, usize)>,
     ) -> Result<()> {
@@ -89,7 +94,7 @@ impl PagedPrefillAttention {
                 narrow(self.spec.kv_heads)?,
                 narrow(self.spec.head_dim)?,
                 narrow(self.spec.value_head_dim)?,
-                narrow(window.unwrap_or(0))?,
+                crate::kernels::paged::window::argument(window)?,
                 scale,
                 narrow(image_start)?,
                 narrow(image_end)?,

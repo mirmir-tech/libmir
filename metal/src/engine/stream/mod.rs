@@ -211,12 +211,15 @@ impl Stream {
     pub(super) fn gated_delta_recurrence(
         &self,
         inputs: [&mirtal::Array; 6],
+        states: crate::engine::kernels::RecurrenceStates,
     ) -> Result<[mirtal::Array; 2]> {
         #[cfg(test)]
-        if self.config.diagnostics.gdn_execution == crate::config::GdnExecution::PackedPrefill {
+        if states == crate::engine::kernels::RecurrenceStates::Final
+            && self.config.diagnostics.gdn_execution == crate::config::GdnExecution::PackedPrefill
+        {
             return self.experimental_recurrence(inputs);
         }
-        self.kernels.gated_delta_recurrence(&self.native, inputs)
+        self.kernels.gated_delta_recurrence(&self.native, inputs, states)
     }
 
     pub(super) fn gated_delta_decode(

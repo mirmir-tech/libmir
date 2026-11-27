@@ -33,22 +33,24 @@ pub(super) fn discover(
     discover_with_hints(spec, catalog, DiscoveryHints::default())
 }
 
-pub(super) fn discover_from_layout(
+/// Discovers bindings as a checkpoint's parsed `config.json` declares its
+/// quantization: a local checkpoint's and a Hub repository's alike.
+pub(super) fn discover_with_config(
     spec: &SemanticModelSpec,
     catalog: &TensorCatalog,
-    layout: &crate::layout::ModelLayout,
+    config: &serde_json::Value,
 ) -> Result<WeightBindingPlan> {
     let hints = DiscoveryHints {
-        bitsandbytes: bitsandbytes::hint(layout)?,
-        gptq: gptq::hint(layout)?,
-        float8: float8::hint(layout)?,
-        nvfp4: block::hint(layout)?,
-        block: match ModelMetadata::from_layout(layout)?.quantization {
+        bitsandbytes: bitsandbytes::hint(config)?,
+        gptq: gptq::hint(config)?,
+        float8: float8::hint(config)?,
+        nvfp4: block::hint(config)?,
+        block: match ModelMetadata::from_value(config)?.quantization {
             foundation::model::Quantization::MxFp4 => Some(BlockQuantization::MXFP4_MLX),
             foundation::model::Quantization::MxFp8 => Some(BlockQuantization::MXFP8),
             _ => None,
         },
-        vision_projection: match VisionConfig::from_layout(layout)? {
+        vision_projection: match VisionConfig::from_value(config)? {
             Some(VisionConfig::PooledEncoder(config)) => {
                 Some([config.output_hidden_size, config.hidden_size])
             },
@@ -159,6 +161,9 @@ fn projection_storage(
     consumed: &mut BTreeSet<String>,
     hints: DiscoveryHints,
 ) -> Result<TensorStorage> {
+    if let Some(storage) = super::ggml::storage(tensor, catalog, consumed)? {
+        return Ok(storage);
+    }
     if let Some(storage) = bitsandbytes::storage(tensor, catalog, consumed, hints.bitsandbytes)? {
         return Ok(storage);
     }

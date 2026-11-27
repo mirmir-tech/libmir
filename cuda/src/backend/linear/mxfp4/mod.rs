@@ -52,6 +52,11 @@ pub struct MxFp4EmbeddingLookup {
 }
 
 impl MxFp4CheckpointWeight {
+    /// Whether the projection adds an output bias, which its plan compiles in.
+    pub(in crate::backend) const fn has_bias(&self) -> bool {
+        self.bias.is_some()
+    }
+
     pub fn prepare(&self, backend: &super::CudaBackend, tokens: usize) -> Result<MxFp4Bf16Linear> {
         if self.layout != BlockProjectionLayout::Matrix {
             return Err(Error::InvalidExecutionPlan(

@@ -81,6 +81,12 @@ impl ModelDescriptor {
     }
 
     #[must_use]
+    /// Returns the container the model's weight files use.
+    pub fn weight_container(&self) -> Option<models::layout::WeightContainer> {
+        self.layout.container()
+    }
+
+    #[must_use]
     /// Returns the discovered paths and files that make up the model.
     pub const fn layout(&self) -> &ModelLayout {
         &self.layout

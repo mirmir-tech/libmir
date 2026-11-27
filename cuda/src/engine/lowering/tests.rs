@@ -36,12 +36,16 @@ fn lowers_dense_qk_normalization_from_semantics() -> Result<()> {
     };
     catalog.tensors.sort_by(|left, right| left.name.cmp(&right.name));
     let spec = SemanticModelSpec::discover(&decoder, &catalog)?;
-    let plan = CudaDecoderPlan::lower(&spec);
+    let plan = CudaDecoderPlan::lower(&spec, None)?;
 
-    assert!(plan.all_dense());
     assert_eq!(
-        crate::admit_architecture(&TaskExecutionPlan::Generation { decoder }, Some(&spec),)?,
-        crate::CudaArchitecture::Generation(crate::CudaDecoderRuntime::Dense)
+        plan.layers()[0].mixer.normalization(),
+        Some(models::semantic::QkNormalization::QueryKeyRms)
+    );
+    assert_eq!(
+        crate::admit_architecture(&TaskExecutionPlan::Generation { decoder }, Some(&spec))?
+            .runtime(),
+        Some(crate::CudaDecoderRuntime::Dense)
     );
     Ok(())
 }
@@ -51,7 +55,13 @@ fn tensor(name: &str) -> TensorInfo {
         name: name.into(),
         file: PathBuf::new(),
         dtype: "BF16".into(),
-        shape: vec![8],
+        // Per-head Q/K norms span one head; a query norm across the whole
+        // projection would declare OLMo 2's norms across heads.
+        shape: if name.ends_with("q_norm.weight") || name.ends_with("k_norm.weight") {
+            vec![4]
+        } else {
+            vec![8]
+        },
         data_start: 0,
         data_offsets: [0, 0],
     }

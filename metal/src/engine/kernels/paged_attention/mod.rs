@@ -214,6 +214,7 @@ fn validate(
         && query[2] == 1
         && keys == values
         && keys[0] > 0
+        && query[1] > 0
         && query[1].is_multiple_of(keys[0])
         && query[3] == keys[3]
         && keys[2] == page_size;

@@ -60,7 +60,7 @@ impl CudaBackend {
         query_heads: usize,
         max_blocks: usize,
     ) -> Result<PagedAttentionBf16> {
-        PagedAttentionBf16::new(self, cache, query_heads, max_blocks)
+        PagedAttentionBf16::new(self, cache, query_heads, max_blocks, None)
     }
 
     pub fn prepare_batched_paged_attention_bf16(

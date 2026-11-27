@@ -57,15 +57,24 @@ mod tests {
             head_dim: 64,
             value_head_dim: 64,
             dtype: KvCacheDType::Auto,
+            score_softcap: None,
         };
         assert!(tensor_queries(spec, 8, true));
         assert!(tensor_queries(
-            PagedAttentionSpec { dtype: KvCacheDType::BFloat16, ..spec },
+            PagedAttentionSpec {
+                dtype: KvCacheDType::BFloat16,
+                score_softcap: None,
+                ..spec
+            },
             8,
             true
         ));
         assert!(!tensor_queries(
-            PagedAttentionSpec { dtype: KvCacheDType::Fp8E4M3, ..spec },
+            PagedAttentionSpec {
+                dtype: KvCacheDType::Fp8E4M3,
+                score_softcap: None,
+                ..spec
+            },
             8,
             true
         ));

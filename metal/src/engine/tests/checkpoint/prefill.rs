@@ -1,7 +1,7 @@
 use models::layout::{DecoderConfig, ModelLayout};
 
 use super::*;
-use crate::engine::hybrid::moe::{HybridMoeLayer, HybridMoeLayerConfig};
+use crate::engine::hybrid::moe::{CheckpointLayer, HybridMoeLayer};
 
 #[test]
 #[ignore = "loads real model layers; set MIRMIR_BENCH_MODEL or MODEL"]
@@ -17,9 +17,9 @@ fn matches_mlx_lm_prefill_through_first_global_layer() -> Result<()> {
         hidden.multiply_scalar(decoder.hidden_size.to_string().parse::<f32>()?.sqrt(), &stream)?;
 
     for (index, expected) in expected_layers().iter().enumerate() {
-        let config = HybridMoeLayerConfig::from_decoder(index, &decoder, 64)?;
-        let layer = HybridMoeLayer::load(&tensors, config, &stream)?;
-        let mut cache = KvCache::new_with_window(16, config.max_context)?;
+        let config = CheckpointLayer::discover(&decoder, index, 64)?;
+        let layer = HybridMoeLayer::load(&tensors, &config, &stream)?;
+        let mut cache = KvCache::new_with_window(16, config.config.max_context())?;
         hidden = layer.forward_decode(&hidden, Some(&mut cache), 0, true, &stream)?;
         hidden.async_eval(&stream)?;
         stream.synchronize()?;
@@ -48,9 +48,9 @@ fn matches_mlx_lm_layer_zero_components() -> Result<()> {
         .lookup(&Array::from_u32(&[1_000, 1_001], &[1, 2])?, &stream)?
         .multiply_scalar(decoder.hidden_size.to_string().parse::<f32>()?.sqrt(), &stream)?;
     assert_eq!(fingerprint(&input.to_vec_f32(&stream)?), 0xc809_b31e_15b3_6ebf);
-    let config = HybridMoeLayerConfig::from_decoder(0, &decoder, 64)?;
-    let layer = HybridMoeLayer::load(&tensors, config, &stream)?;
-    let mut cache = KvCache::new_with_window(16, config.max_context)?;
+    let config = CheckpointLayer::discover(&decoder, 0, 64)?;
+    let layer = HybridMoeLayer::load(&tensors, &config, &stream)?;
+    let mut cache = KvCache::new_with_window(16, config.config.max_context())?;
     let attention = layer.attention_residual_for_test(&input, &mut cache, 0, true, &stream)?;
     let attention_values = attention.to_vec_f32(&stream)?;
     assert_prefix(
@@ -75,7 +75,7 @@ fn matches_mlx_lm_layer_zero_components() -> Result<()> {
     assert_eq!(fingerprint(&normalized.to_vec_f32(&stream)?), 0x92b5_25c9_2256_5adc);
     assert_eq!(fingerprint(&scores.to_vec_f32(&stream)?), 0xb9c2_16d0_e6b5_90dc);
 
-    let mut routing_cache = KvCache::new_with_window(16, config.max_context)?;
+    let mut routing_cache = KvCache::new_with_window(16, config.config.max_context())?;
     let routing_input =
         layer.attention_residual_for_test(&input, &mut routing_cache, 0, true, &stream)?;
     let routing = layer.routing_for_test(&routing_input, &stream)?;
@@ -114,8 +114,8 @@ fn matches_mlx_lm_proportional_rope_frequencies() -> Result<()> {
     let decoder = DecoderConfig::from_layout(&layout)?;
     let tensors = ModelTensors::load(&root, &Stream::new_cpu()?)?;
     let stream = Stream::new_gpu()?;
-    let config = HybridMoeLayerConfig::from_decoder(5, &decoder, 64)?;
-    let layer = HybridMoeLayer::load(&tensors, config, &stream)?;
+    let config = CheckpointLayer::discover(&decoder, 5, 64)?;
+    let layer = HybridMoeLayer::load(&tensors, &config, &stream)?;
     let frequencies = layer
         .rope_frequencies_for_test()
         .ok_or_else(|| Error::InvalidModel("missing proportional RoPE frequencies".into()))?;

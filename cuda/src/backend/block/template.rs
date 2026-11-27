@@ -1,4 +1,5 @@
 use mircuda::{DeviceBuffer, bf16};
+use models::weights::HybridMoeExpertBindings;
 
 use super::{
     BatchedDecodeMoeLayer, CudaBackend, DecodeMoeBlockConfig, DecodeMoeBlockExecutor,
@@ -6,7 +7,12 @@ use super::{
     graph::weights::CapturedBlockWeights,
 };
 use crate::{
-    Error, PagedKvCache, Result, backend::linear::DenseExpertWeights,
+    CudaTensorSet, Error, PagedKvCache, Result,
+    backend::{
+        attention::AttentionLayout,
+        dense::{ExpertBankLayout, GgmlExpertWeights},
+        linear::DenseExpertWeights,
+    },
     kernels::BatchedSplitAttentionWorkspace,
 };
 
@@ -61,6 +67,27 @@ impl CudaBackend {
             experts: ExpertWeights::Dense(experts),
         })
     }
+
+    /// [`Self::prepare_dense_decode_moe_layer_template`] with GGML expert
+    /// banks read in place; `None` when the banks are not GGML.
+    pub(crate) fn prepare_ggml_decode_moe_layer_template(
+        &self,
+        config: DecodeMoeBlockConfig,
+        weights: DecodeMoeBlockWeights<'_>,
+        tensors: &CudaTensorSet,
+        experts: &HybridMoeExpertBindings<'_>,
+    ) -> Result<Option<DecodeMoeLayerTemplate>> {
+        let shape = (config.experts, config.attention.hidden_size, config.expert_intermediate);
+        let Some(experts) = GgmlExpertWeights::load_hybrid(tensors, experts, shape)? else {
+            return Ok(None);
+        };
+        Ok(Some(DecodeMoeLayerTemplate {
+            backend: self.clone(),
+            config,
+            weights: CapturedBlockWeights::prepare(self, weights)?,
+            experts: ExpertWeights::Ggml(Box::new(experts)),
+        }))
+    }
 }
 
 impl DecodeMoeLayerTemplate {
@@ -70,9 +97,22 @@ impl DecodeMoeLayerTemplate {
         self.config
     }
 
+    /// Whether the experts' weights bind at execution, so prefill plans
+    /// serve every layer of the geometry.
     #[must_use]
-    pub(in crate::backend) const fn experts_are_dense(&self) -> bool {
-        matches!(self.experts, ExpertWeights::Dense(_))
+    pub(in crate::backend) const fn experts_bind_at_execution(&self) -> bool {
+        matches!(self.experts, ExpertWeights::Dense(_) | ExpertWeights::Ggml(_))
+    }
+
+    /// What a prefill plan compiles in from this layer's attention
+    /// projections and expert banks.
+    pub(in crate::backend) fn layouts(&self) -> (AttentionLayout, ExpertBankLayout) {
+        let experts = match &self.experts {
+            ExpertWeights::Dense(banks) => ExpertBankLayout::Dense(banks.layout()),
+            ExpertWeights::Ggml(_) => ExpertBankLayout::Ggml,
+            ExpertWeights::NvFp4 { .. } => ExpertBankLayout::NvFp4,
+        };
+        (AttentionLayout::of(self.weights.borrow().attention), experts)
     }
 
     /// Creates private execution state for one session without copying weights.

@@ -89,6 +89,10 @@ impl Config {
         if let Some(value) = self.kv_cache_dtype {
             runtime.kv_cache.dtype = value;
         }
+        #[cfg(feature = "metal")]
+        if env::var_os("MIRMIR_PREFILL_PROFILE_METAL_STEP").is_some() {
+            runtime.metal.cache.prefill_step = Some(self.chunk_tokens);
+        }
         #[cfg(feature = "cuda")]
         {
             runtime.cuda.model_session.prefill_chunk_tokens = self.chunk_tokens;

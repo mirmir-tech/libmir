@@ -2,21 +2,26 @@ mod attention;
 mod compile;
 mod feed_forward;
 mod model;
+mod rotary;
+mod route;
 mod sidecar;
 mod validation;
 
 pub use attention::{
-    AttentionOutputSpec, AttentionSpec, KeyValueRelation, LinearAttentionSpec, MixerSpec,
-    PositionEncodingSpec, QkNormalization, RopeScalingSpec, RotaryLayoutSpec, RotarySpec,
+    AttentionOutputSpec, AttentionSpec, AttentionWindow, KeyValueRelation, LatentAttentionSpec,
+    LinearAttentionSpec, MixerSpec, PositionEncodingSpec, QkNormalization, QueryTemperature,
+    RopeScalingSpec, RotaryAlgorithm, RotaryLayoutSpec, RotaryPairingSpec, RotarySpec,
     StateSpaceSpec, StateSpaceStateDTypeSpec,
 };
 pub use feed_forward::{
-    ActivationSpec, FeedForwardSpec, RoutedExpertsSpec, RouterNormalization, SharedExpertSpec,
+    ActivationSpec, ExpertGroupLimit, FeedForwardSpec, RoutedExpertsSpec, RouterNormalization,
+    SharedExpertSpec,
 };
 pub use model::{
-    BlockLayoutSpec, DecoderLayerSpec, DecoderSpec, LayerBlockPosition, NormalizationKind,
-    NormalizationSpec, SemanticModelSpec,
+    BlockLayoutSpec, DecoderLayerSpec, DecoderSpec, LayerBlockPosition, LayerCacheShape,
+    NormPlacement, NormalizationKind, NormalizationSpec, PerLayerInputSpec, SemanticModelSpec,
 };
+pub use route::RoutedExpert;
 
 use crate::{
     error::Result,

@@ -1,5 +1,4 @@
 use std::{
-    fs,
     fs::File,
     io::{Read, Seek, SeekFrom},
 };
@@ -13,7 +12,6 @@ use super::super::{
 };
 use crate::{
     error::{ModelsError, Result},
-    layout::ModelLayout,
     weights::{TensorCatalog, TensorInfo},
 };
 
@@ -36,8 +34,7 @@ struct PackedState {
     nested_offset: Option<f32>,
 }
 
-pub(super) fn hint(layout: &ModelLayout) -> Result<Option<Hint>> {
-    let value: Value = serde_json::from_str(&fs::read_to_string(&layout.config_path)?)?;
+pub(super) fn hint(value: &Value) -> Result<Option<Hint>> {
     let Some(config) = value.get("quantization_config") else {
         return Ok(None);
     };

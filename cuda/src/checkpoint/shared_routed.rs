@@ -1,16 +1,18 @@
 use std::collections::HashSet;
 
 use models::{
+    execution::TaskExecutionPlan,
     layout::DecoderConfig,
     semantic::SemanticModelSpec,
     weights::{
-        LayerTensorRole, LogicalTensorRole, PredictionTensorRole, TensorCatalog, TensorInfo,
-        TensorStorage, WeightBindingPlan,
+        LayerTensorRole, TensorBinding, TensorCatalog, TensorInfo, TensorStorage, WeightBindingPlan,
     },
 };
 
 use super::{SharedRoutedModelLoadConfig, model::payload_bytes};
-use crate::{CudaBackend, CudaSharedRoutedModelTemplate, Error, Result};
+use crate::{
+    CudaAdmitted, CudaArchitecture, CudaBackend, CudaSharedRoutedModelTemplate, Error, Result,
+};
 
 impl CudaBackend {
     pub fn load_shared_routed_model_template(
@@ -22,15 +24,25 @@ impl CudaBackend {
         let mut ignored = |_completed, _detail| {};
         let spec = SemanticModelSpec::discover(decoder, catalog)?;
         let bindings = WeightBindingPlan::discover(&spec, catalog)?;
+        let task = TaskExecutionPlan::Generation { decoder: decoder.clone() };
+        let CudaArchitecture::Generation(admitted) = crate::admit_architecture(&task, Some(&spec))?
+        else {
+            return Err(Error::State("CUDA admitted a non-generation runtime".into()));
+        };
         self.load_shared_routed_model_template_with_progress(
-            decoder, &spec, catalog, &bindings, load, &mut ignored,
+            decoder,
+            (&admitted, &spec),
+            catalog,
+            &bindings,
+            load,
+            &mut ignored,
         )
     }
 
     pub(crate) fn load_shared_routed_model_template_with_progress(
         &self,
         decoder: &DecoderConfig,
-        semantic: &SemanticModelSpec,
+        (admitted, semantic): (&CudaAdmitted, &SemanticModelSpec),
         catalog: &TensorCatalog,
         bindings: &WeightBindingPlan,
         load: SharedRoutedModelLoadConfig,
@@ -68,6 +80,7 @@ impl CudaBackend {
         CudaSharedRoutedModelTemplate::from_tensors(
             self,
             decoder,
+            admitted,
             semantic,
             &tensors,
             catalog,
@@ -91,18 +104,23 @@ fn shared_routed_source<'a>(
     let individual = bindings
         .tensors
         .iter()
+        // Quantized per-expert tensors stream from the checkpoint into their
+        // banks; BF16 ones are stacked from the uploaded set.
         .filter(|binding| {
             matches!(
-                layer_tensor(&binding.role),
+                binding.role.layer_tensor(),
                 Some(LayerTensorRole::ExpertProjection { expert: Some(_), .. })
-            )
+            ) && !matches!(binding.storage, TensorStorage::Dense { .. })
         })
         .flat_map(|binding| binding.physical_sources())
         .collect::<HashSet<_>>();
-    let mut names = bindings.decoder_boundary()?.physical_sources();
+    let tied = decoder.tie_word_embeddings;
+    let mut names = bindings.decoder_boundary_with_tied_output(tied)?.physical_sources();
     for layer in 0..decoder.num_hidden_layers {
         if decoder.state_space.is_some() {
             names.extend(bindings.state_space_hybrid_layer(layer)?.physical_sources());
+        } else if decoder.latent.is_some() {
+            names.extend(bindings.latent_decoder_layer(layer)?.physical_sources());
         } else {
             names.extend(bindings.mixed_decoder_layer(layer)?.physical_sources());
         }
@@ -120,40 +138,13 @@ fn shared_routed_source<'a>(
 }
 
 /// Tensors uploaded in their checkpoint dtype; every other floating tensor
-/// is converted to BF16. Router correction biases stay FP32: they decide the
-/// expert selection.
+/// is converted to BF16.
 fn raw_sources(bindings: &WeightBindingPlan) -> HashSet<&str> {
     bindings
         .tensors
         .iter()
-        .filter(|binding| {
-            matches!(layer_tensor(&binding.role), Some(LayerTensorRole::RouterCorrectionBias))
-                || matches!(
-                    binding.storage,
-                    TensorStorage::AffineQuantized { .. }
-                        | TensorStorage::BlockQuantized { .. }
-                        | TensorStorage::Float8 { .. }
-                        | TensorStorage::PackedInt8 { .. }
-                        | TensorStorage::PackedInt4 { .. }
-                        | TensorStorage::Awq { .. }
-                        | TensorStorage::Gptq { .. }
-                        | TensorStorage::BitsAndBytes4Bit { .. }
-                )
-        })
-        .flat_map(|binding| binding.physical_sources())
+        .flat_map(TensorBinding::full_precision_sources)
         .collect()
-}
-
-/// The decoder-layer role of a decoder layer's or prediction module's tensor.
-const fn layer_tensor(role: &LogicalTensorRole) -> Option<&LayerTensorRole> {
-    match role {
-        LogicalTensorRole::Layer { tensor, .. }
-        | LogicalTensorRole::Prediction {
-            tensor: PredictionTensorRole::Layer { tensor },
-            ..
-        } => Some(tensor),
-        _ => None,
-    }
 }
 
 fn required<'a>(catalog: &'a TensorCatalog, name: &str) -> Result<&'a TensorInfo> {

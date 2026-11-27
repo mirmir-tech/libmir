@@ -70,7 +70,7 @@ fn execute_dense_clamped_routed_model(
     let decoder = DecoderConfig::from_layout(&layout)?;
     let catalog = TensorCatalog::from_layout(&layout)?;
     let contract = DecoderExecutionContract::discover(&layout, &decoder, &catalog)?;
-    let lowering = lowering::plan(&contract.semantic)?;
+    let lowering = lowering::plan(&decoder, &contract.semantic)?;
     let load_stream = Stream::new_cpu()?;
     let tensors = ModelTensors::load(&root, &load_stream)?;
     let mut config = crate::MetalConfig::default();
@@ -79,7 +79,7 @@ fn execute_dense_clamped_routed_model(
     let mut stream = Stream::new_gpu_with_config(std::sync::Arc::new(config))?;
     let model = ClampedRoutedModel::load(
         &tensors,
-        &decoder,
+        &contract.semantic.decoder,
         &contract.bindings,
         lowering.layers(),
         16,

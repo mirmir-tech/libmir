@@ -41,6 +41,7 @@ impl Kernels {
             || d.len() != heads
             || dt.len() != rows * heads
             || state.shape()?.dimensions() != [rows, heads, channels, state_size]
+            || [rows, heads, channels, groups[2], state_size].contains(&0)
             || !heads.is_multiple_of(groups[2])
             || !state_size.is_multiple_of(32)
         {

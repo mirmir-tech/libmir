@@ -49,7 +49,7 @@ impl CapturedModelLayer {
         }
     }
 
-    pub fn kernels(&self) -> Kernels {
+    pub fn kernels(&self) -> Result<Kernels> {
         match self {
             Self::Moe(layer) => layer.kernels(),
             Self::Dense(layer) => layer.kernels(),
@@ -120,17 +120,18 @@ impl CapturedModelLayer {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn execute_prefill_masked(
+    pub fn execute_prefill(
         &mut self,
         prefill: LayerPrefill<'_>,
         input: &DeviceBuffer<bf16>,
         plan: &KvWritePlan,
         table: &BlockTable,
-        start_position: usize,
+        (start_position, per_layer): (usize, Option<&DeviceBuffer<bf16>>),
         output: &mut DeviceBuffer<bf16>,
         image: Option<crate::backend::attention::ImageAttentionSpan>,
     ) -> Result<()> {
         match (self, prefill) {
+            (Self::Moe(_), _) if per_layer.is_some() => Err(moe_per_layer()),
             (Self::Moe(layer), LayerPrefill::Moe(prefill)) => layer
                 .execute_prefill_masked(prefill, input, plan, table, start_position, output, image),
             (Self::Dense(layer), LayerPrefill::Dense(prefill)) => {
@@ -140,7 +141,14 @@ impl CapturedModelLayer {
                             .into(),
                     ));
                 }
-                layer.execute_prefill(prefill, input, plan, table, start_position, output)
+                layer.execute_prefill(
+                    prefill,
+                    input,
+                    plan,
+                    table,
+                    (start_position, per_layer),
+                    output,
+                )
             },
             _ => Err(crate::Error::InvalidDecoderKernel("prefill layer kind differs from graph")),
         }
@@ -151,18 +159,24 @@ impl CapturedModelLayer {
         prefill: LayerPrefill<'_>,
         input: &DeviceBuffer<bf16>,
         batch: &PagedPrefillBatch,
+        per_layer: Option<&DeviceBuffer<bf16>>,
         output: &mut DeviceBuffer<bf16>,
     ) -> Result<()> {
         match (self, prefill) {
+            (Self::Moe(_), _) if per_layer.is_some() => Err(moe_per_layer()),
             (Self::Moe(layer), LayerPrefill::Moe(prefill)) => {
                 layer.execute_prefill_batch(prefill, input, batch, output)
             },
             (Self::Dense(layer), LayerPrefill::Dense(prefill)) => {
-                layer.execute_prefill_batch(prefill, input, batch, output)
+                layer.execute_prefill_batch(prefill, input, batch, per_layer, output)
             },
             _ => Err(crate::Error::InvalidDecoderKernel("prefill layer kind differs from graph")),
         }
     }
+}
+
+fn moe_per_layer() -> crate::Error {
+    crate::Error::InvalidDecoderKernel("CUDA MoE layers take no per-layer input")
 }
 
 type KvArguments<'a> = (

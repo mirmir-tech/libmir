@@ -9,7 +9,7 @@ use serde::Deserialize;
 
 use crate::{
     error::Result,
-    layout::{ModelLayout, WeightFile},
+    layout::{ModelLayout, WeightContainer, WeightFile},
 };
 
 pub const MAX_SAFETENSORS_HEADER_BYTES: usize = 100 * 1024 * 1024;
@@ -64,8 +64,13 @@ impl TensorCatalog {
 
     pub fn from_weight_files(weights: &[WeightFile]) -> Result<Self> {
         let mut tensors = Vec::new();
-        for weight in weights {
-            tensors.extend(read_weight_header(weight)?);
+        for container in [WeightContainer::SafeTensors, WeightContainer::Gguf] {
+            let files = weights
+                .iter()
+                .filter(|weight| weight.container == container)
+                .cloned()
+                .collect::<Vec<_>>();
+            tensors.extend(container.read_catalog(&files)?);
         }
         Ok(Self::new(tensors))
     }
@@ -114,7 +119,7 @@ impl TensorCatalog {
     }
 }
 
-fn read_weight_header(weight: &WeightFile) -> Result<Vec<TensorInfo>> {
+pub fn read_weight_header(weight: &WeightFile) -> Result<Vec<TensorInfo>> {
     let mut file = File::open(&weight.path)?;
     let header_len = read_header_len(&mut file)?;
     let mut header = vec![0; usize::try_from(header_len)?];
@@ -191,10 +196,7 @@ mod tests {
         bytes.extend_from_slice(&[0; 8]);
         fs::write(&path, &bytes)?;
 
-        let weight = WeightFile {
-            path: path.clone(),
-            bytes: u64::try_from(bytes.len())?,
-        };
+        let weight = WeightFile::open(path.clone())?;
         let tensors = read_weight_header(&weight)?;
         let _removed = fs::remove_file(path);
 

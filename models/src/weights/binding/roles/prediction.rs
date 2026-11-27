@@ -8,6 +8,9 @@ use crate::semantic::{DecoderSpec, LayerBlockPosition};
 /// Parses a path below the `mtp.` namespace.
 pub(super) fn parse(path: &str, decoder: &DecoderSpec) -> LogicalTensorRole {
     let auxiliary = || LogicalTensorRole::Auxiliary { path: format!("mtp.{path}") };
+    if !matches!(decoder.block_layout, crate::semantic::BlockLayoutSpec::Paired { .. }) {
+        return single(path, decoder).unwrap_or_else(auxiliary);
+    }
     let Some((block, suffix)) = path
         .strip_prefix("layers.")
         .and_then(|remainder| remainder.split_once('.'))
@@ -43,4 +46,26 @@ pub(super) fn parse(path: &str, decoder: &DecoderSpec) -> LogicalTensorRole {
         },
     };
     LogicalTensorRole::Prediction { depth, tensor }
+}
+
+/// Qwen3.5's `mtp`: the fusion inputs and output norm at the namespace root
+/// of its one module, and `layers.N` holding ordinary decoder layers.
+fn single(path: &str, decoder: &DecoderSpec) -> Option<LogicalTensorRole> {
+    let root = match path {
+        "fc.weight" => Some(PredictionTensorRole::Fusion),
+        "pre_fc_norm_embedding.weight" => Some(PredictionTensorRole::EmbeddingNorm),
+        "pre_fc_norm_hidden.weight" => Some(PredictionTensorRole::HiddenNorm),
+        "norm.weight" => Some(PredictionTensorRole::FinalNorm),
+        _ => None,
+    };
+    if let Some(tensor) = root {
+        return (!decoder.prediction_layers.is_empty())
+            .then_some(LogicalTensorRole::Prediction { depth: 0, tensor });
+    }
+    let (depth, suffix) = path.strip_prefix("layers.")?.split_once('.')?;
+    let depth = depth.parse::<usize>().ok()?;
+    (depth < decoder.prediction_layers.len()).then(|| LogicalTensorRole::Prediction {
+        depth,
+        tensor: PredictionTensorRole::Layer { tensor: super::parse::layer(suffix) },
+    })
 }

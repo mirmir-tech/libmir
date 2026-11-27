@@ -1,12 +1,13 @@
 use models::weights::BitsAndBytes4BitQuantization;
 
-use super::{AdmissionCheckKind, AdmissionStatus};
+use super::AdmissionStatus;
+use crate::EncodingKind;
 
 pub(super) fn assess(
     format: BitsAndBytes4BitQuantization,
-) -> (AdmissionCheckKind, AdmissionStatus, String) {
+) -> (EncodingKind, AdmissionStatus, String) {
     (
-        AdmissionCheckKind::BitsAndBytes4Bit,
+        EncodingKind::BitsAndBytes4Bit,
         if format.is_supported() {
             AdmissionStatus::Partial
         } else {

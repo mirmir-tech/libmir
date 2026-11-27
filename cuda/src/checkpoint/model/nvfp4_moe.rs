@@ -4,7 +4,7 @@ use models::{
     weights::{TensorCatalog, WeightBindingPlan},
 };
 
-use super::{ModelSource, embedding_multiplier, tensor};
+use super::{ModelSource, ProjectionWeight, embedding_multiplier, tensor};
 use crate::{CudaBackend, CudaMoeModelTemplate, Error, NvFp4MoeLayerLoadConfig, Result};
 
 impl CudaBackend {
@@ -28,22 +28,29 @@ impl CudaBackend {
         progress: &mut dyn FnMut(u64, String),
     ) -> Result<CudaMoeModelTemplate> {
         let spec = SemanticModelSpec::discover(decoder, catalog)?;
+        let plan = architecture::cuda::CudaDecoderPlan::lower(&spec, decoder.attention_scale)?;
         let bindings = WeightBindingPlan::discover(&spec, catalog)?;
         self.load_nvfp4_moe_model_template_with_bindings(
-            decoder, &spec, &bindings, catalog, load, progress,
+            decoder,
+            (&spec, &plan),
+            &bindings,
+            catalog,
+            load,
+            progress,
         )
     }
 
     pub(crate) fn load_nvfp4_moe_model_template_with_bindings(
         &self,
         decoder: &DecoderConfig,
-        semantic: &SemanticModelSpec,
+        (semantic, plan): (&SemanticModelSpec, &architecture::cuda::CudaDecoderPlan),
         bindings: &WeightBindingPlan,
         catalog: &TensorCatalog,
         load: NvFp4MoeLayerLoadConfig,
         progress: &mut dyn FnMut(u64, String),
     ) -> Result<CudaMoeModelTemplate> {
-        let source = ModelSource::discover(decoder, bindings, catalog)?;
+        let source =
+            ModelSource::discover(semantic.decoder.tie_word_embeddings, bindings, catalog)?;
         let tensors = source.upload(self)?;
         let mut completed = source.payload_bytes()?;
         progress(completed, "model boundary tensors".into());
@@ -54,7 +61,12 @@ impl CudaBackend {
         for layer in 0..decoder.num_hidden_layers {
             let layer_bindings = bindings.hybrid_moe_layer(layer)?;
             let (template, bytes) = self.load_nvfp4_moe_layer_template_tracked(
-                decoder, semantic, catalog, layer, &layer_bindings, load,
+                decoder,
+                (semantic, plan),
+                catalog,
+                layer,
+                &layer_bindings,
+                load,
             )?;
             completed = completed
                 .checked_add(bytes)
@@ -74,9 +86,9 @@ impl CudaBackend {
             self,
             decoder.clone(),
             embedding_multiplier(semantic)?,
-            embedding,
+            ProjectionWeight::Dense(embedding),
             final_norm,
-            output,
+            ProjectionWeight::Dense(output),
             layers,
         )
     }

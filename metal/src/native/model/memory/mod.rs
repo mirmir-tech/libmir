@@ -1,6 +1,3 @@
-use models::layout::AttentionLayerType;
-use runtime::kv::KvCacheDType;
-
 use super::LoadedModel;
 use crate::{
     engine::{MemoryStats, clear_memory_cache, memory_stats},
@@ -61,14 +58,13 @@ impl LoadedModel {
         };
         let context = position.checked_add(sequence).ok_or(crate::engine::Error::ShapeOverflow)?;
         let mut largest_context = 0_usize;
-        for layer in 0..decoder.num_hidden_layers {
-            if decoder.layer_type(layer) != AttentionLayerType::Full {
-                continue;
-            }
+        // Every layer attending over the whole context, a latent one by the
+        // row it caches; one sharing another's keys still attends.
+        for paged in pages::attention_layers(decoder) {
             let elements = batch
                 .checked_mul(context)
-                .and_then(|value| value.checked_mul(decoder.layer_key_value_heads(layer)))
-                .and_then(|value| value.checked_mul(decoder.layer_head_dim(layer)))
+                .and_then(|value| value.checked_mul(paged.kv_heads))
+                .and_then(|value| value.checked_mul(paged.head_dim))
                 .and_then(|value| value.checked_mul(2))
                 .ok_or(crate::engine::Error::ShapeOverflow)?;
             let bytes = elements
@@ -116,35 +112,25 @@ impl LoadedModel {
     }
 
     pub(crate) fn estimated_prefix_bytes(&self, tokens: usize) -> Result<usize> {
-        let Some(decoder) = self.info.decoder.as_ref() else {
+        let Some(contract) = self.info.contract.as_ref() else {
             return Ok(0);
         };
-        let dtype = self.stream.config().kv_cache.dtype;
-        let bits = dtype.element_bits(16);
+        let cache = self.stream.config().kv_cache;
         let mut total = 0_usize;
-        for layer in 0..decoder.num_hidden_layers {
-            let length = match decoder.layer_type(layer) {
-                AttentionLayerType::Linear | AttentionLayerType::StateSpace => continue,
-                AttentionLayerType::Full => tokens,
-                AttentionLayerType::Sliding => {
-                    tokens.min(decoder.layer_sliding_window(layer).unwrap_or(tokens))
-                },
+        for layer in &contract.semantic.decoder.layers {
+            let Some(shape) = layer.cache_shape() else {
+                continue;
             };
-            let elements = length
-                .checked_mul(decoder.layer_key_value_heads(layer))
-                .and_then(|value| value.checked_mul(decoder.layer_head_dim(layer)))
-                .ok_or(crate::engine::Error::ShapeOverflow)?;
-            let data_bits = elements
-                .checked_mul(usize::from(bits.key) + usize::from(bits.value))
-                .ok_or(crate::engine::Error::ShapeOverflow)?;
-            let mut bytes = data_bits.div_ceil(8);
-            if dtype == KvCacheDType::Int8PerTokenHead {
-                let scales = length
-                    .checked_mul(decoder.layer_key_value_heads(layer))
-                    .and_then(|value| value.checked_mul(2 * size_of::<f32>()))
-                    .ok_or(crate::engine::Error::ShapeOverflow)?;
-                bytes = bytes.checked_add(scales).ok_or(crate::engine::Error::ShapeOverflow)?;
+            let length = tokens.min(layer.attention_span().unwrap_or(tokens));
+            let budget = runtime::kv::KvStorageSpec {
+                key_head_dim: shape.key_width,
+                value_head_dim: shape.value_width,
+                ..runtime::kv::KvStorageSpec::new(cache, shape.heads, shape.key_width)
             }
+            .memory_budget();
+            let bytes = length
+                .checked_mul(budget.data_bytes_per_token + budget.scale_bytes_per_token)
+                .ok_or(crate::engine::Error::ShapeOverflow)?;
             total = total.checked_add(bytes).ok_or(crate::engine::Error::ShapeOverflow)?;
         }
         Ok(total)

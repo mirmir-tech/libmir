@@ -44,8 +44,9 @@ impl CudaSharedRoutedModelSession {
                         "speculative decoding cannot roll back Gated Delta state".into(),
                     ));
                 },
-                CudaSharedRoutedLayerState::Full(_) | CudaSharedRoutedLayerState::Attention(_) => {
-                },
+                CudaSharedRoutedLayerState::Full(_)
+                | CudaSharedRoutedLayerState::Attention(_)
+                | CudaSharedRoutedLayerState::Latent(_) => {},
             }
         }
         Ok(())

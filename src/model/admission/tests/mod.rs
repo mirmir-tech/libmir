@@ -9,11 +9,13 @@ use models::weights::{
 };
 
 use super::{
-    AdmissionCheck, AdmissionCheckKind, AdmissionStatus, CheckpointEncoding, WeightEncoding,
-    aggregate, registry, resolve_dense_check,
+    AdmissionCheck, AdmissionStatus, CheckSubject, CheckpointEncoding, WeightEncoding, aggregate,
+    registry, resolve_dense_check,
 };
+use crate::EncodingKind;
 
 mod formats;
+mod kinds;
 mod vision;
 
 #[test]
@@ -69,14 +71,15 @@ fn affine_admission_uses_the_complete_physical_contract() {
     no_bias.zero_point = AffineZeroPointMode::None;
     no_bias.bias_dtype = None;
     assert_eq!(
-        registry::assess(&BackendTarget::Metal, &WeightEncoding::Affine { format: no_bias }).status,
+        registry::assess(&BackendTarget::Metal, &WeightEncoding::Affine { format: no_bias })
+            .status(),
         AdmissionStatus::Unsupported
     );
 
     let mut signed = affine(AffineBits::Four);
     signed.signedness = AffineSignedness::Signed;
     assert_eq!(
-        registry::assess(&BackendTarget::Cuda, &WeightEncoding::Affine { format: signed }).status,
+        registry::assess(&BackendTarget::Cuda, &WeightEncoding::Affine { format: signed }).status(),
         AdmissionStatus::Unsupported
     );
 
@@ -84,11 +87,11 @@ fn affine_admission_uses_the_complete_physical_contract() {
     f16.scale_dtype = AffineParameterDType::F16;
     f16.bias_dtype = Some(AffineParameterDType::F16);
     assert_eq!(
-        registry::assess(&BackendTarget::Metal, &WeightEncoding::Affine { format: f16 }).status,
+        registry::assess(&BackendTarget::Metal, &WeightEncoding::Affine { format: f16 }).status(),
         AdmissionStatus::Partial
     );
     assert_eq!(
-        registry::assess(&BackendTarget::Cuda, &WeightEncoding::Affine { format: f16 }).status,
+        registry::assess(&BackendTarget::Cuda, &WeightEncoding::Affine { format: f16 }).status(),
         AdmissionStatus::Unsupported
     );
 
@@ -96,28 +99,35 @@ fn affine_admission_uses_the_complete_physical_contract() {
     byte_storage.storage_dtype = AffineStorageDType::U8;
     assert_eq!(
         registry::assess(&BackendTarget::Metal, &WeightEncoding::Affine { format: byte_storage })
-            .status,
+            .status(),
         AdmissionStatus::Unsupported
     );
 }
 
 #[test]
-fn packed_int8_admission_requires_native_bf16_scales() {
-    let mut format = packed_int8();
-    format.scale_dtype = CompressedIntegerScaleDType::F16;
-    for backend in [BackendTarget::Metal, BackendTarget::Cuda] {
-        assert_eq!(
-            registry::assess(&backend, &WeightEncoding::PackedInt8 { format }).status,
-            AdmissionStatus::Unsupported
-        );
+fn packed_integer_admission_is_backend_specific() {
+    let assess = |backend, format| {
+        registry::assess(&backend, &WeightEncoding::PackedInteger { format }).status()
+    };
+    // Metal converts F16/F32 scales; CUDA kernels read BF16 scales only.
+    for scale_dtype in [CompressedIntegerScaleDType::F16, CompressedIntegerScaleDType::F32] {
+        let format = CompressedIntegerQuantization { scale_dtype, ..packed_int8() };
+        assert_eq!(assess(BackendTarget::Metal, format), AdmissionStatus::Partial);
+        assert_eq!(assess(BackendTarget::Cuda, format), AdmissionStatus::Unsupported);
     }
-    format.scale_dtype = CompressedIntegerScaleDType::F32;
-    for backend in [BackendTarget::Metal, BackendTarget::Cuda] {
-        assert_eq!(
-            registry::assess(&backend, &WeightEncoding::PackedInt8 { format }).status,
-            AdmissionStatus::Unsupported
-        );
+    // GSQ widths: Metal's affine kernels take 2/3/8-bit groups, CUDA does not.
+    for bits in
+        [CompressedIntegerBits::Two, CompressedIntegerBits::Three, CompressedIntegerBits::Eight]
+    {
+        let format = CompressedIntegerQuantization { bits, ..packed_int4() };
+        assert_eq!(assess(BackendTarget::Metal, format), AdmissionStatus::Partial);
+        assert_eq!(assess(BackendTarget::Cuda, format), AdmissionStatus::Unsupported);
     }
+    let unaligned = CompressedIntegerQuantization {
+        scale_strategy: CompressedIntegerScaleStrategy::Group { group_size: 16 },
+        ..packed_int4()
+    };
+    assert_eq!(assess(BackendTarget::Metal, unaligned), AdmissionStatus::Unsupported);
 }
 
 #[test]
@@ -145,8 +155,10 @@ fn resolved_dense_execution_replaces_conditional_format_status() {
     resolve_dense_check(
         &mut checks,
         AdmissionCheck {
-            kind: AdmissionCheckKind::Dense,
-            status: AdmissionStatus::Supported,
+            subject: CheckSubject::Encoding {
+                kind: EncodingKind::Dense,
+                status: AdmissionStatus::Supported,
+            },
             detail: "dense execution is validated".into(),
         },
     );

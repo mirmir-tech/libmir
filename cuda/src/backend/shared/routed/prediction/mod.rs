@@ -32,15 +32,20 @@ pub(super) struct PredictionTemplate {
 impl PredictionTemplate {
     pub(super) fn load(
         load: &HybridLoad<'_>,
-        semantic: &SemanticModelSpec,
+        (semantic, plan): (&SemanticModelSpec, &architecture::cuda::CudaDecoderPlan),
         bindings: &WeightBindingPlan,
     ) -> Result<Self> {
-        let spec = semantic.decoder.prediction_layers.first().ok_or_else(|| {
-            Error::UnsupportedDecoderLayer("checkpoint has no multi-token prediction module".into())
-        })?;
+        let (Some(spec), Some(lowered)) =
+            (semantic.decoder.prediction_layers.first(), plan.prediction().first())
+        else {
+            return Err(Error::UnsupportedDecoderLayer(
+                "checkpoint has no multi-token prediction module".into(),
+            ));
+        };
         let module = bindings.prediction_layer(0)?;
         let index = load.decoder.num_hidden_layers;
-        let SharedRoutedLayerTemplate::Attention(layer) = load.layer(index, spec, module.layer)?
+        let SharedRoutedLayerTemplate::Attention(layer) =
+            load.layer(index, (spec, lowered), module.layer)?
         else {
             return Err(Error::UnsupportedDecoderLayer(
                 "multi-token prediction module mixer is not attention".into(),

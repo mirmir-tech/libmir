@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
+use architecture::metal::MetalArchitecture;
 use foundation::model::ModelManifest;
 use models::{
     execution::TaskExecutionPlan,
     layout::{ModelLayout, ModelMetadata, VisionConfig},
-    weights::{TensorCatalog, TensorReadiness, VisionTensorSchema},
+    weights::{TensorBinding, TensorCatalog, TensorReadiness, VisionTensorSchema},
 };
 
 use super::{
@@ -22,7 +23,7 @@ use tokenizer::tokenizer_info;
 
 use crate::{
     MetalConfig, MetalProgressEvent,
-    engine::{ModelTensors, Stream, configure_recommended_wired_limit, lowering, memory_stats},
+    engine::{ModelTensors, Stream, configure_recommended_wired_limit, memory_stats},
     native::{
         error::{Error, Result},
         prefix::PrefixCache,
@@ -60,22 +61,15 @@ impl LoadedModel {
         let catalog = TensorCatalog::from_layout(&layout)?;
         let task_plan = TaskExecutionPlan::discover(&layout, &catalog)?;
         let (decoder, encoder, contract) = execution_metadata(&task_plan, &layout, &catalog)?;
-        architecture::metal::admit(
+        let architecture = architecture::metal::admit(
             &task_plan,
             contract.as_ref().map(|contract| &contract.semantic),
         )
         .map_err(|error| Error::UnsupportedModel(error.to_string()))?;
-        let decoder_lowering = matches!(
-            task_plan,
-            TaskExecutionPlan::Generation { .. } | TaskExecutionPlan::CausalScoring { .. }
-        )
-        .then(|| {
-            contract
-                .as_ref()
-                .ok_or_else(|| Error::UnsupportedModel("generation contract is missing".into()))
-                .and_then(|contract| Ok(lowering::plan(&contract.semantic)?))
-        })
-        .transpose()?;
+        let decoder_lowering = match architecture {
+            MetalArchitecture::Generation(plan) => Some(plan),
+            MetalArchitecture::Embedding | MetalArchitecture::SequenceScoring => None,
+        };
         let vision = VisionConfig::from_layout(&layout)?;
         if let Some(decoder) = decoder.as_ref()
             && matches!(
@@ -92,8 +86,15 @@ impl LoadedModel {
             .as_ref()
             .map(|config| VisionTensorSchema::discover(config).readiness(&catalog));
         let load_stream = Stream::new_cpu()?;
-        let tensors = ModelTensors::load_layout_materialized_with_progress(
+        let full_precision = contract
+            .iter()
+            .flat_map(|contract| &contract.bindings.tensors)
+            .flat_map(TensorBinding::full_precision_sources)
+            .map(str::to_owned)
+            .collect();
+        let tensors = ModelTensors::load_layout_materialized_keeping(
             &layout,
+            &full_precision,
             &load_stream,
             |loaded, total, detail| {
                 progress(MetalProgressEvent::load_weights(loaded, total, detail));
@@ -127,6 +128,7 @@ impl LoadedModel {
                     lowering,
                     &tensors,
                     decoder,
+                    &contract.semantic.decoder,
                     &contract.bindings,
                     &stream,
                 )?)
@@ -153,7 +155,7 @@ impl LoadedModel {
         let prefix_cache_bytes =
             prefix_cache_budget(metal_memory, stream.config().cache.prefix_cache_bytes);
         let model_prefill_step = contract.as_ref().map_or(0, |contract| {
-            prefill_step(&contract.semantic, stream.config().cache.prefill_step)
+            prefill_step(&contract.semantic, &contract.bindings, stream.config().cache.prefill_step)
         });
         Ok(Self {
             info: ModelInfo {

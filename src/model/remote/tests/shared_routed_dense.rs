@@ -1,4 +1,5 @@
 use super::*;
+use crate::EncodingKind;
 
 #[test]
 fn admits_dense_shared_routed_generation_on_metal_and_cuda() -> Result<()> {
@@ -30,7 +31,8 @@ fn admits_dense_shared_routed_generation_on_metal_and_cuda() -> Result<()> {
     assert_eq!(metal.status, AdmissionStatus::Supported);
     for report in [&metal, &cuda] {
         assert!(report.checks.iter().any(|check| {
-            check.kind == AdmissionCheckKind::Dense && check.status == AdmissionStatus::Supported
+            check.kind() == AdmissionCheckKind::Encoding(EncodingKind::Dense)
+                && check.status() == AdmissionStatus::Supported
         }));
     }
     Ok(())
@@ -62,10 +64,11 @@ fn catalog() -> TensorCatalog {
         (format!("{layer}.linear_attn.A_log"), vec![1]),
         (format!("{layer}.linear_attn.dt_bias"), vec![1]),
     ];
-    TensorCatalog {
-        tensors: specs
+    // Sorted, as checkpoint catalogs are, so name lookups find every tensor.
+    TensorCatalog::new(
+        specs
             .into_iter()
             .map(|(name, shape)| tensor_with_dtype(&name, shape, "F32"))
             .collect(),
-    }
+    )
 }

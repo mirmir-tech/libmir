@@ -44,7 +44,10 @@ fn dense_gemma_model_prefill_matches_reference() -> Result<(), Box<dyn std::erro
     let mut ignored = |_completed, _detail| {};
     let template = backend.load_dense_swiglu_model_template_with_bindings(
         &decoder,
-        &spec,
+        (
+            &spec,
+            &architecture::cuda::CudaDecoderPlan::lower(&spec, decoder.attention_scale)?,
+        ),
         &bindings,
         &catalog,
         DenseSwiGluLayerLoadConfig {
@@ -108,7 +111,10 @@ fn dense_gemma_decode_matches_prefill_across_the_window() -> Result<(), Box<dyn 
     let mut ignored = |_completed, _detail| {};
     let template = backend.load_dense_swiglu_model_template_with_bindings(
         &decoder,
-        &spec,
+        (
+            &spec,
+            &architecture::cuda::CudaDecoderPlan::lower(&spec, decoder.attention_scale)?,
+        ),
         &bindings,
         &catalog,
         DenseSwiGluLayerLoadConfig {

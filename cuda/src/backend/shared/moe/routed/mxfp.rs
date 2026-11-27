@@ -1,11 +1,12 @@
 use super::SharedRoutedExecution;
 use crate::{
-    CudaBackend, DenseRole, Result,
+    CudaBackend, Result,
     backend::{
-        linear::{CheckpointProjection, MxFp4ExpertWeights, MxFp4GatheredMoeBf16},
+        linear::{MxFp4ExpertWeights, MxFp4GatheredMoeBf16},
+        router::{BoundRouter, RouterWeights},
         shared::moe::{AffineSharedExpertMoeConfig, weights::AffineSharedExpertMoeWeights},
     },
-    kernels::{RouterUnitSpec, RouterUnitTopK},
+    kernels::RouterUnitSpec,
 };
 
 pub(super) fn mxfp4(
@@ -15,13 +16,8 @@ pub(super) fn mxfp4(
     experts: &MxFp4ExpertWeights,
     tokens: usize,
 ) -> Result<SharedRoutedExecution> {
-    let (router, top_k, scores, selected, routing) = routing(backend, config, weights, tokens, 4)?;
     Ok(SharedRoutedExecution::MxFp4 {
-        router,
-        top_k,
-        scores,
-        selected,
-        routing,
+        router: router(backend, config, weights, tokens)?,
         experts: Box::new(MxFp4GatheredMoeBf16::new(
             backend,
             tokens,
@@ -39,13 +35,8 @@ pub(super) fn mxfp8(
     experts: &crate::backend::linear::MxFp8ExpertWeights,
     tokens: usize,
 ) -> Result<SharedRoutedExecution> {
-    let (router, top_k, scores, selected, routing) = routing(backend, config, weights, tokens, 8)?;
     Ok(SharedRoutedExecution::MxFp8 {
-        router,
-        top_k,
-        scores,
-        selected,
-        routing,
+        router: router(backend, config, weights, tokens)?,
         experts: Box::new(crate::backend::linear::MxFp8GatheredMoeBf16::new(
             backend,
             tokens,
@@ -56,47 +47,27 @@ pub(super) fn mxfp8(
     })
 }
 
-type Routing = (
-    Box<CheckpointProjection>,
-    RouterUnitTopK,
-    mircuda::DeviceBuffer<mircuda::bf16>,
-    mircuda::DeviceBuffer<u32>,
-    mircuda::DeviceBuffer<mircuda::bf16>,
-);
-
-pub(super) fn routing(
+/// The layer's router, bound to its projection and correction bias.
+pub(super) fn router(
     backend: &CudaBackend,
     config: AffineSharedExpertMoeConfig,
     weights: &AffineSharedExpertMoeWeights,
     tokens: usize,
-    bits: usize,
-) -> Result<Routing> {
-    let selections = tokens.checked_mul(config.top_k).ok_or(crate::Error::InvalidDecoderKernel(
-        if bits == 4 {
-            "MXFP4 shared routing size overflow"
-        } else {
-            "MXFP8 shared routing size overflow"
-        },
-    ))?;
-    Ok((
-        Box::new(CheckpointProjection::new(
-            backend,
-            tokens,
-            config.hidden_size,
-            config.expert_count,
-            DenseRole::Router,
-            &weights.router,
-        )?),
-        RouterUnitTopK::compile(
-            backend.compiler(),
+) -> Result<BoundRouter> {
+    BoundRouter::new(
+        backend,
+        (
             RouterUnitSpec {
                 tokens,
                 experts: config.expert_count,
                 top_k: config.top_k,
             },
-        )?,
-        backend.pool().allocate(backend.stream(), tokens * config.expert_count)?,
-        backend.pool().allocate(backend.stream(), selections)?,
-        backend.pool().allocate(backend.stream(), selections)?,
-    ))
+            config.hidden_size,
+        ),
+        config.routing,
+        RouterWeights {
+            projection: &weights.router,
+            correction_bias: weights.router_correction_bias.as_ref(),
+        },
+    )
 }

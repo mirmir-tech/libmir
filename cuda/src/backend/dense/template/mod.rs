@@ -12,7 +12,8 @@ mod weights;
 
 use weights::DenseWeights;
 pub use weights::{
-    DenseDownSource, DenseGateUpSource, DenseOutputSource, DenseQkvSource, DenseWeightSource,
+    DenseDownSource, DenseFeedForwardSource, DenseGateUpSource, DenseOutputSource, DenseQkvSource,
+    DenseWeightSource,
 };
 
 #[derive(Clone)]

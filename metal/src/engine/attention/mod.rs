@@ -10,5 +10,5 @@ pub use mrope::apply_mrope;
 pub use paged::{PagedAttentionScratch, ScratchSpec};
 pub use prefix::{ImageTokenSpan, prefix_attention_mask};
 pub use request::{AttentionBias, AttentionRequest};
-pub use rope::RopeOptions;
+pub use rope::{RopeOptions, rope_position_scale};
 pub use sdpa::PagedAttention;

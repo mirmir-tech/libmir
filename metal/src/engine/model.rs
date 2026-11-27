@@ -1,8 +1,8 @@
-use std::path::Path;
+use std::{collections::BTreeSet, path::Path};
 
 use models::{layout::ModelLayout, weights::alternate_model_tensor_name};
 
-use super::{Array, Error, Result, Stream, TensorFile};
+use super::{Array, Error, Result, Stream, TensorFile, tensors::GgufShards};
 
 #[derive(Debug)]
 pub struct ModelTensors {
@@ -25,7 +25,7 @@ impl ModelTensors {
         stream: &Stream,
         progress: impl FnMut(u64, u64, String),
     ) -> Result<Self> {
-        Self::load_layout_inner(layout, stream, false, progress)
+        Self::load_layout_inner(layout, &BTreeSet::new(), stream, false, progress)
     }
 
     pub fn load_layout_materialized_with_progress(
@@ -33,11 +33,23 @@ impl ModelTensors {
         stream: &Stream,
         progress: impl FnMut(u64, u64, String),
     ) -> Result<Self> {
-        Self::load_layout_inner(layout, stream, true, progress)
+        Self::load_layout_inner(layout, &BTreeSet::new(), stream, true, progress)
+    }
+
+    /// [`Self::load_layout_materialized_with_progress`] keeping the GGUF
+    /// float tensors in `full_precision` in their stored type.
+    pub fn load_layout_materialized_keeping(
+        layout: &ModelLayout,
+        full_precision: &BTreeSet<String>,
+        stream: &Stream,
+        progress: impl FnMut(u64, u64, String),
+    ) -> Result<Self> {
+        Self::load_layout_inner(layout, full_precision, stream, true, progress)
     }
 
     fn load_layout_inner(
         layout: &ModelLayout,
+        full_precision: &BTreeSet<String>,
         stream: &Stream,
         materialize: bool,
         mut progress: impl FnMut(u64, u64, String),
@@ -55,12 +67,14 @@ impl ModelTensors {
         } else {
             ("mapping", "mapped")
         };
+        // One mapped catalog per GGUF group, each file loading its share.
+        let mut gguf = GgufShards::of(&layout.weights)?;
         for (index, weight) in layout.weights.iter().enumerate() {
             progress(loaded, total, shard_detail(starting, index, shards, &weight.path));
-            let file = TensorFile::load(&weight.path, stream)?;
+            let file = gguf.load(&weight.path, full_precision, stream)?;
             tensors += file.len()?;
             if materialize {
-                file.evaluate()?;
+                file.evaluate(stream)?;
             }
             files.push(file);
             loaded = loaded.saturating_add(weight.bytes).min(total);
@@ -85,6 +99,27 @@ impl ModelTensors {
             return Ok(Some(tensor));
         }
         self.get_exact(&alternate_model_tensor_name(name))
+    }
+
+    /// [`Self::get`], removing the tensor so the model's files no longer
+    /// keep it: for a loader that copies it into another array (an expert
+    /// bank), which is then its only owner.
+    pub(in crate::engine) fn take(&self, name: &str) -> Result<Array> {
+        for name in [name.to_owned(), alternate_model_tensor_name(name)] {
+            if let Some(file) = self.file_with(&name)? {
+                return file.take(&name);
+            }
+        }
+        Err(Error::MissingTensor(name.to_owned()))
+    }
+
+    fn file_with(&self, name: &str) -> Result<Option<&TensorFile>> {
+        for file in &self.files {
+            if file.contains(name)? {
+                return Ok(Some(file));
+            }
+        }
+        Ok(None)
     }
 
     fn get_exact(&self, name: &str) -> Result<Option<Array>> {
@@ -112,8 +147,8 @@ impl ModelTensors {
         Ok(false)
     }
 
-    pub fn evaluate(&self) -> Result<()> {
-        self.files.iter().try_for_each(TensorFile::evaluate)
+    pub fn evaluate(&self, stream: &Stream) -> Result<()> {
+        self.files.iter().try_for_each(|file| file.evaluate(stream))
     }
 
     #[must_use]

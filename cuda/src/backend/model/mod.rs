@@ -3,6 +3,7 @@ mod boundary;
 mod config;
 mod graph;
 mod layer;
+mod per_layer;
 mod prefill;
 mod session;
 mod template;
@@ -14,5 +15,6 @@ pub use config::{
     CudaModelSessionConfig, DEFAULT_PREFILL_CHUNK_TOKENS, RETAINED_CHUNK_SLACK_TOKENS,
     SMALL_PLAN_TOKENS,
 };
+pub use per_layer::{PerLayerInputTensors, PerLayerInputsTemplate};
 pub use session::CudaMoeModelSession;
 pub use template::CudaMoeModelTemplate;

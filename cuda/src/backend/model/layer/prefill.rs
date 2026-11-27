@@ -80,7 +80,9 @@ impl SessionLayer {
                     .prefill
                     .get_mut(&tokens)
                     .ok_or(Error::InvalidDecoderKernel("missing dense CUDA prefill plan"))?;
-                prefill.execute(decode, input, weights, write_plan, table, start_position, output)
+                // Vision prefill is refused for models with per-layer inputs.
+                let start = (start_position, None);
+                prefill.execute(decode, input, weights, write_plan, table, start, output)
             },
         }
     }

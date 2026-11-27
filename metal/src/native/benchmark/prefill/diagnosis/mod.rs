@@ -146,6 +146,7 @@ fn diagnose(
                     session: finished.request.session_id,
                     token: greedy_token(&finished.native.output)?,
                     sampling: SamplingLogits::None,
+                    speculation: None,
                 })
             })
             .collect::<Result<Vec<_>>>()?;

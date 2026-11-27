@@ -21,7 +21,7 @@ pub(super) struct DecodeResources {
     rows: usize,
     /// Keeps the shared split-attention workspace registered while this
     /// batch uses it.
-    _workspace: SharedScratch<BatchedSplitAttentionWorkspace>,
+    _workspace: Option<SharedScratch<BatchedSplitAttentionWorkspace>>,
     pub(super) token_staging: PinnedBuffer<u32>,
     token_ids: DeviceBuffer<u32>,
     position_staging: PinnedBuffer<u32>,
@@ -49,7 +49,7 @@ impl DecodeResources {
         let elements = checked(rows, hidden)?;
         let allocate = |count| backend.inner.pool.allocate(&backend.inner.stream, count);
         let (workspace_handle, attention_workspace) =
-            workspace::attention_workspace(template, rows)?;
+            workspace::attention_workspace(template, rows)?.unzip();
         Ok(Self {
             backend: backend.clone(),
             rows,
@@ -75,7 +75,7 @@ impl DecodeResources {
                         rows,
                         rows.max(template.decode_rows),
                         ExecutionPhase::Decode,
-                        Some(attention_workspace.clone()),
+                        attention_workspace.clone(),
                     )
                 })
                 .collect::<Result<Vec<_>>>()?,

@@ -140,7 +140,7 @@ impl Probe<'_> {
                     .weighted_sum(&weights, -2, self.stream)?
             },
         };
-        routed.add(&self.model.shared(self.input, self.stream)?, self.stream)
+        routed.add(&self.model.shared_expert()?.forward(self.input, self.stream)?, self.stream)
     }
 
     fn parity(&self, stage: ParityStage, actual: &[f32], expected: &[f32]) -> Result<bool> {

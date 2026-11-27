@@ -89,8 +89,10 @@ fn affine(tensors: &CudaTensorSet, name: &str) -> Result<CheckpointProjectionWei
 }
 
 fn convolution_shape(tensor: &CudaTensor, channels: usize, kernel: usize) -> Result<()> {
+    // llama.cpp's GGUF conversion drops the unit axis: `[channels, kernel]`
+    // holds the taps per channel as `[channels, 1, kernel]` does.
     if matches!(tensor.shape(), [c, k, 1] if *c == channels && *k == kernel)
-        || matches!(tensor.shape(), [c, 1, k] if *c == channels && *k == kernel)
+        || matches!(tensor.shape(), [c, 1, k] | [c, k] if *c == channels && *k == kernel)
     {
         return Ok(());
     }

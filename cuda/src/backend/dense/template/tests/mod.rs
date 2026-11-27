@@ -61,10 +61,13 @@ fn qwen2_stack_matches_dynamic_fp8_activation_reference() -> TestResult<()> {
     for index in 0..decoder.num_hidden_layers {
         let (template, _bytes) = backend.load_dense_swiglu_layer_tracked(
             &decoder,
-            &spec,
+            (
+                &spec,
+                &architecture::cuda::CudaDecoderPlan::lower(&spec, decoder.attention_scale)?,
+            ),
             &catalog,
             index,
-            bindings.dense_decoder_layer(index)?,
+            bindings.dense_decoder_layer(index)?.into(),
             load,
         )?;
         let cache = backend.prepare_paged_kv(index, template.config().attention.cache)?;
@@ -76,7 +79,7 @@ fn qwen2_stack_matches_dynamic_fp8_activation_reference() -> TestResult<()> {
         let mut batch =
             backend.prepare_paged_prefill_batch(template.config().attention.cache, 2, 1, 1)?;
         batch.prepare(&[&table], &[0], &[1])?;
-        prefill.execute_batch(&mut layer, &input, template.weights(), &batch, &mut output)?;
+        prefill.execute_batch(&mut layer, &input, template.weights(), &batch, None, &mut output)?;
         if index == 0 {
             let layer_values = read(&backend, &output)?;
             assert_reference(&layer_values[..16], &layer_reference(), "layer 0");

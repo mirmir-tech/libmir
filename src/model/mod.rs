@@ -21,8 +21,9 @@ use std::{
 };
 
 pub use admission::{
-    AdmissionCheck, AdmissionCheckKind, AdmissionStatus, BackendAdmissionReport,
-    CheckpointEncoding, MODEL_FORMAT_REGISTRY_SCHEMA_VERSION, WeightEncoding,
+    AdmissionCheck, AdmissionCheckKind, AdmissionStatus, ArchitectureOutcome,
+    BackendAdmissionReport, CheckSubject, CheckpointEncoding, EncodingKind,
+    MODEL_FORMAT_REGISTRY_SCHEMA_VERSION, WeightEncoding,
 };
 pub use cache::CacheStatsReader;
 use foundation::{
@@ -223,13 +224,17 @@ impl Model {
             .config
             .scheduler
             .speculation
-            .filter(|_| self.engine().target() == BackendTarget::Cuda)
             .filter(|_| {
                 self.inner.descriptor.execution.as_ref().is_some_and(|execution| {
                     !execution.semantic.decoder.prediction_layers.is_empty()
                 })
             })
-            .map(|speculation| speculation.draft_tokens.get())
+            .and_then(|speculation| {
+                memory::prediction::backend_drafts(
+                    &self.engine().target(),
+                    speculation.draft_tokens.get(),
+                )
+            })
     }
 
     /// Renders, tokenizes, and validates a chat request for this model.

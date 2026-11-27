@@ -73,6 +73,7 @@ mod tests {
             kv_heads: 1,
             head_dim: 1,
             references: vec![1],
+            writers: vec![0],
         }));
         let storage = Storage {
             input_dtype: mirtal::DType::Float32,
@@ -81,7 +82,8 @@ mod tests {
             page_ids: vec![0],
             reserved_page_ids: vec![1, 2],
             table_capacity: 1,
-            identity: true,
+            contiguous: true,
+            id: 1,
         };
         assert_eq!(storage.additional_owned_pages(5, 4, 1), 3);
         assert_eq!(storage.reservation_needed(5), 2);

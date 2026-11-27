@@ -2,8 +2,8 @@ use super::DenseGateUpSource;
 use crate::{
     AffineQuantizedWeight, Bf16LinearPairWeights, BlockFp8LinearWeight, CudaBackend,
     DenseExecution, DenseGateUpWeights, DensePlanRequest, DenseRole, DirectFp8CheckpointWeight,
-    ExecutionPhase, Fp8ResidualLinearWeight, MxFp4CheckpointWeight, MxFp8CheckpointWeight,
-    NvFp4LinearWeight, PackedIntegerWeight, Result,
+    ExecutionPhase, Fp8ResidualLinearWeight, GgmlCheckpointWeight, MxFp4CheckpointWeight,
+    MxFp8CheckpointWeight, NvFp4LinearWeight, PackedIntegerWeight, Result,
 };
 
 #[derive(Clone)]
@@ -20,6 +20,10 @@ pub(super) enum DenseGateUpOwned {
     MxFp4 {
         gate: MxFp4CheckpointWeight,
         up: MxFp4CheckpointWeight,
+    },
+    Ggml {
+        gate: GgmlCheckpointWeight,
+        up: GgmlCheckpointWeight,
     },
     MxFp8 {
         gate: MxFp8CheckpointWeight,
@@ -59,6 +63,9 @@ impl DenseGateUpOwned {
                 DenseGateUpSource::MxFp4 { gate, up } => {
                     Self::MxFp4 { gate: gate.clone(), up: up.clone() }
                 },
+                DenseGateUpSource::Ggml { gate, up } => {
+                    Self::Ggml { gate: gate.clone(), up: up.clone() }
+                },
                 DenseGateUpSource::MxFp8 { gate, up } => {
                     Self::MxFp8 { gate: gate.clone(), up: up.clone() }
                 },
@@ -89,9 +96,11 @@ impl DenseGateUpOwned {
                     exact: weights.clone(),
                     quantized: backend.prepare_fp8_residual_linear_pair_weight(weights)?,
                 },
-                DenseExecution::Matrix | DenseExecution::Vector | DenseExecution::CublasLt => {
-                    Self::Bf16(weights.clone())
-                },
+                DenseExecution::Matrix
+                | DenseExecution::Vector
+                | DenseExecution::RowGroupVector
+                | DenseExecution::SplitKVector { .. }
+                | DenseExecution::CublasLt => Self::Bf16(weights.clone()),
             },
         )
     }
@@ -102,6 +111,7 @@ impl DenseGateUpOwned {
             Self::Bf16(weights) => DenseGateUpWeights::Bf16(weights),
             Self::DirectFp8 { gate, up } => DenseGateUpWeights::DirectFp8 { gate, up },
             Self::MxFp4 { gate, up } => DenseGateUpWeights::MxFp4 { gate, up },
+            Self::Ggml { gate, up } => DenseGateUpWeights::Ggml { gate, up },
             Self::MxFp8 { gate, up } => DenseGateUpWeights::MxFp8 { gate, up },
             Self::PackedInteger { gate, up } => DenseGateUpWeights::PackedInteger { gate, up },
             Self::NvFp4 { gate, up } => DenseGateUpWeights::NvFp4 { gate, up },

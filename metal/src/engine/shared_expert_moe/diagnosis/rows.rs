@@ -155,7 +155,7 @@ impl SharedExpertMoe {
         let scores = self.router.forward(input, stream)?;
         let routing = scores.router_top_k_unit(i32::try_from(self.config.top_k)?, stream)?;
         let routed = self.routed(input, &routing.indices, &routing.weights, stream)?;
-        let shared = self.shared(input, stream)?;
+        let shared = self.shared_expert()?.forward(input, stream)?;
         Ok([scores, routing.indices, routing.weights, routed, shared])
     }
 }

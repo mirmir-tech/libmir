@@ -59,10 +59,8 @@ impl PrefillAttentionBf16 {
             &mut self.scratch.key_rope,
             &mut self.scratch.value_norm,
         )?;
-        state
-            .cache
-            .store_prefill_batch(batch, &self.scratch.key_rope, &self.scratch.value_norm)?;
-        if self.config.sliding_window.is_none() && self.fmha.is_some() {
+        self.store_batch(state, batch)?;
+        if self.config.window.is_none() && self.fmha.is_some() {
             return self.execute_paged_varlen_attention(state, weights, batch, output);
         }
         let mut packed = 0;
@@ -94,7 +92,7 @@ impl PrefillAttentionBf16 {
                 &mut row_scratch.attention,
                 row.tokens(),
                 row.start(),
-                self.config.sliding_window,
+                self.config.window,
                 self.config.attention_scale,
             )?;
             self.output_rows.execute(
@@ -113,5 +111,19 @@ impl PrefillAttentionBf16 {
             weights.output,
             output,
         )
+    }
+
+    /// Stores the chunk's keys and values; a layer reading another's finds
+    /// them in the pages that layer stored earlier in the pass.
+    fn store_batch(
+        &self,
+        state: &mut DecodeAttentionBf16,
+        batch: &PagedPrefillBatch,
+    ) -> Result<()> {
+        if self.config.stores_key_values() {
+            let (keys, values) = (&self.scratch.key_rope, &self.scratch.value_norm);
+            state.cache.store_prefill_batch(batch, keys, values)?;
+        }
+        Ok(())
     }
 }

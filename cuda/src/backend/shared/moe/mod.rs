@@ -9,7 +9,10 @@ mod weights;
 pub use execution::CudaAffineSharedExpertMoeExecution;
 pub use weights::AffineSharedExpertMoeWeights;
 
-use crate::{CudaBackend, CudaTensorSet, Error, ExecutionPhase, GatedActivation, Result};
+use crate::{
+    CudaBackend, CudaTensorSet, Error, ExecutionPhase, GatedActivation, Result,
+    kernels::RouterUnitScoring,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AffineSharedExpertMoeConfig {
@@ -22,6 +25,8 @@ pub struct AffineSharedExpertMoeConfig {
     pub expert_bits: usize,
     pub router_bits: usize,
     pub activation: GatedActivation,
+    /// Weighting and scale of the selected experts.
+    pub routing: RouterUnitScoring,
 }
 
 impl AffineSharedExpertMoeConfig {

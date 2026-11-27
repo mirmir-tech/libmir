@@ -10,7 +10,7 @@ use runtime::{backend::ModelHandle, progress::ProgressEvent};
 
 use super::{LoadedModel, capacity::max_sequence_blocks};
 use crate::{
-    CudaArchitecture, CudaDecoderRuntime, Result,
+    CudaDecoderRuntime, Result,
     engine::{CudaEngine, runner::RunnerQueue, vision::model::load_vision_model},
 };
 
@@ -36,14 +36,9 @@ impl CudaEngine {
             return Ok(false);
         };
         let contract = DecoderExecutionContract::discover(&layout, decoder, &catalog)?;
-        Ok(matches!(
-            crate::admit_architecture(&task_plan, Some(&contract.semantic))?,
-            CudaArchitecture::Generation(
-                CudaDecoderRuntime::SharedRouted
-                    | CudaDecoderRuntime::DenseMixed
-                    | CudaDecoderRuntime::StateSpaceHybrid
-            )
-        ))
+        Ok(crate::admit_architecture(&task_plan, Some(&contract.semantic))?
+            .runtime()
+            .is_some_and(CudaDecoderRuntime::resizable_kv_cache))
     }
 
     /// Loads with one sequence's block table sized for `capacity_blocks`
@@ -83,7 +78,7 @@ impl CudaEngine {
             progress(ProgressEvent::load_weights(current.min(total), total, detail));
         };
         let _execution = self.execution.acquire_prefill()?;
-        let runner = self.load_task_runner(
+        let (runner, admitted) = self.load_task_runner(
             manifest,
             &task_plan,
             decoder.as_ref(),
@@ -105,6 +100,7 @@ impl CudaEngine {
             catalog,
             contract,
             task_plan,
+            admitted,
             vision,
             vision_readiness,
             vision_model,
