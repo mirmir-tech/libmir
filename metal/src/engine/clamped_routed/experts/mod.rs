@@ -234,7 +234,8 @@ fn affine_expert_companions(binding: &TensorBinding) -> Result<(&str, &str)> {
     let TensorStorage::AffineQuantized { scales, output_bias: Some(bias), .. } = &binding.storage
     else {
         return Err(crate::engine::Error::InvalidQuantization(format!(
-            "clamped-routed affine expert binding lacks companions: {}",
+            "{}: clamped-routed Metal experts are dense or block-quantized banks each, or \
+             grouped-affine banks with output biases all three",
             binding.source
         )));
     };
