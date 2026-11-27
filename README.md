@@ -1,8 +1,9 @@
 # libmir
 
 Libmir is a native Rust library for embedding local language-model inference in
-applications. It turns Hugging Face-format checkpoints into backend-neutral
-models and sessions backed by Apple Metal or NVIDIA CUDA.
+applications. It turns Hugging Face-format checkpoints and llama.cpp's GGUF
+files into backend-neutral models and sessions backed by Apple Metal or NVIDIA
+CUDA.
 
 Use libmir when an application needs direct ownership of model loading,
 generation, scheduling, cache policy, and telemetry without running a separate
@@ -11,6 +12,10 @@ inference service or adding a Python runtime.
 ## What it provides
 
 - checkpoint, tokenizer, chat-template, and architecture discovery;
+- GGUF import: configuration, tokenizer, chat template and generation settings
+  derived from the file's metadata, with the weights executing in place in
+  their GGML block types (legacy Q4/Q5/Q8, K-quants, IQ1–IQ4, MXFP4 and
+  NVFP4), split files, and an optional `mmproj` vision tower;
 - text, vision, embedding, reranking, and typed Laya decision tasks;
 - streamed generation, sampling, cancellation, and reasoning channels;
 - independent sessions and concurrent request scheduling;
@@ -121,6 +126,34 @@ Run it with a local Hugging Face-format model directory:
 ```sh
 cargo run --release -- /path/to/model
 ```
+
+## Load a GGUF file
+
+A GGUF file loads through an import: a directory with the `config.json`,
+tokenizer and generation settings derived from the file's metadata and a link
+to the file, whose tensors then run in place. Import once, then load the
+directory like any checkpoint:
+
+```rust,no_run
+use std::path::Path;
+
+use libmir::{GenerationOverrides, Library, RuntimeConfig, gguf::{GgufModel, Import}};
+
+fn main() -> libmir::Result<()> {
+    let file = GgufModel::open("Qwen3-8B-Q4_K_M.gguf")?;
+    let directory = Path::new("models/qwen3-8b-q4_k_m");
+    Import::derive(&file)?.publish(directory)?;
+
+    let library = Library::new(RuntimeConfig::default());
+    let _model = library.load(directory, GenerationOverrides::default(), &mut |_| {})?;
+    Ok(())
+}
+```
+
+`GgufModel::open` takes any shard of a split model and opens them all;
+`Import::with_vision` adds an `mmproj` file's vision tower. See
+[model compatibility](https://docs.mirmir.tech/reference/model-compatibility.html)
+for the supported block types and architectures.
 
 Libmir does not select models from environment variables or command-line
 arguments. The embedding application owns configuration and uses the public
