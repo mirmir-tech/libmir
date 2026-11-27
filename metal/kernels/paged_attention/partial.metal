@@ -89,8 +89,9 @@ kernel void NAME( \
     uint3 local [[thread_position_in_threadgroup]], \
     uint3 group [[threadgroup_position_in_grid]]) { \
   paged_attention_partial<TYPE, HEAD_DIM>( \
-      queries, key_pages, value_pages, page_table, page_dependency[0], partials, sums, maximums, \
-      barrier, parameters, lane, local, group); \
+      queries, key_pages, value_pages, page_table, \
+      min(page_dependency[0], parameters.page_capacity * parameters.page_size), partials, sums, \
+      maximums, barrier, parameters, lane, local, group); \
 }
 
 #define INSTANTIATE_DIM(TYPE, SUFFIX, DIM) \

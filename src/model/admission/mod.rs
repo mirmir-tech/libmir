@@ -7,6 +7,7 @@ use models::{
 };
 
 mod dense_execution;
+mod ggml_execution;
 mod kind;
 mod label;
 mod registry;
@@ -57,6 +58,10 @@ pub(super) fn inspect(
     );
     if let Some(check) = dense_execution::assess(&report.backend, execution, task) {
         resolve_dense_check(&mut report.checks, check);
+        report.status = aggregate(&report.checks);
+    }
+    if let Some(check) = ggml_execution::assess(&report.backend, execution, task) {
+        report.checks.push(check);
         report.status = aggregate(&report.checks);
     }
     if let Some(vision) = vision {

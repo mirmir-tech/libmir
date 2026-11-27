@@ -10,8 +10,9 @@ thread float accumulator[V_PER_THREAD];
 threadgroup float outputs[BN * BD];
 threadgroup float maximums[BN];
 threadgroup float normalizers[BN];
-uint context_tokens = page_dependency[0];
-uint visible_tokens = context_tokens - QUERY_TOKENS + query_token + 1;
+uint context_tokens = min(page_dependency[0], uint(PAGE_CAPACITY * PAGE_SIZE));
+uint visible_tokens =
+    context_tokens >= uint(QUERY_TOKENS) ? context_tokens - uint(QUERY_TOKENS) + query_token + 1 : 0;
 uint query_base = (query_head * QUERY_TOKENS + query_token) * HEAD_DIM;
 for (uint index = 0; index < QK_PER_THREAD; ++index) {
   uint dimension = lane * QK_PER_THREAD + index;

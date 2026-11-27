@@ -1,8 +1,4 @@
-use std::{
-    collections::HashMap,
-    fs,
-    path::{Path, PathBuf},
-};
+use std::{collections::HashMap, fs, path::Path};
 
 use serde::{Deserialize, Serialize};
 
@@ -18,6 +14,7 @@ use crate::engine::{
     route_tuning::{RoutingExecution, RoutingKey},
 };
 
+mod atomic;
 mod environment;
 use environment::Environment;
 
@@ -125,7 +122,6 @@ pub(super) fn persist(
     decode_plans: &HashMap<DecodePlanKey, DecodePlan>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     fs::create_dir_all(path.parent().unwrap_or_else(|| Path::new(".")))?;
-    let temporary = temporary_path(path);
     let mut gate_up = decisions
         .iter()
         .map(|(key, execution)| StoredEntry { key: *key, execution: *execution })
@@ -220,22 +216,20 @@ pub(super) fn persist(
         routing,
         decode_plans,
     };
-    fs::write(&temporary, serde_json::to_vec_pretty(&file)?)?;
-    fs::rename(temporary, path)?;
-    Ok(())
+    atomic::write_json(path, &file)
 }
 
 fn sorted_decode_plans(plans: &HashMap<DecodePlanKey, DecodePlan>) -> Vec<StoredDecodePlan> {
     let mut stored = plans
         .iter()
-        .map(|(key, plan)| StoredDecodePlan { key: key.clone(), plan: *plan })
+        .map(|(key, &plan)| StoredDecodePlan { key: key.clone(), plan })
         .collect::<Vec<_>>();
-    stored.sort_by(|left, right| {
-        (&left.key.model, left.key.weight_bytes, left.key.context_bucket, left.key.batch).cmp(&(
-            &right.key.model,
-            right.key.weight_bytes,
-            right.key.context_bucket,
-            right.key.batch,
+    stored.sort_by(|l, r| {
+        (&l.key.model, l.key.weight_bytes, l.key.context_bucket, l.key.batch).cmp(&(
+            &r.key.model,
+            r.key.weight_bytes,
+            r.key.context_bucket,
+            r.key.batch,
         ))
     });
     stored
@@ -243,8 +237,4 @@ fn sorted_decode_plans(plans: &HashMap<DecodePlanKey, DecodePlan>) -> Vec<Stored
 
 pub(super) fn cache_name() -> &'static str {
     "execution-v21-metal-gpu0.json"
-}
-
-fn temporary_path(path: &Path) -> PathBuf {
-    path.with_extension(format!("tmp-{}", std::process::id()))
 }

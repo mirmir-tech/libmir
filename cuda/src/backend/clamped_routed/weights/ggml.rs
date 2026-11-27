@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use mircuda::{DeviceBuffer, bf16};
 use models::{
     gguf::GgmlType,
-    weights::{RoutedDecoderLayerBindings, RoutedExpertBindings, TensorBinding},
+    weights::{RoutedDecoderLayerBindings, RoutedExpertBindings, TensorBinding, TensorStorage},
 };
 
 use super::{
@@ -33,9 +33,33 @@ pub(super) fn load(
     ClampedRoutedLinearWeight,
     ClampedRoutedExpertWeights,
 )> {
-    let weight = |binding| GgmlCheckpointWeight::load_binding(tensors, binding);
-    let qkv = [weight(bindings.query)?, weight(bindings.key)?, weight(bindings.value)?];
-    let output = weight(bindings.attention_output)?;
+    let qkv_bindings = [bindings.query, bindings.key, bindings.value];
+    let qkv = if qkv_bindings
+        .iter()
+        .all(|binding| matches!(binding.storage, TensorStorage::Ggml { .. }))
+    {
+        ClampedRoutedQkvProjections::Ggml(Box::new([
+            GgmlCheckpointWeight::load_binding(tensors, bindings.query)?,
+            GgmlCheckpointWeight::load_binding(tensors, bindings.key)?,
+            GgmlCheckpointWeight::load_binding(tensors, bindings.value)?,
+        ]))
+    } else if qkv_bindings
+        .iter()
+        .all(|binding| matches!(binding.storage, TensorStorage::Dense { .. }))
+    {
+        let query = tensor(tensors, &bindings.query.source)?;
+        let key = tensor(tensors, &bindings.key.source)?;
+        let value = tensor(tensors, &bindings.value.source)?;
+        ClampedRoutedQkvProjections::Native(backend.pack_bf16_linears([&query, &key, &value])?)
+    } else {
+        ClampedRoutedQkvProjections::Mixed(Box::new([
+            linear_weight(tensors, bindings.query)?,
+            linear_weight(tensors, bindings.key)?,
+            linear_weight(tensors, bindings.value)?,
+        ]))
+    };
+    let output = linear_weight(tensors, bindings.attention_output)?;
+    let router = linear_weight(tensors, bindings.router)?;
     let RoutedExpertBindings::SeparateGateUp { gate, up, down } = bindings.experts else {
         return Err(Error::InvalidDecoderKernel(
             "GGML clamped-routed requires separate gate, up and down expert banks",
@@ -43,12 +67,20 @@ pub(super) fn load(
     };
     let experts = experts(backend, config, tensors, [gate, up, down])?;
     validate_native_experts(config, &experts)?;
-    Ok((
-        ClampedRoutedQkvProjections::Ggml(Box::new(qkv)),
-        ClampedRoutedLinearWeight::Ggml(output),
-        ClampedRoutedLinearWeight::Native(tensor(tensors, &bindings.router.source)?),
-        experts,
-    ))
+    Ok((qkv, output, router, experts))
+}
+
+fn linear_weight(
+    tensors: &CudaTensorSet,
+    binding: &TensorBinding,
+) -> Result<ClampedRoutedLinearWeight> {
+    if matches!(binding.storage, TensorStorage::Ggml { .. }) {
+        Ok(ClampedRoutedLinearWeight::Ggml(GgmlCheckpointWeight::load_binding(
+            tensors, binding,
+        )?))
+    } else {
+        Ok(ClampedRoutedLinearWeight::Native(tensor(tensors, &binding.source)?))
+    }
 }
 
 fn experts(

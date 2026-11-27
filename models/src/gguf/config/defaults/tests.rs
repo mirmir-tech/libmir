@@ -22,7 +22,9 @@ fn gemma3_27b_scales_attention_by_hidden_per_head() {
 
 #[test]
 fn imports_the_architectures_it_knows_and_nemotron_h() {
-    for architecture in ["llama", "qwen3moe", "gemma4", "gpt-oss", "deepseek2", "nemotron_h"] {
+    for architecture in
+        ["llama", "qwen2moe", "qwen3moe", "gemma4", "gpt-oss", "deepseek2", "nemotron_h"]
+    {
         assert!(super::imports(architecture), "{architecture}");
     }
     for architecture in ["bert", "mamba", "t5", ""] {

@@ -29,9 +29,11 @@ pub(super) fn model_type(architecture: &str) -> &str {
 /// (`src/models/*.cpp`, v1.0.0) instead of declaring it.
 pub(super) fn activation(architecture: &str) -> Option<&'static str> {
     match architecture {
-        "llama" | "mistral" | "qwen2" | "qwen3" | "qwen3moe" | "gpt-oss" | "deepseek2"
-        | "mistral4" | "qwen35" | "qwen35moe" | "phi3" | "granite" | "granitemoe" | "glm4"
-        | "glm4moe" | "phimoe" | "llama4" | "olmo2" | "command-r" | "cohere2" => Some("silu"),
+        "llama" | "mistral" | "qwen2" | "qwen2moe" | "qwen3" | "qwen3moe" | "gpt-oss"
+        | "deepseek2" | "mistral4" | "qwen35" | "qwen35moe" | "phi3" | "granite" | "granitemoe"
+        | "glm4" | "glm4moe" | "phimoe" | "llama4" | "olmo2" | "command-r" | "cohere2" => {
+            Some("silu")
+        },
         "gemma2" | "gemma3" | "gemma4" => Some("gelu_pytorch_tanh"),
         _ => None,
     }

@@ -93,12 +93,28 @@ pub(super) fn boundary(
             ))
         },
         ClampedRoutedLayout::Ggml => {
-            let weight = |binding| crate::GgmlCheckpointWeight::load_binding(tensors, binding);
-            Ok((
-                ClampedRoutedBoundaryProjection::Ggml(weight(bindings.embedding)?),
-                norm,
-                ClampedRoutedOutputProjection::Ggml(Box::new(weight(bindings.output)?)),
-            ))
+            let embedding = if matches!(bindings.embedding.storage, TensorStorage::Ggml { .. }) {
+                ClampedRoutedBoundaryProjection::Ggml(crate::GgmlCheckpointWeight::load_binding(
+                    tensors,
+                    bindings.embedding,
+                )?)
+            } else {
+                ClampedRoutedBoundaryProjection::Native(tensor(
+                    tensors,
+                    &bindings.embedding.source,
+                )?)
+            };
+            let output = if matches!(bindings.output.storage, TensorStorage::Ggml { .. }) {
+                ClampedRoutedOutputProjection::Ggml(Box::new(
+                    crate::GgmlCheckpointWeight::load_binding(tensors, bindings.output)?,
+                ))
+            } else {
+                let output = tensor(tensors, &bindings.output.source)?;
+                ClampedRoutedOutputProjection::Native(Box::new(CudaOutputHeadTemplate::prepare(
+                    backend, output, config.hidden, config.vocab,
+                )?))
+            };
+            Ok((embedding, norm, output))
         },
         ClampedRoutedLayout::Mlx => {
             let embedding = affine(tensors, bindings.embedding)?;
