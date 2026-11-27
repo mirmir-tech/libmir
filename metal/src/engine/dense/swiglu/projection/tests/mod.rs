@@ -13,6 +13,7 @@ mod awq;
 mod bitsandbytes;
 mod dense_bank;
 mod float8;
+mod fused_dtype;
 mod gptq;
 mod mxfp4;
 mod mxfp8;
