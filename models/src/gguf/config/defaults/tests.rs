@@ -29,3 +29,20 @@ fn imports_the_architectures_it_knows_and_nemotron_h() {
         assert!(!super::imports(architecture), "{architecture}");
     }
 }
+
+/// llama.cpp renormalizes Qwen3-MoE's selected experts, which transformers'
+/// configuration does not by default: the import declares it, unless the
+/// configuration already does.
+#[test]
+fn qwen3_moe_declares_its_renormalized_experts() {
+    let mut config = Map::new();
+    fixed("qwen3moe", &mut config);
+    assert_eq!(config["norm_topk_prob"], json!(true));
+    let mut declared = Map::new();
+    declared.insert("norm_topk_prob".into(), json!(false));
+    fixed("qwen3moe", &mut declared);
+    assert_eq!(declared["norm_topk_prob"], json!(false));
+    let mut other = Map::new();
+    fixed("qwen3", &mut other);
+    assert!(!other.contains_key("norm_topk_prob"));
+}

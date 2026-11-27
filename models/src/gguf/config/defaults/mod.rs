@@ -48,6 +48,11 @@ pub(super) fn fixed(architecture: &str, config: &mut Map<String, Value>) {
     if query_key_rows_interleaved(architecture) {
         config.insert(QUERY_KEY_ROWS.into(), json!(QUERY_KEY_ROWS_INTERLEAVED));
     }
+    // llama.cpp `src/models/qwen3moe.cpp` renormalizes the selected experts'
+    // weights (`norm_w`), where transformers' `Qwen3MoeConfig` defaults not to.
+    if architecture == "qwen3moe" {
+        config.entry("norm_topk_prob").or_insert(json!(true));
+    }
     if architecture == "gemma2" {
         // llama.cpp `src/models/gemma2-iswa.cpp`: scores scale by `1 /
         // sqrt(head_dim)`, except the 27B model (46 layers), which scales by

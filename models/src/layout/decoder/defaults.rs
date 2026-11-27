@@ -18,15 +18,29 @@ pub(super) struct Defaults {
     /// `scoring_func` (GLM-4.5's sigmoid router).
     pub expert_scoring: Option<&'static str>,
     pub router: Router,
+    /// Whether a softmax router that does not declare `norm_topk_prob`
+    /// keeps the selected experts' probabilities as they are, as
+    /// transformers' Qwen2-MoE, Qwen3-MoE and `OLMoE` configurations default
+    /// to; otherwise it renormalizes them over the selection (Mixtral).
+    pub keeps_expert_probabilities: bool,
     embedding: Embedding,
 }
 
 impl Defaults {
-    /// The expert router; the sparsemixer's jitter defaults to transformers
-    /// `PhimoeConfig`'s 0.01.
+    /// The expert router; a softmax router renormalizes its selection as
+    /// `norm_topk_prob` declares, else as the schema defaults; the
+    /// sparsemixer's jitter defaults to transformers `PhimoeConfig`'s 0.01.
     pub fn expert_router(&self, decoder: &Value) -> Result<RouterNormalization> {
         Ok(match self.router {
-            Router::SoftmaxTopK => RouterNormalization::SoftmaxTopK,
+            Router::SoftmaxTopK => {
+                let renormalize = super::parse::optional_bool(decoder, "norm_topk_prob")?
+                    .unwrap_or(!self.keeps_expert_probabilities);
+                if renormalize {
+                    RouterNormalization::SoftmaxTopK
+                } else {
+                    RouterNormalization::SoftmaxProbabilityTopK
+                }
+            },
             Router::SigmoidInputScaled => RouterNormalization::SigmoidInputScaledTopK,
             Router::SparseMixer => {
                 let jitter =
@@ -122,6 +136,12 @@ pub(super) fn for_checkpoint(config: &Value) -> Defaults {
         Some("llama4_text" | "llama4") => Defaults {
             attention_pattern: AttentionPatternDefault::Llama4,
             router: Router::SigmoidInputScaled,
+            ..Defaults::default()
+        },
+        // transformers `Qwen2MoeConfig`, `Qwen3MoeConfig` and `OlmoeConfig`
+        // default `norm_topk_prob` to false.
+        Some("qwen2_moe" | "qwen3_moe" | "olmoe") => Defaults {
+            keeps_expert_probabilities: true,
             ..Defaults::default()
         },
         // transformers `Glm4MoeTopkRouter` scores by sigmoid.

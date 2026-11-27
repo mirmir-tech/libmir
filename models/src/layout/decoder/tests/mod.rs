@@ -10,6 +10,7 @@ mod llama4;
 mod mistral;
 mod phimoe;
 mod rope;
+mod router;
 mod sharing;
 
 #[test]
