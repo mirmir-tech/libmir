@@ -5,7 +5,6 @@ use runtime::kv::BlockId;
 use self::hybrid::HybridLinearLayerCache;
 use crate::engine::{
     Error, GatedDeltaState, KvCache, KvPageFormat, PagedArenaPool, Result, Stream,
-    lowering::MixerLowering,
 };
 
 mod hybrid;
@@ -93,54 +92,21 @@ impl DecoderCache {
         Ok(Self { storage: CacheStorage::Attention(caches) })
     }
 
-    pub fn new_hybrid_linear(mixers: &[MixerLowering], step: usize) -> Result<Self> {
-        Self::new_hybrid_linear_with_format(mixers, step, KvPageFormat::Native, 16)
-    }
-
-    pub(crate) fn new_hybrid_linear_with_format(
-        mixers: &[MixerLowering],
+    /// A cache built from admitted per-layer entries (`from_entries`), with
+    /// the native page format, 16-token pages and a private arena pool.
+    #[cfg(test)]
+    pub(crate) fn for_test_entries(
+        entries: &[architecture::LayerCacheEntry],
         step: usize,
-        format: KvPageFormat,
-        page_size: usize,
     ) -> Result<Self> {
-        Self::new_hybrid_linear_with_pool(
-            mixers,
+        Self::from_entries(
+            entries,
             step,
-            format,
-            page_size,
+            KvPageFormat::Native,
+            16,
+            DEFAULT_TEST_ARENA_PAGES,
             &Arc::new(PagedArenaPool::default()),
         )
-    }
-
-    pub(crate) fn new_hybrid_linear_with_pool(
-        mixers: &[MixerLowering],
-        step: usize,
-        format: KvPageFormat,
-        page_size: usize,
-        pool: &Arc<PagedArenaPool>,
-    ) -> Result<Self> {
-        Self::new_hybrid_linear_with_pool_capacity(
-            mixers,
-            step,
-            format,
-            page_size,
-            DEFAULT_TEST_ARENA_PAGES,
-            pool,
-        )
-    }
-
-    pub(crate) fn new_hybrid_linear_with_pool_capacity(
-        mixers: &[MixerLowering],
-        step: usize,
-        format: KvPageFormat,
-        page_size: usize,
-        max_pages: usize,
-        pool: &Arc<PagedArenaPool>,
-    ) -> Result<Self> {
-        let layers = hybrid::new(mixers, step, format, page_size, max_pages, pool)?;
-        Ok(Self {
-            storage: CacheStorage::HybridLinear(layers),
-        })
     }
 
     pub(crate) fn bind_blocks(

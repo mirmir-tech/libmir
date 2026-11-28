@@ -1,11 +1,10 @@
 use std::sync::Arc;
 
 use architecture::{LayerCacheEntry, LayerCacheKind, RecurrentCacheKind};
-use models::semantic::AttentionWindow;
 
 use crate::engine::{
     Error, GatedDeltaState, KvCache, KvPageFormat, PagedArenaPool, Result, Stream,
-    lowering::MixerLowering, state_space_hybrid::StateSpaceState,
+    state_space_hybrid::StateSpaceState,
 };
 
 #[derive(Debug)]
@@ -49,46 +48,6 @@ pub(super) fn from_entries(
                 "hybrid cache layer {} cannot share an earlier layer's K/V",
                 entry.layer
             ))),
-        })
-        .collect()
-}
-
-pub(super) fn new(
-    mixers: &[MixerLowering],
-    step: usize,
-    format: KvPageFormat,
-    page_size: usize,
-    max_pages: usize,
-    pool: &Arc<PagedArenaPool>,
-) -> Result<Vec<HybridLinearLayerCache>> {
-    mixers
-        .iter()
-        .enumerate()
-        .map(|(layer, mixer)| match mixer {
-            MixerLowering::Linear => GatedDeltaState::new().map(HybridLinearLayerCache::Linear),
-            MixerLowering::StateSpace => {
-                Ok(HybridLinearLayerCache::StateSpace(StateSpaceState::new()))
-            },
-            // A latent row is one paged head (`LatentAttention`).
-            MixerLowering::Softmax {
-                window: None | Some(AttentionWindow::Chunked { .. }),
-                ..
-            }
-            | MixerLowering::Latent(_) => KvCache::new_paged_with_pool_capacity(
-                step,
-                page_size,
-                format,
-                max_pages,
-                Arc::clone(pool),
-                layer,
-            )
-            .map(HybridLinearLayerCache::Full),
-            MixerLowering::Softmax {
-                window: Some(AttentionWindow::Sliding(window)),
-                ..
-            } => {
-                KvCache::new_with_window(step, Some(window.get())).map(HybridLinearLayerCache::Full)
-            },
         })
         .collect()
 }

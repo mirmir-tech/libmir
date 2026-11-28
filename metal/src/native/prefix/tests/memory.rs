@@ -1,8 +1,16 @@
+use architecture::{LayerCacheEntry, LayerCacheKind, RecurrentCacheKind};
+
 use super::*;
-use crate::engine::{Stream, lowering::MixerLowering};
+use crate::engine::Stream;
 
 fn linear_state() -> Result<SessionState> {
-    Ok(SessionState::new(DecoderCache::new_hybrid_linear(&[MixerLowering::Linear], 1)?))
+    Ok(SessionState::new(DecoderCache::for_test_entries(
+        &[LayerCacheEntry {
+            layer: 0,
+            kind: LayerCacheKind::Recurrent(RecurrentCacheKind::Linear),
+        }],
+        1,
+    )?))
 }
 
 fn advance(state: &mut SessionState, stream: &Stream) -> Result<usize> {

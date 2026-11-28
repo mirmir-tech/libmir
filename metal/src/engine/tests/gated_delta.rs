@@ -1,5 +1,7 @@
+use architecture::{LayerCacheEntry, LayerCacheKind, RecurrentCacheKind};
+use models::semantic::LayerCacheShape;
+
 use super::*;
-use crate::engine::lowering::MixerLowering;
 
 #[test]
 fn keeps_recurrent_gated_delta_state_on_the_explicit_gpu_stream() -> Result<()> {
@@ -103,14 +105,17 @@ fn snapshots_recurrent_state_without_a_host_round_trip() -> Result<()> {
 
 #[test]
 fn snapshots_mixed_linear_and_key_value_cache_at_a_common_offset() -> Result<()> {
-    let mut cache = DecoderCache::new_hybrid_linear(
+    let mut cache = DecoderCache::for_test_entries(
         &[
-            MixerLowering::Linear,
-            MixerLowering::Softmax {
-                normalization: models::semantic::QkNormalization::None,
-                sinks: false,
-                window: None,
-                key_value_relation: models::semantic::KeyValueRelation::Separate,
+            LayerCacheEntry {
+                layer: 0,
+                kind: LayerCacheKind::Recurrent(RecurrentCacheKind::Linear),
+            },
+            LayerCacheEntry {
+                layer: 1,
+                kind: LayerCacheKind::Paged {
+                    shape: LayerCacheShape { heads: 1, key_width: 2, value_width: 2 },
+                },
             },
         ],
         16,
