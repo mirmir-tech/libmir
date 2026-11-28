@@ -8,7 +8,9 @@ use models::{
 };
 
 use super::CudaPooledVisionTower;
-use crate::{CudaConfig, Result, backend::CudaBackend, checkpoint::load_vision_tensors};
+use crate::{
+    CudaConfig, Result, backend::CudaBackend, checkpoint::load_vision_tensors_with_inline,
+};
 
 #[test]
 #[ignore = "requires an idle CUDA device; measures the shared driver memory pool"]
@@ -24,8 +26,12 @@ fn executes_a_complete_synthetic_pooled_tower_without_a_host_barrier() -> Result
 
 fn execute(config: &PooledVisionConfig, catalog: &TensorCatalog) -> Result<()> {
     let backend = CudaBackend::new(CudaConfig::default())?;
-    let tensors =
-        load_vision_tensors(&backend, &VisionConfig::PooledEncoder(config.clone()), catalog)?;
+    let tensors = load_vision_tensors_with_inline(
+        &backend,
+        &VisionConfig::PooledEncoder(config.clone()),
+        catalog,
+        None,
+    )?;
     let tower = CudaPooledVisionTower::new(&backend, config.clone(), tensors)?;
     let image = PooledPreprocessedImage {
         patches: vec![1.0, 0.5, 0.0],

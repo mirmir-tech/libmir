@@ -21,7 +21,7 @@ impl HybridFixture {
                 None
             };
             let bytes = &mut fixture.bytes[start..end];
-            if info.dtype == "U32" {
+            if info.dtype == TensorDType::Dense(DenseDType::U32) {
                 for (index, byte) in bytes.iter_mut().enumerate() {
                     *byte = u8::try_from((index * 37 + seed) % 251)?;
                 }

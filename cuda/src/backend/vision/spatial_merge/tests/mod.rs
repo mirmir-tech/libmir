@@ -13,7 +13,9 @@ use models::{
 };
 
 use super::CudaSpatialMergeVisionTower;
-use crate::{CudaConfig, Result, backend::CudaBackend, checkpoint::load_vision_tensors};
+use crate::{
+    CudaConfig, Result, backend::CudaBackend, checkpoint::load_vision_tensors_with_inline,
+};
 
 #[test]
 #[ignore = "requires an idle CUDA device; measures the shared driver memory pool"]
@@ -50,10 +52,11 @@ fn records_a_real_spatial_merge_tower_output() -> Result<()> {
     let image = processor.preprocess_rgb(&comparison_rgb()?, 64, 64)?;
     let backend = CudaBackend::new(CudaConfig::default())?;
     let catalog = TensorCatalog::from_layout(&layout)?;
-    let tensors = load_vision_tensors(
+    let tensors = load_vision_tensors_with_inline(
         &backend,
         &VisionConfig::SpatialMergeEncoder(config.clone()),
         &catalog,
+        None,
     )?;
     let output = CudaSpatialMergeVisionTower::new(&backend, config.clone(), tensors)?
         .forward_preprocessed(&image)?;
@@ -86,8 +89,12 @@ fn read(backend: &CudaBackend, source: &mircuda::DeviceBuffer<bf16>) -> Result<V
 
 fn execute(config: &SpatialMergeVisionConfig, catalog: &TensorCatalog) -> Result<()> {
     let backend = CudaBackend::new(CudaConfig::default())?;
-    let tensors =
-        load_vision_tensors(&backend, &VisionConfig::SpatialMergeEncoder(config.clone()), catalog)?;
+    let tensors = load_vision_tensors_with_inline(
+        &backend,
+        &VisionConfig::SpatialMergeEncoder(config.clone()),
+        catalog,
+        None,
+    )?;
     let tower = CudaSpatialMergeVisionTower::new(&backend, config.clone(), tensors)?;
     let image = SpatialMergePreprocessedImage {
         patches: vec![1.0, 2.0, 3.0, 1.0, 2.0, 3.0],

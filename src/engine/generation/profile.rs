@@ -51,6 +51,10 @@ pub enum NewDecodePolicy {
         allow(dead_code, reason = "immediate decode admission is selected by CUDA")
     )]
     Immediate,
+    #[cfg_attr(
+        not(any(feature = "metal", test)),
+        allow(dead_code, reason = "deferred decode admission is selected by Metal")
+    )]
     DeferDuringPrefill,
 }
 

@@ -13,7 +13,9 @@ use models::{
 };
 
 use super::CudaPixelShuffleVisionTower;
-use crate::{CudaConfig, Result, backend::CudaBackend, checkpoint::load_vision_tensors};
+use crate::{
+    CudaConfig, Result, backend::CudaBackend, checkpoint::load_vision_tensors_with_inline,
+};
 
 #[test]
 fn executes_a_complete_synthetic_pixel_shuffle_tower() -> Result<()> {
@@ -51,10 +53,11 @@ fn records_a_real_pixel_shuffle_tower_output() -> Result<()> {
     let image = processor.preprocess_encoded(&fs::read(image_path)?)?;
     let backend = CudaBackend::new(CudaConfig::default())?;
     let catalog = TensorCatalog::from_layout(&layout)?;
-    let tensors = load_vision_tensors(
+    let tensors = load_vision_tensors_with_inline(
         &backend,
         &VisionConfig::PixelShuffleEncoder(config.clone()),
         &catalog,
+        None,
     )?;
     let output = CudaPixelShuffleVisionTower::new(&backend, config.clone(), tensors)?
         .forward_preprocessed(&image)?;
@@ -82,8 +85,12 @@ fn read(backend: &CudaBackend, source: &mircuda::DeviceBuffer<bf16>) -> Result<V
 
 fn execute(config: &PixelShuffleVisionConfig, catalog: &TensorCatalog) -> Result<()> {
     let backend = CudaBackend::new(CudaConfig::default())?;
-    let tensors =
-        load_vision_tensors(&backend, &VisionConfig::PixelShuffleEncoder(config.clone()), catalog)?;
+    let tensors = load_vision_tensors_with_inline(
+        &backend,
+        &VisionConfig::PixelShuffleEncoder(config.clone()),
+        catalog,
+        None,
+    )?;
     let tower = CudaPixelShuffleVisionTower::new(&backend, config.clone(), tensors)?;
     // A 2×2 grid of 2×2-pixel patches folds into one soft token.
     let image = PixelShufflePreprocessedImage {

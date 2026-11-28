@@ -11,10 +11,10 @@ impl HybridFixture {
             if info.name.ends_with(".scales") || info.name.ends_with(".biases") {
                 continue;
             }
-            let data = if info.dtype == "U32" {
+            let data = if info.dtype == TensorDType::Dense(DenseDType::U32) {
                 let last = info.shape.len() - 1;
                 info.shape[last] *= 8;
-                info.dtype = "BF16".into();
+                info.dtype = TensorDType::Dense(DenseDType::Bf16);
                 let seed = info.name.bytes().map(usize::from).sum::<usize>();
                 (0..info.shape.iter().product::<usize>())
                     .flat_map(|i| {

@@ -6,7 +6,7 @@ use std::{fs, path::PathBuf};
 use mircuda::bf16;
 use models::{
     layout::DecoderConfig,
-    weights::{TensorCatalog, TensorInfo},
+    weights::{DenseDType, TensorCatalog, TensorDType, TensorInfo},
 };
 
 use crate::{Error, Result};
@@ -194,7 +194,7 @@ impl HybridFixture {
             name: name.into(),
             file: self.path.clone(),
             container: models::layout::WeightContainer::SafeTensors,
-            dtype: models::weights::TensorDType::parse(dtype),
+            dtype: TensorDType::parse(dtype),
             shape,
             data_start: 0,
             data_offsets: [start, u64::try_from(self.bytes.len())?],
