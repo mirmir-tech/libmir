@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::BTreeSet;
 
 use super::{BlockHash, BlockId, BlockTable, KvBlock, PrefixCache};
 use crate::error::{Result, RuntimeError};
@@ -17,7 +17,10 @@ pub use types::{
 pub struct KvCache {
     config: CacheConfig,
     blocks: Vec<KvBlock>,
-    free: VecDeque<BlockId>,
+    /// Lowest first: a backend indexing its K/V storage by `BlockId` (Metal's
+    /// paged arenas) then needs storage only up to the blocks in use, not the
+    /// whole configured cache, which a first-in-first-out list walks through.
+    free: BTreeSet<BlockId>,
     prefix: PrefixCache,
     counters: CacheCounters,
 }
@@ -36,11 +39,11 @@ impl KvCache {
             dtype: config.dtype,
         };
         let mut cache_blocks = Vec::with_capacity(config.block_count as usize);
-        let mut free = VecDeque::with_capacity(config.block_count as usize);
+        let mut free = BTreeSet::new();
         for id in 0..config.block_count {
             let block_id = BlockId(id);
             cache_blocks.push(KvBlock::new(block_id));
-            free.push_back(block_id);
+            let _inserted = free.insert(block_id);
         }
         Self {
             config,
@@ -63,7 +66,7 @@ impl KvCache {
         self.ensure_free_blocks(1)?;
         let id = self
             .free
-            .pop_front()
+            .pop_first()
             .ok_or_else(|| RuntimeError::KvCache("no free KV blocks".into()))?;
         let block = self.block_mut(id)?;
         block.allocate();
@@ -143,7 +146,7 @@ impl KvCache {
         if let Some(hash) = hash {
             let _removed = self.prefix.remove(hash);
         }
-        self.free.push_back(id);
+        let _inserted = self.free.insert(id);
         Ok(true)
     }
 

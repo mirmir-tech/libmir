@@ -5,7 +5,9 @@ use std::{
 
 use crate::engine::{Array, Error, KvPageFormat, Result, Stream};
 
+mod growth;
 mod key;
+pub(super) use growth::target as growth_target;
 pub(super) use key::ArenaKey;
 
 #[derive(Debug)]
@@ -53,8 +55,8 @@ impl ArenaPages {
     }
 }
 
-/// Fixed-capacity per-layer K/V page arena indexed directly by runtime
-/// `BlockId`s (`0..capacity`).
+/// Per-layer K/V page arena indexed directly by runtime `BlockId`s, holding
+/// pages `0..capacity` up to the highest one bound so far (see `growth`).
 #[derive(Debug)]
 pub(super) struct Arena {
     pub(super) pages: ArenaPages,

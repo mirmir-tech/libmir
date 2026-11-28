@@ -15,13 +15,15 @@ pub(super) fn ensure(
     let end = offset.checked_add(sequence).ok_or(Error::ShapeOverflow)?;
     let needed = end.div_ceil(store.page_size);
     if store.storage.is_none() {
+        let initial = super::pool::growth_target(0, needed.max(1), store.capacity)?;
         let arena = store
             .pool
-            .acquire(store.layer, store.page_size, store.format, keys, store.capacity, stream)?;
+            .acquire(store.layer, store.page_size, store.format, keys, initial, stream)?;
         let (arena_capacity, initial_ids) = {
             let mut guard = lock(&arena)?;
-            let cap = guard.capacity;
             let ids = desired_page_ids(store, &[], needed, &mut guard)?;
+            guard.grow(required_pages(&ids), store.capacity, stream)?;
+            let cap = guard.capacity;
             drop(guard);
             (cap, ids)
         };
@@ -41,8 +43,9 @@ pub(super) fn ensure(
     let (arena_capacity, desired) = {
         let storage = store.storage.as_ref().ok_or(Error::NullHandle("paged storage"))?;
         let mut guard = lock(&storage.arena)?;
-        let cap = guard.capacity;
         let ids = desired_page_ids(store, &storage.page_ids, needed, &mut guard)?;
+        guard.grow(required_pages(&ids), store.capacity, stream)?;
+        let cap = guard.capacity;
         drop(guard);
         (cap, ids)
     };
@@ -98,11 +101,11 @@ fn desired_page_ids(
             });
         }
         for &block in bound {
-            if usize::try_from(block)? >= arena.capacity {
+            if usize::try_from(block)? >= store.capacity {
                 return Err(Error::KvBlockOutOfRange {
                     layer: store.layer,
                     block,
-                    capacity: arena.capacity,
+                    capacity: store.capacity,
                 });
             }
         }
@@ -110,12 +113,12 @@ fn desired_page_ids(
     }
     #[cfg(not(test))]
     {
-        let _ = existing;
-        if needed > arena.capacity {
+        let _ = (existing, arena);
+        if needed > store.capacity {
             return Err(Error::KvPageCapacity {
                 layer: store.layer,
                 required: needed,
-                maximum: arena.capacity,
+                maximum: store.capacity,
             });
         }
         (0..needed).map(|index| Ok(u32::try_from(index)?)).collect()
@@ -124,13 +127,17 @@ fn desired_page_ids(
     {
         let mut ids = existing.to_vec();
         let extra = needed.saturating_sub(ids.len());
+        // Slots count to the configured capacity; the arena grows to them.
+        if arena.unbound_refs.len() < store.capacity {
+            arena.unbound_refs.resize(store.capacity, 0);
+        }
         if extra > 0 {
             let free = arena.unbound_refs.iter().filter(|&&refs| refs == 0).count();
             if extra > free {
                 return Err(Error::KvPageCapacity {
                     layer: store.layer,
-                    required: arena.capacity - free + extra,
-                    maximum: arena.capacity,
+                    required: store.capacity - free + extra,
+                    maximum: store.capacity,
                 });
             }
             for _ in 0..extra {
@@ -138,7 +145,7 @@ fn desired_page_ids(
                     Error::KvPageCapacity {
                         layer: store.layer,
                         required: needed,
-                        maximum: arena.capacity,
+                        maximum: store.capacity,
                     },
                 )?;
                 arena.unbound_refs[slot] = 1;
@@ -147,6 +154,12 @@ fn desired_page_ids(
         }
         Ok(ids)
     }
+}
+
+/// The pages an arena holds for `ids`: up to the highest, as it is indexed
+/// by them directly.
+fn required_pages(ids: &[u32]) -> usize {
+    ids.iter().max().map_or(0, |&id| id as usize + 1)
 }
 
 fn table_capacity(count: usize, arena_capacity: usize) -> usize {

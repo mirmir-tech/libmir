@@ -157,3 +157,18 @@ fn impossible_allocation_is_typed_and_preserves_cached_prefix() -> Result<()> {
     assert_eq!(cache.allocate_for_tokens(2)?.table.blocks(), &[block]);
     Ok(())
 }
+
+/// Freed blocks are handed out lowest first, so a backend indexing storage
+/// by `BlockId` needs it only up to the blocks in use.
+#[test]
+fn allocates_the_lowest_free_block_first() -> Result<()> {
+    let mut cache = KvCache::new(8);
+    let blocks = (0..4).map(|_| cache.allocate()).collect::<Result<Vec<_>>>()?;
+    assert_eq!(blocks, [BlockId(0), BlockId(1), BlockId(2), BlockId(3)]);
+    cache.free(BlockId(1))?;
+    cache.free(BlockId(3))?;
+    assert_eq!(cache.allocate()?, BlockId(1));
+    assert_eq!(cache.allocate()?, BlockId(3));
+    assert_eq!(cache.allocate()?, BlockId(4));
+    Ok(())
+}
