@@ -7,27 +7,41 @@ use crate::{
 };
 
 impl PrefixCache {
+    /// [`Self::lease_longest_within`] without a limit, for tests.
+    #[cfg(test)]
     pub(in crate::native) fn lease_longest(
         &mut self,
         model: &ModelId,
         tokens: &[u32],
     ) -> Result<Option<LeasedPrefix>> {
+        self.lease_longest_within(model, tokens, None)
+    }
+
+    /// The longest snapshot of `tokens`'s prefix no longer than `limit`: the
+    /// tokens the runtime's block table backs, when it backs the paged part.
+    pub(in crate::native) fn lease_longest_within(
+        &mut self,
+        model: &ModelId,
+        tokens: &[u32],
+        limit: Option<usize>,
+    ) -> Result<Option<LeasedPrefix>> {
         let Some((_, entry)) = longest_usable_prefix(model, tokens, &self.entries, |entry| {
-            entry.position < tokens.len()
-                || self
-                    .groups
-                    .get(&entry.memory_group)
-                    .and_then(|group| {
-                        group.checkpoints.get(&entry.position).or(group.terminal.as_ref())
-                    })
-                    .is_some_and(|snapshot| {
-                        snapshot.logits.is_some()
-                            || snapshot
-                                .state
-                                .cache
-                                .prefix_floor()
-                                .is_ok_and(|floor| floor <= entry.completion_position)
-                    })
+            limit.is_none_or(|limit| entry.position <= limit)
+                && (entry.position < tokens.len()
+                    || self
+                        .groups
+                        .get(&entry.memory_group)
+                        .and_then(|group| {
+                            group.checkpoints.get(&entry.position).or(group.terminal.as_ref())
+                        })
+                        .is_some_and(|snapshot| {
+                            snapshot.logits.is_some()
+                                || snapshot
+                                    .state
+                                    .cache
+                                    .prefix_floor()
+                                    .is_ok_and(|floor| floor <= entry.completion_position)
+                        }))
         }) else {
             return Ok(None);
         };

@@ -50,7 +50,9 @@ impl MetalPrefillCohort {
         let cached_bytes_before = loaded.prefixes.resident_bytes();
         let mut hits = 0;
         for request in requests {
-            let leased = loaded.prefixes.lease_longest(&model_id, &request.prompt_tokens)?;
+            let limit = (!request.block_table.blocks().is_empty()).then_some(request.cached_tokens);
+            let leased =
+                loaded.prefixes.lease_longest_within(&model_id, &request.prompt_tokens, limit)?;
             hits += usize::from(leased.is_some());
             if let Some(leased) = leased.as_ref() {
                 leased_groups.insert(leased.memory_group);
@@ -137,7 +139,11 @@ pub(in crate::native) fn restore_prefix(
         Some(leased) => leased.into_restored(),
         None => loaded
             .prefixes
-            .lease_longest(&loaded.info.manifest.id, &request.prompt_tokens)?
+            .lease_longest_within(
+                &loaded.info.manifest.id,
+                &request.prompt_tokens,
+                (!blocks.is_empty()).then_some(request.cached_tokens),
+            )?
             .map(|lease| lease.restored),
     };
     Ok(restored.filter(|(state, _)| blocks.is_empty() || state.position <= request.cached_tokens))

@@ -50,7 +50,9 @@ impl Sequence {
             } else {
                 (SessionState::new(model.new_cache(&loaded.stream)?), 0, None)
             };
-            if !blocks.is_empty() {
+            // A snapshot of the whole prompt is restored with its logits and
+            // writes nothing before decode, which binds the request's blocks.
+            if !blocks.is_empty() && logits.is_none() {
                 state.cache.bind_blocks(blocks, None, &loaded.stream)?;
             }
             (state, position, logits)

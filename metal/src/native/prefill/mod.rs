@@ -155,7 +155,11 @@ impl LoadedModel {
         }
         let restored = self
             .prefixes
-            .lease_longest(&self.info.manifest.id, tokens)?
+            .lease_longest_within(
+                &self.info.manifest.id,
+                tokens,
+                (!blocks.is_empty()).then_some(cached_tokens),
+            )?
             .map(|lease| lease.restored)
             .filter(|(state, _)| blocks.is_empty() || state.position <= cached_tokens);
         let (mut state, logits) = if let Some(restored) = restored {
@@ -164,7 +168,9 @@ impl LoadedModel {
             let model = self.execution.decoder()?;
             (SessionState::new(model.new_cache(&self.stream)?), None)
         };
-        if !blocks.is_empty() {
+        // A snapshot of the whole prompt is restored with its logits and
+        // writes nothing before decode, which binds the request's blocks.
+        if !blocks.is_empty() && logits.is_none() {
             state.cache.bind_blocks(blocks, None, &self.stream)?;
         }
         Ok((state, logits))
