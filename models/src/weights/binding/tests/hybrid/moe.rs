@@ -145,7 +145,8 @@ fn tensor(name: &str, shape: &[usize]) -> TensorInfo {
     TensorInfo {
         name: name.into(),
         file: PathBuf::new(),
-        dtype: "BF16".into(),
+        container: crate::layout::WeightContainer::SafeTensors,
+        dtype: crate::weights::DenseDType::Bf16.into(),
         shape: shape.to_vec(),
         data_start: 0,
         data_offsets: [0, 0],
@@ -156,9 +157,9 @@ fn nvfp4(tensors: &mut Vec<TensorInfo>, expert: usize, projection: &str, shape: 
     let prefix = format!("model.layers.0.experts.{expert}.{projection}");
     let (output, input) = (shape[0], shape[1]);
     let mut weight = tensor(&format!("{prefix}.weight"), &[output, input / 2]);
-    weight.dtype = "U8".into();
+    weight.dtype = crate::weights::DenseDType::U8.into();
     let mut scale = tensor(&format!("{prefix}.weight_scale"), &[output, input / 16]);
-    scale.dtype = "F8_E4M3".into();
+    scale.dtype = crate::weights::DenseDType::F8E4M3.into();
     tensors.extend([
         weight,
         scale,
@@ -166,7 +167,7 @@ fn nvfp4(tensors: &mut Vec<TensorInfo>, expert: usize, projection: &str, shape: 
         tensor(&format!("{prefix}.input_scale"), &[]),
     ]);
     for tensor in tensors.iter_mut().rev().take(2) {
-        tensor.dtype = "F32".into();
+        tensor.dtype = crate::weights::DenseDType::F32.into();
     }
 }
 

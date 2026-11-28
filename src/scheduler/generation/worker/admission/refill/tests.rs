@@ -42,12 +42,14 @@ fn worker() -> crate::Result<Worker> {
             max_prefill_cohort_tokens: 128,
             block_tokens: 16,
             resident_token_slots: 256,
-            limit_deep_prefill_waves: true,
-            cached_prefix_replay_tokens: Some(0),
-            cached_prefix_checkpoint_replay_tokens: Some(0),
-            cached_prefix_completion_slack_tokens: 0,
-            defer_new_decode: true,
-            interleave_prefill_decode: false,
+            wave_depth: crate::engine::WaveDepthPolicy::Bounded,
+            prefix_replay: crate::engine::PrefixReplayPolicy::Replay {
+                fallback_tokens: 0,
+                checkpoint_tokens: Some(0),
+                completion_slack_tokens: 0,
+            },
+            new_decode: crate::engine::NewDecodePolicy::DeferDuringPrefill,
+            interleaving: crate::engine::DecodeInterleaving::CohortSerial,
         },
         Arc::new(std::sync::atomic::AtomicBool::new(false)),
         crate::scheduler::PreparingRequests::default(),
@@ -125,10 +127,17 @@ fn cached_refill_respects_slots_replay_and_resident_capacity() -> crate::Result<
     worker.prefill_profile.resident_token_slots = 16;
     assert!(!worker.short_cached_refill_ready());
     worker.prefill_profile.resident_token_slots = 256;
-    worker.prefill_profile.cached_prefix_checkpoint_replay_tokens = None;
-    worker.prefill_profile.cached_prefix_replay_tokens = Some(32);
+    worker.prefill_profile.prefix_replay = crate::engine::PrefixReplayPolicy::Replay {
+        fallback_tokens: 32,
+        checkpoint_tokens: None,
+        completion_slack_tokens: 0,
+    };
     assert!(!worker.short_cached_refill_ready());
-    worker.prefill_profile.cached_prefix_replay_tokens = Some(0);
+    worker.prefill_profile.prefix_replay = crate::engine::PrefixReplayPolicy::Replay {
+        fallback_tokens: 0,
+        checkpoint_tokens: None,
+        completion_slack_tokens: 0,
+    };
     worker.prefill_cohort = Some(PrefillCohort {
         lease: EnginePrefillCohort::default(),
         remaining: 1,

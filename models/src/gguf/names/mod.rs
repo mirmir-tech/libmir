@@ -7,8 +7,11 @@ mod state_space;
 
 use std::collections::BTreeSet;
 
-use super::{GgmlType, GgufHeader, vision::Projector};
-use crate::{error::Result, weights::TensorInfo};
+use super::{GgufHeader, vision::Projector};
+use crate::{
+    error::Result,
+    weights::{DenseDType, TensorInfo},
+};
 
 /// Whole-model tensors; Phi-3.5-MoE's final `LayerNorm` and output carry
 /// biases.
@@ -183,7 +186,7 @@ pub(super) fn map(header: &GgufHeader, tensors: &mut [TensorInfo]) -> Result<()>
     // `weight_scale` does.
     let fp8 = tensors
         .iter()
-        .filter(|tensor| tensor.dtype == GgmlType::F8_E4M3.name())
+        .filter(|tensor| tensor.dtype == DenseDType::F8E4M3)
         .filter_map(|tensor| tensor.name.strip_suffix(".weight").map(str::to_owned))
         .collect::<BTreeSet<_>>();
     for tensor in tensors {

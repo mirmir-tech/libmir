@@ -113,6 +113,7 @@ pub(super) fn start(
                 token: greedy_token(&output.output)?,
                 sampling: SamplingLogits::None,
                 speculation: None,
+                blocks: Vec::new(),
             },
         )]);
     }
@@ -161,6 +162,7 @@ pub(super) fn start(
                             token: greedy_token(&finished.native.output)?,
                             sampling: SamplingLogits::None,
                             speculation: None,
+                            blocks: Vec::new(),
                         },
                     ))
                 })

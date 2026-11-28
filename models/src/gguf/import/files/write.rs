@@ -37,7 +37,7 @@ impl Plan {
         for (name, contents) in &self.derived {
             let partial = partial(&directory.join(name))?;
             write_new(&partial, contents)?;
-            let written = Some(Written::of(contents)?);
+            let written = Written::of(contents)?;
             renames.push((partial, directory.join(name)));
             files.push(ImportedFile {
                 name: name.clone(),
@@ -48,7 +48,7 @@ impl Plan {
         let mut links = Vec::new();
         for link in &self.links {
             let origin = if link.present {
-                FileOrigin::InPlace { source: Some(link.target.clone()) }
+                FileOrigin::InPlace { source: link.target.clone() }
             } else {
                 let partial = partial(&directory.join(&link.name))?;
                 link_file(&link.target, &partial)?;
@@ -104,7 +104,7 @@ impl Plan {
         reached(Step::Moved)?;
         // Their identity in place spares reading them to tell them current.
         for file in &mut manifest.files {
-            if let FileOrigin::Derived { written: Some(written) } = &mut file.origin {
+            if let FileOrigin::Derived { written } = &mut file.origin {
                 written.stamp = Stamp::of(&directory.join(&file.name));
             }
         }

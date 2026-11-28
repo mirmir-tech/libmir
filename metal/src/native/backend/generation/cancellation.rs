@@ -13,7 +13,7 @@ impl MetalBackend {
         batch: &MetalPrefillBatch,
         sessions: &[uuid::Uuid],
     ) -> Result<()> {
-        let model = batch.model_id().to_owned();
+        let model = batch.model_id().clone();
         let batch = batch.clone();
         let sessions = sessions.to_vec();
         Ok(self.with_model(&model, move |loaded| batch.cancel_sessions(loaded, &sessions))?)
@@ -25,7 +25,7 @@ impl MetalBackend {
         cohort: &MetalPrefillCohort,
         sessions: &[uuid::Uuid],
     ) -> Result<()> {
-        let model = cohort.model_id().to_owned();
+        let model = cohort.model_id().clone();
         let cohort = cohort.clone();
         let sessions = sessions.to_vec();
         Ok(self.with_model(&model, move |_| cohort.discard(&sessions))?)

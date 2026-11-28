@@ -7,7 +7,10 @@ use super::{IndividualBank, RoutedExpertLoader};
 use crate::metal::MetalDecoderRuntime;
 
 fn dense() -> TensorStorage {
-    TensorStorage::Dense { dtype: "BF16".into(), bias: None }
+    TensorStorage::Dense {
+        dtype: models::weights::DenseDType::Bf16,
+        bias: None,
+    }
 }
 
 fn nvfp4() -> TensorStorage {

@@ -169,7 +169,7 @@ fn binding(
         logical_shape: None,
         transforms,
         storage: TensorStorage::Dense {
-            dtype: "BF16".into(),
+            dtype: models::weights::DenseDType::Bf16,
             bias: Some(bias.into()),
         },
     }
@@ -179,7 +179,8 @@ fn info(name: &str, path: &Path, shape: Vec<usize>, start: u64, end: u64) -> Ten
     TensorInfo {
         name: name.into(),
         file: path.to_path_buf(),
-        dtype: "BF16".into(),
+        container: models::layout::WeightContainer::SafeTensors,
+        dtype: models::weights::DenseDType::Bf16.into(),
         shape,
         data_start: 0,
         data_offsets: [start, end],

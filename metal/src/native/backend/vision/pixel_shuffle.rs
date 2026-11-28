@@ -31,7 +31,7 @@ impl MetalBackend {
         let model_id = lookup.clone();
         let prompt = prompt.clone();
         let image = image.clone();
-        let blocks = block_table.blocks().len();
+        let blocks = block_table.blocks().to_vec();
         let execution_sampling = execution_sampling(
             sampling_logits.clone(),
             self.config.fusion.device_token_pipeline.enabled(),
@@ -45,7 +45,7 @@ impl MetalBackend {
                     session_id,
                     &prompt,
                     &image,
-                    blocks,
+                    &blocks,
                     &sampling_logits,
                     &execution_sampling,
                     started,
@@ -60,11 +60,11 @@ impl MetalBackend {
 #[allow(clippy::too_many_arguments)]
 fn execute(
     loaded: &mut LoadedModel,
-    model_id: &str,
+    model_id: &foundation::model::ModelId,
     session_id: Uuid,
     prompt: &PixelShufflePromptTokens,
     image: &PixelShufflePreprocessedImage,
-    blocks: usize,
+    blocks: &[runtime::kv::BlockId],
     sampling_logits: &SamplingLogits,
     execution_sampling: &SamplingLogits,
     started: Instant,
@@ -74,6 +74,7 @@ fn execute(
         session_id,
         prompt,
         image,
+        blocks,
         execution_sampling,
         progress,
     )?;
@@ -82,12 +83,12 @@ fn execute(
     let trace = format!(
         "native pixel-shuffle vision prefill: {} tokens, prefix cache disabled, {} runtime KV blocks, {} cached tokens, {:.3}ms",
         prompt.token_ids.len(),
-        blocks,
+        blocks.len(),
         cached_tokens,
         started.elapsed().as_secs_f64() * 1_000.0
     );
     tracing::debug!(
-        model_id,
+        model_id = %model_id,
         session_id = %session_id,
         prompt_tokens = prompt.token_ids.len(),
         cached_tokens,

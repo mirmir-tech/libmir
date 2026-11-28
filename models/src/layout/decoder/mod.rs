@@ -64,7 +64,7 @@ pub struct DecoderConfig {
     pub top_k_experts: Option<usize>,
     pub moe_intermediate_size: Option<usize>,
     pub shared_expert_intermediate_size: Option<usize>,
-    pub hidden_activation: Option<String>,
+    pub hidden_activation: Option<crate::layout::HiddenActivation>,
     pub final_logit_softcapping: Option<f64>,
     /// Cap on attention scores before the softmax (Gemma 2).
     pub attn_logit_softcapping: Option<f64>,

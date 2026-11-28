@@ -8,7 +8,7 @@ use super::super::{
 };
 use crate::{
     error::{ModelsError, Result},
-    weights::{TensorCatalog, TensorInfo},
+    weights::{DenseDType, TensorCatalog, TensorInfo},
 };
 
 pub(super) fn storage(
@@ -54,7 +54,7 @@ pub(super) fn storage(
         )));
     }
     let bits = CompressedIntegerBits::try_from(u8::try_from(packed_bits / input)?)?;
-    if tensor.dtype != "I32" {
+    if tensor.dtype != DenseDType::I32 {
         return Err(ModelsError::InvalidConfig(format!(
             "packed integer words must use I32: {}",
             tensor.name

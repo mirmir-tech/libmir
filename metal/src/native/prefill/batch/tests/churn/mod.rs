@@ -51,14 +51,24 @@ fn prompt(seed: u32) -> Vec<u32> {
     (0..32).map(|index| (seed + index) % 64).collect()
 }
 
-fn reference(model: &mut LoadedModel, input: &DecodeInput) -> Result<Vec<u32>> {
+fn reference(model: &mut LoadedModel, input: &DecodeInput, seed: u32) -> Result<Vec<u32>> {
     let session = Uuid::new_v4();
     let state = model.sessions[&input.session].snapshot()?;
     model.sessions.insert(session, state);
+    let ref_blocks = if model.prefix_cache_enabled() {
+        Vec::new()
+    } else {
+        vec![
+            runtime::kv::BlockId(seed * 4),
+            runtime::kv::BlockId(seed * 4 + 1),
+            runtime::kv::BlockId(100 + seed * 2),
+            runtime::kv::BlockId(100 + seed * 2 + 1),
+        ]
+    };
     let mut next = input.token;
     let mut tokens = vec![next];
     for _ in 0..24 {
-        let output = model.decode(session, next, SamplingLogits::Full)?;
+        let output = model.decode_with_blocks(session, next, &ref_blocks, SamplingLogits::Full)?;
         next = token(model, output)?;
         tokens.push(next);
     }
@@ -66,7 +76,16 @@ fn reference(model: &mut LoadedModel, input: &DecodeInput) -> Result<Vec<u32>> {
     Ok(tokens)
 }
 
+fn block_table(seed: u32) -> BlockTable {
+    let mut table = BlockTable::with_block_size(16);
+    for offset in 0..4 {
+        table.push(runtime::kv::BlockId(seed * 4 + offset));
+    }
+    table
+}
+
 fn wave(model: &mut LoadedModel, seeds: &[u32], cached: bool) -> Result<Vec<DecodeInput>> {
+    let use_runtime_blocks = !model.prefix_cache_enabled();
     let requests = seeds
         .iter()
         .map(|seed| PrefillRequest {
@@ -77,12 +96,27 @@ fn wave(model: &mut LoadedModel, seeds: &[u32], cached: bool) -> Result<Vec<Deco
             session_id: Uuid::new_v4(),
             prompt_tokens: prompt(*seed),
             cache_checkpoints: Vec::new(),
-            block_table: BlockTable::with_block_size(16),
-            cached_tokens: 0,
+            block_table: if use_runtime_blocks {
+                block_table(*seed)
+            } else {
+                BlockTable::with_block_size(16)
+            },
+            cached_tokens: if use_runtime_blocks && cached {
+                32
+            } else {
+                0
+            },
             generation_tokens: std::num::NonZeroUsize::new(24),
             sampling_logits: SamplingLogits::None,
         })
         .collect::<Vec<_>>();
+    let expected_cached = if !cached {
+        0
+    } else if use_runtime_blocks {
+        16
+    } else {
+        32
+    };
     let cohort = cached.then(|| MetalPrefillCohort::prepare(model, &requests)).transpose()?;
     let (batch, _) = MetalPrefillBatch::prepare(
         model,
@@ -97,19 +131,13 @@ fn wave(model: &mut LoadedModel, seeds: &[u32], cached: bool) -> Result<Vec<Deco
             .finish()?
             .into_iter()
             .map(|row| {
-                assert_eq!(
-                    row.native.prefix_cache_tokens,
-                    if cached {
-                        32
-                    } else {
-                        0
-                    }
-                );
+                assert_eq!(row.native.prefix_cache_tokens, expected_cached);
                 Ok(DecodeInput {
                     session: row.request.session_id,
                     token: token(model, row.native.output)?,
                     sampling: SamplingLogits::None,
                     speculation: None,
+                    blocks: row.request.block_table.blocks().to_vec(),
                 })
             })
             .collect();
@@ -146,26 +174,6 @@ fn recurrent_bytes(model: &LoadedModel, session: Uuid) -> Result<usize> {
     Ok(model.sessions[&session].cache.recurrent_logical_bytes()?)
 }
 
-fn occupied_pages(model: &LoadedModel) -> Result<usize> {
-    let config = model
-        .info
-        .decoder
-        .as_ref()
-        .ok_or_else(|| Error::UnsupportedModel("missing decoder".into()))?;
-    (0..config.num_hidden_layers)
-        .map(|layer| {
-            Ok(usize::MAX
-                - model.stream().paged_arenas().available_pages(
-                    usize::MAX,
-                    layer,
-                    config.layer_key_value_heads(layer),
-                    config.layer_head_dim(layer),
-                    crate::engine::KvPageFormat::Native,
-                )?)
-        })
-        .sum()
-}
-
 #[allow(clippy::print_stderr)]
 pub(super) fn exercise(model: &mut LoadedModel) -> Result<()> {
     for cycle in 0..2 {
@@ -178,21 +186,18 @@ pub(super) fn exercise(model: &mut LoadedModel) -> Result<()> {
         model.flush_decode_graphs()?;
         let expected = rows
             .iter()
-            .map(|(input, _, _)| reference(model, input))
+            .map(|(input, seed, _)| reference(model, input, u32::try_from(*seed).unwrap_or(0)))
             .collect::<Result<Vec<_>>>()?;
         for _ in 0..8 {
             advance(model, &mut rows, &expected)?;
         }
         model.flush_decode_graphs()?;
         let packed_bytes = recurrent_bytes(model, rows[0].0.session)?;
-        let full_pages = occupied_pages(model)?;
         assert!(model.stream().paged_arenas().resident_arenas()? > 0);
         for (input, _, _) in rows.drain(1..) {
             model.release_session(input.session)?;
         }
         assert_eq!(model.sessions.len(), 1);
-        let survivor_pages = occupied_pages(model)?;
-        assert!(survivor_pages < full_pages, "cancelled decode tails still own pages");
         advance(model, &mut rows, &expected)?;
         model.flush_decode_graphs()?;
         let scalar_bytes = recurrent_bytes(model, rows[0].0.session)?;
@@ -219,10 +224,8 @@ pub(super) fn exercise(model: &mut LoadedModel) -> Result<()> {
         }
         assert!(model.sessions.is_empty());
         model.clear_prefix_cache();
-        assert_eq!(model.stream().paged_arenas().resident_arenas()?, 0, "cycle {cycle}");
-        eprintln!(
-            "churn cycle {cycle}: recurrent bytes {packed_bytes} -> {scalar_bytes}, used pages {full_pages} -> {survivor_pages}, all arenas released"
-        );
+        assert_eq!(model.prefixes.group_count(), 0, "cycle {cycle}");
+        eprintln!("churn cycle {cycle}: recurrent bytes {packed_bytes} -> {scalar_bytes}");
     }
     Ok(())
 }

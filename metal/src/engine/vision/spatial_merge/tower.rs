@@ -1,4 +1,7 @@
-use models::{layout::SpatialMergeVisionConfig, vision::SpatialMergePreprocessedImage};
+use models::{
+    layout::{HiddenActivation, SpatialMergeVisionConfig},
+    vision::SpatialMergePreprocessedImage,
+};
 
 use super::{dimension, embedding::PatchEmbedding, layer::EncoderLayer, merger::PatchMerger};
 use crate::engine::{Array, Error, ModelTensors, Result, Stream};
@@ -133,7 +136,7 @@ fn validate_config(config: &SpatialMergeVisionConfig) -> Result<()> {
         || !config.hidden_size.is_multiple_of(config.num_attention_heads)
         || config.in_channels != 3
         || config.spatial_merge_size == 0
-        || config.hidden_activation != "gelu_pytorch_tanh"
+        || config.hidden_activation != HiddenActivation::GeluTanh
     {
         return Err(Error::InvalidModel(format!(
             "unsupported spatial-merge vision configuration: {config:?}"

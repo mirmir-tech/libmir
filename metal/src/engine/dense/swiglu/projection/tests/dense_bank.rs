@@ -61,7 +61,7 @@ fn expert(expert: usize, biased: bool, transposed: bool) -> TensorBinding {
             Vec::new()
         },
         storage: TensorStorage::Dense {
-            dtype: "F32".into(),
+            dtype: models::weights::DenseDType::F32,
             bias: biased.then(|| format!("bias{expert}")),
         },
     }

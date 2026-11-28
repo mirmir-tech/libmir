@@ -55,7 +55,7 @@ impl Engine {
             #[cfg(feature = "metal")]
             EngineInner::Metal(metal) => metal.prefill_request_with_progress(request, progress),
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => super::unavailable(),
+            EngineInner::Unavailable(never) => match *never {},
         }
     }
 
@@ -85,7 +85,7 @@ impl Engine {
                 })
                 .collect(),
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => super::unavailable(),
+            EngineInner::Unavailable(never) => match *never {},
         }
     }
 }

@@ -37,26 +37,25 @@ impl Reference {
         if let Some(logits) = self.cuda.as_ref().and_then(|gate| gate.first_logits.as_ref()) {
             Self::validate_logits(logits)?;
         }
-        self.gate(&active_target())
+        self.gate(active_target())
             .ok_or_else(|| super::validation_error("reference has no gate for active backend"))?
             .validate()
     }
 
-    pub fn gate(&self, target: &BackendTarget) -> Option<&ResourceGate> {
+    pub fn gate(&self, target: BackendTarget) -> Option<&ResourceGate> {
         match target {
             BackendTarget::Metal => self.metal.as_ref(),
             BackendTarget::Cuda => self.cuda.as_ref(),
-            BackendTarget::CpuReference => None,
         }
     }
 
-    pub fn logits(&self, target: &BackendTarget) -> &LogitsReference {
+    pub fn logits(&self, target: BackendTarget) -> &LogitsReference {
         self.gate(target)
             .and_then(|gate| gate.first_logits.as_ref())
             .unwrap_or(&self.first_logits)
     }
 
-    pub fn tokens(&self, target: &BackendTarget) -> &[u32] {
+    pub fn tokens(&self, target: BackendTarget) -> &[u32] {
         self.gate(target)
             .and_then(|gate| gate.generated_tokens.as_deref())
             .unwrap_or(&self.generated_tokens)

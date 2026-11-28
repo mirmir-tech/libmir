@@ -147,6 +147,7 @@ fn diagnose(
                     token: greedy_token(&finished.native.output)?,
                     sampling: SamplingLogits::None,
                     speculation: None,
+                    blocks: Vec::new(),
                 })
             })
             .collect::<Result<Vec<_>>>()?;

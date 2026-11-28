@@ -35,6 +35,7 @@ fn pressure_releases_optional_history_and_preserves_nonempty_prefix_cache() -> R
                     token: next,
                     sampling: SamplingLogits::None,
                     speculation: None,
+                    blocks: Vec::new(),
                 });
             }
         }
@@ -50,7 +51,11 @@ fn pressure_releases_optional_history_and_preserves_nonempty_prefix_cache() -> R
         let retained = model.stream.history_budget().snapshot().retained_bytes;
         assert!(retained > 0, "both families keep a batched K/V history");
         let groups = model.prefixes.group_count();
-        assert!(groups > 0, "prefix preservation must not be vacuous");
+        if model.prefix_cache_enabled() {
+            assert!(groups > 0, "prefix preservation must not be vacuous");
+        } else {
+            assert_eq!(groups, 0, "pure-paged models do not use PrefixCache");
+        }
         model.apply_history_pressure(
             MemoryStats {
                 active: 60,
@@ -64,7 +69,9 @@ fn pressure_releases_optional_history_and_preserves_nonempty_prefix_cache() -> R
         assert_eq!(model.stream.history_budget().snapshot().retained_bytes, 0);
         assert_eq!(model.stream.history_budget().snapshot().admission, Admission::Suspended);
         assert_eq!(model.prefixes.group_count(), groups);
-        assert!(model.prefixes.lease_longest(&model.info.manifest.id, &sentinel)?.is_some());
+        if model.prefix_cache_enabled() {
+            assert!(model.prefixes.lease_longest(&model.info.manifest.id, &sentinel)?.is_some());
+        }
         for input in inputs {
             model.release_session(input.session)?;
         }

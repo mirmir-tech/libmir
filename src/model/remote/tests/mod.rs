@@ -240,7 +240,8 @@ fn tensor_with_dtype(name: &str, shape: Vec<usize>, dtype: &str) -> TensorInfo {
     TensorInfo {
         name: name.to_owned(),
         file: PathBuf::from("remote.safetensors"),
-        dtype: dtype.to_owned(),
+        container: WeightContainer::SafeTensors,
+        dtype: models::weights::TensorDType::parse(dtype),
         shape,
         data_start: 0,
         data_offsets: [0, 0],

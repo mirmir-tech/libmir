@@ -24,6 +24,7 @@ impl CudaEngine {
         &self,
         manifest: &ModelManifest,
         task: &TaskExecutionPlan,
+        admitted: &CudaArchitecture,
         decoder: Option<&models::layout::DecoderConfig>,
         encoder: Option<&models::layout::EncoderConfig>,
         contract: Option<&DecoderExecutionContract>,
@@ -54,19 +55,18 @@ impl CudaEngine {
         }
         let contract =
             contract.ok_or_else(|| Error::State("CUDA decoder contract is missing".into()))?;
-        let CudaArchitecture::Generation(admitted) =
-            crate::admit_architecture(task, Some(&contract.semantic))?
-        else {
+        let CudaArchitecture::Generation(admitted) = admitted else {
             return Err(Error::State("CUDA admitted a non-generation runtime".into()));
         };
-        let runner =
-            self.load_admitted(manifest, decoder, &admitted, contract, catalog, blocks, report)?;
-        Ok((runner, Some(admitted)))
+        let runner = self.load_admitted_decoder(
+            manifest, decoder, admitted, contract, catalog, blocks, report,
+        )?;
+        Ok((runner, Some(admitted.clone())))
     }
 
     /// Builds the runtime admission chose from the plan it admitted.
     #[allow(clippy::too_many_arguments)]
-    fn load_admitted(
+    fn load_admitted_decoder(
         &self,
         manifest: &ModelManifest,
         decoder: &models::layout::DecoderConfig,
@@ -76,7 +76,7 @@ impl CudaEngine {
         blocks: usize,
         report: &mut dyn FnMut(u64, String),
     ) -> Result<ModelRunner> {
-        let CudaAdmitted { runtime, plan } = admitted;
+        let CudaAdmitted { runtime, plan, .. } = admitted;
         let runtime = *runtime;
         match runtime {
             CudaDecoderRuntime::SharedRouted

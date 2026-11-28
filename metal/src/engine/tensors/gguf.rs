@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 
 use mirtal::{DType, TensorRange};
-use models::{gguf::GgmlType, weights::TensorInfo};
+use models::weights::{DenseDType, TensorDType, TensorInfo};
 
 use crate::engine::{Error, Result};
 
@@ -18,21 +18,19 @@ pub(super) fn ranges(tensors: &[TensorInfo]) -> Result<Vec<TensorRange>> {
 }
 
 fn range(tensor: &TensorInfo) -> Result<TensorRange> {
-    let ggml =
-        GgmlType::from_name(&tensor.dtype).ok_or_else(|| invalid(tensor, "an unknown type"))?;
     let mut shape = tensor
         .shape
         .iter()
         .map(|&dimension| u64::try_from(dimension))
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    let dtype = match ggml {
-        GgmlType::F32 => DType::Float32,
-        GgmlType::F16 => DType::Float16,
-        GgmlType::BF16 => DType::Bfloat16,
+    let dtype = match &tensor.dtype {
+        TensorDType::Dense(DenseDType::F32) => DType::Float32,
+        TensorDType::Dense(DenseDType::F16) => DType::Float16,
+        TensorDType::Dense(DenseDType::Bf16) => DType::Bfloat16,
         // Raw E4M3 bytes, as the FP8 projections read `SafeTensors` FP8.
-        GgmlType::F8_E4M3 => DType::Uint8,
-        _ if ggml.is_dense() => return Err(invalid(tensor, "a dense type Metal does not load")),
-        _ => {
+        TensorDType::Dense(DenseDType::F8E4M3) => DType::Uint8,
+        TensorDType::Dense(_) => return Err(invalid(tensor, "a dense type Metal does not load")),
+        TensorDType::Ggml(ggml) => {
             let input = shape.pop().ok_or_else(|| invalid(tensor, "no dimensions"))?;
             shape.push(ggml.row_bytes(input)?);
             DType::Uint8

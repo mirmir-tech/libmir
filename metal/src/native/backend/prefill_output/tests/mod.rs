@@ -18,7 +18,7 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 fn manifest(path: String) -> ModelManifest {
     ModelManifest {
-        id: format!("prefill-timing-{}", Uuid::new_v4()),
+        id: format!("prefill-timing-{}", Uuid::new_v4()).into(),
         path,
         tokenizer_path: None,
         context_len: 256,
@@ -28,13 +28,37 @@ fn manifest(path: String) -> ModelManifest {
 }
 
 fn request(model: &ModelHandle, seed: u32) -> PrefillRequest {
+    request_with_blocks(model, seed, false, false)
+}
+
+fn request_with_blocks(
+    model: &ModelHandle,
+    seed: u32,
+    use_runtime_blocks: bool,
+    hit: bool,
+) -> PrefillRequest {
+    let mut block_table = BlockTable::with_block_size(16);
+    if use_runtime_blocks {
+        let base = if seed == 0 {
+            0
+        } else {
+            4
+        };
+        for offset in 0..4 {
+            block_table.push(runtime::kv::BlockId(base + offset));
+        }
+    }
     PrefillRequest {
         model: model.clone(),
         session_id: Uuid::new_v4(),
         prompt_tokens: (0..64).map(|i| (i + seed) % 64).collect(),
         cache_checkpoints: Vec::new(),
-        block_table: BlockTable::with_block_size(16),
-        cached_tokens: 0,
+        block_table,
+        cached_tokens: if use_runtime_blocks && hit {
+            64
+        } else {
+            0
+        },
         generation_tokens: None,
         sampling_logits: SamplingLogits::None,
     }
@@ -57,11 +81,18 @@ fn exercise(manifest: &ModelManifest) -> Result<()> {
     config.set_max_batch_requests(2);
     let backend = MetalBackend::new(config);
     let model = backend.load_model_with_progress(manifest, &mut |_| {})?;
+    let use_runtime_blocks =
+        !backend.with_model(&model.id, |loaded| Ok(loaded.prefix_cache_enabled()))?;
+    let expected_hit = if use_runtime_blocks {
+        48
+    } else {
+        64
+    };
     let mut reference = Vec::new();
-    // Scalar miss and exact hit, through the real worker/output adapter.
+    // Scalar miss and hit, through the real worker/output adapter.
     for seed in [0, 3] {
         for hit in [false, true] {
-            let request = request(&model, seed);
+            let request = request_with_blocks(&model, seed, use_runtime_blocks, hit);
             let started = Instant::now();
             let mut initial = None;
             let output = backend.prefill_request_with_progress(&request, &mut |event| {
@@ -73,7 +104,7 @@ fn exercise(manifest: &ModelManifest) -> Result<()> {
             assert_eq!(
                 initial,
                 Some(if hit {
-                    64
+                    expected_hit
                 } else {
                     0
                 })
@@ -87,9 +118,12 @@ fn exercise(manifest: &ModelManifest) -> Result<()> {
         }
     }
     backend.clear_prefix_cache(&model)?;
-    // Packed cold prefill followed by cohort-leased exact hits.
+    // Packed cold prefill followed by prefix/block hits.
     for hit in [false, true] {
-        let requests = [request(&model, 0), request(&model, 3)];
+        let requests = [
+            request_with_blocks(&model, 0, use_runtime_blocks, hit),
+            request_with_blocks(&model, 3, use_runtime_blocks, hit),
+        ];
         let cohort = hit.then(|| backend.prepare_prefill_cohort(&requests)).transpose()?;
         let started = Instant::now();
         let mut initial = [None; 2];
@@ -102,7 +136,7 @@ fn exercise(manifest: &ModelManifest) -> Result<()> {
         assert_eq!(
             initial,
             [Some(if hit {
-                64
+                expected_hit
             } else {
                 0
             }); 2]

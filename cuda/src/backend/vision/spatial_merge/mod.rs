@@ -187,7 +187,7 @@ fn validate_config(config: &SpatialMergeVisionConfig) -> Result<()> {
         || head_dim > 256
         || config.in_channels != 3
         || config.spatial_merge_size == 0
-        || config.hidden_activation != "gelu_pytorch_tanh"
+        || config.hidden_activation != models::layout::HiddenActivation::GeluTanh
     {
         return Err(Error::UnsupportedVisionContract(format!(
             "unsupported spatial-merge vision geometry or activation: hidden={}, heads={}, merge={}, activation={}",

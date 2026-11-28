@@ -66,7 +66,8 @@ pub(super) fn continue_and_release(
     model.release_session(second)?;
     model.clear_prefix_cache();
     model.flush_decode_graphs()?;
-    assert_eq!(model.stream().paged_arenas().resident_arenas()?, 0);
+    assert!(model.sessions.is_empty());
+    assert_eq!(model.stream().paged_arenas().resident_arenas()?, 1);
     Ok(())
 }
 

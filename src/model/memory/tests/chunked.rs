@@ -1,11 +1,12 @@
-//! Metal keeps one chunk of K/V for Llama 4's chunked layers.
+//! Both Metal and CUDA keep Llama 4's chunked layers in paged K/V storage.
 
+use models::layout::DecoderConfig;
 use serde_json::json;
 
 use super::{decoder_budget, *};
 
 #[test]
-fn metal_bounds_chunked_layers_to_their_chunk() -> crate::Result<()> {
+fn chunked_layers_use_paged_storage_on_both_metal_and_cuda() -> crate::Result<()> {
     // Llama 4: layers 0-2 attend in chunks of 32 tokens, layer 3 globally.
     let decoder = DecoderConfig::from_value(&json!({
         "model_type": "llama4_text", "hidden_size": 64, "intermediate_size": 32,
@@ -15,9 +16,11 @@ fn metal_bounds_chunked_layers_to_their_chunk() -> crate::Result<()> {
         "attn_scale": 0.1, "use_qk_norm": true
     }))?;
     let config = RuntimeConfig::default();
-    let (metal, _) = decoder_budget(&decoder, &config, &BackendTarget::Metal)?;
-    let (cuda, _) = decoder_budget(&decoder, &config, &BackendTarget::Cuda)?;
-    // Only the global layer grows with the sequence on Metal.
-    assert_eq!(cuda, 4 * metal);
+    let (metal_per_token, metal_total) = decoder_budget(&decoder, &config, BackendTarget::Metal)?;
+    let (cuda_per_token, cuda_total) = decoder_budget(&decoder, &config, BackendTarget::Cuda)?;
+    // Every layer (chunked and global) grows with paged K/V on both backends.
+    assert!(metal_per_token > 0);
+    assert_eq!(metal_per_token, cuda_per_token);
+    assert_eq!(metal_total, cuda_total);
     Ok(())
 }

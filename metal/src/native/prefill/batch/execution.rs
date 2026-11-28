@@ -29,11 +29,6 @@ impl Batch {
             if should_yield() {
                 break;
             }
-            if loaded.stream.config().cache.decode_reservation
-                == crate::config::DecodeReservation::GenerationBudget
-            {
-                super::reservation::fit(&mut self.sequences, loaded)?;
-            }
             match self.execute_packed(loaded, budget)? {
                 PackedStep::Advanced(used, packed_events) => {
                     budget -= used;

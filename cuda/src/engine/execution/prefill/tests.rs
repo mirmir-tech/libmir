@@ -1,6 +1,8 @@
+use runtime::kv::reusable_prefix_tokens;
+
 use super::plan::{
-    checkpoint_distance, context_chunk_budget, fair_chunk_budget, reusable_prefix_tokens,
-    round_rows_from_pending, row_chunk_budget, valid_chunk,
+    checkpoint_distance, context_chunk_budget, fair_chunk_budget, round_rows_from_pending,
+    row_chunk_budget, valid_chunk,
 };
 
 #[test]

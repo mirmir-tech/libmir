@@ -47,14 +47,17 @@ fn readiness_reports_distinct_physical_dtypes() {
     let mut catalog = catalog_for(&schema, 0);
     for tensor in &mut catalog.tensors {
         tensor.dtype = if tensor.name.ends_with("std_scale") {
-            "F32"
+            crate::weights::DenseDType::F32
         } else {
-            "F16"
+            crate::weights::DenseDType::F16
         }
         .into();
     }
 
-    assert_eq!(schema.readiness(&catalog).dtypes, ["F16", "F32"]);
+    assert_eq!(
+        schema.readiness(&catalog).dtypes,
+        [crate::weights::DenseDType::F16, crate::weights::DenseDType::F32]
+    );
 }
 
 #[test]
@@ -64,13 +67,13 @@ fn pooled_bound_projection_does_not_claim_its_packed_container_as_dense() {
     let mut found = false;
     for tensor in &mut catalog.tensors {
         if tensor.name == "embed_vision.embedding_projection.weight" {
-            tensor.dtype = "U32".into();
+            tensor.dtype = crate::weights::DenseDType::U32.into();
             found = true;
         }
     }
 
     assert!(found);
-    assert_eq!(schema.readiness(&catalog).dtypes, ["BF16"]);
+    assert_eq!(schema.readiness(&catalog).dtypes, [crate::weights::DenseDType::Bf16]);
 }
 
 fn catalog_for(schema: &VisionTensorSchema, alias: usize) -> TensorCatalog {
@@ -82,7 +85,8 @@ fn catalog_for(schema: &VisionTensorSchema, alias: usize) -> TensorCatalog {
             .map(|name| TensorInfo {
                 name: name.clone(),
                 file: PathBuf::new(),
-                dtype: "BF16".into(),
+                container: crate::layout::WeightContainer::SafeTensors,
+                dtype: crate::weights::DenseDType::Bf16.into(),
                 shape: Vec::new(),
                 data_start: 0,
                 data_offsets: [0, 0],
@@ -105,7 +109,7 @@ fn pooled_config() -> PooledVisionConfig {
         position_embedding_size: 16,
         rms_norm_eps: 1.0e-6,
         rope_theta: 100.0,
-        hidden_activation: "gelu_pytorch_tanh".into(),
+        hidden_activation: crate::layout::HiddenActivation::GeluTanh,
         use_clipped_linears: true,
         standardize: true,
         image_token_id: 10,
@@ -128,7 +132,7 @@ fn spatial_merge_config() -> SpatialMergeVisionConfig {
         temporal_patch_size: 2,
         spatial_merge_size: 2,
         num_position_embeddings: 16,
-        hidden_activation: "gelu_pytorch_tanh".into(),
+        hidden_activation: crate::layout::HiddenActivation::GeluTanh,
         image_token_id: 10,
         vision_start_token_id: 11,
         vision_end_token_id: 12,

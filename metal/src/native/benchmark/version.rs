@@ -96,6 +96,7 @@ fn run(model: &mut LoadedModel, prompts: &[Vec<u32>], steps: usize) -> Result<Sa
             token,
             sampling: SamplingLogits::None,
             speculation: None,
+            blocks: Vec::new(),
         });
         tokens.push(vec![token]);
     }

@@ -2,6 +2,8 @@ use std::{
     collections::HashMap,
     fs::File,
     io::{Read, Seek, SeekFrom},
+    path::PathBuf,
+    sync::Arc,
 };
 
 use mircuda::{Context, DeviceElement, MemoryPool, PinnedBuffer, Stream, bf16, f16};
@@ -30,6 +32,7 @@ pub struct TensorUploadBatch {
     pool: MemoryPool,
     pending: Vec<PendingTensor>,
     tensors: HashMap<String, CudaTensor>,
+    inline_files: HashMap<PathBuf, Arc<[u8]>>,
     staging_bytes: usize,
     staging_limit: usize,
 }
@@ -42,9 +45,14 @@ impl TensorUploadBatch {
             pool,
             pending: Vec::new(),
             tensors: HashMap::new(),
+            inline_files: HashMap::new(),
             staging_bytes: 0,
             staging_limit: DEFAULT_STAGING_LIMIT,
         }
+    }
+
+    pub(crate) fn insert_inline_file(&mut self, path: impl Into<PathBuf>, bytes: Arc<[u8]>) {
+        let _prev = self.inline_files.insert(path.into(), bytes);
     }
 
     /// Reads one payload directly into pinned memory and enqueues one H2D
@@ -101,12 +109,10 @@ impl TensorUploadBatch {
         info: &TensorInfo,
         cast: &DenseCast,
     ) -> Result<()> {
-        // GGML block names are not CUDA dtypes; `enqueue` uploads them raw.
-        match CudaTensorDType::parse(&info.dtype) {
-            Ok(CudaTensorDType::F16 | CudaTensorDType::Bf16 | CudaTensorDType::F32) => {
-                self.enqueue_as_bf16(info, cast)
-            },
-            _ => self.enqueue(info),
+        if info.dtype.as_float().is_some() {
+            self.enqueue_as_bf16(info, cast)
+        } else {
+            self.enqueue(info)
         }
     }
 
@@ -183,9 +189,17 @@ impl TensorUploadBatch {
     ) -> Result<PinnedBuffer<T>> {
         let offset = info.payload_start()?;
         let length = info.payload_bytes()?;
+        let mut staging = self.context.allocate_pinned::<T>(elements)?;
+        if let Some(inline) = self.inline_files.get(&info.file) {
+            let start = usize::try_from(offset)?;
+            let slice = inline.get(start..start + length).ok_or_else(|| {
+                Error::MissingTensor(format!("inline tensor `{}` out of bounds", info.name))
+            })?;
+            staging.with_bytes_mut(|bytes| bytes.copy_from_slice(slice))?;
+            return Ok(staging);
+        }
         let mut file = File::open(&info.file)?;
         file.seek(SeekFrom::Start(offset))?;
-        let mut staging = self.context.allocate_pinned::<T>(elements)?;
         let read = staging.with_bytes_mut(|bytes| file.read_exact(bytes))?;
         read?;
         release_file_cache(&file, offset, length);

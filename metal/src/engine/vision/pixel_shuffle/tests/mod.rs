@@ -29,7 +29,7 @@ pub(super) fn config() -> PixelShuffleVisionConfig {
         prefix_tokens: 2,
         position_grid: 3,
         layer_norm_eps: 1e-6,
-        hidden_activation: "gelu".into(),
+        hidden_activation: models::layout::HiddenActivation::Gelu,
         shuffle_factor: 2,
         projector_hidden_size: 12,
         projector_norm_eps: 1e-5,

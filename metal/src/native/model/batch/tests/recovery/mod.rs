@@ -159,7 +159,8 @@ fn exercise(case: Case) -> Result<()> {
     ] {
         model.release_session(session)?;
     }
-    assert_eq!(model.stream().paged_arenas().resident_arenas()?, 0);
+    assert!(model.sessions.is_empty());
+    assert_eq!(model.stream().paged_arenas().resident_arenas()?, 1);
     drop(model);
     std::fs::remove_dir_all(directory)?;
     Ok(())

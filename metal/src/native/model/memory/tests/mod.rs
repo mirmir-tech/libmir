@@ -1,7 +1,5 @@
 use super::*;
 
-mod pages;
-
 #[test]
 fn bounds_automatic_prefix_cache_to_two_fifths_of_usable_memory() {
     let memory = MemoryStats {

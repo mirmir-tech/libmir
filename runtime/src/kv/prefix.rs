@@ -121,6 +121,31 @@ impl PrefixCache {
     }
 }
 
+/// Prefix tokens a backend may skip during prefill given `cached_tokens`
+/// resident in the runtime block table.
+///
+/// When `replay_tokens > 0` (e.g. sliding-window replay), backs off by that
+/// margin. When the entire prompt is already cached, backs off by one block so
+/// the final token is always evaluated to produce fresh logits.
+#[must_use]
+pub fn reusable_prefix_tokens(
+    cached_tokens: usize,
+    prompt_tokens: usize,
+    block_size: Option<usize>,
+    replay_tokens: usize,
+) -> usize {
+    let cached_tokens = cached_tokens.min(prompt_tokens);
+    if replay_tokens > 0 {
+        return cached_tokens.saturating_sub(replay_tokens);
+    }
+    if cached_tokens < prompt_tokens {
+        return cached_tokens;
+    }
+    block_size
+        .filter(|size| *size > 0)
+        .map_or(0, |size| cached_tokens.saturating_sub(size))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,5 +161,13 @@ mod tests {
         assert_eq!(cache.oldest_first(), [hashes[1], hashes[2], hashes[0]]);
         assert_eq!(cache.remove(hashes[2].0), Some(BlockId(2)));
         assert_eq!(cache.oldest_first(), [hashes[1], hashes[0]]);
+    }
+
+    #[test]
+    fn backs_off_exact_prompt_hits_by_one_block_and_respects_replay_margin() {
+        assert_eq!(reusable_prefix_tokens(32, 48, Some(16), 0), 32);
+        assert_eq!(reusable_prefix_tokens(32, 32, Some(16), 0), 16);
+        assert_eq!(reusable_prefix_tokens(32, 32, Some(16), 8), 24);
+        assert_eq!(reusable_prefix_tokens(32, 32, None, 0), 0);
     }
 }

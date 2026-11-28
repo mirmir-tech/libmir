@@ -33,7 +33,7 @@ fn builds_spatial_mrope_positions_and_decode_delta() -> Result<()> {
         temporal_patch_size: 2,
         spatial_merge_size: 1,
         num_position_embeddings: 4,
-        hidden_activation: "gelu_pytorch_tanh".into(),
+        hidden_activation: crate::layout::HiddenActivation::GeluTanh,
         image_token_id: 10,
         vision_start_token_id: 11,
         vision_end_token_id: 12,

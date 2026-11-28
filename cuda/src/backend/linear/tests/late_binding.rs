@@ -117,7 +117,8 @@ fn info(name: &str, path: &std::path::Path, dtype: &str, start: u64, end: u64) -
     TensorInfo {
         name: name.into(),
         file: path.into(),
-        dtype: dtype.into(),
+        container: models::layout::WeightContainer::SafeTensors,
+        dtype: models::weights::TensorDType::parse(dtype),
         shape: vec![
             OUTPUT,
             match dtype {

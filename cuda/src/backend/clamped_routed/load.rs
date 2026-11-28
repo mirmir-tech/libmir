@@ -1,10 +1,14 @@
-use architecture::{cuda::CudaDecoderPlan, lowering::MixerLowering};
+use architecture::{
+    CacheLayout,
+    cuda::{CudaDecoderPlan, CudaDecoderRuntime},
+    lowering::MixerLowering,
+};
 use models::{execution::DecoderExecutionContract, layout::DecoderConfig, weights::TensorCatalog};
 use runtime::kv::CacheConfig;
 
 use super::{
-    ClampedRoutedCapabilityPlan, ClampedRoutedConfig, ClampedRoutedLayout,
-    CudaClampedRoutedModelTemplate, layer::ClampedRoutedLayerTemplate, weights,
+    ClampedRoutedCapabilityPlan, ClampedRoutedConfig, CudaClampedRoutedModelTemplate,
+    layer::ClampedRoutedLayerTemplate, weights,
 };
 use crate::{CudaBackend, CudaTensorSet, Error, Result};
 
@@ -30,7 +34,7 @@ impl CudaBackend {
             });
         }
         let config = ClampedRoutedConfig::from_admitted(plan, &contract.semantic)?;
-        let layout = ClampedRoutedLayout::discover(bindings)?;
+        let layout = super::layout::discover(bindings)?;
         let capabilities = ClampedRoutedCapabilityPlan::lower(config, layout, cache.dtype)?;
         if ring_sessions == 0 {
             return Err(Error::InvalidPagedKv("windowed KV session capacity is empty"));
@@ -64,6 +68,10 @@ impl CudaBackend {
         Ok(CudaClampedRoutedModelTemplate {
             backend: self.clone(),
             decoder: decoder.clone(),
+            cache_layout: CacheLayout::for_cuda(
+                &contract.semantic.decoder,
+                CudaDecoderRuntime::ClampedRouted,
+            ),
             embedding,
             final_norm,
             output,

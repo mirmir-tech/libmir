@@ -1,5 +1,3 @@
-use std::fs;
-
 use serde_json::Value;
 
 use super::VisionPipeline;
@@ -69,15 +67,9 @@ impl PixelShuffleImageProcessorConfig {
 
 impl ImageProcessorConfig {
     pub fn from_layout(layout: &ModelLayout, pipeline: VisionPipeline) -> Result<Option<Self>> {
-        let Some(path) = layout
-            .processor_config_path
-            .as_ref()
-            .or(layout.preprocessor_config_path.as_ref())
-        else {
+        let Some(root) = layout.read_preprocessor_config()? else {
             return Ok(None);
         };
-        let json = fs::read_to_string(path)?;
-        let root: Value = serde_json::from_str(&json)?;
         Self::from_value(&root, pipeline).map(Some)
     }
 

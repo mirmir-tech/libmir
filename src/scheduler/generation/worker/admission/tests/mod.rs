@@ -156,6 +156,8 @@ fn profile(
     resident_token_slots: usize,
     limit_deep_prefill_waves: bool,
 ) -> PrefillExecutionProfile {
+    use crate::engine::{DecodeInterleaving, NewDecodePolicy, PrefixReplayPolicy, WaveDepthPolicy};
+
     PrefillExecutionProfile {
         refill: crate::engine::PrefillRefillPolicy::Closed,
         admission: crate::engine::PrefillAdmissionPolicy::Uniform,
@@ -166,12 +168,18 @@ fn profile(
         max_prefill_cohort_tokens: usize::MAX,
         block_tokens: 16,
         resident_token_slots,
-        limit_deep_prefill_waves,
-        cached_prefix_replay_tokens: Some(1_525),
-        cached_prefix_checkpoint_replay_tokens: Some(0),
-        cached_prefix_completion_slack_tokens: 16,
-        defer_new_decode: false,
-        interleave_prefill_decode: true,
+        wave_depth: if limit_deep_prefill_waves {
+            WaveDepthPolicy::Bounded
+        } else {
+            WaveDepthPolicy::Unbounded
+        },
+        prefix_replay: PrefixReplayPolicy::Replay {
+            fallback_tokens: 1_525,
+            checkpoint_tokens: Some(0),
+            completion_slack_tokens: 16,
+        },
+        new_decode: NewDecodePolicy::Immediate,
+        interleaving: DecodeInterleaving::Interleaved,
     }
 }
 

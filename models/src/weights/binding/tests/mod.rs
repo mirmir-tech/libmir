@@ -126,7 +126,7 @@ fn binds_transposed_dense_gpt_oss_experts_and_suffix_biases() -> Result<()> {
     assert_eq!(
         gate_up.storage,
         TensorStorage::Dense {
-            dtype: "BF16".into(),
+            dtype: crate::weights::DenseDType::Bf16,
             bias: Some("model.layers.0.mlp.experts.gate_up_proj_bias".into()),
         }
     );
@@ -163,7 +163,8 @@ fn tensor(name: &str, dtype: &str, shape: Vec<usize>) -> TensorInfo {
     TensorInfo {
         name: name.to_owned(),
         file: PathBuf::new(),
-        dtype: dtype.to_owned(),
+        container: crate::layout::WeightContainer::SafeTensors,
+        dtype: crate::weights::TensorDType::parse(dtype),
         shape,
         data_start: 0,
         data_offsets: [0, 0],

@@ -51,17 +51,17 @@ pub(super) fn validate(
     let mut parameters = prefix.to_vec();
     parameters.push(groups);
     companion(catalog, scales, &parameters)?;
-    companion_dtype(catalog, scales, format.scale_dtype.as_str())?;
+    companion_dtype(catalog, scales, &format.scale_dtype.as_dense())?;
     if let Some(biases) = biases {
         companion(catalog, biases, &parameters)?;
         let dtype = format.bias_dtype.ok_or_else(|| invalid(biases, "bias dtype is missing"))?;
-        companion_dtype(catalog, biases, dtype.as_str())?;
+        companion_dtype(catalog, biases, &dtype.as_dense())?;
     }
 
     let weight = catalog
         .get(&binding.source)
         .ok_or_else(|| invalid(&binding.source, "packed tensor is missing"))?;
-    if weight.dtype != format.storage_dtype.as_str() {
+    if weight.dtype != format.storage_dtype.as_dense() {
         return Err(invalid(&binding.source, "packed dtype disagrees with affine format"));
     }
     Ok(())

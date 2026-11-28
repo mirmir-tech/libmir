@@ -1,3 +1,4 @@
+use architecture::CacheLayout;
 use models::{layout::DecoderConfig, semantic::DecoderSpec, weights::WeightBindingPlan};
 
 use super::{
@@ -14,6 +15,7 @@ use crate::engine::{
 #[derive(Debug)]
 pub struct DenseSwiGluModel {
     pub(super) layers: Vec<DenseSwiGluLayer>,
+    cache_layout: CacheLayout,
     cache_step: usize,
     /// Factor on token embeddings before the first layer (Gemma's
     /// sqrt(hidden)).
@@ -85,6 +87,7 @@ impl DenseSwiGluModel {
             .transpose()?;
         Ok(Self {
             layers,
+            cache_layout: CacheLayout::for_metal(spec),
             cache_step,
             embedding_multiplier,
             logit_scale,
@@ -118,12 +121,12 @@ impl DenseSwiGluModel {
     }
 
     pub fn new_cache(&self, stream: &Stream) -> Result<DecoderCache> {
-        DecoderCache::new_with_pool_capacity(
-            &self.layers.iter().map(|layer| layer.config.span()).collect::<Vec<_>>(),
+        DecoderCache::from_layout(
+            &self.cache_layout,
             self.cache_step,
             crate::engine::KvPageFormat::resolve(stream.config().kv_cache.dtype)?,
             stream.config().kv_cache.block_size,
-            DecoderCache::physical_page_capacity(stream, self.cache_step),
+            stream.config().kv_cache.block_count as usize,
             stream.paged_arenas(),
         )
     }

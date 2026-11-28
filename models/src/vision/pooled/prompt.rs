@@ -92,7 +92,7 @@ mod tests {
             position_embedding_size: 2,
             rms_norm_eps: 1.0e-6,
             rope_theta: 10_000.0,
-            hidden_activation: "gelu_pytorch_tanh".into(),
+            hidden_activation: crate::layout::HiddenActivation::GeluTanh,
             image_token_id: 10,
             image_begin_token_id: 11,
             image_end_token_id: 12,

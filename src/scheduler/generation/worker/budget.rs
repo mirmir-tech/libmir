@@ -37,16 +37,16 @@ impl Worker {
         &self,
         pending: &crate::scheduler::generation::PendingPrefill,
     ) -> usize {
-        let Some(fallback_tokens) = self.prefill_profile.cached_prefix_replay_tokens else {
+        let Some(fallback_tokens) = self.prefill_profile.prefix_replay.fallback_tokens() else {
             return pending.request.prompt_tokens.len();
         };
-        if !self.prefill_profile.limit_deep_prefill_waves {
+        if !self.prefill_profile.wave_depth.is_bounded() {
             return pending.request.prompt_tokens.len();
         }
         let (replay_tokens, checkpoint) = admission_replay_tokens(
             pending.request.cached_tokens,
             fallback_tokens,
-            self.prefill_profile.cached_prefix_checkpoint_replay_tokens,
+            self.prefill_profile.prefix_replay.checkpoint_tokens(),
         );
         let tokens = super::admission::pending_prefill_tokens(
             pending.request.prompt_tokens.len(),
@@ -59,7 +59,7 @@ impl Worker {
             pending.request.prompt_tokens.len(),
             pending.request.cached_tokens,
             if checkpoint {
-                self.prefill_profile.cached_prefix_completion_slack_tokens
+                self.prefill_profile.prefix_replay.completion_slack_tokens()
             } else {
                 0
             },
@@ -75,8 +75,11 @@ impl Worker {
                     row.request.cached_tokens < row.request.prompt_tokens.len()
                         && admission_replay_tokens(
                             row.request.cached_tokens,
-                            self.prefill_profile.cached_prefix_replay_tokens.unwrap_or_default(),
-                            self.prefill_profile.cached_prefix_checkpoint_replay_tokens,
+                            self.prefill_profile
+                                .prefix_replay
+                                .fallback_tokens()
+                                .unwrap_or_default(),
+                            self.prefill_profile.prefix_replay.checkpoint_tokens(),
                         )
                         .1
                 })
@@ -86,10 +89,10 @@ impl Worker {
             self.config.max_batch_tokens,
             decode_rows,
             cached_rows,
-            self.prefill_profile.cached_prefix_completion_slack_tokens,
+            self.prefill_profile.prefix_replay.completion_slack_tokens(),
         );
         if self.config.cached_prefill_policy == crate::CachedPrefillPolicy::InterleaveOneBlock
-            && !self.prefill_profile.interleave_prefill_decode
+            && !self.prefill_profile.interleaving.allows_interleaving()
             && !self.active_decode.is_empty()
         {
             // A logical hit can lose its backend snapshot before preparation.

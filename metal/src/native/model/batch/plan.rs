@@ -20,7 +20,7 @@ impl LoadedModel {
         self.release_settled_prefill_reserve()?;
         // Validate every row before advancing any cache, including scalar rows.
         self.validate_decode_inputs(inputs)?;
-        self.validate_decode_capacity(inputs)?;
+        self.bind_decode_blocks(inputs)?;
         let result = self.decode_grouped_admitted(inputs);
         self.finish_decode(inputs, result)
     }

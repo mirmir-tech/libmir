@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
 use models::{
     layout::VisionConfig,
@@ -7,10 +7,11 @@ use models::{
 
 use crate::{CudaBackend, CudaTensorSet, Error, Result};
 
-pub fn load_vision_tensors(
+pub fn load_vision_tensors_with_inline(
     backend: &CudaBackend,
     config: &VisionConfig,
     catalog: &TensorCatalog,
+    inline: Option<&(String, Arc<[u8]>)>,
 ) -> Result<CudaTensorSet> {
     let schema = VisionTensorSchema::discover(config);
     let mut seen = HashSet::with_capacity(schema.requirements.len());
@@ -32,6 +33,9 @@ pub fn load_vision_tensors(
     }
     let cast = backend.prepare_dense_cast()?;
     let mut upload = backend.begin_tensor_upload();
+    if let Some((name, bytes)) = inline {
+        upload.insert_inline_file(name, Arc::clone(bytes));
+    }
     for tensor in tensors {
         upload.enqueue_as_bf16(tensor, &cast)?;
     }

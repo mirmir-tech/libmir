@@ -1,3 +1,4 @@
+use architecture::CacheLayout;
 use models::{layout::DecoderConfig, semantic::DecoderSpec, weights::WeightBindingPlan};
 
 use super::layer::StateSpaceHybridLayer;
@@ -6,13 +7,13 @@ use crate::engine::{
     binding::{BoundEmbedding, BoundLinear},
     decode,
     decoder::{LayerContext, LayerLoopOptions, forward_layers, prefill_evaluation_step},
-    lowering::{LayerLowering, MixerLowering},
+    lowering::LayerLowering,
 };
 
 #[derive(Debug)]
 pub struct StateSpaceHybridModel {
     pub(super) layers: Vec<StateSpaceHybridLayer>,
-    mixers: Vec<MixerLowering>,
+    cache_layout: CacheLayout,
     cache_step: usize,
     pub(super) embedding: BoundEmbedding,
     pub(super) output: BoundLinear,
@@ -51,7 +52,7 @@ impl StateSpaceHybridModel {
         let boundary = bindings.decoder_boundary()?;
         Ok(Self {
             layers,
-            mixers: lowering.iter().map(|layer| layer.mixer).collect(),
+            cache_layout: CacheLayout::for_metal(spec),
             cache_step,
             embedding: BoundEmbedding::load(tensors, boundary.embedding, stream)?,
             output: BoundLinear::load(tensors, boundary.output, stream)?,
@@ -61,12 +62,12 @@ impl StateSpaceHybridModel {
     }
 
     pub fn new_cache(&self, stream: &Stream) -> Result<DecoderCache> {
-        DecoderCache::new_hybrid_linear_with_pool_capacity(
-            &self.mixers,
+        DecoderCache::from_layout(
+            &self.cache_layout,
             self.cache_step,
             crate::engine::KvPageFormat::resolve(stream.config().kv_cache.dtype)?,
             stream.config().kv_cache.block_size,
-            DecoderCache::physical_page_capacity(stream, self.cache_step),
+            stream.config().kv_cache.block_count as usize,
             stream.paged_arenas(),
         )
     }

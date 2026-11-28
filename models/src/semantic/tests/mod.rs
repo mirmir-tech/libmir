@@ -196,7 +196,8 @@ fn catalog(names: &[&str]) -> TensorCatalog {
             .map(|name| TensorInfo {
                 name: (*name).to_owned(),
                 file: PathBuf::new(),
-                dtype: "F32".into(),
+                container: crate::layout::WeightContainer::SafeTensors,
+                dtype: crate::weights::DenseDType::F32.into(),
                 shape: vec![4],
                 data_start: 0,
                 data_offsets: [0, 0],

@@ -12,7 +12,11 @@ pub(super) fn has_chatml_tokens(path: Option<&Path>) -> Result<bool> {
         return Ok(false);
     };
     let tokenizer: Value = serde_json::from_str(&fs::read_to_string(path)?)?;
-    Ok(has_added_token(&tokenizer, CHATML_START) && has_added_token(&tokenizer, CHATML_END))
+    Ok(has_chatml_value(&tokenizer))
+}
+
+pub(super) fn has_chatml_value(tokenizer: &Value) -> bool {
+    has_added_token(tokenizer, CHATML_START) && has_added_token(tokenizer, CHATML_END)
 }
 
 fn has_added_token(tokenizer: &Value, expected: &str) -> bool {

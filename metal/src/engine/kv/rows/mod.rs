@@ -1,4 +1,4 @@
-use super::{KvCache, paged};
+use super::{KvCache, KvStorage, paged};
 use crate::engine::{Array, Error, Result, Stream};
 
 impl KvCache {
@@ -11,12 +11,9 @@ impl KvCache {
         stream: &Stream,
     ) -> Result<bool> {
         let eligible = caches.len() > 1
-            && caches.iter().all(|cache| {
-                cache.max_context.is_none()
-                    && cache
-                        .pages
-                        .as_ref()
-                        .is_some_and(|pages| pages.active() && !pages.quantized())
+            && caches.iter().all(|cache| match &cache.storage {
+                KvStorage::Paged(pages) => pages.active() && !pages.quantized(),
+                KvStorage::Contiguous(_) | KvStorage::Sliding(_) => false,
             });
         if !eligible {
             return Ok(false);
@@ -34,7 +31,12 @@ impl KvCache {
         let offsets = caches.iter().map(|cache| cache.offset).collect::<Vec<_>>();
         let mut stores = caches
             .iter_mut()
-            .map(|cache| cache.pages.as_mut().ok_or(Error::NullHandle("paged K/V store")))
+            .map(|cache| match &mut cache.storage {
+                KvStorage::Paged(pages) => Ok(pages),
+                KvStorage::Contiguous(_) | KvStorage::Sliding(_) => {
+                    Err(Error::NullHandle("paged K/V store"))
+                },
+            })
             .collect::<Result<Vec<_>>>()?;
         paged::write_rows(&mut stores, &offsets, [keys, values], stream)?;
         for cache in caches.iter_mut() {

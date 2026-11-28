@@ -1,5 +1,11 @@
+use foundation::model::ModelId;
+
 use super::*;
 use crate::kv::{KvCacheDType, KvQuantMode};
+
+fn model(name: &str) -> ModelId {
+    ModelId::new(name)
+}
 
 #[test]
 fn committed_prefix_is_reused() -> Result<()> {
@@ -8,9 +14,10 @@ fn committed_prefix_is_reused() -> Result<()> {
         block_count: 2,
         dtype: KvCacheDType::Auto,
     });
+    let gemma = model("gemma");
     let block = cache.allocate()?;
-    let hash = cache.commit_prefix_block("gemma", None, block, &[1, 2, 3, 4])?;
-    let probe = cache.probe_prefix("gemma", &[1, 2, 3, 4, 5]);
+    let hash = cache.commit_prefix_block(&gemma, None, block, &[1, 2, 3, 4])?;
+    let probe = cache.probe_prefix(&gemma, &[1, 2, 3, 4, 5]);
 
     assert_eq!(probe.cached_blocks, vec![block]);
     assert_eq!(probe.cached_tokens, 4);
@@ -54,12 +61,13 @@ fn committed_prefix_survives_request_release_until_evicted() -> Result<()> {
         block_count: 1,
         dtype: KvCacheDType::Auto,
     });
+    let gemma = model("gemma");
     let block = cache.allocate()?;
-    let hash = cache.commit_prefix_block("gemma", None, block, &[1, 2])?;
+    let hash = cache.commit_prefix_block(&gemma, None, block, &[1, 2])?;
 
     assert!(!cache.release(block)?);
     assert_eq!(cache.block_ref_count(block)?, 1);
-    assert_eq!(cache.probe_prefix("gemma", &[1, 2]).cached_blocks, vec![block]);
+    assert_eq!(cache.probe_prefix(&gemma, &[1, 2]).cached_blocks, vec![block]);
     assert!(cache.evict_prefix(hash)?);
     assert_eq!(cache.free_blocks(), 1);
     Ok(())
@@ -72,15 +80,16 @@ fn duplicate_prefix_releases_the_replaced_cache_reference() -> Result<()> {
         block_count: 2,
         dtype: KvCacheDType::Auto,
     });
+    let gemma = model("gemma");
     let first = cache.allocate()?;
-    cache.commit_prefix_block("gemma", None, first, &[1, 2])?;
+    cache.commit_prefix_block(&gemma, None, first, &[1, 2])?;
     let second = cache.allocate()?;
-    cache.commit_prefix_block("gemma", None, second, &[1, 2])?;
+    cache.commit_prefix_block(&gemma, None, second, &[1, 2])?;
 
     assert_eq!(cache.block_ref_count(first)?, 1);
-    assert_eq!(cache.probe_prefix("gemma", &[1, 2]).cached_blocks, [second]);
+    assert_eq!(cache.probe_prefix(&gemma, &[1, 2]).cached_blocks, [second]);
     assert!(cache.release(first)?);
-    assert_eq!(cache.probe_prefix("gemma", &[1, 2]).cached_blocks, [second]);
+    assert_eq!(cache.probe_prefix(&gemma, &[1, 2]).cached_blocks, [second]);
     assert!(!cache.release(second)?);
     assert_eq!(cache.free_blocks(), 1);
     Ok(())
@@ -93,11 +102,12 @@ fn allocation_pressure_evicts_oldest_inactive_prefix() -> Result<()> {
         block_count: 2,
         dtype: KvCacheDType::Auto,
     });
+    let gemma = model("gemma");
     let oldest = cache.allocate()?;
-    let oldest_hash = cache.commit_prefix_block("gemma", None, oldest, &[1, 2])?;
+    let oldest_hash = cache.commit_prefix_block(&gemma, None, oldest, &[1, 2])?;
     cache.release(oldest)?;
     let newest = cache.allocate()?;
-    cache.commit_prefix_block("gemma", None, newest, &[3, 4])?;
+    cache.commit_prefix_block(&gemma, None, newest, &[3, 4])?;
     cache.release(newest)?;
 
     let allocation = cache.allocate_for_tokens(2)?;
@@ -116,8 +126,9 @@ fn allocation_pressure_preserves_prefixes_used_by_sessions() -> Result<()> {
         block_count: 1,
         dtype: KvCacheDType::Auto,
     });
+    let gemma = model("gemma");
     let block = cache.allocate()?;
-    cache.commit_prefix_block("gemma", None, block, &[1, 2])?;
+    cache.commit_prefix_block(&gemma, None, block, &[1, 2])?;
     cache.retain(block)?;
 
     assert!(matches!(cache.allocate(), Err(RuntimeError::KvCachePressure)));
@@ -133,15 +144,16 @@ fn impossible_allocation_is_typed_and_preserves_cached_prefix() -> Result<()> {
         block_count: 1,
         dtype: KvCacheDType::Auto,
     });
+    let id = model("model");
     let block = cache.allocate()?;
-    cache.commit_prefix_block("model", None, block, &[1, 2])?;
+    cache.commit_prefix_block(&id, None, block, &[1, 2])?;
     cache.release(block)?;
     assert!(matches!(
         cache.allocate_for_tokens(3),
         Err(RuntimeError::KvCapacity { requested: 2, capacity: 1 })
     ));
     assert_eq!(cache.stats().counters.evictions, 0);
-    assert_eq!(cache.probe_prefix("model", &[1, 2]).cached_blocks, [block]);
+    assert_eq!(cache.probe_prefix(&id, &[1, 2]).cached_blocks, [block]);
     assert_eq!(cache.allocate_for_tokens(2)?.table.blocks(), &[block]);
     Ok(())
 }

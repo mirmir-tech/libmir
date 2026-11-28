@@ -4,7 +4,11 @@ use super::{
     GgmlType,
     reader::{Parsed, Reader, invalid},
 };
-use crate::{error::Result, weights::TensorInfo};
+use crate::{
+    error::Result,
+    layout::WeightContainer,
+    weights::{TensorDType, TensorInfo},
+};
 
 /// GGML tensors have at most four dimensions (`GGML_MAX_DIMS`).
 const MAX_DIMS: u32 = 4;
@@ -60,12 +64,13 @@ impl GgufTensor {
         self.offset.saturating_add(self.bytes)
     }
 
-    /// The catalog entry the binding layer reads; `dtype` is the GGML name.
+    /// The catalog entry the binding layer reads.
     pub fn info(&self, file: &Path, data_start: u64) -> Result<TensorInfo> {
         Ok(TensorInfo {
             name: self.name.clone(),
             file: file.to_path_buf(),
-            dtype: self.ggml_type.name().to_owned(),
+            container: WeightContainer::Gguf,
+            dtype: TensorDType::from_ggml(self.ggml_type),
             shape: self.shape()?,
             data_start,
             data_offsets: [self.offset, self.end()],

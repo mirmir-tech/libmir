@@ -7,7 +7,7 @@ use crate::{ModelMemoryEstimate, model::cache::pool::KvCachePools};
 #[test]
 fn observer_never_waits_for_cache_or_keeps_it_alive() {
     let assignment = KvCachePools::default().acquire(
-        &BackendTarget::CpuReference,
+        BackendTarget::Metal,
         CacheConfig::new(4),
         ModelMemoryEstimate {
             weight_bytes: 0,

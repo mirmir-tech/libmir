@@ -50,10 +50,6 @@ impl MetalConfig {
         self.max_batch_requests = max_batch_requests.max(1);
     }
 
-    pub(crate) const fn max_batch_requests(&self) -> usize {
-        self.max_batch_requests
-    }
-
     pub const fn set_speculation(
         &mut self,
         speculation: Option<runtime::speculation::Speculation>,

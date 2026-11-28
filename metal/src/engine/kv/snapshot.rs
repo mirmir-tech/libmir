@@ -1,6 +1,6 @@
 //! Prefix snapshots of one layer's K/V, at its current offset or rewound.
 
-use super::{KvCache, clone_array};
+use super::{ContiguousStore, KvCache, KvStorage, SlidingStore, clone_array};
 use crate::engine::{Error, Result};
 
 impl KvCache {
@@ -12,21 +12,22 @@ impl KvCache {
     /// prompt, llama-benchy's context probe). A wrapped decode ring and an
     /// unpaged full cache only snapshot their current offset.
     pub(crate) fn prefix_floor(&self) -> usize {
-        if self.pages.is_some() {
-            return 0;
-        }
-        match (self.max_context, self.keys.as_ref()) {
-            (Some(window), Some(_)) => {
-                let stored = self.sliding_valid(window);
-                if self.write_index < stored {
+        match &self.storage {
+            KvStorage::Paged(_) => 0,
+            KvStorage::Contiguous(_) => self.offset,
+            KvStorage::Sliding(store) => {
+                if store.keys.is_none() {
+                    return self.offset;
+                }
+                let stored = store.valid_tokens(self.offset);
+                if store.write_index < stored {
                     self.offset
                 } else if stored >= self.offset {
                     0
                 } else {
-                    (self.offset - stored).saturating_add(window - 1).min(self.offset)
+                    (self.offset - stored).saturating_add(store.max_context - 1).min(self.offset)
                 }
             },
-            _ => self.offset,
         }
     }
 
@@ -37,39 +38,36 @@ impl KvCache {
             ));
         }
         let rewind = self.offset - offset;
-        let (capacity, write_index) = if rewind == 0 || self.max_context.is_none() {
-            (self.capacity, self.write_index)
-        } else if offset >= self.prefix_floor() {
-            // The chronological view keeps the first `capacity` tokens only, so
-            // the rewound snapshot shares the arrays and drops their tail.
-            (self.capacity - rewind, self.write_index - rewind)
-        } else {
-            return Err(Error::InvalidModel(format!(
-                "KV cache cannot rewind from {} to {offset} tokens",
-                self.offset
-            )));
+        let storage = match &self.storage {
+            KvStorage::Contiguous(store) => KvStorage::Contiguous(ContiguousStore {
+                keys: clone_array(store.keys.as_ref())?,
+                values: clone_array(store.values.as_ref())?,
+                capacity: store.capacity,
+                step: store.step,
+            }),
+            KvStorage::Sliding(store) => {
+                let (capacity, write_index) = if rewind == 0 {
+                    (store.capacity, store.write_index)
+                } else if offset >= self.prefix_floor() {
+                    (store.capacity - rewind, store.write_index - rewind)
+                } else {
+                    return Err(Error::InvalidModel(format!(
+                        "KV cache cannot rewind from {} to {offset} tokens",
+                        self.offset
+                    )));
+                };
+                KvStorage::Sliding(SlidingStore {
+                    keys: clone_array(store.keys.as_ref())?,
+                    values: clone_array(store.values.as_ref())?,
+                    capacity,
+                    write_index,
+                    step: store.step,
+                    max_context: store.max_context,
+                    last_update_tokens: store.last_update_tokens,
+                })
+            },
+            KvStorage::Paged(pages) => KvStorage::Paged(pages.snapshot_at(offset)?),
         };
-        Ok(Self {
-            history: None,
-            keys: clone_array(self.keys.as_ref())?,
-            values: clone_array(self.values.as_ref())?,
-            pages: self.pages.as_ref().map(|pages| pages.snapshot_at(offset)).transpose()?,
-            offset,
-            capacity,
-            write_index,
-            step: self.step,
-            max_context: self.max_context,
-            reserve_tokens: self.reserve_tokens,
-            last_update_tokens: self.last_update_tokens,
-        })
-    }
-
-    /// Tokens of the sliding chronological view (`temporal` in `sliding`).
-    const fn sliding_valid(&self, window: usize) -> usize {
-        if self.offset < window {
-            self.offset
-        } else {
-            self.capacity
-        }
+        Ok(Self { history: None, storage, offset })
     }
 }

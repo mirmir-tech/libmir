@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use foundation::model::ModelId;
+
 use super::{
     PrefixCache, PrefixEntry, PrefixGroup, PrefixSnapshot,
     index::{PrefixKey, indexed_prefixes},
@@ -12,32 +14,37 @@ use crate::{
 mod memory;
 mod retention;
 
+fn model(id: &str) -> ModelId {
+    ModelId::new(id)
+}
+
 #[test]
 fn indexes_storage_efficient_complete_blocks_and_the_exact_prompt() {
-    let indexed = indexed_prefixes("model", &[1, 2, 3, 4, 5], Some(2), 0);
+    let indexed = indexed_prefixes(&model("model"), &[1, 2, 3, 4, 5], Some(2), 0);
     assert_eq!(indexed.iter().map(|(_, position)| *position).collect::<Vec<_>>(), [4, 5]);
 }
 
 #[test]
 fn indexes_only_the_exact_prompt_without_block_prefixes() {
-    let indexed = indexed_prefixes("model", &[1, 2, 3], None, 0);
+    let indexed = indexed_prefixes(&model("model"), &[1, 2, 3], None, 0);
     assert_eq!(indexed.iter().map(|(_, position)| *position).collect::<Vec<_>>(), [3]);
 }
 
 #[test]
 fn continuation_replays_an_unaligned_terminal_page() -> Result<()> {
+    let id = model("model");
     let mut cache = PrefixCache::new(2, usize::MAX);
     let mut state = SessionState::new(DecoderCache::new(&[], 1)?);
     state.position = 5;
     let logits = Array::from_u32(&[0], &[1])?;
-    cache.insert("model", &[1, 2, 3, 4, 5], &state, &logits, Some(2), 100)?;
+    cache.insert(&id, &[1, 2, 3, 4, 5], &state, &logits, Some(2), 100)?;
 
     let (continued, continued_logits) = cache
-        .lease_longest("model", &[1, 2, 3, 4, 5, 6])?
+        .lease_longest(&id, &[1, 2, 3, 4, 5, 6])?
         .ok_or(crate::native::error::Error::NoPrefixLogits)?
         .restored;
     let (exact, exact_logits) = cache
-        .lease_longest("model", &[1, 2, 3, 4, 5])?
+        .lease_longest(&id, &[1, 2, 3, 4, 5])?
         .ok_or(crate::native::error::Error::NoPrefixLogits)?
         .restored;
 
@@ -50,13 +57,14 @@ fn continuation_replays_an_unaligned_terminal_page() -> Result<()> {
 
 #[test]
 fn continuation_replays_an_unaligned_checkpoint_page() -> Result<()> {
+    let id = model("model");
     let mut cache = PrefixCache::new(2, usize::MAX);
     let mut state = SessionState::new(DecoderCache::new(&[], 1)?);
     state.position = 5;
-    cache.insert_checkpoint("model", &[1, 2, 3, 4, 5], &state, 2, 100)?;
+    cache.insert_checkpoint(&id, &[1, 2, 3, 4, 5], &state, 2, 100)?;
 
     let (continued, logits) = cache
-        .lease_longest("model", &[1, 2, 3, 4, 5, 6])?
+        .lease_longest(&id, &[1, 2, 3, 4, 5, 6])?
         .ok_or(crate::native::error::Error::NoPrefixLogits)?
         .restored;
 
@@ -64,7 +72,7 @@ fn continuation_replays_an_unaligned_checkpoint_page() -> Result<()> {
     assert!(logits.is_none());
 
     let (completed, completed_logits) = cache
-        .lease_longest("model", &[1, 2, 3, 4, 5])?
+        .lease_longest(&id, &[1, 2, 3, 4, 5])?
         .ok_or(crate::native::error::Error::NoPrefixLogits)?
         .restored;
     assert_eq!(completed.position, 4);
@@ -74,16 +82,17 @@ fn continuation_replays_an_unaligned_checkpoint_page() -> Result<()> {
 
 #[test]
 fn shared_checkpoints_count_only_the_largest_group_footprint() -> Result<()> {
+    let id = model("model");
     let mut cache = PrefixCache::new(2, usize::MAX);
     let mut state = SessionState::new(DecoderCache::new(&[], 1)?);
     state.position = 2;
-    cache.insert_checkpoint("model", &[1, 2], &state, 2, 40)?;
+    cache.insert_checkpoint(&id, &[1, 2], &state, 2, 40)?;
     state.position = 3;
     let logits = Array::from_u32(&[0], &[1])?;
-    cache.insert("model", &[1, 2, 3], &state, &logits, None, 60)?;
+    cache.insert(&id, &[1, 2, 3], &state, &logits, None, 60)?;
 
     let (restored, logits) = cache
-        .lease_longest("model", &[1, 2, 9])?
+        .lease_longest(&id, &[1, 2, 9])?
         .ok_or(crate::native::error::Error::NoPrefixLogits)?
         .restored;
 
@@ -96,15 +105,16 @@ fn shared_checkpoints_count_only_the_largest_group_footprint() -> Result<()> {
 
 #[test]
 fn growing_checkpoints_do_not_sum_shared_kv_pages() -> Result<()> {
+    let id = model("model");
     let mut cache = PrefixCache::new(2, 100);
     let mut state = SessionState::new(DecoderCache::new(&[], 1)?);
     state.position = 2;
-    cache.insert_checkpoint("model", &[1, 2], &state, 2, 20)?;
+    cache.insert_checkpoint(&id, &[1, 2], &state, 2, 20)?;
     state.position = 4;
-    cache.insert_checkpoint("model", &[1, 2, 3, 4], &state, 2, 40)?;
+    cache.insert_checkpoint(&id, &[1, 2, 3, 4], &state, 2, 40)?;
     state.position = 5;
     let logits = Array::from_u32(&[0], &[1])?;
-    cache.insert("model", &[1, 2, 3, 4, 5], &state, &logits, None, 60)?;
+    cache.insert(&id, &[1, 2, 3, 4, 5], &state, &logits, None, 60)?;
 
     assert_eq!(cache.groups.len(), 1);
     assert_eq!(cache.resident_bytes(), 60);
@@ -141,7 +151,7 @@ fn lookup_miss_preserves_groups_until_explicit_reservation() -> Result<()> {
     insert_snapshot(&mut cache, 1, 1, 100)?;
     insert_snapshot(&mut cache, 2, 2, 100)?;
 
-    assert!(cache.lease_longest("missing", &[1])?.is_none());
+    assert!(cache.lease_longest(&model("missing"), &[1])?.is_none());
     assert_eq!(cache.group_count(), 2);
     cache.reserve_miss_slot();
 
@@ -156,9 +166,9 @@ fn cohort_lease_does_not_evict_prefixes_while_collecting_misses() -> Result<()> 
     insert_prompt(&mut cache, 1)?;
     insert_prompt(&mut cache, 2)?;
 
-    assert!(cache.lease_longest("missing", &[9])?.is_none());
-    assert!(cache.lease_longest("model", &[1])?.is_some());
-    assert!(cache.lease_longest("model", &[2])?.is_some());
+    assert!(cache.lease_longest(&model("missing"), &[9])?.is_none());
+    assert!(cache.lease_longest(&model("model"), &[1])?.is_some());
+    assert!(cache.lease_longest(&model("model"), &[2])?.is_some());
     assert_eq!(cache.groups.len(), 2);
     Ok(())
 }
@@ -201,7 +211,7 @@ fn insert_prompt(cache: &mut PrefixCache, token: u32) -> Result<()> {
     let mut state = SessionState::new(DecoderCache::new(&[], 1)?);
     state.position = 1;
     let logits = Array::from_u32(&[token], &[1])?;
-    cache.insert("model", &[token], &state, &logits, None, 100)
+    cache.insert(&model("model"), &[token], &state, &logits, None, 100)
 }
 
 fn insert_snapshot_with_key(

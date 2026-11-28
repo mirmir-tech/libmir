@@ -20,7 +20,8 @@ fn template() -> Result<DenseFeedForward> {
         upload.enqueue(&TensorInfo {
             name: name.into(),
             file: path.clone(),
-            dtype: "BF16".into(),
+            container: models::layout::WeightContainer::SafeTensors,
+            dtype: models::weights::DenseDType::Bf16.into(),
             shape: vec![2, 2],
             data_start: 0,
             data_offsets: [offset, offset + 8],

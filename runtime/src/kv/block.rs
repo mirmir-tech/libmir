@@ -45,9 +45,13 @@ impl KvBlock {
 
 impl BlockHash {
     #[must_use]
-    pub fn from_tokens(model: &str, parent: Option<Self>, tokens: &[u32]) -> Self {
+    pub fn from_tokens(
+        model: &foundation::model::ModelId,
+        parent: Option<Self>,
+        tokens: &[u32],
+    ) -> Self {
         let mut hasher = blake3::Hasher::new();
-        hasher.update(model.as_bytes());
+        hasher.update(model.as_str().as_bytes());
         if let Some(parent) = parent {
             hasher.update(&parent.0);
         }

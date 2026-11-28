@@ -17,6 +17,7 @@ use std::{
 };
 
 use ::runtime::{RuntimeError, backend::ModelHandle};
+use foundation::model::ModelId;
 pub use generation::{MetalGenerationStepOutput, MetalPrefillSchedule};
 
 use self::worker::ModelClient;
@@ -24,11 +25,11 @@ use super::{
     error::{Error, Result},
     model::LoadedModel,
 };
-use crate::{MetalConfig, engine::PagedArenaPool};
+use crate::MetalConfig;
 
 #[derive(Debug, Default)]
 struct ModelRegistry {
-    models: HashMap<String, ModelClient>,
+    models: HashMap<ModelId, ModelClient>,
 }
 
 #[derive(Debug, Clone)]
@@ -36,7 +37,6 @@ pub struct MetalBackend {
     models: Arc<Mutex<ModelRegistry>>,
     profile_decode: Arc<AtomicBool>,
     config: Arc<MetalConfig>,
-    paged_arenas: Arc<PagedArenaPool>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -54,7 +54,6 @@ impl MetalBackend {
             models: Arc::default(),
             profile_decode: Arc::default(),
             config: Arc::new(config),
-            paged_arenas: Arc::default(),
         }
     }
 
@@ -166,7 +165,7 @@ impl MetalBackend {
 
     fn with_model<T>(
         &self,
-        id: &str,
+        id: &ModelId,
         run: impl FnOnce(&mut LoadedModel) -> Result<T> + Send + 'static,
     ) -> Result<T>
     where
@@ -176,18 +175,18 @@ impl MetalBackend {
         model.run(run)
     }
 
-    fn model_client(&self, id: &str) -> Result<ModelClient> {
+    fn model_client(&self, id: &ModelId) -> Result<ModelClient> {
         self.models
             .lock()?
             .models
             .get(id)
             .cloned()
-            .ok_or_else(|| Error::ModelNotLoaded(id.to_owned()))
+            .ok_or_else(|| Error::ModelNotLoaded(id.to_string()))
     }
 
     fn with_model_progress<T>(
         &self,
-        id: &str,
+        id: &ModelId,
         run: impl FnOnce(&mut LoadedModel, &mut dyn FnMut(crate::MetalProgressEvent)) -> Result<T>
         + Send
         + 'static,

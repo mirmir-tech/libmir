@@ -64,6 +64,7 @@ pub enum CudaSharedRoutedLayerState {
 pub struct CudaSharedRoutedModelTemplate {
     backend: CudaBackend,
     decoder: DecoderConfig,
+    cache_layout: architecture::CacheLayout,
     embedding: CheckpointProjectionWeight,
     final_norm: CudaTensor,
     output: CheckpointProjectionWeight,
@@ -98,7 +99,7 @@ impl CudaSharedRoutedModelTemplate {
         max_sequence_blocks: usize,
         speculation: Option<Speculation>,
     ) -> Result<Self> {
-        let (hybrid, latent) = load::composition(admitted.runtime, max_sequence_blocks)?;
+        let composition = load::composition(admitted.runtime, max_sequence_blocks)?;
         let plan = admitted.plan.layers();
         let boundary = bindings.decoder_boundary_with_tied_output(decoder.tie_word_embeddings)?;
         let embedding = CheckpointProjectionWeight::load_binding_prepared(
@@ -114,67 +115,76 @@ impl CudaSharedRoutedModelTemplate {
         };
         output.affine_format(1, decoder.hidden_size, decoder.vocab_size)?;
         let final_norm = required_norm(tensors, &boundary.final_norm.source, decoder.hidden_size)?;
-        let (norm_shift, layers, prediction) = if hybrid {
-            let load = load::HybridLoad {
-                backend,
-                decoder,
-                tensors,
-                catalog,
-                cache,
-                max_sequence_blocks,
-            };
-            let layers = semantic
-                .decoder
-                .layers
-                .iter()
-                .enumerate()
-                .zip(plan)
-                .map(|((layer, spec), lowered)| {
-                    load.layer(layer, (spec, lowered), bindings.state_space_hybrid_layer(layer)?)
-                })
-                .collect::<Result<Vec<_>>>()?;
-            // Speculation drafts only with a checkpoint's prediction module.
-            let prediction = speculation
-                .filter(|_| !semantic.decoder.prediction_layers.is_empty())
-                .map(|_| PredictionTemplate::load(&load, (semantic, &admitted.plan), bindings))
-                .transpose()?;
-            (0.0, layers, prediction)
-        } else if latent {
-            let layers = load::latent_layers(
-                backend,
-                decoder,
-                (semantic, plan),
-                tensors,
-                catalog,
-                bindings,
-                cache,
-            )?;
-            (0.0, layers, None)
-        } else {
-            let norm_shift = infer_norm_shift(tensors, decoder, bindings)?;
-            let layers = semantic
-                .decoder
-                .layers
-                .iter()
-                .enumerate()
-                .zip(plan)
-                .map(|((layer, spec), lowered)| {
-                    build_layer(
-                        backend,
-                        decoder,
-                        tensors,
-                        catalog,
-                        (layer, spec, lowered),
-                        bindings.mixed_decoder_layer(layer)?,
-                        norm_shift,
-                    )
-                })
-                .collect::<Result<Vec<_>>>()?;
-            (norm_shift, layers, None)
+        let (norm_shift, layers, prediction) = match composition {
+            load::SharedRoutedComposition::StateSpaceHybrid => {
+                let load = load::HybridLoad {
+                    backend,
+                    decoder,
+                    tensors,
+                    catalog,
+                    cache,
+                    max_sequence_blocks,
+                };
+                let layers = semantic
+                    .decoder
+                    .layers
+                    .iter()
+                    .enumerate()
+                    .zip(plan)
+                    .map(|((layer, spec), lowered)| {
+                        load.layer(
+                            layer,
+                            (spec, lowered),
+                            bindings.state_space_hybrid_layer(layer)?,
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                // Speculation drafts only with a checkpoint's prediction module.
+                let prediction = speculation
+                    .filter(|_| !semantic.decoder.prediction_layers.is_empty())
+                    .map(|_| PredictionTemplate::load(&load, (semantic, &admitted.plan), bindings))
+                    .transpose()?;
+                (0.0, layers, prediction)
+            },
+            load::SharedRoutedComposition::LatentAttention => {
+                let layers = load::latent_layers(
+                    backend,
+                    decoder,
+                    (semantic, plan),
+                    tensors,
+                    catalog,
+                    bindings,
+                    cache,
+                )?;
+                (0.0, layers, None)
+            },
+            load::SharedRoutedComposition::LinearFull => {
+                let norm_shift = infer_norm_shift(tensors, decoder, bindings)?;
+                let layers = semantic
+                    .decoder
+                    .layers
+                    .iter()
+                    .enumerate()
+                    .zip(plan)
+                    .map(|((layer, spec), lowered)| {
+                        build_layer(
+                            backend,
+                            decoder,
+                            tensors,
+                            catalog,
+                            (layer, spec, lowered),
+                            bindings.mixed_decoder_layer(layer)?,
+                            norm_shift,
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                (norm_shift, layers, None)
+            },
         };
         Ok(Self {
             backend: backend.clone(),
             decoder: decoder.clone(),
+            cache_layout: admitted.cache_layout.clone(),
             embedding,
             final_norm,
             output,
@@ -197,25 +207,6 @@ impl CudaSharedRoutedModelTemplate {
     #[must_use]
     pub const fn norm_shift(&self) -> f32 {
         self.norm_shift
-    }
-
-    fn prepare_embedding(&self) -> Result<boundary::SharedRoutedEmbedding> {
-        boundary::SharedRoutedEmbedding::new(
-            &self.backend,
-            self.decoder.hidden_size,
-            self.decoder.vocab_size,
-            &self.embedding,
-        )
-    }
-
-    fn prepare_output_head(&self, tokens: usize) -> Result<boundary::SharedRoutedOutputHead> {
-        boundary::SharedRoutedOutputHead::new(
-            &self.backend,
-            tokens,
-            self.decoder.hidden_size,
-            self.decoder.vocab_size,
-            &self.output,
-        )
     }
 
     #[must_use]

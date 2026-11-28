@@ -17,15 +17,16 @@ mod vision;
 #[cfg(feature = "cuda")]
 use cuda::CudaEngine;
 use foundation::model::BackendTarget;
+#[cfg(all(test, any(feature = "cuda", feature = "metal")))]
+pub use generation::{DecodeInterleaving, NewDecodePolicy, PrefixReplayPolicy, WaveDepthPolicy};
 #[cfg(any(feature = "cuda", feature = "metal"))]
 pub use generation::{
     EngineGenerationStepOutput, EnginePrefillBatch, EnginePrefillCohort, PrefillAdmissionPolicy,
     PrefillExecutionProfile, PrefillRefillPolicy,
 };
+pub use load::AdmittedArchitecture;
 #[cfg(feature = "metal")]
 use metal::MetalBackend;
-#[cfg(not(any(feature = "cuda", feature = "metal")))]
-use runtime::RuntimeError;
 use runtime::{Result as RuntimeResult, backend::ModelHandle, kv::CacheConfig};
 use uuid::Uuid;
 
@@ -52,7 +53,8 @@ enum EngineInner {
     )]
     Metal(MetalBackend),
     #[cfg(not(any(feature = "cuda", feature = "metal")))]
-    Unavailable,
+    #[allow(dead_code, reason = "uninhabited placeholder when no accelerator feature is compiled")]
+    Unavailable(std::convert::Infallible),
 }
 
 impl Engine {
@@ -70,7 +72,7 @@ impl Engine {
             #[cfg(feature = "metal")]
             EngineInner::Metal(_) => BackendTarget::Metal,
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => BackendTarget::CpuReference,
+            EngineInner::Unavailable(never) => match *never {},
         }
     }
 
@@ -93,7 +95,7 @@ impl Engine {
             #[cfg(feature = "metal")]
             EngineInner::Metal(metal) => Ok(metal.finish_startup_tuning(model)?),
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => Ok(()),
+            EngineInner::Unavailable(never) => match *never {},
         }
     }
 
@@ -105,7 +107,7 @@ impl Engine {
             #[cfg(feature = "metal")]
             EngineInner::Metal(metal) => metal.clear_memory_cache(),
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => unavailable(),
+            EngineInner::Unavailable(never) => match *never {},
         }
     }
 
@@ -120,7 +122,7 @@ impl Engine {
             #[cfg(feature = "metal")]
             EngineInner::Metal(_) => Ok(()),
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => unavailable(),
+            EngineInner::Unavailable(never) => match *never {},
         }
     }
 
@@ -135,7 +137,7 @@ impl Engine {
             #[cfg(feature = "metal")]
             EngineInner::Metal(_) => Ok(()),
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => unavailable(),
+            EngineInner::Unavailable(never) => match *never {},
         }
     }
 
@@ -150,7 +152,7 @@ impl Engine {
             #[cfg(feature = "metal")]
             EngineInner::Metal(_) => Ok(0),
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => unavailable(),
+            EngineInner::Unavailable(never) => match *never {},
         }
     }
 
@@ -165,7 +167,7 @@ impl Engine {
             #[cfg(feature = "metal")]
             EngineInner::Metal(_) => Ok(None),
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => unavailable(),
+            EngineInner::Unavailable(never) => match *never {},
         }
     }
 
@@ -180,7 +182,7 @@ impl Engine {
             #[cfg(feature = "metal")]
             EngineInner::Metal(_) => Ok(false),
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => unavailable(),
+            EngineInner::Unavailable(never) => match *never {},
         }
     }
 
@@ -194,7 +196,7 @@ impl Engine {
             #[cfg(feature = "metal")]
             EngineInner::Metal(metal) => metal.clear_prefix_cache(model),
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => unavailable(),
+            EngineInner::Unavailable(never) => match *never {},
         }
     }
 
@@ -208,26 +210,21 @@ impl Engine {
             #[cfg(feature = "metal")]
             EngineInner::Metal(metal) => metal.release_session(model, session),
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => unavailable(),
+            EngineInner::Unavailable(never) => match *never {},
         }
     }
 
     /// Runs a closure inside a backend-specific generation resource scope.
     pub fn with_generation_scope<T>(&self, run: impl FnOnce() -> T) -> T {
+        #[cfg(not(any(feature = "cuda", feature = "metal")))]
+        drop(run);
         match &self.inner {
             #[cfg(feature = "cuda")]
             EngineInner::Cuda(_) => run(),
             #[cfg(feature = "metal")]
             EngineInner::Metal(metal) => metal.with_generation_scope(run),
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => run(),
+            EngineInner::Unavailable(never) => match *never {},
         }
     }
-}
-
-#[cfg(not(any(feature = "cuda", feature = "metal")))]
-fn unavailable<T>() -> RuntimeResult<T> {
-    Err(RuntimeError::BackendUnavailable(
-        "libmir was built without an accelerator feature".into(),
-    ))
 }

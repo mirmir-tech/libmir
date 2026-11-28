@@ -42,7 +42,10 @@ fn q8_0() -> TensorStorage {
 }
 
 fn bf16_storage() -> TensorStorage {
-    TensorStorage::Dense { dtype: "BF16".into(), bias: None }
+    TensorStorage::Dense {
+        dtype: models::weights::DenseDType::Bf16,
+        bias: None,
+    }
 }
 
 fn copy<T: DeviceElement>(backend: &CudaBackend, values: &[T]) -> Result<mircuda::DeviceBuffer<T>> {

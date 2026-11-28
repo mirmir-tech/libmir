@@ -1,7 +1,5 @@
 mod output;
 
-use std::fs;
-
 pub use output::{GenerationChannel, GenerationToken, OutputNormalizer};
 use serde_json::Value;
 
@@ -59,10 +57,9 @@ pub struct GenerationSettings {
 
 impl GenerationConfig {
     pub fn from_layout(layout: &ModelLayout) -> Result<Self> {
-        layout.generation_config_path.as_deref().map_or_else(
-            || Ok(Self::default()),
-            |path| Self::from_value(&serde_json::from_str(&fs::read_to_string(path)?)?),
-        )
+        layout
+            .read_generation_config()?
+            .map_or_else(|| Ok(Self::default()), |value| Self::from_value(&value))
     }
 
     pub fn from_value(value: &Value) -> Result<Self> {

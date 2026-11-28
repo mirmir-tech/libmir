@@ -62,7 +62,10 @@ impl ChatTemplate {
             }
         } else {
             let has_turns = config.tokens.turn_tokens().is_some();
-            let has_chatml = protocol::has_chatml_tokens(layout.tokenizer_path.as_deref())?;
+            let has_chatml = match &layout.derived {
+                Some(derived) => protocol::has_chatml_value(&derived.tokenizer),
+                None => protocol::has_chatml_tokens(layout.tokenizer_path.as_deref())?,
+            };
             Self {
                 kind: builtin_kind(config.model_type.as_deref(), has_turns, has_chatml),
                 source: TemplateSource::Builtin,

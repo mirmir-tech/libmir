@@ -65,6 +65,7 @@ pub(super) fn run_budget_with_decode(
                 token: greedy_token(&finished.native.output)?,
                 sampling: SamplingLogits::None,
                 speculation: None,
+                blocks: Vec::new(),
             })
         })
         .collect::<Result<Vec<_>>>()?;

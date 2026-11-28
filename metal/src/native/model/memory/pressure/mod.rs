@@ -31,10 +31,14 @@ impl LoadedModel {
         // One token makes every sliding window look unbounded; a long-prompt
         // average charges windows once (Gemma: 225 KB/token at 1, 33 KB at 16k).
         let kv_bytes_per_token = self.kv_rate_bytes_per_token()?;
-        // Arenas keep their high-water capacity inside `active`: their free
-        // pages take new K/V without allocating.
+        // Fixed-capacity arenas allocate once; once populated, all runtime
+        // blocks take K/V without allocating new arena buffers.
         let page_size = self.stream.config().kv_cache.block_size.max(1);
-        let reusable_tokens = self.allocated_page_headroom()?.saturating_mul(page_size);
+        let reusable_tokens = if self.stream.paged_arenas().is_populated()? {
+            (self.stream.config().kv_cache.block_count as usize).saturating_mul(page_size)
+        } else {
+            0
+        };
         let budgets = prefill_token_budgets(memory, kv_bytes_per_token, reusable_tokens);
         tracing::debug!(
             active_bytes = memory.active,
@@ -63,7 +67,11 @@ impl LoadedModel {
             return Ok(false);
         }
         let page_size = self.stream.config().kv_cache.block_size.max(1);
-        let reusable = self.allocated_page_headroom()?.saturating_mul(page_size);
+        let reusable = if self.stream.paged_arenas().is_populated()? {
+            (self.stream.config().kv_cache.block_count as usize).saturating_mul(page_size)
+        } else {
+            0
+        };
         let fresh = prefill_token_budgets(before, self.kv_rate_bytes_per_token()?, reusable).1;
         if fresh >= pending_tokens {
             return Ok(false);

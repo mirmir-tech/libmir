@@ -23,12 +23,12 @@ pub use cancellation::CancellationToken;
 pub use config::{MemoryRuntimeConfig, RuntimeConfig, VisionRuntimeConfig};
 pub use embedding::{EmbeddingOutput, EmbeddingRequest};
 pub use engine::Engine;
-pub use error::{Error, Result};
+pub use error::{Error, ResponseFormatError, Result, ToolCallError};
 pub use foundation::{
     conversation::{
         Conversation, FunctionCall, FunctionDefinition, Message, Tool, ToolCall, ToolChoice,
     },
-    model::BackendTarget,
+    model::{BackendTarget, ModelId},
 };
 pub use generation::{
     GenerationOutput, GenerationRequest, ReasoningCyclePolicy, ResponseFormat, ToolConstraints,
@@ -40,7 +40,7 @@ pub use model::{
     AdmissionCheck, AdmissionCheckKind, AdmissionStatus, ArchitectureOutcome,
     BackendAdmissionReport, CacheStatsReader, CheckSubject, CheckpointEncoding, EncodingKind,
     IMAGE_PLACEHOLDER, Library, LoadPreview, MODEL_FORMAT_REGISTRY_SCHEMA_VERSION, Model,
-    ModelDescriptor, ModelLoadOptions, PreparedPrompt, PreparedVisionPrompt,
+    ModelDescriptor, ModelLoadOptions, ModelSource, PreparedPrompt, PreparedVisionPrompt,
     PromptPreparationTimings, RemoteModelContract, RemoteTaskMetadata, RemoteVisionContract,
     UnloadedTensors, WeightEncoding,
 };
@@ -48,13 +48,15 @@ pub use models::{
     chat::{ReasoningEffort, ReasoningHistory, ReasoningMode, TemplateKind},
     execution::{
         ArchitectureCapability, ArchitectureRequirements, CausalScoringTask, EmbeddingTask,
-        ModelTask, PoolingMode, TaskExecutionPlan,
+        ModelTask, PoolingMode, TaskExecutionPlan, TaskKind,
     },
     generation::{GenerationChannel, GenerationOverrides, GenerationSettings, GenerationToken},
     gguf,
     layout::{WeightContainer, json as config_json},
     tokenizer::{TokenizerAssets, TokenizerKind},
-    weights::{TensorCatalog, TensorInfo, safetensors_header_len},
+    weights::{
+        DenseDType, FloatDType, TensorCatalog, TensorDType, TensorInfo, safetensors_header_len,
+    },
 };
 pub use rerank::{RerankOutput, RerankRequest, RerankResult};
 pub use runtime::{

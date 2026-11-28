@@ -9,8 +9,8 @@ pub use lowering::{LayerLowering, NormalizationLowering, lower_layer};
 use models::{
     execution::{PoolingMode, TaskExecutionPlan},
     layout::{
-        DecoderConfig, EncoderConfig, EncoderPositionEmbedding, EncoderRopeScaling, NormKind,
-        VisionPipeline,
+        DecoderConfig, EncoderConfig, EncoderPositionEmbedding, EncoderRopeScaling,
+        HiddenActivation, NormKind, VisionPipeline,
     },
     semantic::SemanticModelSpec,
 };
@@ -18,7 +18,8 @@ pub use runtime::MetalDecoderRuntime;
 
 pub use crate::lowering::{Activation, Clamp, Experts, FeedForwardLowering, MixerLowering};
 use crate::{
-    ArchitectureError, Result, TaskRefusal, capability::Operations, decoder::DecoderFeatures,
+    ArchitectureError, CacheLayout, Result, TaskRefusal, capability::Operations,
+    decoder::DecoderFeatures,
 };
 
 /// A lowered decoder and the runtime admitted to execute it, which the
@@ -29,6 +30,7 @@ pub struct MetalDecoderPlan {
     final_norm: NormalizationLowering,
     features: DecoderFeatures,
     runtime: MetalDecoderRuntime,
+    cache_layout: CacheLayout,
 }
 
 impl MetalDecoderPlan {
@@ -50,6 +52,11 @@ impl MetalDecoderPlan {
     #[must_use]
     pub const fn runtime(&self) -> MetalDecoderRuntime {
         self.runtime
+    }
+
+    #[must_use]
+    pub const fn cache_layout(&self) -> &CacheLayout {
+        &self.cache_layout
     }
 
     /// What the plan requires of a runtime.
@@ -122,6 +129,7 @@ pub fn plan(decoder: &DecoderConfig, spec: &SemanticModelSpec) -> Result<MetalDe
         final_norm: lowered.final_norm,
         features: lowered.features,
         runtime,
+        cache_layout: CacheLayout::for_metal(&spec.decoder),
     })
 }
 
@@ -130,7 +138,7 @@ fn sequence_scoring(config: &EncoderConfig) -> Result<MetalArchitecture> {
         matches!(config.rope_scaling, None | Some(EncoderRopeScaling::Ntk { mixed_b: None, .. }));
     if config.packed_qkv
         && config.norm == NormKind::LayerNorm
-        && config.hidden_activation == "gelu"
+        && config.hidden_activation == HiddenActivation::Gelu
         && config.position_embedding == EncoderPositionEmbedding::Rope
         && config.num_labels == 1
         && rope

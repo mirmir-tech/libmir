@@ -28,6 +28,14 @@ pub(super) struct SpeculativeState {
 }
 
 impl SpeculativeState {
+    pub(in crate::native) fn bind_blocks(
+        &mut self,
+        blocks: &[runtime::kv::BlockId],
+        stream: &Stream,
+    ) -> Result<()> {
+        Ok(self.cache.bind_blocks(blocks, None, stream)?)
+    }
+
     pub(super) fn snapshot(&self) -> Result<Self> {
         Ok(Self {
             cache: self.cache.snapshot_at(self.cache.cached_tokens()?)?,

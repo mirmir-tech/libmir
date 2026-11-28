@@ -5,6 +5,7 @@ use super::{
     CompressedIntegerQuantization, Float8Quantization, GgmlBlockQuantization, GgmlCompanion,
     GptqQuantization, GroupedAffineQuantization, LogicalTensorRole,
 };
+use crate::weights::{DenseDType, TensorDType};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -36,7 +37,7 @@ pub enum BindingTransform {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TensorStorage {
     Dense {
-        dtype: String,
+        dtype: DenseDType,
         bias: Option<String>,
     },
     AffineQuantized {
@@ -94,7 +95,7 @@ pub enum TensorStorage {
         companion: GgmlCompanion,
     },
     Auxiliary {
-        dtype: String,
+        dtype: TensorDType,
     },
 }
 

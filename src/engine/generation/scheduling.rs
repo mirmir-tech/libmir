@@ -1,7 +1,8 @@
 use runtime::{backend::ModelHandle, kv::CacheConfig};
 
 use super::{
-    Engine, EngineInner, PrefillAdmissionPolicy, PrefillExecutionProfile, PrefillRefillPolicy,
+    DecodeInterleaving, Engine, EngineInner, NewDecodePolicy, PrefillAdmissionPolicy,
+    PrefillExecutionProfile, PrefillRefillPolicy, PrefixReplayPolicy, WaveDepthPolicy,
 };
 use crate::Result;
 #[cfg(feature = "metal")]
@@ -62,30 +63,39 @@ impl Engine {
                 .map_or(resident_token_slots, |value| value.max_cohort_tokens)
                 .min(resident_token_slots),
         };
-        let limit_deep_prefill_waves = true;
         let cached_prefix_admission = match &self.inner {
             #[cfg(feature = "cuda")]
             EngineInner::Cuda(cuda) => cuda.paged_prefix_admission(&model.id)?,
             #[cfg(feature = "metal")]
             EngineInner::Metal(_) => Some((0, 0, 0)),
         };
-        let cached_prefix_replay_tokens =
-            cached_prefix_admission.map(|(fallback_tokens, _, _)| fallback_tokens);
-        let cached_prefix_checkpoint_replay_tokens =
-            cached_prefix_admission.map(|(_, checkpoint_tokens, _)| checkpoint_tokens);
-        let cached_prefix_completion_slack_tokens =
-            cached_prefix_admission.map_or(0, |(_, _, slack_tokens)| slack_tokens);
-        let defer_new_decode = match &self.inner {
+        let prefix_replay = cached_prefix_admission.map_or(
+            PrefixReplayPolicy::Off,
+            |(fallback_tokens, checkpoint_tokens, completion_slack_tokens)| {
+                PrefixReplayPolicy::Replay {
+                    fallback_tokens,
+                    checkpoint_tokens: Some(checkpoint_tokens),
+                    completion_slack_tokens,
+                }
+            },
+        );
+        let new_decode = match &self.inner {
             #[cfg(feature = "cuda")]
-            EngineInner::Cuda(_) => false,
+            EngineInner::Cuda(_) => NewDecodePolicy::Immediate,
             #[cfg(feature = "metal")]
-            EngineInner::Metal(_) => true,
+            EngineInner::Metal(_) => NewDecodePolicy::DeferDuringPrefill,
         };
-        let interleave_prefill_decode = match &self.inner {
+        let interleaving = match &self.inner {
             #[cfg(feature = "cuda")]
-            EngineInner::Cuda(_) => true,
+            EngineInner::Cuda(_) => DecodeInterleaving::Interleaved,
             #[cfg(feature = "metal")]
-            EngineInner::Metal(_) => metal_schedule.is_none_or(|value| value.interleave_decode),
+            EngineInner::Metal(_) => {
+                if metal_schedule.is_none_or(|value| value.interleave_decode) {
+                    DecodeInterleaving::Interleaved
+                } else {
+                    DecodeInterleaving::CohortSerial
+                }
+            },
         };
         Ok(PrefillExecutionProfile {
             refill,
@@ -97,12 +107,10 @@ impl Engine {
             max_prefill_cohort_tokens,
             block_tokens: cache.block_size.max(1),
             resident_token_slots,
-            limit_deep_prefill_waves,
-            cached_prefix_replay_tokens,
-            cached_prefix_checkpoint_replay_tokens,
-            cached_prefix_completion_slack_tokens,
-            defer_new_decode,
-            interleave_prefill_decode,
+            wave_depth: WaveDepthPolicy::Bounded,
+            prefix_replay,
+            new_decode,
+            interleaving,
         })
     }
 

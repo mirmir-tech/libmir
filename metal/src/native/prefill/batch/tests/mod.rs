@@ -6,7 +6,6 @@ mod lifecycle;
 mod materialization;
 mod parity;
 mod recovery;
-mod reservation;
 mod router;
 mod terminal;
 

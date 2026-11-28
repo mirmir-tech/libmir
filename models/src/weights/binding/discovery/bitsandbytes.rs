@@ -12,7 +12,7 @@ use super::super::{
 };
 use crate::{
     error::{ModelsError, Result},
-    weights::{TensorCatalog, TensorInfo},
+    weights::{DenseDType, TensorCatalog, TensorInfo},
 };
 
 #[derive(Clone, Copy)]
@@ -111,7 +111,7 @@ pub(super) fn storage(
 }
 
 fn read_state(tensor: &TensorInfo) -> Result<PackedState> {
-    if tensor.dtype != "U8" || tensor.payload_bytes()? > 4096 {
+    if tensor.dtype != DenseDType::U8 || tensor.payload_bytes()? > 4096 {
         return Err(invalid("bitsandbytes quant_state must be a small U8 tensor"));
     }
     let mut file = File::open(&tensor.file)?;
@@ -126,7 +126,7 @@ fn validate_state(tensor: &TensorInfo, state: &PackedState, hint: Hint) -> Resul
     let payload_bytes = tensor.payload_bytes()?;
     if parse_type(&state.quant_type)? != hint.quant_type
         || logical_elements.is_none_or(|elements| elements.div_ceil(2) != payload_bytes)
-        || BitsAndBytesStorageDType::parse(&tensor.dtype) != Some(hint.storage_dtype)
+        || BitsAndBytesStorageDType::from_tensor_dtype(&tensor.dtype) != Some(hint.storage_dtype)
         || (state.nested_blocksize.is_some() != hint.nested)
         || state.nested_offset.is_some() != hint.nested
         || state.nested_dtype.as_deref().is_some_and(|dtype| dtype != "float32")

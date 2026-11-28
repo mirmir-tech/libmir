@@ -30,6 +30,16 @@ pub(super) fn read(paths: [Option<&Path>; 2]) -> Result<SpecialTokens> {
     })
 }
 
+pub(super) fn read_value(value: &Value) -> Result<SpecialTokens> {
+    let mut tokens = BTreeMap::new();
+    let mut eos = BTreeSet::new();
+    collect(value, &mut tokens, &mut eos)?;
+    Ok(SpecialTokens {
+        tokens: tokens.into_values().collect(),
+        eos: eos.into_iter().collect(),
+    })
+}
+
 fn collect(
     root: &Value,
     tokens: &mut BTreeMap<String, TokenConfig>,

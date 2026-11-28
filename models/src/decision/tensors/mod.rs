@@ -7,7 +7,7 @@ pub use role::{DecisionTensor, EncoderTensor, HeadTensor, ScorerTensor};
 use crate::{
     error::{ModelsError, Result},
     layout::ModernBertConfig,
-    weights::{TensorCatalog, TensorInfo},
+    weights::{FloatDType, TensorCatalog, TensorInfo},
 };
 
 const ENCODER_TENSORS: [EncoderTensor; 6] = [
@@ -47,7 +47,7 @@ const SCORER_TENSORS: [ScorerTensor; 6] = [
 /// and a supported floating-point encoding.
 #[derive(Debug, Clone)]
 pub struct DecisionTensorPlan {
-    tensors: BTreeMap<DecisionTensor, TensorInfo>,
+    tensors: BTreeMap<DecisionTensor, (TensorInfo, FloatDType)>,
 }
 
 impl DecisionTensorPlan {
@@ -81,7 +81,10 @@ impl DecisionTensorPlan {
         roles.extend(SCORER_TENSORS.map(DecisionTensor::Scorer));
         let tensors = roles
             .into_iter()
-            .map(|role| Ok((role, checked(catalog, role, &role.shape(widths))?.clone())))
+            .map(|role| {
+                let (info, dtype) = checked(catalog, role, &role.shape(widths))?;
+                Ok((role, (info.clone(), dtype)))
+            })
             .collect::<Result<_>>()?;
         Ok(Self { tensors })
     }
@@ -89,13 +92,18 @@ impl DecisionTensorPlan {
     /// The checked tensor for `role`; roles outside the plan, such as layer
     /// 0's attention norm, are an error.
     pub fn get(&self, role: DecisionTensor) -> Result<&TensorInfo> {
-        self.tensors.get(&role).ok_or_else(|| {
+        self.tensor(role).map(|(info, _)| info)
+    }
+
+    /// The checked tensor and validated floating-point dtype for `role`.
+    pub fn tensor(&self, role: DecisionTensor) -> Result<(&TensorInfo, FloatDType)> {
+        self.tensors.get(&role).map(|(info, dtype)| (info, *dtype)).ok_or_else(|| {
             ModelsError::InvalidConfig(format!("{} is not part of the plan", role.name()))
         })
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (DecisionTensor, &TensorInfo)> {
-        self.tensors.iter().map(|(role, info)| (*role, info))
+        self.tensors.iter().map(|(role, (info, _))| (*role, info))
     }
 }
 
@@ -103,7 +111,7 @@ fn checked<'a>(
     catalog: &'a TensorCatalog,
     role: DecisionTensor,
     shape: &[usize],
-) -> Result<&'a TensorInfo> {
+) -> Result<(&'a TensorInfo, FloatDType)> {
     let name = role.name();
     let tensor = catalog
         .get(&name)
@@ -114,13 +122,13 @@ fn checked<'a>(
             tensor.shape
         )));
     }
-    if !matches!(tensor.dtype.as_str(), "F16" | "BF16" | "F32") {
+    let Some(dtype) = tensor.dtype.as_float() else {
         return Err(ModelsError::InvalidConfig(format!(
             "Laya tensor `{name}` has unsupported dtype {}",
             tensor.dtype
         )));
-    }
-    Ok(tensor)
+    };
+    Ok((tensor, dtype))
 }
 
 #[cfg(test)]

@@ -28,7 +28,8 @@ pub(super) fn dense_contract() -> AnyResult<(TaskExecutionPlan, SemanticModelSpe
         tensors: vec![TensorInfo {
             name: "model.layers.0.input_layernorm.weight".into(),
             file: PathBuf::new(),
-            dtype: "BF16".into(),
+            container: models::layout::WeightContainer::SafeTensors,
+            dtype: models::weights::DenseDType::Bf16.into(),
             shape: vec![8],
             data_start: 0,
             data_offsets: [0, 0],

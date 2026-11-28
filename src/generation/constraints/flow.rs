@@ -118,9 +118,7 @@ pub(in crate::generation) fn normalize(
         && constraint.target == Target::Tool
         && !constraint.complete()?
     {
-        return Err(crate::Error::InvalidToolCall(
-            "schema-constrained tool generation ended before completion".into(),
-        ));
+        return Err(crate::ToolCallError::Incomplete.into());
     }
     let calls = crate::generation::tools::normalize(payload, conversation)?;
     if let Some(constraint) = constraint
@@ -142,9 +140,7 @@ pub(in crate::generation) fn validate_content(
         return Ok(());
     };
     if !constraint.complete()? {
-        return Err(crate::Error::InvalidResponseFormat(
-            "JSON content ended before its schema was complete".into(),
-        ));
+        return Err(crate::ResponseFormatError::Incomplete.into());
     }
     validation::validate_content(&constraint.validator, content)
 }

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     error::{ModelsError, Result},
-    weights::TensorInfo,
+    weights::{DenseDType, TensorDType, TensorInfo},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -108,11 +108,20 @@ pub enum CompressedIntegerScaleDType {
 
 impl CompressedIntegerScaleDType {
     pub(super) fn parse(tensor: &TensorInfo) -> Result<Self> {
-        match tensor.dtype.as_str() {
-            "F16" => Ok(Self::F16),
-            "BF16" => Ok(Self::BF16),
-            "F32" => Ok(Self::F32),
+        match &tensor.dtype {
+            TensorDType::Dense(DenseDType::F16) => Ok(Self::F16),
+            TensorDType::Dense(DenseDType::Bf16) => Ok(Self::BF16),
+            TensorDType::Dense(DenseDType::F32) => Ok(Self::F32),
             dtype => Err(invalid(&tensor.name, &format!("unsupported scale dtype {dtype}"))),
+        }
+    }
+
+    #[must_use]
+    pub const fn as_dense(self) -> DenseDType {
+        match self {
+            Self::F16 => DenseDType::F16,
+            Self::BF16 => DenseDType::Bf16,
+            Self::F32 => DenseDType::F32,
         }
     }
 

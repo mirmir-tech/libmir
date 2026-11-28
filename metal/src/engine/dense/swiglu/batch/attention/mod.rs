@@ -164,10 +164,7 @@ fn packed_attention_rows(
                 return Ok(output);
             }
             let view = mode == PagedContextMode::Both
-                && context
-                    .paged
-                    .as_ref()
-                    .is_none_or(|paged| paged.key_scales.is_none() && paged.value_scales.is_none());
+                && context.paged.as_ref().is_none_or(|paged| !paged.is_quantized());
             if let Some(mask) = context.mask.as_ref() {
                 return query.masked_scaled_dot_product_attention(
                     &context.keys,

@@ -114,6 +114,7 @@ fn pair(model: &mut LoadedModel, seed: u32) -> Result<(DecodeInput, Uuid)> {
             token,
             sampling: SamplingLogits::None,
             speculation: None,
+            blocks: Vec::new(),
         },
         reference,
     ))

@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{
     error::{ModelsError, Result},
-    weights::TensorCatalog,
+    weights::{DenseDType, TensorCatalog},
 };
 
 mod affine;
@@ -145,12 +145,12 @@ fn block(
         physical.push(tail);
     }
     shape(&binding.source, &binding.shape, &physical)?;
-    companion_dtype(catalog, &binding.source, format.storage_dtype.as_str())?;
+    companion_dtype(catalog, &binding.source, &format.storage_dtype.as_dense())?;
     let scale_divisor = format.block_size;
     let mut scale_shape = prefix.to_vec();
     scale_shape.push(divided(input, scale_divisor, &binding.source)?);
     companion(catalog, scales, &scale_shape)?;
-    companion_dtype(catalog, scales, format.block_scale.storage_dtype.as_str())?;
+    companion_dtype(catalog, scales, &format.block_scale.storage_dtype.as_dense())?;
     if format.global_scale.is_some() != global_scale.is_some()
         || format.input_scale.is_some() != input_scale.is_some()
     {
@@ -160,21 +160,21 @@ fn block(
         scalar::companion(catalog, global)?;
         let expected =
             format.global_scale.ok_or_else(|| invalid(global, "unexpected global scale"))?;
-        companion_dtype(catalog, global, expected.storage_dtype.as_str())?;
+        companion_dtype(catalog, global, &expected.storage_dtype.as_dense())?;
     }
     if let Some(input_scale) = input_scale {
         scalar::companion(catalog, input_scale)?;
         let expected = format
             .input_scale
             .ok_or_else(|| invalid(input_scale, "unexpected input scale"))?;
-        companion_dtype(catalog, input_scale, expected.storage_dtype.as_str())?;
+        companion_dtype(catalog, input_scale, &expected.storage_dtype.as_dense())?;
     }
     if let Some(bias) = bias {
         companion(catalog, bias, prefix)?;
         let dtype = format
             .output_bias_dtype
             .ok_or_else(|| invalid(bias, "block contract does not admit an output bias"))?;
-        companion_dtype(catalog, bias, dtype.as_str())?;
+        companion_dtype(catalog, bias, &dtype.as_dense())?;
     }
     Ok(())
 }
@@ -214,9 +214,13 @@ pub(super) fn companion(catalog: &TensorCatalog, name: &str, expected: &[usize])
     shape(name, &tensor.shape, expected)
 }
 
-pub(super) fn companion_dtype(catalog: &TensorCatalog, name: &str, expected: &str) -> Result<()> {
+pub(super) fn companion_dtype(
+    catalog: &TensorCatalog,
+    name: &str,
+    expected: &DenseDType,
+) -> Result<()> {
     let tensor = catalog.get(name).ok_or_else(|| invalid(name, "companion tensor is missing"))?;
-    if tensor.dtype == expected {
+    if tensor.dtype == *expected {
         Ok(())
     } else {
         Err(invalid(name, &format!("expected dtype {expected}, found {}", tensor.dtype)))

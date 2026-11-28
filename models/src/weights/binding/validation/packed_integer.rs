@@ -1,7 +1,9 @@
 use super::{companion, companion_dtype, divided, invalid, projection, shape};
 use crate::{
     error::Result,
-    weights::{CompressedIntegerScaleStrategy, TensorBinding, TensorCatalog, TensorStorage},
+    weights::{
+        CompressedIntegerScaleStrategy, DenseDType, TensorBinding, TensorCatalog, TensorStorage,
+    },
 };
 
 pub(super) fn validate(
@@ -45,7 +47,7 @@ pub(super) fn validate(
         },
     });
     companion(catalog, scales, &scale_shape)?;
-    companion_dtype(catalog, scales, format.scale_dtype.as_str())?;
+    companion_dtype(catalog, scales, &format.scale_dtype.as_dense())?;
     companion(catalog, shape_tensor, &[logical.len()])?;
-    companion_dtype(catalog, shape_tensor, "I64")
+    companion_dtype(catalog, shape_tensor, &DenseDType::I64)
 }

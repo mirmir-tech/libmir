@@ -60,6 +60,17 @@ impl TokenizerAssets {
     }
 
     pub fn from_layout(layout: &ModelLayout) -> Result<Self> {
+        if let Some(derived) = &layout.derived {
+            let tokenizer_bytes = u64::try_from(serde_json::to_vec(&derived.tokenizer)?.len())?;
+            let config_bytes = u64::try_from(serde_json::to_vec(&derived.tokenizer_config)?.len())?;
+            return Ok(Self {
+                kind: TokenizerKind::TokenizerJson,
+                primary: TOKENIZER_JSON.into(),
+                merges: None,
+                metadata: vec!["tokenizer_config.json".into()],
+                total_bytes: tokenizer_bytes.saturating_add(config_bytes),
+            });
+        }
         let paths = [
             layout.tokenizer_path.as_ref(),
             layout.vocab_path.as_ref(),

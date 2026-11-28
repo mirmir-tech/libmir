@@ -45,7 +45,7 @@ impl Engine {
                 })
             },
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => super::unavailable(),
+            EngineInner::Unavailable(never) => match *never {},
         }
     }
 }

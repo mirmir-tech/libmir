@@ -47,19 +47,24 @@ pub(in crate::engine::kv) fn write_rows(
     };
     let slots = mirtal::Array::from_slice(&slots, [slots.len()])?;
     let mut arena = lock(&arena)?;
-    let [page_keys, page_values] = stream.kernels().page_rows_write(
+    let options = PageRowsOptions {
+        rows: stores.len(),
+        kv_heads: arena.kv_heads,
+        page_capacity: arena.capacity,
+        page_size: arena.page_size,
+        head_dim: arena.head_dim,
+    };
+    let super::pool::ArenaPages::Native { keys: page_keys, values: page_values } = &mut arena.pages
+    else {
+        return Err(Error::InvalidModel("row page writes need native K/V pages".into()));
+    };
+    let [next_keys, next_values] = stream.kernels().page_rows_write(
         stream.native(),
-        [keys.native(), values.native(), arena.keys.native(), arena.values.native(), &slots],
-        PageRowsOptions {
-            rows: stores.len(),
-            kv_heads: arena.kv_heads,
-            page_capacity: arena.capacity,
-            page_size: arena.page_size,
-            head_dim: arena.head_dim,
-        },
+        [keys.native(), values.native(), page_keys.native(), page_values.native(), &slots],
+        options,
     )?;
-    arena.keys = Array::from_native(page_keys)?;
-    arena.values = Array::from_native(page_values)?;
+    *page_keys = Array::from_native(next_keys)?;
+    *page_values = Array::from_native(next_values)?;
     drop(arena);
     Ok(())
 }

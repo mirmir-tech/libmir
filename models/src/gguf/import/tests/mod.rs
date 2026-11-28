@@ -39,33 +39,6 @@ fn import(shards: Vec<PathBuf>, version: u32) -> Import {
     }
 }
 
-/// Rewrites `directory`'s manifest as the version recording links' sources
-/// wrote it: without a format, a derived file or one found in place by its
-/// origin alone; `edit` then changes each file's entry.
-fn as_earlier(
-    directory: &std::path::Path,
-    edit: impl Fn(&mut serde_json::Value) -> TestResult,
-) -> TestResult {
-    let path = directory.join(super::MANIFEST);
-    let mut manifest = serde_json::from_slice::<serde_json::Value>(&fs::read(&path)?)?;
-    let object = manifest.as_object_mut().ok_or("no manifest")?;
-    object.remove("format");
-    for file in object
-        .get_mut("files")
-        .and_then(|files| files.as_array_mut())
-        .ok_or("no files")?
-    {
-        for origin in ["derived", "in_place"] {
-            if file["origin"].get(origin).is_some() {
-                file["origin"] = json!(origin);
-            }
-        }
-        edit(file)?;
-    }
-    fs::write(path, serde_json::to_vec(&manifest)?)?;
-    Ok(())
-}
-
 fn conflict(result: &crate::error::Result<()>) -> Option<ImportConflict> {
     match result {
         Err(ModelsError::ImportConflict { conflict, .. }) => Some(*conflict),

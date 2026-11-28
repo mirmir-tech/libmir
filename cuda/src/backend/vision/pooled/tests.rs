@@ -118,7 +118,8 @@ fn catalog(path: &Path, tensors: Vec<TestTensor>) -> Result<TensorCatalog> {
         infos.push(TensorInfo {
             name: tensor.name,
             file: path.to_owned(),
-            dtype: "BF16".into(),
+            container: models::layout::WeightContainer::SafeTensors,
+            dtype: models::weights::DenseDType::Bf16.into(),
             shape: tensor.shape,
             data_start: 0,
             data_offsets: [start, u64::try_from(payload.len())?],
@@ -170,7 +171,7 @@ fn config() -> PooledVisionConfig {
         position_embedding_size: 2,
         rms_norm_eps: 1.0e-6,
         rope_theta: 100.0,
-        hidden_activation: "gelu_pytorch_tanh".into(),
+        hidden_activation: models::layout::HiddenActivation::GeluTanh,
         use_clipped_linears: false,
         standardize: false,
         image_token_id: 1,

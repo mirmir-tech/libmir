@@ -168,7 +168,8 @@ fn info(
     TensorInfo {
         name: name.into(),
         file: path.into(),
-        dtype: dtype.into(),
+        container: models::layout::WeightContainer::SafeTensors,
+        dtype: models::weights::TensorDType::parse(dtype),
         shape,
         data_start: 0,
         data_offsets: [start, end],

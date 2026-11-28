@@ -109,7 +109,7 @@ fn validate_dense_storage(descriptor: &ModelDescriptor, reference: &Reference) -
         let WeightEncoding::Dense { dtype } = encoding else {
             return Err(validation_error("MF-100 fixture contains non-dense checkpoint storage"));
         };
-        actual.insert(dtype);
+        actual.insert(dtype.as_str().to_owned());
     }
     let expected = reference.dtypes.iter().cloned().collect::<BTreeSet<_>>();
     require(
@@ -128,7 +128,7 @@ fn validate_affine_storage(descriptor: &ModelDescriptor, reference: &Reference) 
     for encoding in descriptor.checkpoint_encoding().weights {
         match encoding {
             WeightEncoding::Dense { dtype } => {
-                dense.insert(dtype);
+                dense.insert(dtype.as_str().to_owned());
             },
             WeightEncoding::Affine { format } => {
                 require(native_mlx(format), "checkpoint affine contract is not native MLX U32")?;

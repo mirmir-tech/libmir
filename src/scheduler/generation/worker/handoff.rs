@@ -18,7 +18,7 @@ impl Worker {
     }
 
     pub(super) fn begin_prefill_handoff(&mut self, sessions: impl IntoIterator<Item = uuid::Uuid>) {
-        if !self.prefill_profile.limit_deep_prefill_waves || self.prefill.is_empty() {
+        if !self.prefill_profile.wave_depth.is_bounded() || self.prefill.is_empty() {
             return;
         }
         self.prefill_handoff.begin(sessions);
@@ -26,7 +26,7 @@ impl Worker {
 
     pub(super) fn prefill_waits_for_decode(&self) -> bool {
         serial_prefill_waits(
-            self.prefill_profile.interleave_prefill_decode,
+            self.prefill_profile.interleaving.allows_interleaving(),
             !self.active_decode.is_empty(),
         ) && !self.short_cached_refill_ready()
     }

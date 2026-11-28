@@ -19,7 +19,13 @@ fn binds_encoder_roles_and_dense_storage() -> Result<()> {
                 index: 0,
                 tensor: EncoderLayerTensorRole::Qkv,
             }
-            && matches!(binding.storage, TensorStorage::Dense { ref dtype, .. } if dtype == "F16")
+            && matches!(
+                binding.storage,
+                TensorStorage::Dense {
+                    dtype: crate::weights::DenseDType::F16,
+                    ..
+                }
+            )
     }));
     Ok(())
 }
@@ -42,7 +48,7 @@ fn rejects_an_encoder_bias_with_a_different_dtype() -> Result<()> {
     else {
         return Err(ModelsError::InvalidConfig("classifier bias fixture is missing".into()));
     };
-    bias.dtype = "BF16".into();
+    bias.dtype = crate::weights::DenseDType::Bf16.into();
 
     assert!(EncoderBindingPlan::discover(&config, &catalog).is_err());
     Ok(())
@@ -58,7 +64,7 @@ fn config() -> EncoderConfig {
         vocab_size: 32,
         max_position_embeddings: 64,
         layer_norm_eps: 1e-5,
-        hidden_activation: "gelu".into(),
+        hidden_activation: crate::layout::HiddenActivation::Gelu,
         position_embedding: EncoderPositionEmbedding::Rope,
         rope_theta: Some(10_000.0),
         rope_scaling: Some(EncoderRopeScaling::Ntk { factor: 1.0, mixed_b: None }),
@@ -83,7 +89,8 @@ fn catalog(config: &EncoderConfig, dtype: &str) -> TensorCatalog {
                 shape: shape(&name, config),
                 name,
                 file: PathBuf::from("model.safetensors"),
-                dtype: dtype.into(),
+                container: crate::layout::WeightContainer::SafeTensors,
+                dtype: crate::weights::TensorDType::parse(dtype),
                 data_start: 0,
                 data_offsets: [0, 0],
             }

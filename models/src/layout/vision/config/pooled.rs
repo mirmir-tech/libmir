@@ -7,7 +7,7 @@ use super::super::parse::{
     bool_field, float_field, has_fields, object, optional_usize_field, string_field, u32_field,
     usize_field,
 };
-use crate::error::Result;
+use crate::{error::Result, layout::HiddenActivation};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PooledVisionConfig {
@@ -23,7 +23,7 @@ pub struct PooledVisionConfig {
     pub position_embedding_size: usize,
     pub rms_norm_eps: f64,
     pub rope_theta: f64,
-    pub hidden_activation: String,
+    pub hidden_activation: HiddenActivation,
     pub use_clipped_linears: bool,
     pub standardize: bool,
     pub image_token_id: u32,
@@ -84,7 +84,7 @@ pub(super) fn parse_pooled(root: &Value, vision: &Value) -> Result<PooledVisionC
         position_embedding_size: usize_field(vision, "position_embedding_size")?,
         rms_norm_eps: float_field(vision, "rms_norm_eps")?,
         rope_theta,
-        hidden_activation: string_field(vision, "hidden_activation")?,
+        hidden_activation: HiddenActivation::parse(&string_field(vision, "hidden_activation")?),
         use_clipped_linears: bool_field(vision, "use_clipped_linears", false)?,
         standardize: bool_field(vision, "standardize", false)?,
         image_token_id: u32_field(root, "image_token_id")?,

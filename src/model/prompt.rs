@@ -1,7 +1,11 @@
 use std::time::Instant;
 
 use foundation::conversation::Conversation;
-use models::{chat::TemplateControls, execution::ModelTask, generation::GenerationSettings};
+use models::{
+    chat::TemplateControls,
+    execution::{ModelTask, TaskKind},
+    generation::GenerationSettings,
+};
 
 use super::{
     ModelDescriptor, PreparedPrompt, PromptPreparationTimings, task_mismatch, validate_context,
@@ -12,8 +16,8 @@ impl ModelDescriptor {
     /// Renders and tokenizes a request, validating it against the model context
     /// window.
     pub fn prepare(&self, conversation: &Conversation) -> Result<PreparedPrompt> {
-        if !matches!(self.task_plan.task(), ModelTask::Generation) {
-            return Err(task_mismatch("generation", &self.task_plan));
+        if !matches!(self.inspected.task_plan.task(), ModelTask::Generation) {
+            return Err(task_mismatch(TaskKind::Generation, &self.inspected.task_plan));
         }
         self.prepare_with_settings(conversation, self.generation)
     }
@@ -32,8 +36,8 @@ impl ModelDescriptor {
         generation: GenerationSettings,
         controls: TemplateControls,
     ) -> Result<PreparedPrompt> {
-        if !matches!(self.task_plan.task(), ModelTask::Generation) {
-            return Err(task_mismatch("generation", &self.task_plan));
+        if !matches!(self.inspected.task_plan.task(), ModelTask::Generation) {
+            return Err(task_mismatch(TaskKind::Generation, &self.inspected.task_plan));
         }
         let render_started = Instant::now();
         let prompt = self.template.render_with_controls(conversation, controls)?;
@@ -45,7 +49,11 @@ impl ModelDescriptor {
         if tokens.token_ids.is_empty() {
             return Err(Error::EmptyPrompt);
         }
-        validate_context(tokens.token_ids.len(), generation.max_tokens, self.metadata.context_len)?;
+        validate_context(
+            tokens.token_ids.len(),
+            generation.max_tokens,
+            self.inspected.metadata.context_len,
+        )?;
         let cache_checkpoints =
             self.cache_checkpoints(conversation, &prompt.text, &token_ends, controls);
         Ok(PreparedPrompt {

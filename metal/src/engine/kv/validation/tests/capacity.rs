@@ -1,100 +1,64 @@
 use std::sync::Arc;
 
+use runtime::kv::BlockId;
+
 use crate::engine::{Array, Error, KvCache, KvPageFormat, PagedArenaPool, Result, Stream};
 
-fn cache(format: KvPageFormat, pool: &Arc<PagedArenaPool>) -> Result<KvCache> {
-    KvCache::new_paged_with_pool_capacity(4, 4, format, 1, Arc::clone(pool), 0)
-}
-
 #[test]
-fn rejected_first_page_allocation_remains_inactive_and_can_retry() -> Result<()> {
+fn bind_blocks_rejects_out_of_range_block_ids_and_reads_shared_prefix_directly() -> Result<()> {
     let stream = Stream::new_gpu()?;
-    let token = Array::from_f32(&[1.0, 0.5, -0.5, 0.25], &[1, 1, 1, 4])?;
-    for format in [KvPageFormat::Native, KvPageFormat::Int8PerTokenHead] {
-        let pool = Arc::new(PagedArenaPool::default());
-        let mut owner = cache(format, &pool)?;
-        drop(owner.update(&token, &token, &stream)?);
-        pool.eval_with_graph_roots(&[], &stream)?;
-        let mut waiting = cache(format, &pool)?;
-        assert!(waiting.update(&token, &token, &stream).is_err());
-        assert_eq!(waiting.offset()?, 0);
-        assert_eq!(waiting.physical_page_count(), 0);
-        assert!(!waiting.pages.as_ref().ok_or(Error::NullHandle("pages"))?.active());
-        owner.reset()?;
-        drop(waiting.update(&token, &token, &stream)?);
-        pool.eval_with_graph_roots(&[], &stream)?;
-        assert_eq!(waiting.offset()?, 1);
-        waiting.reset()?;
-        assert_eq!(pool.resident_arenas()?, 0);
-    }
-    Ok(())
-}
-
-#[test]
-fn rejected_promotion_preserves_contiguous_tokens_and_can_retry() -> Result<()> {
-    let stream = Stream::new_gpu()?;
-    let first = Array::from_f32(&[1.0, 0.5, -0.5, 0.25], &[1, 1, 1, 4])?;
+    let pool = Arc::new(PagedArenaPool::default());
+    let first = Array::from_f32(&[1.0, 0.5, -0.5, 0.25, 0.25, 0.5, 0.75, 1.0], &[1, 1, 2, 4])?;
     let next = Array::from_f32(&[0.0, 1.0, 0.0, 0.5], &[1, 1, 1, 4])?;
-    for format in [KvPageFormat::Native, KvPageFormat::Int8PerTokenHead] {
-        let pool = Arc::new(PagedArenaPool::default());
-        let mut owner = cache(format, &pool)?;
-        drop(owner.update(&first, &first, &stream)?);
-        let mut waiting = cache(format, &pool)?;
-        drop(waiting.update_with_page_min_context(&first, &first, &stream, 2)?);
-        pool.eval_with_graph_roots(&[], &stream)?;
-        let before = waiting.keys.as_ref().ok_or(Error::NullHandle("keys"))?.to_vec_f32(&stream)?;
-        let capacity = waiting.capacity;
-        assert!(waiting.update_with_page_min_context(&next, &next, &stream, 2).is_err());
-        assert_eq!(waiting.offset()?, 1, "failed promotion consumed a token");
-        assert_eq!(waiting.capacity, capacity);
-        assert!(!waiting.pages.as_ref().ok_or(Error::NullHandle("pages"))?.active());
-        assert_eq!(
-            waiting.keys.as_ref().ok_or(Error::NullHandle("keys"))?.to_vec_f32(&stream)?,
-            before
-        );
-        owner.reset()?;
-        let context = waiting.update_with_page_min_context(&next, &next, &stream, 2)?;
-        assert_eq!(waiting.offset()?, 2);
-        assert!(waiting.keys.is_none() && waiting.values.is_none());
-        if format == KvPageFormat::Native {
-            assert_eq!(
-                context.keys.to_vec_f32(&stream)?,
-                [1.0, 0.5, -0.5, 0.25, 0.0, 1.0, 0.0, 0.5]
-            );
-        }
-        pool.eval_with_graph_roots(&[], &stream)?;
-        drop(context);
-        waiting.reset()?;
-        assert_eq!(pool.resident_arenas()?, 0);
-    }
+
+    let mut producer =
+        KvCache::new_paged_with_pool_capacity(4, 2, KvPageFormat::Native, 4, Arc::clone(&pool), 0)?;
+    let out_of_range = producer.bind_blocks(&[BlockId(4)], None, &stream);
+    assert!(matches!(
+        out_of_range,
+        Err(Error::KvBlockOutOfRange { layer: 0, block: 4, capacity: 4 })
+    ));
+
+    // Producer writes 2 tokens into runtime BlockId(2).
+    producer.bind_blocks(&[BlockId(2)], None, &stream)?;
+    drop(producer.update(&first, &first, &stream)?);
+    pool.eval_with_graph_roots(&[], &stream)?;
+    stream.synchronize()?;
+    drop(producer);
+
+    // Arena stays resident in pool after producer drops so consumer reuses
+    // BlockId(2).
+    assert_eq!(pool.resident_arenas()?, 1);
+
+    let mut consumer =
+        KvCache::new_paged_with_pool_capacity(4, 2, KvPageFormat::Native, 4, Arc::clone(&pool), 0)?;
+    consumer.bind_blocks(&[BlockId(2), BlockId(0)], Some(2), &stream)?;
+    assert_eq!(consumer.offset()?, 2);
+    let ctx = consumer.update(&next, &next, &stream)?;
+    assert_eq!(consumer.offset()?, 3);
+    assert_eq!(
+        ctx.keys.to_vec_f32(&stream)?,
+        [1.0, 0.5, -0.5, 0.25, 0.25, 0.5, 0.75, 1.0, 0.0, 1.0, 0.0, 0.5]
+    );
     Ok(())
 }
 
 #[test]
-fn owner_appends_in_place_while_rejected_cow_preserves_shared_page() -> Result<()> {
+fn rejects_write_exceeding_bound_block_table() -> Result<()> {
     let stream = Stream::new_gpu()?;
-    let token = Array::from_f32(&[1.0, 0.5, -0.5, 0.25], &[1, 1, 1, 4])?;
-    for format in [KvPageFormat::Native, KvPageFormat::Int8PerTokenHead] {
-        let pool = Arc::new(PagedArenaPool::default());
-        let mut owner = cache(format, &pool)?;
-        drop(owner.update(&token, &token, &stream)?);
-        pool.eval_with_graph_roots(&[], &stream)?;
-        let mut snapshot = owner.snapshot_at(1)?;
-        let page = owner.first_physical_page();
-        drop(owner.update(&token, &token, &stream)?);
-        pool.eval_with_graph_roots(&[], &stream)?;
-        assert_eq!(owner.offset()?, 2);
-        assert_eq!(owner.first_physical_page(), page);
-        assert!(snapshot.update(&token, &token, &stream).is_err());
-        assert_eq!(snapshot.offset()?, 1);
-        assert_eq!(snapshot.first_physical_page(), page);
-        owner.reset()?;
-        drop(snapshot.update(&token, &token, &stream)?);
-        pool.eval_with_graph_roots(&[], &stream)?;
-        assert_eq!(snapshot.offset()?, 2);
-        assert_eq!(snapshot.first_physical_page(), page);
-        snapshot.reset()?;
-        assert_eq!(pool.resident_arenas()?, 0);
-    }
+    let pool = Arc::new(PagedArenaPool::default());
+    let two_tokens = Array::from_f32(&[1.0; 8], &[1, 1, 2, 4])?;
+    let one_token = Array::from_f32(&[2.0; 4], &[1, 1, 1, 4])?;
+    let mut cache =
+        KvCache::new_paged_with_pool_capacity(4, 2, KvPageFormat::Native, 4, Arc::clone(&pool), 0)?;
+    cache.bind_blocks(&[BlockId(1)], None, &stream)?;
+    drop(cache.update(&two_tokens, &two_tokens, &stream)?);
+    assert!(!cache.can_write_token(2));
+    let overflow = cache.update(&one_token, &one_token, &stream);
+    assert!(matches!(
+        overflow,
+        Err(Error::KvPageCapacity { layer: 0, required: 2, maximum: 1 })
+    ));
+    assert_eq!(cache.offset()?, 2);
     Ok(())
 }

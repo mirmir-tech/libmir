@@ -3,6 +3,8 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
+use foundation::model::ModelId;
+
 use super::{super::cache::SharedCacheMemory, policy};
 use crate::{Error, MemoryRuntimeConfig, MemorySnapshot, ModelMemoryEstimate, Result};
 
@@ -27,7 +29,7 @@ struct MemoryLedger {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Reservation {
-    model: String,
+    model: ModelId,
     bytes: u64,
     shared_memory: Option<u64>,
     state: ReservationState,
@@ -55,7 +57,7 @@ impl ModelMemoryManager {
 
     pub(in crate::model) fn reserve(
         &self,
-        model: String,
+        model: ModelId,
         estimate: ModelMemoryEstimate,
         shared_memory: Option<SharedCacheMemory>,
         memory: &MemorySnapshot,
@@ -113,7 +115,7 @@ impl ModelMemoryManager {
             reservation.references = reservation.references.saturating_add(1);
         }
         tracing::info!(
-            model,
+            %model,
             reservation_bytes = model_bytes,
             shared_cache_bytes = shared_bytes,
             committed_bytes = committed.saturating_add(planned),

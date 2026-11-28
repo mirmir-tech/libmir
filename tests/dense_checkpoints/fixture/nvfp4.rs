@@ -48,7 +48,7 @@ impl Reference {
         self.validate_tokens()?;
         Self::validate_logits(&self.first_logits)?;
         let gate = self
-            .gate(&active_target())
+            .gate(active_target())
             .ok_or_else(|| validation_error("NVFP4 reference has no active-backend gate"))?;
         if let Some(logits) = &gate.first_logits {
             Self::validate_logits(logits)?;

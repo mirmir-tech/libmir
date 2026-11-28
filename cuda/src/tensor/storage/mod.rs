@@ -28,18 +28,19 @@ pub enum CudaTensorDType {
 }
 
 impl CudaTensorDType {
-    pub(super) fn parse(value: &str) -> Result<Self> {
-        match value {
-            "F16" => Ok(Self::F16),
-            "BF16" => Ok(Self::Bf16),
-            "F32" => Ok(Self::F32),
-            "F8_E4M3" => Ok(Self::F8E4M3),
-            "F8_E5M2" => Ok(Self::F8E5M2),
-            "U32" => Ok(Self::U32),
-            "I32" => Ok(Self::I32),
-            "U8" => Ok(Self::U8),
-            "I8" => Ok(Self::I8),
-            other => Err(Error::UnsupportedDType(other.into())),
+    pub(super) fn from_dense(dtype: &models::weights::DenseDType) -> Result<Self> {
+        use models::weights::DenseDType;
+        match dtype {
+            DenseDType::F16 => Ok(Self::F16),
+            DenseDType::Bf16 => Ok(Self::Bf16),
+            DenseDType::F32 => Ok(Self::F32),
+            DenseDType::F8E4M3 => Ok(Self::F8E4M3),
+            DenseDType::F8E5M2 => Ok(Self::F8E5M2),
+            DenseDType::U32 => Ok(Self::U32),
+            DenseDType::I32 => Ok(Self::I32),
+            DenseDType::U8 => Ok(Self::U8),
+            DenseDType::I8 => Ok(Self::I8),
+            other => Err(Error::UnsupportedDType(other.as_str().to_owned())),
         }
     }
 

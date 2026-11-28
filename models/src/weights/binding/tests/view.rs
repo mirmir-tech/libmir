@@ -110,6 +110,9 @@ fn dense(role: LogicalTensorRole, source: &str) -> TensorBinding {
         shape: Vec::new(),
         logical_shape: None,
         transforms: Vec::new(),
-        storage: TensorStorage::Dense { dtype: "BF16".into(), bias: None },
+        storage: TensorStorage::Dense {
+            dtype: crate::weights::DenseDType::Bf16,
+            bias: None,
+        },
     }
 }

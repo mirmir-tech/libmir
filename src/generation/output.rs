@@ -91,8 +91,8 @@ pub(super) fn append_delta(
 
 pub(super) fn missing_decoder() -> Error {
     Error::TaskMismatch {
-        requested: "generation",
-        actual: "sequence scoring",
+        requested: models::execution::TaskKind::Generation,
+        actual: models::execution::TaskKind::SequenceScoring,
     }
 }
 

@@ -141,7 +141,7 @@ fn finish_logits(batch: &MetalPrefillBatch, model: &mut LoadedModel) -> Result<V
     let values = logits.to_vec_f32(model.stream())?;
     model.release_session(row.request.session_id)?;
     model.flush_decode_graphs()?;
-    assert_eq!(model.stream().paged_arenas().resident_arenas()?, 0);
+    assert_eq!(model.stream().paged_arenas().resident_arenas()?, 1);
     Ok(values)
 }
 
@@ -168,7 +168,7 @@ fn interruption_yields_between_graphs_without_changing_row_indices_or_budget() -
         batch.cancel_sessions(&mut model, &[requests[0].session_id])?;
         assert_eq!(finish(&batch, &mut model, 128)?.len(), 1);
         model.flush_decode_graphs()?;
-        assert_eq!(model.stream().paged_arenas().resident_arenas()?, 0);
+        assert_eq!(model.stream().paged_arenas().resident_arenas()?, 1);
         drop(model);
         std::fs::remove_dir_all(directory)?;
     }

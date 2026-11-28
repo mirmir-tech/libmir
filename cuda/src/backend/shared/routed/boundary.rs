@@ -153,3 +153,24 @@ impl SharedRoutedOutputHead {
         self.operation.execute(input, output)
     }
 }
+
+impl super::CudaSharedRoutedModelTemplate {
+    pub(super) fn prepare_embedding(&self) -> Result<SharedRoutedEmbedding> {
+        SharedRoutedEmbedding::new(
+            &self.backend,
+            self.decoder.hidden_size,
+            self.decoder.vocab_size,
+            &self.embedding,
+        )
+    }
+
+    pub(super) fn prepare_output_head(&self, tokens: usize) -> Result<SharedRoutedOutputHead> {
+        SharedRoutedOutputHead::new(
+            &self.backend,
+            tokens,
+            self.decoder.hidden_size,
+            self.decoder.vocab_size,
+            &self.output,
+        )
+    }
+}

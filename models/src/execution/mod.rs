@@ -6,7 +6,7 @@ pub use capability::{ArchitectureCapability, ArchitectureRequirements};
 pub use contract::DecoderExecutionContract;
 pub use task::{
     CausalScoringTask, EmbeddingTask, ModelTask, PoolingMode, SequenceScoringTask,
-    TaskExecutionPlan,
+    TaskExecutionPlan, TaskKind,
 };
 
 #[cfg(test)]

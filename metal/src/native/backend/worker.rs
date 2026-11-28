@@ -42,16 +42,38 @@ impl ModelClient {
         paged_arenas: Arc<PagedArenaPool>,
         progress: &mut dyn FnMut(MetalProgressEvent),
     ) -> Result<Self> {
+        let name = format!("mirmir-metal-{}", manifest.id);
+        Self::spawn_with(name, progress, move |report| {
+            LoadedModel::load_with_config_and_pool(&manifest, config, paged_arenas, report)
+        })
+    }
+
+    pub(super) fn spawn_admitted(
+        manifest: ModelManifest,
+        inspected: architecture::InspectedModel,
+        admitted: architecture::metal::MetalArchitecture,
+        config: Arc<MetalConfig>,
+        paged_arenas: Arc<PagedArenaPool>,
+        progress: &mut dyn FnMut(MetalProgressEvent),
+    ) -> Result<Self> {
+        let name = format!("mirmir-metal-{}", manifest.id);
+        Self::spawn_with(name, progress, move |report| {
+            LoadedModel::load_admitted(&manifest, inspected, admitted, config, paged_arenas, report)
+        })
+    }
+
+    fn spawn_with(
+        name: String,
+        progress: &mut dyn FnMut(MetalProgressEvent),
+        load: impl FnOnce(&mut dyn FnMut(MetalProgressEvent)) -> Result<LoadedModel> + Send + 'static,
+    ) -> Result<Self> {
         let (task_sender, task_receiver) = mpsc::channel::<Task>();
         let (event_sender, event_receiver) = mpsc::channel();
-        let name = format!("mirmir-metal-{}", manifest.id);
         let worker = std::thread::Builder::new().name(name).spawn(move || {
             let mut report = |event| {
                 let _sent = event_sender.send(StartEvent::Progress(event));
             };
-            let mut loaded = match LoadedModel::load_with_config_and_pool(
-                &manifest, config, paged_arenas, &mut report,
-            ) {
+            let mut loaded = match load(&mut report) {
                 Ok(loaded) => loaded,
                 Err(error) => {
                     let _sent = event_sender.send(StartEvent::Ready(Err(error.into())));

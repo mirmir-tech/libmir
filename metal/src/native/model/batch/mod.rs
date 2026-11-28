@@ -29,6 +29,8 @@ pub struct DecodeInput {
     pub sampling: SamplingLogits,
     /// Bounds of a speculative step; `None` decodes the token alone.
     pub speculation: Option<runtime::speculation::DraftBounds>,
+    /// Runtime-assigned physical `BlockId`s for this session.
+    pub blocks: Vec<runtime::kv::BlockId>,
 }
 
 impl DecodeInput {
@@ -40,6 +42,7 @@ impl DecodeInput {
             token,
             sampling,
             speculation: None,
+            blocks: Vec::new(),
         }
     }
 }
@@ -57,7 +60,9 @@ impl LoadedModel {
 
     fn can_decode_packed_row(&self, input: &DecodeInput) -> bool {
         step::supports_device_token(&input.sampling)
-            && self.sessions.get(&input.session).is_some_and(|state| state.pending.is_some())
+            && self.sessions.get(&input.session).is_some_and(|state| {
+                state.pending.is_some() && state.cache.can_write_token(state.position + 1)
+            })
     }
 
     #[cfg(test)]
@@ -76,7 +81,7 @@ impl LoadedModel {
         #[cfg(test)] profile: Option<&mut profile::Profile>,
     ) -> Result<Vec<NativeOutput>> {
         self.validate_batch(inputs)?;
-        self.validate_decode_capacity(inputs)?;
+        self.bind_decode_blocks(inputs)?;
         let result = self.decode_batch_admitted(
             inputs,
             #[cfg(test)]

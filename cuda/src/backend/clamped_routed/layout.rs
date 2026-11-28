@@ -1,59 +1,14 @@
-use models::weights::{
-    ExpertProjectionLayout, LayerTensorRole, LogicalTensorRole, TensorStorage, WeightBindingPlan,
-};
+pub(super) use architecture::CudaClampedExpertLayout as ClampedRoutedLayout;
+use models::weights::WeightBindingPlan;
 
 use crate::{Error, Result};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum ClampedRoutedLayout {
-    Native,
-    Mlx,
-    Dense,
-    Ggml,
-}
-
-impl ClampedRoutedLayout {
-    pub(super) fn discover(bindings: &WeightBindingPlan) -> Result<Self> {
-        if bindings.tensors.iter().any(|binding| {
-            matches!(
-                binding.role,
-                LogicalTensorRole::Layer {
-                    tensor: LayerTensorRole::ExpertProjection { .. },
-                    ..
-                }
-            ) && binding.output_scale().is_none()
-                && matches!(binding.storage, TensorStorage::Ggml { .. })
-        }) {
-            return Ok(Self::Ggml);
-        }
-        if bindings.tensors.iter().any(|binding| {
-            matches!(
-                binding.role,
-                LogicalTensorRole::Layer {
-                    tensor: LayerTensorRole::ExpertProjection { .. },
-                    ..
-                }
-            ) && matches!(binding.storage, TensorStorage::Dense { .. })
-        }) {
-            return Ok(Self::Dense);
-        }
-        match bindings.expert_projection_layout() {
-            Some(ExpertProjectionLayout::InterleavedGateUp) => Ok(Self::Native),
-            Some(ExpertProjectionLayout::SeparateGateUp) => Ok(Self::Mlx),
-            None => Err(Error::UnsupportedDecoderLayer(
-                "binding plan has no complete clamped-routed expert projection layout".into(),
-            )),
-        }
-    }
-
-    pub(super) const fn storage(self) -> &'static str {
-        match self {
-            Self::Native => "interleaved MXFP4 gate/up blocks",
-            Self::Mlx => "separate MLX affine MXFP4 gate/up blocks",
-            Self::Dense => "dense BF16 selected-expert matrices",
-            Self::Ggml => "GGML MXFP4 expert banks repacked to interleaved OCP blocks",
-        }
-    }
+pub(super) fn discover(bindings: &WeightBindingPlan) -> Result<ClampedRoutedLayout> {
+    ClampedRoutedLayout::discover(bindings).ok_or_else(|| {
+        Error::UnsupportedDecoderLayer(
+            "binding plan has no complete clamped-routed expert projection layout".into(),
+        )
+    })
 }
 
 #[cfg(test)]
@@ -80,7 +35,7 @@ mod tests {
                 packing: TensorPacking::InterleavedGateUp,
             },
         )]);
-        assert_eq!(ClampedRoutedLayout::discover(&native)?, ClampedRoutedLayout::Native);
+        assert_eq!(discover(&native)?, ClampedRoutedLayout::Native);
 
         let affine = || TensorStorage::AffineQuantized {
             format: GroupedAffineQuantization {
@@ -102,19 +57,22 @@ mod tests {
             binding(ExpertProjectionRole::Gate, affine()),
             binding(ExpertProjectionRole::Up, affine()),
         ]);
-        assert_eq!(ClampedRoutedLayout::discover(&mlx)?, ClampedRoutedLayout::Mlx);
+        assert_eq!(discover(&mlx)?, ClampedRoutedLayout::Mlx);
 
         let dense = plan(vec![binding(
             ExpertProjectionRole::GateUp,
-            TensorStorage::Dense { dtype: "BF16".into(), bias: None },
+            TensorStorage::Dense {
+                dtype: models::weights::DenseDType::Bf16,
+                bias: None,
+            },
         )]);
-        assert_eq!(ClampedRoutedLayout::discover(&dense)?, ClampedRoutedLayout::Dense);
+        assert_eq!(discover(&dense)?, ClampedRoutedLayout::Dense);
         Ok(())
     }
 
     #[test]
     fn rejects_a_plan_without_an_expert_transform() {
-        assert!(ClampedRoutedLayout::discover(&plan(Vec::new())).is_err());
+        assert!(discover(&plan(Vec::new())).is_err());
     }
 
     fn plan(tensors: Vec<TensorBinding>) -> WeightBindingPlan {

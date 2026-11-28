@@ -21,7 +21,7 @@ fn long_wait_does_not_join_an_existing_short_window() -> crate::Result<()> {
 fn identical_long_fill_waits_for_the_leader() -> crate::Result<()> {
     assert_fill_ownership(CacheCohort::new(20, 16, 4))?;
     assert_fill_ownership(CacheCohort::for_backend(
-        &foundation::model::BackendTarget::Cuda,
+        foundation::model::BackendTarget::Cuda,
         2_000,
         16,
         4,
@@ -110,13 +110,13 @@ fn cancelled_cohort_wait_does_not_wait_for_a_long_admission_window() {
 
 #[test]
 fn cuda_eviction_has_no_artificial_wait_and_still_honors_cancellation() -> crate::Result<()> {
-    let cohort = CacheCohort::for_backend(&foundation::model::BackendTarget::Cuda, 2_000, 16, 4);
+    let cohort = CacheCohort::for_backend(foundation::model::BackendTarget::Cuda, 2_000, 16, 4);
     let token = crate::CancellationToken::new();
     assert_eq!(cohort.wait(true, 32, &token)?, Duration::ZERO);
     assert_eq!(cohort.wait(true, 8, &token)?, Duration::ZERO);
     token.cancel();
     assert!(matches!(cohort.wait(true, 32, &token), Err(crate::Error::Cancelled)));
-    let metal = CacheCohort::for_backend(&foundation::model::BackendTarget::Metal, 2_000, 16, 4);
+    let metal = CacheCohort::for_backend(foundation::model::BackendTarget::Metal, 2_000, 16, 4);
     assert_eq!(metal.long_wait, Duration::from_secs(2));
     assert_eq!(metal.short_wait, Duration::from_millis(100));
     Ok(())

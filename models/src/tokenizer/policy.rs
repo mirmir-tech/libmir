@@ -22,6 +22,10 @@ impl TokenizerPolicy {
             .map(|json| serde_json::from_str::<Value>(&json))
             .transpose()?
             .unwrap_or_default();
+        Self::from_value(&value)
+    }
+
+    pub(super) fn from_value(value: &Value) -> Result<Self> {
         Ok(Self {
             padding_side: match value.get("padding_side").and_then(Value::as_str) {
                 Some("left") => PaddingSide::Left,
@@ -31,9 +35,9 @@ impl TokenizerPolicy {
                 Some("left") => TruncationDirection::Left,
                 _ => TruncationDirection::Right,
             },
-            pad_token: string_token(&value, "pad_token"),
-            default_max_length: usize_value(&value, "max_length")?,
-            model_max_length: usize_value(&value, "model_max_length")?,
+            pad_token: string_token(value, "pad_token"),
+            default_max_length: usize_value(value, "max_length")?,
+            model_max_length: usize_value(value, "model_max_length")?,
         })
     }
 }

@@ -1,4 +1,5 @@
 mod gguf;
+mod inline;
 #[cfg(test)]
 mod tests;
 
@@ -10,7 +11,7 @@ use std::{
 
 use models::{
     layout::{WeightContainer, WeightFile},
-    weights::TensorInfo,
+    weights::{TensorCatalog, TensorInfo},
 };
 
 use super::{Array, Dtype, Error, Result, Stream};
@@ -18,11 +19,11 @@ use super::{Array, Dtype, Error, Result, Stream};
 #[derive(Debug)]
 pub struct TensorFile {
     /// Behind a lock so a loader that copies a tensor into another (an
-    /// expert bank) can take it out through a shared reference.
-    native: Mutex<mirtal::TensorFile>,
-    /// GGUF float tensors cast to the BF16 activation type, by name, taken
-    /// out of `native`: the cast is the only owner of the stored array, which
-    /// is freed once the cast has run, so a tensor occupies memory once.
+    /// expert bank) can take it out through a shared reference. `None` for
+    /// in-memory `SafeTensors` payloads (assembled GGUF vision projections).
+    native: Option<Mutex<mirtal::TensorFile>>,
+    /// GGUF float tensors cast to the BF16 activation type (or in-memory
+    /// tensors), by name.
     converted: Mutex<BTreeMap<String, mirtal::Array>>,
 }
 
@@ -34,7 +35,7 @@ impl TensorFile {
             return Err(Error::UncataloguedGguf(path.to_owned()));
         }
         Ok(Self {
-            native: Mutex::new(mirtal::TensorFile::load(path, stream.native())?),
+            native: Some(Mutex::new(mirtal::TensorFile::load(path, stream.native())?)),
             converted: Mutex::default(),
         })
     }
@@ -58,13 +59,13 @@ impl TensorFile {
             converted.insert(range.name().to_owned(), value.native().clone());
         }
         Ok(Self {
-            native: Mutex::new(native),
+            native: Some(Mutex::new(native)),
             converted: Mutex::new(converted),
         })
     }
 
     pub fn len(&self) -> Result<usize> {
-        let native = self.native().len();
+        let native = self.native().map_or(0, |guard| guard.len());
         let converted = self.converted().len();
         Ok(native + converted)
     }
@@ -72,7 +73,9 @@ impl TensorFile {
     /// Evaluates every tensor; the casts one at a time, so a stored tensor is
     /// freed before the next is read.
     pub fn evaluate(&self, stream: &Stream) -> Result<()> {
-        self.native().evaluate()?;
+        if let Some(native) = self.native() {
+            native.evaluate()?;
+        }
         for value in self.converted().values() {
             stream.native().eval(value)?;
         }
@@ -83,7 +86,8 @@ impl TensorFile {
         if let Some(value) = self.converted().get(name) {
             return Array::from_native(value.clone());
         }
-        Array::from_native(self.native().get(name)?)
+        let native = self.native().ok_or_else(|| Error::MissingTensor(name.to_owned()))?;
+        Array::from_native(native.get(name)?)
     }
 
     /// Removes `name` and returns it, so the file no longer keeps what it
@@ -91,9 +95,11 @@ impl TensorFile {
     /// the copy is evaluated.
     pub fn take(&self, name: &str) -> Result<Array> {
         let converted = self.converted().remove(name);
-        match converted {
-            Some(value) => Array::from_native(value),
-            None => Array::from_native(self.native().take(name)?),
+        if let Some(value) = converted {
+            Array::from_native(value)
+        } else {
+            let mut native = self.native().ok_or_else(|| Error::MissingTensor(name.to_owned()))?;
+            Array::from_native(native.take(name)?)
         }
     }
 
@@ -101,17 +107,19 @@ impl TensorFile {
         if self.converted().contains_key(name) {
             return Ok(true);
         }
-        Ok(self.native().contains(name)?)
+        self.native().map_or(Ok(false), |native| Ok(native.contains(name)?))
     }
 
     pub fn is_empty(&self) -> Result<bool> {
-        let native = self.native().is_empty();
+        let native = self.native().is_none_or(|guard| guard.is_empty());
         let converted = self.converted().is_empty();
         Ok(native && converted)
     }
 
-    fn native(&self) -> MutexGuard<'_, mirtal::TensorFile> {
-        self.native.lock().unwrap_or_else(PoisonError::into_inner)
+    fn native(&self) -> Option<MutexGuard<'_, mirtal::TensorFile>> {
+        self.native
+            .as_ref()
+            .map(|mutex| mutex.lock().unwrap_or_else(PoisonError::into_inner))
     }
 
     fn converted(&self) -> MutexGuard<'_, BTreeMap<String, mirtal::Array>> {
@@ -127,6 +135,23 @@ impl TensorFile {
 pub struct GgufShards(BTreeMap<PathBuf, Vec<TensorInfo>>);
 
 impl GgufShards {
+    /// Groups the GGUF tensors of an already-parsed catalog by shard path so
+    /// loading never re-reads GGUF headers.
+    #[must_use]
+    pub fn from_catalog(weights: &[WeightFile], catalog: &TensorCatalog) -> Self {
+        let mut files = weights
+            .iter()
+            .filter(|weight| weight.container == WeightContainer::Gguf)
+            .map(|weight| (weight.path.clone(), Vec::new()))
+            .collect::<BTreeMap<_, _>>();
+        for tensor in &catalog.tensors {
+            if tensor.container == WeightContainer::Gguf {
+                files.entry(tensor.file.clone()).or_default().push(tensor.clone());
+            }
+        }
+        Self(files)
+    }
+
     /// Maps every GGUF group among `weights`, whatever order they sort in.
     pub fn of(weights: &[WeightFile]) -> Result<Self> {
         let gguf = weights
@@ -144,19 +169,23 @@ impl GgufShards {
         Ok(Self(files))
     }
 
-    /// Loads `path`: a GGUF file by its share of its group's catalog, keeping
-    /// `full_precision`; other weights whole.
-    pub fn load(
+    /// Loads `weight`: a GGUF file by its share of its group's catalog, keeping
+    /// `full_precision`; `SafeTensors` files whole.
+    pub fn load_weight(
         &mut self,
-        path: &Path,
+        weight: &WeightFile,
         full_precision: &BTreeSet<String>,
         stream: &Stream,
     ) -> Result<TensorFile> {
-        if WeightContainer::of(path) != Some(WeightContainer::Gguf) {
-            return TensorFile::load(path, stream);
+        match weight.container {
+            WeightContainer::SafeTensors => TensorFile::load(&weight.path, stream),
+            WeightContainer::Gguf => {
+                let tensors = self
+                    .0
+                    .remove(&weight.path)
+                    .ok_or_else(|| Error::UncataloguedGguf(weight.path.clone()))?;
+                TensorFile::load_gguf_shard(&weight.path, &tensors, full_precision, stream)
+            },
         }
-        let tensors =
-            self.0.remove(path).ok_or_else(|| Error::UncataloguedGguf(path.to_owned()))?;
-        TensorFile::load_gguf_shard(path, &tensors, full_precision, stream)
     }
 }

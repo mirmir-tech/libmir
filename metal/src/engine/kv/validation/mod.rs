@@ -1,4 +1,4 @@
-use super::KvCache;
+use super::{KvCache, KvStorage};
 use crate::engine::{Array, Error, Result};
 
 impl KvCache {
@@ -13,25 +13,56 @@ impl KvCache {
         {
             return Err(Error::InvalidModel("K/V updates require nonempty rank-four arrays with matching batch, heads and tokens".into()));
         }
-        for (stored, update, shape) in [(&self.keys, keys, &ks), (&self.values, values, &vs)] {
-            if let Some(stored) = stored {
-                let current = stored.native().shape()?;
-                if [0, 1, 3]
-                    .into_iter()
-                    .any(|axis| current.dimensions()[axis] != shape.dimensions()[axis])
-                    || stored.native().dtype()? != update.native().dtype()?
-                {
-                    return Err(Error::InvalidModel(
-                        "K/V update changed the cached array layout or dtype".into(),
-                    ));
-                }
-            }
-        }
-        if let Some(pages) = self.pages.as_ref().filter(|pages| !pages.active()) {
-            pages.validate_update(keys, values)?;
+        match &self.storage {
+            KvStorage::Contiguous(store) => {
+                validate_layout(
+                    store.keys.as_ref(),
+                    store.values.as_ref(),
+                    keys,
+                    values,
+                    &ks,
+                    &vs,
+                )?;
+            },
+            KvStorage::Sliding(store) => {
+                validate_layout(
+                    store.keys.as_ref(),
+                    store.values.as_ref(),
+                    keys,
+                    values,
+                    &ks,
+                    &vs,
+                )?;
+            },
+            KvStorage::Paged(pages) => pages.validate_update(keys, values)?,
         }
         Ok(ks.dimensions()[2])
     }
+}
+
+fn validate_layout(
+    stored_keys: Option<&Array>,
+    stored_values: Option<&Array>,
+    keys: &Array,
+    values: &Array,
+    ks: &mirtal::Shape,
+    vs: &mirtal::Shape,
+) -> Result<()> {
+    for (stored, update, shape) in [(stored_keys, keys, ks), (stored_values, values, vs)] {
+        if let Some(stored) = stored {
+            let current = stored.native().shape()?;
+            if [0, 1, 3]
+                .into_iter()
+                .any(|axis| current.dimensions()[axis] != shape.dimensions()[axis])
+                || stored.native().dtype()? != update.native().dtype()?
+            {
+                return Err(Error::InvalidModel(
+                    "K/V update changed the cached array layout or dtype".into(),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

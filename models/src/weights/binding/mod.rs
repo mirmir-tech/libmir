@@ -95,7 +95,7 @@ impl WeightBindingPlan {
         catalog: &TensorCatalog,
         layout: &ModelLayout,
     ) -> Result<Self> {
-        let config = crate::layout::json::read(&layout.config_path)?;
+        let config = layout.read_config()?;
         discovery::discover_with_config(spec, catalog, &config)
     }
 

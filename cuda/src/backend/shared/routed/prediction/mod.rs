@@ -83,10 +83,6 @@ impl PredictionTemplate {
         })
     }
 
-    pub(super) const fn index(&self) -> usize {
-        self.index
-    }
-
     pub(super) const fn layer(&self) -> &CudaAttentionHybridLayer {
         &self.layer
     }

@@ -231,9 +231,12 @@ fn projection_storage(
         if let Some(name) = &output_bias {
             let _inserted = consumed.insert(name.clone());
         }
-        Ok(TensorStorage::Dense {
-            dtype: tensor.dtype.clone(),
-            bias: output_bias,
-        })
+        let Some(dtype) = tensor.dtype.as_dense().cloned() else {
+            return Err(ModelsError::InvalidConfig(format!(
+                "non-dense tensor {} fell through to dense binding",
+                tensor.name
+            )));
+        };
+        Ok(TensorStorage::Dense { dtype, bias: output_bias })
     }
 }

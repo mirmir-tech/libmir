@@ -21,7 +21,8 @@ fn uploads_a_safetensors_range_without_an_intermediate_value_vector() -> libmir_
     let info = TensorInfo {
         name: "model.test.weight".into(),
         file: path.clone(),
-        dtype: "BF16".into(),
+        container: models::layout::WeightContainer::SafeTensors,
+        dtype: models::weights::DenseDType::Bf16.into(),
         shape: vec![2, 2],
         data_start: 8,
         data_offsets: [8, 16],

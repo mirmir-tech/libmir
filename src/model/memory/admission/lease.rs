@@ -26,7 +26,7 @@ impl ModelMemoryLease {
         let bytes = reservation.bytes;
         drop(ledger);
         tracing::info!(
-            model,
+            %model,
             reservation_bytes = bytes,
             "committed resident model memory reservation"
         );
@@ -93,7 +93,7 @@ impl Drop for ModelMemoryLease {
                 }
             }
             tracing::info!(
-                model = reservation.model,
+                model = %reservation.model,
                 reservation_bytes = reservation.bytes,
                 state = ?reservation.state,
                 "released model memory reservation"

@@ -153,7 +153,8 @@ fn tensor(
     TensorInfo {
         name: name.into(),
         file: path.into(),
-        dtype: dtype.into(),
+        container: crate::layout::WeightContainer::SafeTensors,
+        dtype: crate::weights::TensorDType::parse(dtype),
         shape,
         data_start: 0,
         data_offsets: [start as u64, end as u64],

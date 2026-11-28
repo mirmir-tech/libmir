@@ -21,13 +21,10 @@ enum TailStep {
 fn localizes_terminal_prefill_differences() -> Result<()> {
     let config = BenchmarkConfig::from_env()?;
     let settings = configured_settings()?;
-    let mut model = LoadedModel::load_with_config(&config.manifest(), settings, &mut |_| {})?;
+    let model = LoadedModel::load_with_config(&config.manifest(), settings, &mut |_| {})?;
     let prompt = (1_000..3_065).collect::<Vec<_>>();
-    model.reserve_prefill_pages(400)?;
     let decoder = model.execution.decoder()?;
-    let mut cache = decoder.new_cache(model.stream())?;
-    cache.reserve(2_081)?;
-    cache.plan_contiguous(2_081);
+    let cache = decoder.new_cache(model.stream())?;
     let mut common = SessionState::new(cache);
     for position in (0..2048).step_by(512) {
         let hidden = step::forward_prefill_state(

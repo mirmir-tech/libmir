@@ -1,4 +1,4 @@
-mod capacity;
+mod context;
 mod contiguous;
 mod format;
 pub mod history;
@@ -15,81 +15,50 @@ mod validation;
 
 use std::sync::Arc;
 
+pub use context::{KvContext, PageLayout, PagedContextMode, PagedKvContext, PagedScales};
 pub use format::KvPageFormat;
-pub use paged::{DecodeCapacity, PagedArenaPool};
+pub use paged::PagedArenaPool;
 pub use policy::{
     NATIVE_PAGED_ATTENTION_MIN_CONTEXT, native_paged_attention_mode, paged_attention_enabled,
     paged_attention_min_context,
 };
+use runtime::kv::BlockId;
 
 use super::{Array, Error, PagedAttention, Result, Stream};
-use crate::engine::attention::PagedAttentionScratch;
 
 #[derive(Debug)]
-pub struct KvContext {
-    pub keys: Array,
-    pub values: Array,
-    pub paged: Option<PagedKvContext>,
-    pub mask: Option<Array>,
+pub(super) struct ContiguousStore {
+    pub(super) keys: Option<Array>,
+    pub(super) values: Option<Array>,
+    pub(super) capacity: usize,
+    pub(super) step: usize,
 }
 
 #[derive(Debug)]
-pub struct PagedKvContext {
-    pub key_pages: Array,
-    pub value_pages: Array,
-    pub key_scales: Option<Array>,
-    pub value_scales: Option<Array>,
-    pub page_table: Array,
-    pub page_dependency: Array,
-    pub(crate) scratch: Arc<PagedAttentionScratch>,
-    pub page_size: usize,
-    pub context_tokens: usize,
-    pub(crate) fragmented: bool,
+pub(super) struct SlidingStore {
+    pub(super) keys: Option<Array>,
+    pub(super) values: Option<Array>,
+    pub(super) capacity: usize,
+    pub(super) write_index: usize,
+    pub(super) step: usize,
+    pub(super) max_context: usize,
+    /// Tokens of the latest sliding update: a single token right after a
+    /// chunk is a prompt's last token and keeps the rewind margin.
+    pub(super) last_update_tokens: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PagedContextMode {
-    View,
-    NativeIfFragmented,
-    Native,
-    Both,
-}
-
-impl PagedKvContext {
-    #[must_use]
-    pub fn attention(&self) -> PagedAttention<'_> {
-        PagedAttention {
-            key_pages: &self.key_pages,
-            value_pages: &self.value_pages,
-            key_scales: self.key_scales.as_ref(),
-            value_scales: self.value_scales.as_ref(),
-            page_table: &self.page_table,
-            page_dependency: &self.page_dependency,
-            page_size: self.page_size,
-            context_tokens: self.context_tokens,
-        }
-    }
-
-    pub(crate) fn scratch(&self) -> &PagedAttentionScratch {
-        &self.scratch
-    }
+#[derive(Debug)]
+enum KvStorage {
+    Contiguous(ContiguousStore),
+    Sliding(SlidingStore),
+    Paged(paged::PagedStore),
 }
 
 #[derive(Debug)]
 pub struct KvCache {
     history: Option<history::Row>,
-    keys: Option<Array>,
-    values: Option<Array>,
-    pages: Option<paged::PagedStore>,
+    storage: KvStorage,
     offset: usize,
-    capacity: usize,
-    write_index: usize,
-    step: usize,
-    max_context: Option<usize>,
-    reserve_tokens: usize,
-    /// Tokens of the latest sliding update: a single token right after a
-    /// chunk is a prompt's last token and keeps the rewind margin.
-    last_update_tokens: usize,
 }
 
 impl KvCache {
@@ -98,7 +67,31 @@ impl KvCache {
     }
 
     pub fn new_with_window(step: usize, max_context: Option<usize>) -> Result<Self> {
-        Self::new_with_options(step, max_context, None)
+        if step == 0 || max_context == Some(0) {
+            return Err(Error::InvalidModel("KV cache dimensions must be positive".into()));
+        }
+        let storage = max_context.map_or_else(
+            || {
+                KvStorage::Contiguous(ContiguousStore {
+                    keys: None,
+                    values: None,
+                    capacity: 0,
+                    step,
+                })
+            },
+            |max_context| {
+                KvStorage::Sliding(SlidingStore {
+                    keys: None,
+                    values: None,
+                    capacity: 0,
+                    write_index: 0,
+                    step,
+                    max_context,
+                    last_update_tokens: 0,
+                })
+            },
+        );
+        Ok(Self { history: None, storage, offset: 0 })
     }
 
     pub fn new_paged(step: usize, page_size: usize) -> Result<Self> {
@@ -120,7 +113,7 @@ impl KvCache {
         pool: Arc<PagedArenaPool>,
         layer: usize,
     ) -> Result<Self> {
-        Self::new_paged_with_pool_capacity(step, page_size, format, usize::MAX, pool, layer)
+        Self::new_paged_with_pool_capacity(step, page_size, format, 4096, pool, layer)
     }
 
     pub(crate) fn new_paged_with_pool_capacity(
@@ -131,35 +124,14 @@ impl KvCache {
         pool: Arc<PagedArenaPool>,
         layer: usize,
     ) -> Result<Self> {
-        Self::new_with_options(step, None, Some((page_size, format, max_pages, pool, layer)))
-    }
-
-    fn new_with_options(
-        step: usize,
-        max_context: Option<usize>,
-        page_storage: Option<(usize, KvPageFormat, usize, Arc<PagedArenaPool>, usize)>,
-    ) -> Result<Self> {
-        if step == 0
-            || max_context == Some(0)
-            || page_storage.as_ref().is_some_and(|(size, ..)| *size == 0)
-        {
+        if step == 0 || page_size == 0 {
             return Err(Error::InvalidModel("KV cache dimensions must be positive".into()));
         }
-        let reserve_tokens = usize::from(page_storage.is_some()) * step;
+        let pages = paged::PagedStore::new(page_size, max_pages, format, pool, layer);
         Ok(Self {
             history: None,
-            keys: None,
-            values: None,
-            pages: page_storage.map(|(size, format, max_pages, pool, layer)| {
-                paged::PagedStore::new(size, step, reserve_tokens, max_pages, format, pool, layer)
-            }),
+            storage: KvStorage::Paged(pages),
             offset: 0,
-            capacity: 0,
-            write_index: 0,
-            step,
-            max_context,
-            reserve_tokens,
-            last_update_tokens: 0,
         })
     }
 
@@ -167,22 +139,47 @@ impl KvCache {
         Ok(self.offset)
     }
 
-    pub fn reserve(&mut self, tokens: usize) -> Result<()> {
-        self.reserve_tokens = self.reserve_tokens.max(tokens);
-        if let Some(pages) = self.pages.as_mut() {
-            pages.reserve(self.reserve_tokens);
+    pub fn bind_blocks(
+        &mut self,
+        blocks: &[BlockId],
+        token_len: Option<usize>,
+        stream: &Stream,
+    ) -> Result<()> {
+        if let KvStorage::Paged(pages) = &mut self.storage {
+            pages.bind_blocks(blocks, stream)?;
+            if let Some(tokens) = token_len {
+                self.offset = tokens;
+                self.history = None;
+            }
         }
+        Ok(())
+    }
+
+    pub(crate) fn can_write_token(&self, token_pos: usize) -> bool {
+        match &self.storage {
+            KvStorage::Paged(pages) => pages.can_write_token(token_pos),
+            KvStorage::Contiguous(_) | KvStorage::Sliding(_) => true,
+        }
+    }
+
+    pub fn reserve(&mut self, _tokens: usize) -> Result<()> {
         Ok(())
     }
 
     #[cfg(test)]
     pub(crate) fn physical_page_count(&self) -> usize {
-        self.pages.as_ref().map_or(0, paged::PagedStore::page_count)
+        match &self.storage {
+            KvStorage::Paged(pages) => pages.page_count(),
+            KvStorage::Contiguous(_) | KvStorage::Sliding(_) => 0,
+        }
     }
 
     /// Whether the active pages already form more than one physical run.
     pub(crate) fn fragmented_pages(&self) -> bool {
-        self.pages.as_ref().is_some_and(|pages| pages.active() && pages.fragmented())
+        match &self.storage {
+            KvStorage::Paged(pages) => pages.active() && pages.fragmented(),
+            KvStorage::Contiguous(_) | KvStorage::Sliding(_) => false,
+        }
     }
 
     pub fn update(&mut self, keys: &Array, values: &Array, stream: &Stream) -> Result<KvContext> {

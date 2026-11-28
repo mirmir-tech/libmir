@@ -104,14 +104,6 @@ impl Written {
     }
 }
 
-/// Whether `path` is a regular file holding exactly `contents`.
-pub(in crate::gguf::import) fn holds_contents(path: &Path, contents: &[u8]) -> bool {
-    path.symlink_metadata().is_ok_and(|metadata| {
-        metadata.is_file()
-            && u64::try_from(contents.len()).is_ok_and(|bytes| bytes == metadata.len())
-    }) && fs::read(path).is_ok_and(|now| now == contents)
-}
-
 fn digest(contents: &[u8]) -> String {
     blake3::hash(contents).to_hex().to_string()
 }

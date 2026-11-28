@@ -5,7 +5,7 @@
 use std::{collections::BTreeSet, sync::Arc};
 
 use models::{
-    semantic::{AttentionWindow, DecoderLayerSpec, DecoderSpec},
+    semantic::{DecoderLayerSpec, DecoderSpec},
     weights::WeightBindingPlan,
 };
 
@@ -17,7 +17,6 @@ use crate::engine::{
         sharing::{PerLayerGate, PerLayerInputs, StepShare},
         weights::Publish,
     },
-    lowering::{LayerLowering, MixerLowering},
 };
 
 /// The model's per-layer inputs and the step slot its layers share.
@@ -143,33 +142,4 @@ fn readers(spec: &DecoderSpec) -> Vec<usize> {
         }
     }
     readers
-}
-
-/// The sliding window of each layer that caches its keys and values, by
-/// layer: Gemma 4's E models share in their last layers, which keep no
-/// cache, so caching layers must all come first. The semantic validation
-/// already admits only an earlier softmax source of the same geometry.
-pub(super) fn cache_windows(
-    spec: &DecoderSpec,
-    lowering: &[LayerLowering],
-) -> Result<Vec<Option<usize>>> {
-    let mut windows = Vec::with_capacity(lowering.len());
-    for (index, lowered) in lowering.iter().enumerate() {
-        let shares = spec
-            .layer(index)?
-            .mixer
-            .softmax_attention()
-            .is_some_and(|attention| attention.key_value_source.is_some());
-        if shares {
-            continue;
-        }
-        if windows.len() != index {
-            return Err(Error::CachingLayerAfterSharing { layer: index });
-        }
-        let MixerLowering::Softmax { window, .. } = lowered.mixer else {
-            return Err(Error::InvalidModel("hybrid MoE layers are softmax attention".into()));
-        };
-        windows.push(window.and_then(AttentionWindow::sliding));
-    }
-    Ok(windows)
 }

@@ -1,4 +1,4 @@
-use models::weights::TensorInfo;
+use models::weights::{DenseDType, TensorInfo};
 
 use super::{NvFp4ExpertBankConfig, NvFp4ExpertSource};
 use crate::{Error, Result};
@@ -18,23 +18,23 @@ pub(super) fn validate(
     let weight_shape = [config.output_features, config.input_features / 2];
     let scale_shape = [config.output_features, config.input_features / 16];
     for source in sources {
-        tensor(source.weight, "U8", &weight_shape)?;
-        tensor(source.weight_scale, "F8_E4M3", &scale_shape)?;
-        scalar(source.weight_scale_2, "F32")?;
-        scalar(source.input_scale, "F32")?;
+        tensor(source.weight, &DenseDType::U8, &weight_shape)?;
+        tensor(source.weight_scale, &DenseDType::F8E4M3, &scale_shape)?;
+        scalar(source.weight_scale_2, &DenseDType::F32)?;
+        scalar(source.input_scale, &DenseDType::F32)?;
     }
     Ok(())
 }
 
-fn scalar(info: &TensorInfo, dtype: &str) -> Result<()> {
-    if info.dtype != dtype || !(info.shape.is_empty() || info.shape == [1]) {
+fn scalar(info: &TensorInfo, dtype: &DenseDType) -> Result<()> {
+    if info.dtype != *dtype || !(info.shape.is_empty() || info.shape == [1]) {
         return Err(Error::InvalidNvFp4("expert bank scalar metadata mismatch"));
     }
     Ok(())
 }
 
-fn tensor(info: &TensorInfo, dtype: &str, shape: &[usize]) -> Result<()> {
-    if info.dtype != dtype || info.shape != shape {
+fn tensor(info: &TensorInfo, dtype: &DenseDType, shape: &[usize]) -> Result<()> {
+    if info.dtype != *dtype || info.shape != shape {
         return Err(Error::InvalidNvFp4("expert bank tensor metadata mismatch"));
     }
     Ok(())

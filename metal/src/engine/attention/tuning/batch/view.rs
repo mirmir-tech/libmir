@@ -5,7 +5,10 @@ pub(super) fn attention(
     stream: &Stream,
     refresh_fragmented: bool,
 ) -> Result<(Array, Array)> {
-    let Some(paged) = context.paged.as_ref().filter(|paged| refresh_fragmented && paged.fragmented)
+    let Some(paged) = context
+        .paged
+        .as_ref()
+        .filter(|paged| refresh_fragmented && paged.is_fragmented())
     else {
         return Ok((
             Array::from_native(context.keys.native().clone())?,

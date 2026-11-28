@@ -179,7 +179,7 @@ fn validate_config(config: &PooledVisionConfig) -> Result<()> {
         || config.num_key_value_heads == 0
         || !config.num_attention_heads.is_multiple_of(config.num_key_value_heads)
         || config.pooling_kernel_size == 0
-        || config.hidden_activation != "gelu_pytorch_tanh"
+        || config.hidden_activation != models::layout::HiddenActivation::GeluTanh
         || !config.rms_norm_eps.is_finite()
         || config.rms_norm_eps < 0.0
     {

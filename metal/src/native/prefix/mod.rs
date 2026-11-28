@@ -5,6 +5,8 @@ mod retention;
 
 use std::collections::{HashMap, VecDeque};
 
+use foundation::model::ModelId;
+
 use self::index::{PrefixKey, indexed_prefixes, longest_indexed_prefix};
 use super::{
     error::{Error, Result},
@@ -65,7 +67,7 @@ impl PrefixCache {
 
     pub(super) fn insert(
         &mut self,
-        model: &str,
+        model: &ModelId,
         tokens: &[u32],
         state: &SessionState,
         logits: &Array,
@@ -99,7 +101,7 @@ impl PrefixCache {
 
     pub(super) fn insert_checkpoint(
         &mut self,
-        model: &str,
+        model: &ModelId,
         tokens: &[u32],
         state: &SessionState,
         block_size: usize,
@@ -129,7 +131,7 @@ impl PrefixCache {
         Ok(())
     }
 
-    fn pending_group(&self, model: &str, tokens: &[u32]) -> Option<u64> {
+    fn pending_group(&self, model: &ModelId, tokens: &[u32]) -> Option<u64> {
         longest_indexed_prefix(model, tokens, &self.entries)
             .map(|(_, entry)| entry.memory_group)
             .filter(|group| self.groups.get(group).is_some_and(|state| state.terminal.is_none()))

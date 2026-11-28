@@ -1,3 +1,5 @@
+use foundation::model::ModelId;
+
 use crate::{
     Result,
     engine::{CudaEngine, model::ModelExecution},
@@ -5,7 +7,7 @@ use crate::{
 
 impl CudaEngine {
     /// Scheduling capability of the loaded generation runner.
-    pub fn prefill_schedule(&self, model_id: &str) -> Result<crate::CudaPrefillSchedule> {
+    pub fn prefill_schedule(&self, model_id: &ModelId) -> Result<crate::CudaPrefillSchedule> {
         let loaded = self.model(model_id)?;
         let runner = loaded.prefill_runner()?;
         Ok(match &runner.execution {
@@ -17,7 +19,7 @@ impl CudaEngine {
     /// Exact full and interleaved prefill shapes to calibrate before serving.
     pub fn prefill_profile_shapes(
         &self,
-        model_id: &str,
+        model_id: &ModelId,
         max_batch_tokens: usize,
     ) -> Result<Vec<usize>> {
         let budget = max_batch_tokens.saturating_sub(1);
@@ -42,11 +44,11 @@ impl CudaEngine {
         })
     }
 
-    pub fn supports_paged_prefix_reuse(&self, model_id: &str) -> Result<bool> {
+    pub fn supports_paged_prefix_reuse(&self, model_id: &ModelId) -> Result<bool> {
         Ok(self.paged_prefix_replay_tokens(model_id)?.is_some())
     }
 
-    pub fn paged_prefix_replay_tokens(&self, model_id: &str) -> Result<Option<usize>> {
+    pub fn paged_prefix_replay_tokens(&self, model_id: &ModelId) -> Result<Option<usize>> {
         let loaded = self.model(model_id)?;
         let runner = loaded.prefill_runner()?;
         Ok(match &runner.execution {
@@ -55,7 +57,10 @@ impl CudaEngine {
         })
     }
 
-    pub fn paged_prefix_admission(&self, model_id: &str) -> Result<Option<(usize, usize, usize)>> {
+    pub fn paged_prefix_admission(
+        &self,
+        model_id: &ModelId,
+    ) -> Result<Option<(usize, usize, usize)>> {
         let loaded = self.model(model_id)?;
         let runner = loaded.prefill_runner()?;
         Ok(match &runner.execution {

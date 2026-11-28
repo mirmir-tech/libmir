@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use super::{KvContext, PagedKvContext};
+use super::{KvContext, PagedKvContext, PagedScales};
 use crate::engine::{Array, Result};
 
 impl KvContext {
@@ -21,12 +21,17 @@ impl KvContext {
 
 impl PagedKvContext {
     fn share(&self) -> Result<Self> {
-        let optional = |array: Option<&Array>| array.map(Array::snapshot).transpose();
+        let scales = match &self.scales {
+            PagedScales::None => PagedScales::None,
+            PagedScales::PerTokenHead { keys, values } => PagedScales::PerTokenHead {
+                keys: keys.snapshot()?,
+                values: values.snapshot()?,
+            },
+        };
         Ok(Self {
             key_pages: self.key_pages.snapshot()?,
             value_pages: self.value_pages.snapshot()?,
-            key_scales: optional(self.key_scales.as_ref())?,
-            value_scales: optional(self.value_scales.as_ref())?,
+            scales,
             page_table: self.page_table.snapshot()?,
             page_dependency: self.page_dependency.snapshot()?,
             // Only a later layer of the same step reads it, after this
@@ -34,7 +39,7 @@ impl PagedKvContext {
             scratch: Arc::clone(&self.scratch),
             page_size: self.page_size,
             context_tokens: self.context_tokens,
-            fragmented: self.fragmented,
+            layout: self.layout,
         })
     }
 }

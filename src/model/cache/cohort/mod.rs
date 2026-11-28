@@ -64,7 +64,7 @@ impl State {
 
 impl CacheCohort {
     pub(in crate::model) fn for_backend(
-        target: &foundation::model::BackendTarget,
+        target: foundation::model::BackendTarget,
         decode_batch_wait_us: u64,
         max_batch_tokens: usize,
         block_tokens: usize,
@@ -73,7 +73,7 @@ impl CacheCohort {
         // Delaying only requests that need eviction splits an admitted burst;
         // it must not inherit a seconds-long delay from decode collection.
         // Keep identical-prefix fill ownership and real capacity waits intact.
-        let eviction_wait = if *target == foundation::model::BackendTarget::Cuda {
+        let eviction_wait = if target == foundation::model::BackendTarget::Cuda {
             0
         } else {
             decode_batch_wait_us

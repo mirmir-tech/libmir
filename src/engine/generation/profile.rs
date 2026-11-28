@@ -1,6 +1,6 @@
 pub use runtime::scheduler::PrefillRefillPolicy;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrefillAdmissionPolicy {
     #[cfg_attr(
         not(feature = "metal"),
@@ -14,11 +14,90 @@ pub enum PrefillAdmissionPolicy {
     ShortPrompt,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WaveDepthPolicy {
+    Bounded,
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "unbounded waves remain exercised by scheduling policy tests")
+    )]
+    Unbounded,
+}
+
+impl WaveDepthPolicy {
+    #[must_use]
+    pub const fn is_bounded(self) -> bool {
+        matches!(self, Self::Bounded)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DecodeInterleaving {
+    Interleaved,
+    CohortSerial,
+}
+
+impl DecodeInterleaving {
+    #[must_use]
+    pub const fn allows_interleaving(self) -> bool {
+        matches!(self, Self::Interleaved)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NewDecodePolicy {
+    #[cfg_attr(
+        not(feature = "cuda"),
+        allow(dead_code, reason = "immediate decode admission is selected by CUDA")
+    )]
+    Immediate,
+    DeferDuringPrefill,
+}
+
+impl NewDecodePolicy {
+    #[must_use]
+    pub const fn defers_during_prefill(self) -> bool {
+        matches!(self, Self::DeferDuringPrefill)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrefixReplayPolicy {
+    Off,
+    Replay {
+        fallback_tokens: usize,
+        checkpoint_tokens: Option<usize>,
+        completion_slack_tokens: usize,
+    },
+}
+
+impl PrefixReplayPolicy {
+    #[must_use]
+    pub const fn fallback_tokens(self) -> Option<usize> {
+        match self {
+            Self::Off => None,
+            Self::Replay { fallback_tokens, .. } => Some(fallback_tokens),
+        }
+    }
+
+    #[must_use]
+    pub const fn checkpoint_tokens(self) -> Option<usize> {
+        match self {
+            Self::Off => None,
+            Self::Replay { checkpoint_tokens, .. } => checkpoint_tokens,
+        }
+    }
+
+    #[must_use]
+    pub const fn completion_slack_tokens(self) -> usize {
+        match self {
+            Self::Off => 0,
+            Self::Replay { completion_slack_tokens, .. } => completion_slack_tokens,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "backend scheduling capabilities are independent binary contracts"
-)]
 pub struct PrefillExecutionProfile {
     pub refill: PrefillRefillPolicy,
     pub admission: PrefillAdmissionPolicy,
@@ -29,12 +108,10 @@ pub struct PrefillExecutionProfile {
     pub max_prefill_cohort_tokens: usize,
     pub block_tokens: usize,
     pub resident_token_slots: usize,
-    pub limit_deep_prefill_waves: bool,
-    pub cached_prefix_replay_tokens: Option<usize>,
-    pub cached_prefix_checkpoint_replay_tokens: Option<usize>,
-    pub cached_prefix_completion_slack_tokens: usize,
-    pub defer_new_decode: bool,
-    pub interleave_prefill_decode: bool,
+    pub wave_depth: WaveDepthPolicy,
+    pub prefix_replay: PrefixReplayPolicy,
+    pub new_decode: NewDecodePolicy,
+    pub interleaving: DecodeInterleaving,
 }
 
 impl super::Engine {
@@ -93,9 +170,7 @@ impl super::Engine {
                     schedule.max_cohort_tokens.min(profile.resident_token_slots);
             },
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            super::EngineInner::Unavailable => {
-                let _ = (model, profile);
-            },
+            super::EngineInner::Unavailable(never) => match *never {},
         }
         Ok(())
     }
@@ -107,7 +182,7 @@ impl PrefillExecutionProfile {
         policy: runtime::scheduler::PrefillDecodePolicy,
     ) -> Self {
         if policy == runtime::scheduler::PrefillDecodePolicy::CompleteCohort {
-            self.interleave_prefill_decode = false;
+            self.interleaving = DecodeInterleaving::CohortSerial;
             self.max_prefill_cohort_tokens =
                 self.max_prefill_cohort_tokens.min(self.resident_token_slots.max(1));
         }
@@ -133,18 +208,16 @@ mod tests {
             max_prefill_cohort_tokens: usize::MAX,
             block_tokens: 16,
             resident_token_slots: 81920,
-            limit_deep_prefill_waves: true,
-            cached_prefix_replay_tokens: None,
-            cached_prefix_checkpoint_replay_tokens: None,
-            cached_prefix_completion_slack_tokens: 0,
-            defer_new_decode: false,
-            interleave_prefill_decode: true,
+            wave_depth: WaveDepthPolicy::Bounded,
+            prefix_replay: PrefixReplayPolicy::Off,
+            new_decode: NewDecodePolicy::Immediate,
+            interleaving: DecodeInterleaving::Interleaved,
         };
         let default = profile.with_decode_policy(PrefillDecodePolicy::BackendDefault);
-        assert!(default.interleave_prefill_decode);
+        assert_eq!(default.interleaving, DecodeInterleaving::Interleaved);
         assert_eq!(default.max_prefill_cohort_tokens, usize::MAX);
         let grouped = profile.with_decode_policy(PrefillDecodePolicy::CompleteCohort);
-        assert!(!grouped.interleave_prefill_decode);
+        assert_eq!(grouped.interleaving, DecodeInterleaving::CohortSerial);
         assert_eq!(grouped.max_prefill_cohort_tokens, 81920);
         let smaller = PrefillExecutionProfile {
             max_prefill_cohort_tokens: 1024,

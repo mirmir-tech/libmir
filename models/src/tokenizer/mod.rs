@@ -5,6 +5,7 @@ mod decoder;
 mod encoding;
 mod engine;
 mod harmony;
+mod load;
 mod metadata;
 mod policy;
 pub(crate) mod protocol;

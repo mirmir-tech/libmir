@@ -1,12 +1,14 @@
+use foundation::model::ModelId;
+
 use crate::kv::{BlockHash, KvCache, PrefixProbe};
 
 impl KvCache {
     #[must_use]
-    pub fn probe_prefix(&self, model: &str, tokens: &[u32]) -> PrefixProbe {
+    pub fn probe_prefix(&self, model: &ModelId, tokens: &[u32]) -> PrefixProbe {
         self.probe_prefix_inner(model, tokens).0
     }
 
-    pub(crate) fn probe_prefix_recorded(&mut self, model: &str, tokens: &[u32]) -> PrefixProbe {
+    pub(crate) fn probe_prefix_recorded(&mut self, model: &ModelId, tokens: &[u32]) -> PrefixProbe {
         let (probe, hashes) = self.probe_prefix_inner(model, tokens);
         for hash in hashes {
             self.prefix.touch(hash);
@@ -15,7 +17,7 @@ impl KvCache {
         probe
     }
 
-    fn probe_prefix_inner(&self, model: &str, tokens: &[u32]) -> (PrefixProbe, Vec<BlockHash>) {
+    fn probe_prefix_inner(&self, model: &ModelId, tokens: &[u32]) -> (PrefixProbe, Vec<BlockHash>) {
         let mut cached_blocks = Vec::new();
         let mut hashes = Vec::new();
         let mut cached_tokens = 0;

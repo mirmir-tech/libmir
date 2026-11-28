@@ -210,11 +210,17 @@ fn binding(
             Ok(name)
         })
         .transpose()?;
+    let dtype = tensor.dtype.as_dense().cloned().ok_or_else(|| {
+        ModelsError::InvalidConfig(format!(
+            "encoder tensor `{source}` uses unsupported non-dense dtype {}",
+            tensor.dtype
+        ))
+    })?;
     Ok(EncoderTensorBinding {
         role,
         source,
         shape,
-        storage: TensorStorage::Dense { dtype: tensor.dtype.clone(), bias },
+        storage: TensorStorage::Dense { dtype, bias },
     })
 }
 

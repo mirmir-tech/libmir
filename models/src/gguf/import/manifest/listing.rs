@@ -77,19 +77,15 @@ impl ImportManifest {
     /// The manifest of the import whose model `directory` holds, which
     /// decides what a loader reads there: `None` without one, and where its
     /// `config.json` is not the one it wrote, as when a checkpoint was
-    /// downloaded over the import, or an earlier version's manifest cannot
-    /// tell. The directory then loads as it is, as a stale import of
-    /// unchanged files still loads as the import.
+    /// downloaded over the import. The directory then loads as it is, as a
+    /// stale import of unchanged files still loads as the import.
     #[must_use]
     pub fn describing(directory: &Path) -> Option<Self> {
         let config = directory.join(CONFIG);
         Self::read(directory).filter(|manifest| {
             manifest.files.iter().any(|file| {
                 file.name == CONFIG
-                    && matches!(
-                        &file.origin,
-                        FileOrigin::Derived { written: Some(written) } if written.holds(&config)
-                    )
+                    && matches!(&file.origin, FileOrigin::Derived { written } if written.holds(&config))
             })
         })
     }

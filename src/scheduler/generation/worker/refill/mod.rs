@@ -11,7 +11,7 @@ use selection::refill_rows;
 impl Worker {
     pub(super) fn refill_prefill(&mut self) {
         if !matches!(self.prefill_profile.refill, PrefillRefillPolicy::ShortPrompt)
-            || !self.prefill_profile.interleave_prefill_decode
+            || !self.prefill_profile.interleaving.allows_interleaving()
             || self.prefill.is_empty()
             || self.prefill_cohort.is_some()
             || self.prefill_handoff_active()

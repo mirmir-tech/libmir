@@ -46,6 +46,7 @@ fn preserves_batched_pipeline_against_synchronous_logits() -> Result<()> {
             token: output_token(&model, output.output)?,
             sampling: SamplingLogits::None,
             speculation: None,
+            blocks: Vec::new(),
         });
     }
     for (step, expected) in expected.iter().enumerate() {

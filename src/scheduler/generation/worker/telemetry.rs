@@ -39,13 +39,13 @@ pub(super) fn trace_prefill_cohort(
         max_prefill_wave_tokens = worker.prefill_profile.max_prefill_wave_tokens,
         max_prefill_cohort_tokens = worker.prefill_profile.max_prefill_cohort_tokens,
         cached_prefix_checkpoint_replay_tokens =
-            worker.prefill_profile.cached_prefix_checkpoint_replay_tokens,
+            worker.prefill_profile.prefix_replay.checkpoint_tokens(),
         cached_prefix_completion_slack_tokens =
-            worker.prefill_profile.cached_prefix_completion_slack_tokens,
+            worker.prefill_profile.prefix_replay.completion_slack_tokens(),
         resident_token_slots = worker.prefill_profile.resident_token_slots,
         resident_wave_rows,
         active_resident_tokens = worker.active_resident_tokens(),
-        limit_deep_prefill_waves = worker.prefill_profile.limit_deep_prefill_waves,
+        limit_deep_prefill_waves = worker.prefill_profile.wave_depth.is_bounded(),
         oldest_queue_ms = oldest_queue.as_secs_f64() * 1_000.0,
         "prepared accelerator generation-worker prefill cohort"
     );

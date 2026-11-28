@@ -10,10 +10,10 @@ use crate::{
 #[test]
 #[ignore = "real-model scalar/packed prefill with matched chunks and logits/state comparison"]
 fn diagnoses_matched_prefill() -> std::result::Result<(), Box<dyn std::error::Error>> {
-    let mut loaded = fixture::load_path(std::env::var("MIRMIR_BENCH_MODEL")?, 0)?;
+    let loaded = fixture::load_path(std::env::var("MIRMIR_BENCH_MODEL")?, 0)?;
     let mut previous: Option<(Vec<f32>, Vec<f32>)> = None;
     for chunk in [31, 8] {
-        let (scalar, packed) = compare(&mut loaded, chunk)?;
+        let (scalar, packed) = compare(&loaded, chunk)?;
         if let Some((old_scalar, old_packed)) = previous {
             report::difference("scalar.chunk31/chunk8", &old_scalar, &scalar)?;
             report::difference("packed.chunk31/chunk8", &old_packed, &packed)?;
@@ -25,8 +25,8 @@ fn diagnoses_matched_prefill() -> std::result::Result<(), Box<dyn std::error::Er
 
 #[test]
 fn matched_prefill_fixture_is_finite_and_preserves_offsets() -> Result<()> {
-    let (mut loaded, directory) = fixture::load_family(fixture::Family::Hybrid, 0)?;
-    let (scalar, packed) = compare(&mut loaded, 8)?;
+    let (loaded, directory) = fixture::load_family(fixture::Family::Hybrid, 0)?;
+    let (scalar, packed) = compare(&loaded, 8)?;
     assert_eq!(scalar, packed, "fixture logits must be identical");
     drop(loaded);
     std::fs::remove_dir_all(directory)?;
@@ -36,18 +36,15 @@ fn matched_prefill_fixture_is_finite_and_preserves_offsets() -> Result<()> {
 fn states(loaded: &LoadedModel) -> Result<Vec<SessionState>> {
     (0..5)
         .map(|_| {
-            let mut cache = loaded.execution.decoder()?.new_cache(loaded.stream())?;
-            cache.reserve(256)?;
-            cache.plan_contiguous(48);
+            let cache = loaded.execution.decoder()?.new_cache(loaded.stream())?;
             Ok(SessionState::new(cache))
         })
         .collect()
 }
 
-fn compare(loaded: &mut LoadedModel, chunk: usize) -> Result<(Vec<f32>, Vec<f32>)> {
+fn compare(loaded: &LoadedModel, chunk: usize) -> Result<(Vec<f32>, Vec<f32>)> {
     let mut scalar = states(loaded)?;
     let mut packed = states(loaded)?;
-    loaded.reserve_prefill_pages(30)?;
     let mut position = 0;
     while position < 31 {
         let count = chunk.min(31 - position);
@@ -100,7 +97,6 @@ fn compare(loaded: &mut LoadedModel, chunk: usize) -> Result<(Vec<f32>, Vec<f32>
     let packed_logits = logits(loaded, &mut packed)?;
     report::difference(&format!("chunk={chunk},logits"), &scalar_logits, &packed_logits)?;
     drop((scalar, packed));
-    assert_eq!(loaded.stream().paged_arenas().resident_arenas()?, 0);
     Ok((scalar_logits, packed_logits))
 }
 

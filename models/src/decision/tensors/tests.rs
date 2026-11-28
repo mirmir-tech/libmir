@@ -27,7 +27,8 @@ fn info(name: &str, shape: Vec<usize>) -> TensorInfo {
     TensorInfo {
         name: name.into(),
         file: PathBuf::from("model.safetensors"),
-        dtype: "F16".into(),
+        container: crate::layout::WeightContainer::SafeTensors,
+        dtype: crate::weights::DenseDType::F16.into(),
         shape,
         data_start: 0,
         data_offsets: [0, 0],

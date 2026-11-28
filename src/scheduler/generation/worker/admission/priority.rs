@@ -23,7 +23,7 @@ pub(super) fn take_ready<T>(
 
 impl Worker {
     pub(in crate::scheduler::generation::worker) fn prioritize_prefill(&mut self) {
-        let Some(replay_tokens) = self.prefill_profile.cached_prefix_replay_tokens else {
+        let Some(replay_tokens) = self.prefill_profile.prefix_replay.fallback_tokens() else {
             return;
         };
         let now = Instant::now();

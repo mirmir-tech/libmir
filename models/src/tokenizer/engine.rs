@@ -6,13 +6,10 @@ use std::{
 use tokenizers::{Tokenizer, TruncationParams, TruncationStrategy};
 
 use super::{
-    TokenizerAssets, bpe, metadata, policy::TokenizerPolicy, protocol::ProtocolTokenIds, tokenized,
+    TokenizerAssets, load::open_disk_tokenizer, metadata, policy::TokenizerPolicy,
+    protocol::ProtocolTokenIds, tokenized,
 };
-use crate::{
-    error::{ModelsError, Result},
-    generation::GenerationConfig,
-    layout::ModelLayout,
-};
+use crate::{error::Result, generation::GenerationConfig, layout::ModelLayout};
 
 #[derive(Debug, Clone)]
 pub struct TokenizedPrompt {
@@ -62,48 +59,30 @@ pub struct TextTokenizer {
 
 impl TextTokenizer {
     pub fn from_layout(layout: &ModelLayout) -> Result<Self> {
-        let assets = TokenizerAssets::from_layout(layout)?;
-        let path = layout.root.join(&assets.primary);
-        let configured_stop_token_ids =
-            GenerationConfig::from_layout(layout)?.stop_token_ids().to_vec();
-        let (mut inner, kind) = if assets.kind == TokenizerKind::BpeVocab {
-            let merges_path = assets
-                .merges
-                .as_deref()
-                .map(|merges| layout.root.join(merges))
-                .ok_or_else(|| ModelsError::MissingFile(layout.root.join("merges.txt")))?;
-            let add_prefix_space = bpe::add_prefix_space(layout.tokenizer_config_path.as_deref())?;
-            (
-                bpe::tokenizer_from_files(&path, &merges_path, add_prefix_space)?,
-                TokenizerKind::BpeVocab,
-            )
-        } else if assets.kind == TokenizerKind::TikToken {
-            let config = layout.tokenizer_config_path.as_deref();
-            (super::tiktoken::tokenizer_from_files(&path, config)?, TokenizerKind::TikToken)
-        } else if assets.kind == TokenizerKind::SentencePieceModel {
-            (
-                super::sentencepiece::tokenizer_from_file(&path)?,
-                TokenizerKind::SentencePieceModel,
-            )
+        let stop_ids = GenerationConfig::from_layout(layout)?.stop_token_ids().to_vec();
+        let (inner, path, kind, metadata, policy) = if let Some(derived) = &layout.derived {
+            let mut inner = Tokenizer::from_bytes(serde_json::to_vec(&derived.tokenizer)?)?;
+            let metadata = metadata::configure_value(&mut inner, &derived.tokenizer_config)?;
+            let policy = TokenizerPolicy::from_value(&derived.tokenizer_config)?;
+            (inner, layout.root.clone(), TokenizerKind::TokenizerJson, metadata, policy)
         } else {
-            (Tokenizer::from_file(&path)?, TokenizerKind::TokenizerJson)
+            let assets = TokenizerAssets::from_layout(layout)?;
+            let path = layout.root.join(&assets.primary);
+            let (mut inner, kind) = open_disk_tokenizer(layout, &assets, &path)?;
+            let metadata = metadata::configure(
+                &mut inner,
+                layout.tokenizer_config_path.as_deref(),
+                layout.added_tokens_path.as_deref(),
+                layout.special_tokens_map_path.as_deref(),
+            )?;
+            let policy = TokenizerPolicy::read(layout.tokenizer_config_path.as_deref())?;
+            (inner, path, kind, metadata, policy)
         };
-        let metadata = metadata::configure(
-            &mut inner,
-            layout.tokenizer_config_path.as_deref(),
-            layout.added_tokens_path.as_deref(),
-            layout.special_tokens_map_path.as_deref(),
-        )?;
-        let policy = TokenizerPolicy::read(layout.tokenizer_config_path.as_deref())?;
         let added_tokens = metadata::inventory(&inner);
         let vocab_size = inner.get_vocab_size(true);
         let pad_token_id = policy.pad_token.as_deref().and_then(|token| inner.token_to_id(token));
-        let protocol = ProtocolTokenIds::resolve(
-            &inner,
-            &added_tokens,
-            &configured_stop_token_ids,
-            &metadata.eos_token_ids,
-        );
+        let protocol =
+            ProtocolTokenIds::resolve(&inner, &added_tokens, &stop_ids, &metadata.eos_token_ids);
         Ok(Self {
             inner,
             path,

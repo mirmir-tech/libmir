@@ -50,7 +50,7 @@ impl ModelCoordinator {
         cache: CacheConfig,
     ) -> Result<Self> {
         #[cfg(any(feature = "cuda", feature = "metal"))]
-        if uses_generation_worker(&engine.target()) {
+        if uses_generation_worker(engine.target()) {
             return Ok(Self {
                 inner: Coordinator::Generation(GenerationCoordinator::new(
                     engine, model, config, cache,
@@ -171,12 +171,13 @@ impl ModelCoordinator {
 }
 
 #[cfg(any(feature = "cuda", feature = "metal"))]
-fn uses_generation_worker(target: &BackendTarget) -> bool {
+fn uses_generation_worker(target: BackendTarget) -> bool {
     match target {
         #[cfg(feature = "cuda")]
         BackendTarget::Cuda => true,
         #[cfg(feature = "metal")]
         BackendTarget::Metal => true,
+        #[cfg(not(all(feature = "cuda", feature = "metal")))]
         _ => false,
     }
 }

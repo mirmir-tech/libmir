@@ -1,3 +1,5 @@
+use foundation::model::ModelId;
+
 use super::{LeasedPrefix, PrefixCache, index::longest_usable_prefix};
 use crate::{
     engine::Array,
@@ -7,7 +9,7 @@ use crate::{
 impl PrefixCache {
     pub(in crate::native) fn lease_longest(
         &mut self,
-        model: &str,
+        model: &ModelId,
         tokens: &[u32],
     ) -> Result<Option<LeasedPrefix>> {
         let Some((_, entry)) = longest_usable_prefix(model, tokens, &self.entries, |entry| {

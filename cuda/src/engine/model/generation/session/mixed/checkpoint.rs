@@ -1,3 +1,4 @@
+use foundation::model::ModelId;
 use runtime::kv::BlockHash;
 
 use super::{MixedMixerExecution, required};
@@ -52,7 +53,7 @@ impl PrefixCheckpoints {
 
     pub(super) fn lookup(
         &mut self,
-        model: &str,
+        model: &ModelId,
         prompt: &[u32],
         minimum: usize,
         maximum: usize,
@@ -76,7 +77,7 @@ impl PrefixCheckpoints {
 
     pub(super) fn insert(
         &mut self,
-        model: &str,
+        model: &ModelId,
         prompt: &[u32],
         tokens: usize,
         checkpoint: SharedRoutedCheckpoint,
@@ -121,7 +122,7 @@ impl PrefixCheckpoints {
     }
 }
 
-fn key(model: &str, prompt: &[u32], tokens: usize) -> BlockHash {
+fn key(model: &ModelId, prompt: &[u32], tokens: usize) -> BlockHash {
     BlockHash::from_tokens(model, None, &prompt[..tokens])
 }
 

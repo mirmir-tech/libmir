@@ -197,9 +197,7 @@ fn generation_contract(
 }
 
 fn container(catalog: &TensorCatalog) -> Option<WeightContainer> {
-    WeightContainer::of_model(
-        catalog.tensors.iter().filter_map(|tensor| WeightContainer::of(&tensor.file)),
-    )
+    WeightContainer::of_model(catalog.tensors.iter().map(|tensor| tensor.container))
 }
 
 /// The decoder's contract, its bindings discovered as `config` declares

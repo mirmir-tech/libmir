@@ -1,7 +1,5 @@
 use async_trait::async_trait;
 use foundation::model::ModelManifest;
-#[cfg(not(any(feature = "cuda", feature = "metal")))]
-use runtime::RuntimeError;
 use runtime::{
     Result as RuntimeResult,
     backend::{
@@ -23,11 +21,7 @@ impl Backend for Engine {
             #[cfg(feature = "metal")]
             EngineInner::Metal(metal) => metal.info(),
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => BackendInfo {
-                name: "unavailable".into(),
-                device: "none".into(),
-                capabilities: Vec::new(),
-            },
+            EngineInner::Unavailable(never) => match *never {},
         }
     }
 
@@ -40,7 +34,7 @@ impl Backend for Engine {
             #[cfg(feature = "metal")]
             EngineInner::Metal(metal) => metal.load_model(manifest).await,
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => unavailable(),
+            EngineInner::Unavailable(never) => match *never {},
         }
     }
 
@@ -53,7 +47,7 @@ impl Backend for Engine {
             #[cfg(feature = "metal")]
             EngineInner::Metal(metal) => metal.model_trace(model).await,
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => unavailable(),
+            EngineInner::Unavailable(never) => match *never {},
         }
     }
 
@@ -66,7 +60,7 @@ impl Backend for Engine {
             #[cfg(feature = "metal")]
             EngineInner::Metal(metal) => metal.prefill(request).await,
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => unavailable(),
+            EngineInner::Unavailable(never) => match *never {},
         }
     }
 
@@ -79,7 +73,7 @@ impl Backend for Engine {
             #[cfg(feature = "metal")]
             EngineInner::Metal(metal) => metal.decode(request).await,
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => unavailable(),
+            EngineInner::Unavailable(never) => match *never {},
         }
     }
 
@@ -92,7 +86,7 @@ impl Backend for Engine {
             #[cfg(feature = "metal")]
             EngineInner::Metal(metal) => metal.decode_batch(request).await,
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => unavailable(),
+            EngineInner::Unavailable(never) => match *never {},
         }
     }
 
@@ -105,7 +99,7 @@ impl Backend for Engine {
             #[cfg(feature = "metal")]
             EngineInner::Metal(metal) => metal.embed(request).await,
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => unavailable(),
+            EngineInner::Unavailable(never) => match *never {},
         }
     }
 
@@ -121,14 +115,7 @@ impl Backend for Engine {
             #[cfg(feature = "metal")]
             EngineInner::Metal(metal) => metal.score_sequences(request).await,
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => unavailable(),
+            EngineInner::Unavailable(never) => match *never {},
         }
     }
-}
-
-#[cfg(not(any(feature = "cuda", feature = "metal")))]
-fn unavailable<T>() -> RuntimeResult<T> {
-    Err(RuntimeError::BackendUnavailable(
-        "libmir was built without an accelerator feature".into(),
-    ))
 }

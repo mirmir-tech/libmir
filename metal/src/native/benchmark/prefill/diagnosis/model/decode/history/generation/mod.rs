@@ -5,7 +5,6 @@ use crate::{
 };
 mod cost;
 mod resident;
-mod resources;
 
 #[test]
 #[ignore = "Qwen reserved decode tail allocation/numerical gate; set MIRMIR_BENCH_MODEL"]

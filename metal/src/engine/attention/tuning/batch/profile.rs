@@ -122,7 +122,7 @@ fn row_key(query: &Array, context: &KvContext, causal: bool) -> Result<Option<Ro
     if context
         .paged
         .as_ref()
-        .is_some_and(|paged| paged.key_scales.is_some() || paged.value_scales.is_some())
+        .is_some_and(crate::engine::kv::PagedKvContext::is_quantized)
     {
         return Ok(None);
     }
@@ -150,7 +150,7 @@ fn row_key(query: &Array, context: &KvContext, causal: bool) -> Result<Option<Ro
             } else {
                 paged.context_tokens
             };
-            (context_group, pages[0], pages[3], paged.fragmented, view)
+            (context_group, pages[0], pages[3], paged.is_fragmented(), view)
         } else {
             if view_keys.len() != 4 || view_values != view_keys || view_keys[0] != 1 {
                 return Ok(None);

@@ -19,7 +19,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         GenerationOverrides::default(),
         &mut |_| {},
     )?;
-    let prepared = model.prepare(&request(&model.handle().id))?;
+    let prepared = model.prepare(&request(model.handle().id.as_str()))?;
     let mut session = model.session();
     let prefill = session.prefill(&prepared.tokens.token_ids, SamplingLogits::None, &mut |_| {})?;
     let mut next = required_token(prefill.next_token)?;

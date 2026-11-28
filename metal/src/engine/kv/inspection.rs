@@ -1,4 +1,4 @@
-use super::KvCache;
+use super::{KvCache, KvStorage};
 
 impl KvCache {
     pub(crate) fn extend_history_allocations(
@@ -12,17 +12,23 @@ impl KvCache {
     }
 
     pub(crate) fn has_native_page_views(&self) -> bool {
-        self.pages.as_ref().is_some_and(|pages| pages.active() && !pages.quantized())
+        match &self.storage {
+            KvStorage::Paged(pages) => pages.active() && !pages.quantized(),
+            KvStorage::Contiguous(_) | KvStorage::Sliding(_) => false,
+        }
     }
 
     pub(crate) fn shares_paged_arena(&self, other: &Self) -> bool {
-        self.pages
-            .as_ref()
-            .zip(other.pages.as_ref())
-            .is_some_and(|(left, right)| left.shares_arena(right))
+        match (&self.storage, &other.storage) {
+            (KvStorage::Paged(left), KvStorage::Paged(right)) => left.shares_arena(right),
+            _ => false,
+        }
     }
 
     pub(crate) fn first_physical_page(&self) -> Option<u32> {
-        self.pages.as_ref().and_then(super::paged::PagedStore::first_page)
+        match &self.storage {
+            KvStorage::Paged(pages) => pages.first_page(),
+            KvStorage::Contiguous(_) | KvStorage::Sliding(_) => None,
+        }
     }
 }

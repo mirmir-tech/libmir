@@ -1,4 +1,4 @@
-use models::execution::{ModelTask, TaskExecutionPlan};
+use models::execution::TaskExecutionPlan;
 
 use crate::{Error, Model, Result};
 
@@ -33,8 +33,8 @@ impl Model {
         let descriptor = self.descriptor();
         let TaskExecutionPlan::Embedding { task, .. } = descriptor.task_plan() else {
             return Err(Error::TaskMismatch {
-                requested: "embedding",
-                actual: task_name(&descriptor.task()),
+                requested: models::execution::TaskKind::Embedding,
+                actual: descriptor.task().kind(),
             });
         };
         if requested_inputs.is_empty() {
@@ -78,14 +78,5 @@ impl Model {
             embeddings: self.engine().embed_tokens(self.handle(), &inputs, dimensions)?,
             prompt_tokens,
         })
-    }
-}
-
-fn task_name(task: &ModelTask) -> &'static str {
-    match task {
-        ModelTask::Generation => "generation",
-        ModelTask::CausalScoring(_) => "rerank",
-        ModelTask::Embedding(_) => "embedding",
-        ModelTask::SequenceScoring(_) => "sequence scoring",
     }
 }

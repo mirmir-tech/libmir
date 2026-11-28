@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use architecture::{LayerCacheEntry, LayerCacheKind, RecurrentCacheKind};
 use models::semantic::AttentionWindow;
 
 use crate::engine::{
@@ -13,6 +14,43 @@ pub(super) enum HybridLinearLayerCache {
     Linear(GatedDeltaState),
     StateSpace(StateSpaceState),
     Full(KvCache),
+}
+
+pub(super) fn from_entries(
+    entries: &[LayerCacheEntry],
+    step: usize,
+    format: KvPageFormat,
+    page_size: usize,
+    max_pages: usize,
+    pool: &Arc<PagedArenaPool>,
+) -> Result<Vec<HybridLinearLayerCache>> {
+    entries
+        .iter()
+        .map(|entry| match entry.kind {
+            LayerCacheKind::Recurrent(RecurrentCacheKind::Linear) => {
+                GatedDeltaState::new().map(HybridLinearLayerCache::Linear)
+            },
+            LayerCacheKind::Recurrent(RecurrentCacheKind::StateSpace) => {
+                Ok(HybridLinearLayerCache::StateSpace(StateSpaceState::new()))
+            },
+            LayerCacheKind::Paged { .. } => KvCache::new_paged_with_pool_capacity(
+                step,
+                page_size,
+                format,
+                max_pages,
+                Arc::clone(pool),
+                entry.layer,
+            )
+            .map(HybridLinearLayerCache::Full),
+            LayerCacheKind::Ring { window, .. } => {
+                KvCache::new_with_window(step, Some(window.get())).map(HybridLinearLayerCache::Full)
+            },
+            LayerCacheKind::SharedFrom { .. } => Err(Error::InvalidModel(format!(
+                "hybrid cache layer {} cannot share an earlier layer's K/V",
+                entry.layer
+            ))),
+        })
+        .collect()
 }
 
 pub(super) fn new(
@@ -75,12 +113,25 @@ pub(super) fn reserve(layers: &mut [HybridLinearLayerCache], tokens: usize) -> R
     Ok(())
 }
 
-pub(super) fn plan_contiguous(layers: &mut [HybridLinearLayerCache], tokens: usize) {
+pub(super) fn bind_blocks(
+    layers: &mut [HybridLinearLayerCache],
+    blocks: &[runtime::kv::BlockId],
+    token_len: Option<usize>,
+    stream: &Stream,
+) -> Result<()> {
     for layer in layers {
         if let HybridLinearLayerCache::Full(cache) = layer {
-            cache.plan_contiguous(tokens);
+            cache.bind_blocks(blocks, token_len, stream)?;
         }
     }
+    Ok(())
+}
+
+pub(super) fn can_write_token(layers: &[HybridLinearLayerCache], token_pos: usize) -> bool {
+    layers.iter().all(|layer| match layer {
+        HybridLinearLayerCache::Full(cache) => cache.can_write_token(token_pos),
+        HybridLinearLayerCache::Linear(_) | HybridLinearLayerCache::StateSpace(_) => true,
+    })
 }
 
 pub(super) fn detach_evaluated_graphs(

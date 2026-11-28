@@ -4,7 +4,9 @@ mod apple;
 mod nvidia;
 mod reader;
 
-pub use reader::{DeviceTelemetryReader, Source};
+pub use reader::DeviceTelemetryReader;
+#[cfg(any(feature = "cuda", feature = "metal"))]
+pub use reader::Source;
 
 /// Best-effort dynamic readings for the accelerator selected by a library.
 #[derive(Clone, Debug, Default, PartialEq)]

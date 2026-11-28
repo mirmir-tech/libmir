@@ -32,7 +32,7 @@ impl Reference {
         {
             Self::validate_logits(logits)?;
         }
-        self.gate(&active_target())
+        self.gate(active_target())
             .ok_or_else(|| validation_error("reference has no gate for active backend"))?
             .validate()
     }
@@ -91,7 +91,7 @@ impl Reference {
         self.validate_dtypes()?;
         self.validate_tokens()?;
         Self::validate_logits(&self.first_logits)?;
-        self.gate(&active_target())
+        self.gate(active_target())
             .ok_or_else(|| validation_error("AWQ reference has no active-backend gate"))?
             .validate()
     }
@@ -130,7 +130,7 @@ impl Reference {
         self.validate_packed_integer(bits)?;
         self.validate_tokens()?;
         Self::validate_logits(&self.first_logits)?;
-        self.gate(&active_target())
+        self.gate(active_target())
             .ok_or_else(|| validation_error("packed reference has no active-backend gate"))?
             .validate()
     }

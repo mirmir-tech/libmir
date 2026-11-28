@@ -1,4 +1,6 @@
+use architecture::CacheLayout;
 use models::layout::DecoderConfig;
+use runtime::kv::CacheConfig;
 
 use super::layer::DecoderLayerTemplate;
 use crate::{
@@ -19,6 +21,8 @@ mod instantiate;
 pub struct CudaMoeModelTemplate {
     backend: CudaBackend,
     decoder: DecoderConfig,
+    cache_layout: CacheLayout,
+    cache: CacheConfig,
     embedding: ModelEmbeddingTemplate,
     final_norm: CudaTensor,
     output_head: ModelOutputHeadTemplate,
@@ -28,9 +32,11 @@ pub struct CudaMoeModelTemplate {
 }
 
 impl CudaMoeModelTemplate {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         backend: &CudaBackend,
         decoder: DecoderConfig,
+        cache_layout: CacheLayout,
         embedding_scale: f32,
         embedding: CheckpointProjectionWeight,
         final_norm: CudaTensor,
@@ -42,13 +48,16 @@ impl CudaMoeModelTemplate {
             .map(|layer| DecoderLayerTemplate::Moe(Box::new(layer)))
             .collect();
         Self::new_layers(
-            backend, decoder, embedding, final_norm, output_head, layers, embedding_scale,
+            backend, decoder, cache_layout, embedding, final_norm, output_head, layers,
+            embedding_scale,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_dense_bound(
         backend: &CudaBackend,
         decoder: DecoderConfig,
+        cache_layout: CacheLayout,
         embedding_scale: f32,
         embedding: CheckpointProjectionWeight,
         final_norm: CudaTensor,
@@ -60,13 +69,16 @@ impl CudaMoeModelTemplate {
             .map(|layer| DecoderLayerTemplate::Dense(Box::new(layer)))
             .collect();
         Self::new_layers(
-            backend, decoder, embedding, final_norm, output_head, layers, embedding_scale,
+            backend, decoder, cache_layout, embedding, final_norm, output_head, layers,
+            embedding_scale,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn new_layers(
         backend: &CudaBackend,
         decoder: DecoderConfig,
+        cache_layout: CacheLayout,
         embedding: CheckpointProjectionWeight,
         final_norm: CudaTensor,
         output_head: CheckpointProjectionWeight,
@@ -74,6 +86,10 @@ impl CudaMoeModelTemplate {
         embedding_scale: f32,
     ) -> Result<Self> {
         validate(&decoder, &final_norm, &layers)?;
+        let cache = layers
+            .first()
+            .map(|layer| layer.attention().cache.cache)
+            .ok_or(Error::InvalidPagedKv("decoder has no layers"))?;
         let embedding = ModelEmbeddingTemplate::new(
             embedding,
             decoder.vocab_size,
@@ -93,6 +109,8 @@ impl CudaMoeModelTemplate {
         Ok(Self {
             backend: backend.clone(),
             decoder,
+            cache_layout,
+            cache,
             embedding,
             final_norm,
             output_head,
@@ -116,19 +134,13 @@ impl CudaMoeModelTemplate {
     /// One cache per layer; a layer reading an earlier layer's keys and
     /// values shares that layer's pages.
     pub(crate) fn allocate_shared_kv(&self) -> Result<Vec<PagedKvCache>> {
-        let mut caches: Vec<PagedKvCache> = Vec::with_capacity(self.layers.len());
-        for layer in &self.layers {
-            let attention = layer.attention();
-            let cache = match attention.key_value_source {
-                Some(source) => caches
-                    .get(usize::from(source))
-                    .cloned()
-                    .ok_or(Error::InvalidDecoderKernel("shared keys come from a later layer"))?,
-                None => self.backend.prepare_paged_kv(attention.layer, attention.cache)?,
-            };
-            caches.push(cache);
-        }
-        Ok(caches)
+        self.backend
+            .allocate_cache_layout(&self.cache_layout, self.cache, 1, false)?
+            .into_iter()
+            .map(|cache| {
+                cache.ok_or(Error::InvalidPagedKv("decoder layer requires a paged K/V cache"))
+            })
+            .collect()
     }
 }
 

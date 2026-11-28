@@ -105,21 +105,3 @@ pub(super) const fn context_chunk_budget(
         1_024
     }
 }
-
-pub(super) fn reusable_prefix_tokens(
-    cached_tokens: usize,
-    prompt_tokens: usize,
-    block_size: Option<usize>,
-    replay_tokens: usize,
-) -> usize {
-    let cached_tokens = cached_tokens.min(prompt_tokens);
-    if replay_tokens > 0 {
-        return cached_tokens.saturating_sub(replay_tokens);
-    }
-    if cached_tokens < prompt_tokens {
-        return cached_tokens;
-    }
-    block_size
-        .filter(|size| *size > 0)
-        .map_or(0, |size| cached_tokens.saturating_sub(size))
-}

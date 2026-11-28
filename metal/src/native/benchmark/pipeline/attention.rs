@@ -50,12 +50,14 @@ fn compares_paged_attention_candidate_with_row_reader() -> Result<()> {
             token,
             sampling: SamplingLogits::None,
             speculation: None,
+            blocks: Vec::new(),
         });
         cohorts[1].push(DecodeInput {
             session: reference,
             token,
             sampling: SamplingLogits::None,
             speculation: None,
+            blocks: Vec::new(),
         });
         writeln!(std::io::stderr().lock(), "attention.prefill: row={row}, context={context}")?;
     }

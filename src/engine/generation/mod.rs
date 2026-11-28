@@ -16,7 +16,10 @@ mod profile;
 mod refill;
 mod scheduling;
 pub use cohort::EnginePrefillCohort;
-pub use profile::{PrefillAdmissionPolicy, PrefillExecutionProfile, PrefillRefillPolicy};
+pub use profile::{
+    DecodeInterleaving, NewDecodePolicy, PrefillAdmissionPolicy, PrefillExecutionProfile,
+    PrefillRefillPolicy, PrefixReplayPolicy, WaveDepthPolicy,
+};
 pub enum EnginePrefillBatch {
     #[cfg(feature = "cuda")]
     Cuda(cuda::CudaPrefillBatch),

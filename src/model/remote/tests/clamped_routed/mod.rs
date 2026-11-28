@@ -115,6 +115,9 @@ fn catalog(projection: &str, bias: &str, file: &str) -> TensorCatalog {
                 };
                 let mut tensor = tensor_with_dtype(&name, shape, dtype);
                 tensor.file = file.into();
+                if let Some(container) = WeightContainer::of(&tensor.file) {
+                    tensor.container = container;
+                }
                 tensor
             })
             .collect(),

@@ -34,7 +34,7 @@ pub enum VisionConfig {
 
 impl VisionConfig {
     pub fn from_layout(layout: &ModelLayout) -> Result<Option<Self>> {
-        Self::from_value(&crate::layout::json::read(&layout.config_path)?)
+        Self::from_value(&layout.read_config()?)
     }
 
     pub fn from_value(root: &Value) -> Result<Option<Self>> {

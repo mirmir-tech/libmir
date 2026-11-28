@@ -1,3 +1,4 @@
+use architecture::CacheLayout;
 use models::{semantic::DecoderSpec, weights::WeightBindingPlan};
 
 use super::{
@@ -14,7 +15,7 @@ use crate::engine::{
 #[derive(Debug)]
 pub struct ClampedRoutedModel {
     pub(super) layers: Vec<ClampedRoutedLayer>,
-    windows: Vec<Option<usize>>,
+    cache_layout: CacheLayout,
     cache_step: usize,
     pub(super) final_norm_eps: f32,
     pub(super) embedding: BoundEmbedding,
@@ -70,20 +71,9 @@ impl ClampedRoutedModel {
             })
             .collect::<Result<Vec<_>>>()?;
         let boundary = bindings.decoder_boundary()?;
-        let windows = lowering
-            .iter()
-            .map(|layer| match layer.mixer {
-                MixerLowering::Softmax { window, .. } => {
-                    window.and_then(models::semantic::AttentionWindow::sliding)
-                },
-                MixerLowering::Linear | MixerLowering::StateSpace | MixerLowering::Latent(_) => {
-                    unreachable!("validated sink-attention mixer")
-                },
-            })
-            .collect();
         Ok(Self {
             layers,
-            windows,
+            cache_layout: CacheLayout::for_metal(spec),
             cache_step,
             final_norm_eps: spec.final_norm.epsilon.to_string().parse()?,
             embedding: BoundEmbedding::load(tensors, boundary.embedding, stream)?,
@@ -93,12 +83,12 @@ impl ClampedRoutedModel {
     }
 
     pub fn new_cache(&self, stream: &Stream) -> Result<DecoderCache> {
-        DecoderCache::new_with_pool_capacity(
-            &self.windows,
+        DecoderCache::from_layout(
+            &self.cache_layout,
             self.cache_step,
             KvPageFormat::resolve(stream.config().kv_cache.dtype)?,
             stream.config().kv_cache.block_size,
-            DecoderCache::physical_page_capacity(stream, self.cache_step),
+            stream.config().kv_cache.block_count as usize,
             stream.paged_arenas(),
         )
     }

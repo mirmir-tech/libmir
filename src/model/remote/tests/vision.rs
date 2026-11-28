@@ -15,7 +15,7 @@ fn admits_complete_remote_spatial_vision_contract() -> Result<()> {
     let mut catalog = spatial_vision_catalog();
     for tensor in &mut catalog.tensors {
         if tensor.name.starts_with("model.visual.") {
-            tensor.dtype = "F16".into();
+            tensor.dtype = models::weights::DenseDType::F16.into();
         }
     }
     let contract = RemoteModelContract::inspect(
@@ -32,7 +32,7 @@ fn admits_complete_remote_spatial_vision_contract() -> Result<()> {
         .vision()
         .ok_or_else(|| Error::Model(models::ModelsError::InvalidConfig("vision missing".into())))?;
     assert!(vision.readiness().is_ready());
-    assert_eq!(vision.readiness().dtypes, ["F16"]);
+    assert_eq!(vision.readiness().dtypes, [models::weights::DenseDType::F16]);
     assert!(vision.processor().is_some());
     assert_eq!(contract.checkpoint_encoding().label(), "Dense BF16 + Dense F16");
     assert!(contract.admission(BackendTarget::Metal).checks.iter().any(|check| {

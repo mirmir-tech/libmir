@@ -4,7 +4,10 @@ use std::{
 };
 
 use mircup::{DType, EmbeddingTable, LayerNorm, Linear, Tensor};
-use models::decision::{DecisionTensor, DecisionTensorPlan};
+use models::{
+    decision::{DecisionTensor, DecisionTensorPlan},
+    weights::FloatDType,
+};
 
 use crate::{Error, Result};
 
@@ -52,17 +55,11 @@ impl<'a> WeightReader<'a> {
     }
 
     fn payload(&self, role: DecisionTensor) -> Result<(DType, Vec<usize>, Vec<u8>)> {
-        let info = self.plan.get(role)?;
-        let dtype = match info.dtype.as_str() {
-            "F32" => DType::F32,
-            "F16" => DType::F16,
-            "BF16" => DType::BF16,
-            other => {
-                return Err(Error::DType {
-                    name: info.name.clone(),
-                    dtype: other.into(),
-                });
-            },
+        let (info, dtype) = self.plan.tensor(role)?;
+        let dtype = match dtype {
+            FloatDType::F32 => DType::F32,
+            FloatDType::F16 => DType::F16,
+            FloatDType::Bf16 => DType::BF16,
         };
         let mut file = File::open(&info.file)?;
         let _position = file.seek(SeekFrom::Start(info.payload_start()?))?;

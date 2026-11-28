@@ -6,6 +6,7 @@
 //! The layer is a full-attention decoder layer with its own K/V cache; the
 //! decoder's embedding and output head serve the module.
 
+use architecture::{CacheLayout, LayerCacheEntry};
 use models::{layout::DecoderConfig, semantic::DecoderSpec, weights::WeightBindingPlan};
 
 use super::{HybridLinearMoeModel, layer::HybridLinearMoeLayer};
@@ -13,7 +14,6 @@ use crate::engine::{
     Array, DecoderCache, Error, ModelTensors, NormWeight, Result, Stream,
     binding::{BoundLinear, adjusted_norm},
     decoder::{LayerContext, LayerLoopOptions, forward_layers},
-    lowering::{LayerLowering, MixerLowering},
 };
 
 #[derive(Debug)]
@@ -24,7 +24,7 @@ pub struct PredictionModule {
     fusion: BoundLinear,
     layer: HybridLinearMoeLayer,
     final_norm: NormWeight,
-    mixer: MixerLowering,
+    cache_entry: LayerCacheEntry,
 }
 
 impl PredictionModule {
@@ -33,8 +33,8 @@ impl PredictionModule {
         tensors: &ModelTensors,
         decoder: &DecoderConfig,
         spec: &DecoderSpec,
+        cache_layout: &CacheLayout,
         bindings: &WeightBindingPlan,
-        lowering: &[LayerLowering],
         norm_shift: f32,
         stream: &Stream,
     ) -> Result<Option<Self>> {
@@ -45,13 +45,9 @@ impl PredictionModule {
         let layer = spec.prediction_layers.first().ok_or_else(|| {
             Error::InvalidModel("the prediction module has no specification".into())
         })?;
-        // The module's layer lowers like the decoder's full-attention layers.
-        let lowered = *lowering
-            .iter()
-            .find(|layer| matches!(layer.mixer, MixerLowering::Softmax { .. }))
-            .ok_or_else(|| {
-                Error::InvalidModel("prediction module needs a full-attention layer".into())
-            })?;
+        let cache_entry = *cache_layout.prediction_layers.first().ok_or_else(|| {
+            Error::InvalidModel("the prediction module has no cache layout entry".into())
+        })?;
         let norm = |binding| adjusted_norm(tensors, binding, norm_shift, stream);
         Ok(Some(Self {
             embedding_norm: norm(module.embedding_norm)?,
@@ -62,7 +58,7 @@ impl PredictionModule {
                 tensors, decoder, layer, 0, module.layer, norm_shift, stream,
             )?,
             final_norm: norm(module.final_norm)?,
-            mixer: lowered.mixer,
+            cache_entry,
         }))
     }
 }
@@ -73,12 +69,12 @@ impl HybridLinearMoeModel {
         self.prediction
             .as_ref()
             .map(|module| {
-                DecoderCache::new_hybrid_linear_with_pool_capacity(
-                    &[module.mixer],
+                DecoderCache::from_entries(
+                    std::slice::from_ref(&module.cache_entry),
                     self.cache_step,
                     crate::engine::KvPageFormat::resolve(stream.config().kv_cache.dtype)?,
                     stream.config().kv_cache.block_size,
-                    DecoderCache::physical_page_capacity(stream, self.cache_step),
+                    stream.config().kv_cache.block_count as usize,
                     stream.paged_arenas(),
                 )
             })

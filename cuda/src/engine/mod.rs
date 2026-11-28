@@ -23,6 +23,7 @@ use std::{
 
 use ::runtime::{kv::CacheConfig, scheduler::SchedulerConfig};
 pub use execution::{CudaGenerationStepOutput, CudaPrefillBatch};
+use foundation::model::ModelId;
 
 use self::model::LoadedModel;
 use crate::{CudaBackend, CudaConfig, Error, Result, backend::ProfilerCapture};
@@ -34,7 +35,7 @@ pub struct CudaEngine {
     cache: CacheConfig,
     session_config: crate::CudaModelSessionConfig,
     scheduler: SchedulerConfig,
-    models: Arc<Mutex<HashMap<String, Arc<LoadedModel>>>>,
+    models: Arc<Mutex<HashMap<ModelId, Arc<LoadedModel>>>>,
     profile_decode: Arc<AtomicBool>,
     profiler_capture: Arc<Mutex<Option<ProfilerCapture>>>,
 }
@@ -105,14 +106,14 @@ impl CudaEngine {
         self.profile_decode.load(Ordering::Relaxed)
     }
 
-    fn model(&self, id: &str) -> Result<Arc<LoadedModel>> {
+    fn model(&self, id: &ModelId) -> Result<Arc<LoadedModel>> {
         self.models()?
             .get(id)
             .cloned()
             .ok_or_else(|| Error::State(format!("model is not loaded: {id}")))
     }
 
-    fn models(&self) -> Result<MutexGuard<'_, HashMap<String, Arc<LoadedModel>>>> {
+    fn models(&self) -> Result<MutexGuard<'_, HashMap<ModelId, Arc<LoadedModel>>>> {
         let Ok(models) = self.models.lock() else {
             return Err(Error::State("model registry lock is poisoned".into()));
         };
@@ -120,13 +121,13 @@ impl CudaEngine {
     }
 
     /// Pool bytes a model's retained execution shapes may still grow by.
-    pub fn model_retention_headroom_bytes(&self, model_id: &str) -> Result<u64> {
+    pub fn model_retention_headroom_bytes(&self, model_id: &ModelId) -> Result<u64> {
         self.model(model_id)?.retention_headroom_bytes()
     }
 
     /// Pool bytes one live session of a model cost during concurrency
     /// warm-up, where the backend measured it.
-    pub fn model_session_bytes(&self, model_id: &str) -> Result<Option<u64>> {
+    pub fn model_session_bytes(&self, model_id: &ModelId) -> Result<Option<u64>> {
         self.model(model_id)?.session_bytes()
     }
 
@@ -134,13 +135,13 @@ impl CudaEngine {
     /// dtype are fixed at load; only the block count changes.
     pub fn resize_model_kv_cache(
         &self,
-        model_id: &str,
+        model_id: &ModelId,
         cache: ::runtime::kv::CacheConfig,
     ) -> Result<bool> {
         self.model(model_id)?.resize_kv_cache(cache)
     }
 
-    pub fn clear_model_sessions(&self, model_id: &str) -> Result<()> {
+    pub fn clear_model_sessions(&self, model_id: &ModelId) -> Result<()> {
         self.model(model_id)?.clear_sessions()
     }
 
@@ -150,11 +151,11 @@ impl CudaEngine {
         self.session_config.prefill_chunk_tokens
     }
 
-    pub fn release_session(&self, model_id: &str, session: uuid::Uuid) -> Result<()> {
+    pub fn release_session(&self, model_id: &ModelId, session: uuid::Uuid) -> Result<()> {
         self.model(model_id)?.release_session(session)
     }
 
-    pub fn unload_model(&self, model_id: &str) -> Result<bool> {
+    pub fn unload_model(&self, model_id: &ModelId) -> Result<bool> {
         let _execution = self.execution.acquire_prefill()?;
         let removed = self.models()?.remove(model_id);
         let unloaded = removed.is_some();
@@ -172,20 +173,14 @@ impl CudaEngine {
 
     /// Trims the memory pool and re-anchors its release threshold after a
     /// model's resident allocations changed.
-    pub fn settle_resident_memory(&self, model_id: &str) -> Result<()> {
+    pub fn settle_resident_memory(&self, model_id: &ModelId) -> Result<()> {
         let reclaimable = self.model(model_id)?.retained_shape_bytes()?;
         let _execution = self.execution.acquire_prefill()?;
         self.backend.settle_resident_memory(reclaimable)
     }
 
-    /// Whether a checkpoint lowers to a runtime whose K/V pages can be
-    /// reallocated after loading.
-    pub fn kv_cache_resizable(manifest: &foundation::model::ModelManifest) -> Result<bool> {
-        Self::kv_cache_resizable_from_layout(manifest)
-    }
-
     /// Runs decode steps over one to `rows` throwaway sessions of `model_id`.
-    pub fn warm_concurrency(&self, model_id: &str, rows: usize) -> Result<()> {
+    pub fn warm_concurrency(&self, model_id: &ModelId, rows: usize) -> Result<()> {
         self.model(model_id)?.warm_concurrency(&self.backend, rows)
     }
 

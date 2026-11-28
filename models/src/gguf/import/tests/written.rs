@@ -135,34 +135,6 @@ fn a_serialized_manifest_reads_back() -> TestResult {
     Ok(())
 }
 
-/// A derived file of an import an earlier version made, which recorded no
-/// contents, is the import's only where it holds what the new import
-/// writes: a user's `tokenizer.json` moved in with an old time is kept,
-/// and so is every derived file of another model, refusing the switch.
-#[test]
-fn an_earlier_imports_derived_files_are_the_imports_only_unchanged() -> TestResult {
-    let root = root("earlier-derived")?;
-    let (first, second) = (shard(&root, "a", b"first")?, shard(&root, "b", b"second")?);
-    let output = root.join("output");
-    import(vec![first], 1).write(&output)?;
-    super::as_earlier(&output, |_| Ok(()))?;
-    let refused = import(vec![second.clone()], 2).write(&output);
-    assert_eq!(conflict(&refused), Some(ImportConflict::OccupiedFile));
-    let tokenizer = output.join("tokenizer.json");
-    let modified = fs::metadata(&tokenizer)?.modified()?;
-    fs::write(&tokenizer, b"{\"mine\": true}")?;
-    fs::File::options().write(true).open(&tokenizer)?.set_modified(modified)?;
-    let refused = import(vec![second.clone()], 1).write(&output);
-    assert_eq!(conflict(&refused), Some(ImportConflict::OccupiedFile));
-    assert_eq!(fs::read(&tokenizer)?, b"{\"mine\": true}");
-    fs::remove_file(&tokenizer)?;
-    import(vec![second], 1).write(&output)?;
-    assert_eq!(files_in(&output)?, [output.join("model.gguf")]);
-    assert_eq!(fs::read(output.join("model.gguf"))?, b"second");
-    fs::remove_dir_all(root)?;
-    Ok(())
-}
-
 /// Publishing refuses a shard given as a user's link inside the directory
 /// it replaces, though the link resolves elsewhere, and keeps the link.
 #[cfg(unix)]

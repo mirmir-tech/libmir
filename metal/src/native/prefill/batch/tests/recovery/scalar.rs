@@ -103,7 +103,12 @@ fn exercise(case: Case) -> Result<()> {
                 &mut |_| {},
             )?;
             if matches!(case, Case::ExactPrefix) {
-                assert_eq!(output.prefix_cache_tokens, request.prompt_tokens.len());
+                let expected = if model.prefix_cache_enabled() {
+                    request.prompt_tokens.len()
+                } else {
+                    0
+                };
+                assert_eq!(output.prefix_cache_tokens, expected);
             }
             model.release_session(request.session_id)?;
             support::continue_and_release(&mut model, survivors)?;

@@ -38,7 +38,7 @@ fn exercise(path: String) -> Result<()> {
     config.set_max_batch_requests(3);
     let backend = MetalBackend::new(config);
     let manifest = ModelManifest {
-        id: format!("decode-timing-{}", Uuid::new_v4()),
+        id: format!("decode-timing-{}", Uuid::new_v4()).into(),
         path,
         tokenizer_path: None,
         context_len: 256,
@@ -72,7 +72,7 @@ fn exercise(path: String) -> Result<()> {
         let started = Instant::now();
         let output = execute_decode(
             loaded,
-            "timing",
+            &foundation::model::ModelId::new("timing"),
             sequence.session_id,
             sequence.token_id,
             &sequence.block_table,

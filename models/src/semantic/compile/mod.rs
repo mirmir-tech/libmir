@@ -206,8 +206,7 @@ fn feed_forward(
         group_limit: None,
         output_scale: 1.0,
     };
-    if decoder.attention_k_eq_v && decoder.hidden_activation.as_deref() == Some("gelu_pytorch_tanh")
-    {
+    if decoder.attention_k_eq_v && matches!(activation, super::ActivationSpec::GeluTanh) {
         return Ok(FeedForwardSpec::DenseAndRouted {
             dense_intermediate_size: decoder.intermediate_size,
             dense_activation: activation,

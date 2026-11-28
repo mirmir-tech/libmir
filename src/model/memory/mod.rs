@@ -1,15 +1,15 @@
 pub(super) mod admission;
 pub(super) mod policy;
+use architecture::{CacheLayout, LayerCacheEntry, LayerCacheKind, cuda::CudaDecoderRuntime};
 use foundation::model::BackendTarget;
 use models::{
     execution::{DecoderExecutionContract, TaskExecutionPlan},
-    layout::DecoderConfig,
-    semantic::{DecoderSpec, LayerCacheShape},
+    semantic::{LayerCacheShape, SemanticModelSpec},
     weights::{
         BlockActivationMode, BlockFormat, LayerTensorRole, LogicalTensorRole, TensorStorage,
     },
 };
-use runtime::kv::{CacheConfig, KvStorageSpec};
+use runtime::kv::{CacheConfig, KvStorageSpec, ring_blocks};
 
 use super::ModelDescriptor;
 use crate::{ModelMemoryEstimate, RuntimeConfig};
@@ -21,8 +21,6 @@ mod session;
 
 pub use resident::UnloadedTensors;
 pub(super) use resident::unloaded;
-
-const CUDA_SLIDING_PHYSICAL_SLOTS_PER_SESSION: usize = 4;
 
 const MIB: u64 = 1024 * 1024;
 
@@ -42,16 +40,16 @@ impl ModelDescriptor {
         target: &BackendTarget,
     ) -> ModelMemoryEstimate {
         let speculation = config.scheduler.speculation.is_some_and(|speculation| {
-            prediction::backend_drafts(target, speculation.draft_tokens.get()).is_some()
+            prediction::backend_drafts(*target, speculation.draft_tokens.get()) > 0
         });
         let weight_bytes =
-            resident::weight_bytes(&self.layout, self.unloaded.as_ref(), speculation)
+            resident::weight_bytes(&self.inspected.layout, self.unloaded.as_ref(), speculation)
                 .saturating_add(if *target == BackendTarget::Metal {
-                    conversion::metal_affine_growth(self.execution.as_ref(), speculation)
+                    conversion::metal_affine_growth(self.inspected.contract.as_ref(), speculation)
                 } else {
                     0
                 });
-        let generation_decoder = match &self.task_plan {
+        let generation_decoder = match &self.inspected.task_plan {
             TaskExecutionPlan::Generation { decoder }
             | TaskExecutionPlan::CausalScoring { decoder, .. } => Some(decoder),
             TaskExecutionPlan::Embedding { .. } | TaskExecutionPlan::SequenceScoring { .. } => None,
@@ -60,17 +58,18 @@ impl ModelDescriptor {
             u64::from(config.kv_cache.block_count)
                 .saturating_mul(u64::try_from(config.kv_cache.block_size).unwrap_or(u64::MAX))
         });
-        let decoder_spec = self.execution.as_ref().map(|execution| &execution.semantic.decoder);
-        let generation = generation_decoder.zip(decoder_spec);
-        let (kv_bytes_per_token, kv_cache_bytes) = generation.map_or((0, 0), |(decoder, spec)| {
-            let (per_token, total) = kv_budget(decoder, spec, config, target);
-            let (prediction_per_token, prediction) =
-                prediction::kv_budget(self.execution.as_ref(), config, target);
-            (per_token.saturating_add(prediction_per_token), total.saturating_add(prediction))
-        });
+        let semantic = self.inspected.contract.as_ref().map(|execution| &execution.semantic);
+        let (kv_bytes_per_token, kv_cache_bytes) =
+            generation_decoder.zip(semantic).map_or((0, 0), |(_, semantic)| {
+                let layout = cache_layout(&self.inspected.task_plan, semantic, *target);
+                let (per_token, total) = kv_budget(&layout.layers, config);
+                let (prediction_per_token, prediction) =
+                    prediction::kv_budget(&layout.prediction_layers, config, *target);
+                (per_token.saturating_add(prediction_per_token), total.saturating_add(prediction))
+            });
         let workspace_bytes =
             workspace(weight_bytes).saturating_add(if *target == BackendTarget::Cuda {
-                cuda_persistent_workspace(self.execution.as_ref())
+                cuda_persistent_workspace(self.inspected.contract.as_ref())
             } else {
                 0
             });
@@ -83,42 +82,64 @@ impl ModelDescriptor {
             required_bytes,
             kv_bytes_per_token,
             cache_capacity_tokens,
-            model_context_tokens: u64::try_from(self.metadata.context_len).unwrap_or(u64::MAX),
+            model_context_tokens: u64::try_from(self.inspected.metadata.context_len)
+                .unwrap_or(u64::MAX),
             session_state_bytes: generation_decoder.map_or(0, |decoder| {
                 session::state_bytes(
                     decoder,
-                    prediction::rollback_snapshots(self.execution.as_ref(), config, target),
+                    prediction::rollback_snapshots(
+                        self.inspected.contract.as_ref(),
+                        config,
+                        *target,
+                    ),
                 )
             }),
         }
     }
 }
 
-fn kv_budget(
-    decoder: &DecoderConfig,
-    spec: &DecoderSpec,
-    config: &RuntimeConfig,
-    target: &BackendTarget,
-) -> (u64, u64) {
-    spec.layers
-        .iter()
-        .filter_map(|layer| layer.cache_shape().map(|shape| (layer, shape)))
-        .fold((0_u64, 0_u64), |(per_token, total), (layer, shape)| {
-            let span = layer.attention_span().filter(|_| bounded_sliding(decoder, target));
-            let cache = span.map_or(config.kv_cache, |span| sliding_cache(span, config, target));
+pub(super) fn cache_layout(
+    task: &TaskExecutionPlan,
+    semantic: &SemanticModelSpec,
+    target: BackendTarget,
+) -> CacheLayout {
+    match target {
+        BackendTarget::Metal => match architecture::metal::admit(task, Some(semantic)) {
+            Ok(architecture::metal::MetalArchitecture::Generation(plan)) => {
+                plan.cache_layout().clone()
+            },
+            _ => CacheLayout::for_metal(&semantic.decoder),
+        },
+        BackendTarget::Cuda => match architecture::cuda::admit(task, Some(semantic)) {
+            Ok(architecture::cuda::CudaArchitecture::Generation(admitted)) => admitted.cache_layout,
+            _ => CacheLayout::for_cuda(&semantic.decoder, CudaDecoderRuntime::Dense),
+        },
+    }
+}
+
+pub(super) fn kv_budget(entries: &[LayerCacheEntry], config: &RuntimeConfig) -> (u64, u64) {
+    entries.iter().fold((0_u64, 0_u64), |(per_token, total), entry| {
+        let (layer_per_token, layer_total) = layer_kv_budget(entry.kind, config);
+        (per_token.saturating_add(layer_per_token), total.saturating_add(layer_total))
+    })
+}
+
+fn layer_kv_budget(kind: LayerCacheKind, config: &RuntimeConfig) -> (u64, u64) {
+    let bytes = |value: usize| u64::try_from(value).unwrap_or(u64::MAX);
+    match kind {
+        LayerCacheKind::Paged { shape } => {
+            let budget = layer_storage(shape, config.kv_cache).memory_budget();
+            let growing = bytes(budget.data_bytes_per_token)
+                .saturating_add(bytes(budget.scale_bytes_per_token));
+            (growing, bytes(budget.total_bytes))
+        },
+        LayerCacheKind::Ring { shape, window, slots_per_session } => {
+            let cache = ring_cache(window.get(), slots_per_session, config);
             let budget = layer_storage(shape, cache).memory_budget();
-            let data = u64::try_from(budget.data_bytes_per_token).unwrap_or(u64::MAX);
-            let scales = u64::try_from(budget.scale_bytes_per_token).unwrap_or(u64::MAX);
-            let growing = if span.is_none() {
-                data.saturating_add(scales)
-            } else {
-                0
-            };
-            (
-                per_token.saturating_add(growing),
-                total.saturating_add(u64::try_from(budget.total_bytes).unwrap_or(u64::MAX)),
-            )
-        })
+            (0, bytes(budget.total_bytes))
+        },
+        LayerCacheKind::SharedFrom { .. } | LayerCacheKind::Recurrent(_) => (0, 0),
+    }
 }
 
 /// A layer's K/V storage of `shape` under `cache`.
@@ -130,29 +151,16 @@ fn layer_storage(shape: LayerCacheShape, cache: CacheConfig) -> KvStorageSpec {
     }
 }
 
-/// The ring a bounded layer of `window` recent tokens keeps per session.
-fn sliding_cache(window: usize, config: &RuntimeConfig, target: &BackendTarget) -> CacheConfig {
-    let ring_blocks = window
-        .saturating_add(config.kv_cache.block_size.saturating_sub(1))
-        .div_ceil(config.kv_cache.block_size);
-    let physical_slots = if *target == BackendTarget::Cuda {
-        CUDA_SLIDING_PHYSICAL_SLOTS_PER_SESSION
-    } else {
-        1
-    };
-    let sessions = config.scheduler.max_batch_requests.max(1).saturating_mul(physical_slots);
-    let blocks = ring_blocks.saturating_mul(sessions).min(config.kv_cache.block_count as usize);
+/// The ring a bounded sliding layer of `window` recent tokens keeps across
+/// concurrent sessions.
+fn ring_cache(window: usize, slots_per_session: usize, config: &RuntimeConfig) -> CacheConfig {
+    let per_slot = ring_blocks(window, config.kv_cache.block_size);
+    let sessions = config.scheduler.max_batch_requests.max(1).saturating_mul(slots_per_session);
+    let blocks = per_slot.saturating_mul(sessions).min(config.kv_cache.block_count as usize);
     CacheConfig {
         block_count: u32::try_from(blocks).unwrap_or(u32::MAX),
         ..config.kv_cache
     }
-}
-
-/// Metal keeps every sliding or chunked layer in a bounded ring outside the
-/// block pool; CUDA bounds only the clamped-routed sliding layers.
-fn bounded_sliding(decoder: &DecoderConfig, target: &BackendTarget) -> bool {
-    *target == BackendTarget::Metal
-        || (decoder.swiglu_limit.is_some() && decoder.num_experts.is_some())
 }
 
 const fn workspace(weights: u64) -> u64 {

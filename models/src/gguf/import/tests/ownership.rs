@@ -38,7 +38,7 @@ fn a_source_found_in_place_is_never_replaced() -> TestResult {
     import(vec![first.clone()], 1).write(&directory)?;
     let manifest = ImportManifest::read(&directory).ok_or("no manifest")?;
     let origin = manifest.files.iter().find(|file| file.name == "model.gguf");
-    let source = Some(fs::canonicalize(&first)?);
+    let source = fs::canonicalize(&first)?;
     assert_eq!(origin.map(|file| file.origin.clone()), Some(FileOrigin::InPlace { source }));
 
     let refused = conflict(&import(vec![second], 2).write(&directory));
@@ -125,51 +125,12 @@ fn a_user_symlink_given_as_the_shard_survives_a_switch() -> TestResult {
     import(vec![external.clone()], 1).write(&output)?;
     let manifest = ImportManifest::read(&output).ok_or("no manifest")?;
     let origin = manifest.files.iter().find(|file| file.name == "external.gguf");
-    let source = Some(fs::canonicalize(&weights)?);
+    let source = fs::canonicalize(&weights)?;
     assert_eq!(origin.map(|file| file.origin.clone()), Some(FileOrigin::InPlace { source }));
     assert!(manifest.is_current(&output));
 
     import(vec![second], 2).write(&output)?;
     assert_eq!(fs::read_link(&external)?, weights);
-    assert_eq!(fs::read(&external)?, b"user bytes");
-    assert_eq!(files_in(&output)?, [output.join("second.gguf")]);
-    fs::remove_dir_all(root)?;
-    Ok(())
-}
-
-/// The same symlink in an import an earlier version made, which replaced it
-/// with its own link to the canonical source and recorded that link with the
-/// symlink as the path it was given: switching models straight from that
-/// import, never rewritten since, keeps the symlink and its weights.
-#[cfg(unix)]
-#[test]
-fn a_user_symlink_an_earlier_import_recorded_as_its_link_survives_a_switch() -> TestResult {
-    let root = root("user-link-upgrade")?;
-    let (weights, second) = (root.join("weights/model.gguf"), root.join("b/second.gguf"));
-    for (path, bytes) in [(&weights, b"user bytes"), (&second, b"next bytes")] {
-        fs::create_dir_all(path.parent().unwrap_or(&root))?;
-        fs::write(path, bytes)?;
-    }
-    let (output, canonical) = (root.join("output"), fs::canonicalize(&weights)?);
-    fs::create_dir_all(&output)?;
-    let external = output.join("external.gguf");
-    std::os::unix::fs::symlink(&canonical, &external)?;
-    import(vec![external.clone()], 1).write(&output)?;
-    // As the earlier version wrote it: `external.gguf` linked, named itself.
-    let named = std::path::absolute(&external)?;
-    super::as_earlier(&output, |file| {
-        if file["name"] == "external.gguf" {
-            file["origin"] =
-                serde_json::json!({ "linked": { "source": canonical, "named": named } });
-        }
-        Ok(())
-    })?;
-    // Its given path is not known to still resolve to its source.
-    assert!(!ImportManifest::read(&output).ok_or("no manifest")?.is_current(&output));
-
-    // The same derived files: an earlier version did not record them.
-    import(vec![second], 1).write(&output)?;
-    assert_eq!(fs::read_link(&external)?, canonical);
     assert_eq!(fs::read(&external)?, b"user bytes");
     assert_eq!(files_in(&output)?, [output.join("second.gguf")]);
     fs::remove_dir_all(root)?;

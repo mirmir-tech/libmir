@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use runtime::kv::{CacheConfig, KvBlockWrite};
+use runtime::kv::{CacheConfig, KvBlockWrite, ring_physical_blocks};
 
 use crate::{Error, Result};
 
@@ -15,10 +15,8 @@ impl RingGeometry {
         if window == 0 || cache.block_size == 0 || sessions == 0 {
             return Err(Error::InvalidPagedKv("windowed KV ring geometry is empty"));
         }
-        let blocks_per_session = window
-            .checked_add(cache.block_size - 1)
-            .ok_or(Error::InvalidPagedKv("windowed KV ring size overflow"))?
-            .div_ceil(cache.block_size);
+        let blocks_per_session = ring_physical_blocks(window, cache.block_size, 1)
+            .ok_or(Error::InvalidPagedKv("windowed KV ring size overflow"))?;
         Ok(Self { blocks_per_session, sessions })
     }
 

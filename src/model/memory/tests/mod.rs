@@ -1,8 +1,10 @@
+use models::layout::DecoderConfig;
 use serde_json::json;
 
 use super::*;
 
 mod chunked;
+mod vision;
 
 #[test]
 fn reserves_at_least_half_a_gibibyte_for_runtime_workspace() {
@@ -19,6 +21,7 @@ fn accounts_for_persistent_marlin_weights_scales_and_globals() {
 #[test]
 fn bounds_clamped_sliding_layers_per_concurrent_session() -> crate::Result<()> {
     let decoder = DecoderConfig::from_value(&json!({
+        "model_type": "gpt_oss",
         "hidden_size": 128,
         "intermediate_size": 128,
         "num_hidden_layers": 2,
@@ -31,12 +34,29 @@ fn bounds_clamped_sliding_layers_per_concurrent_session() -> crate::Result<()> {
         "experts_per_token": 2,
         "sliding_window": 128,
         "swiglu_limit": 7.0,
+        "attention_bias": true,
+        "rope_scaling": {
+            "rope_type": "yarn",
+            "factor": 32.0,
+            "beta_fast": 32.0,
+            "beta_slow": 1.0,
+            "original_max_position_embeddings": 4096
+        },
         "layer_types": ["sliding_attention", "full_attention"]
     }))?;
     let config = RuntimeConfig::default();
-    let bounded = sliding_cache(128, &config, &BackendTarget::Cuda);
-    let metal = sliding_cache(128, &config, &BackendTarget::Metal);
-    let (growing, total) = decoder_budget(&decoder, &config, &BackendTarget::Cuda)?;
+    let bounded = ring_cache(128, architecture::CUDA_SLIDING_SLOTS_PER_SESSION, &config);
+    let metal = ring_cache(128, 1, &config);
+    let (growing, total) = decoder_budget_with_tensors(
+        &decoder,
+        &[
+            "model.layers.0.input_layernorm.weight",
+            "model.layers.0.self_attn.sinks",
+            "model.layers.1.self_attn.sinks",
+        ],
+        &config,
+        BackendTarget::Cuda,
+    )?;
 
     assert_eq!(bounded.block_count, 576);
     assert_eq!(metal.block_count, 144);
@@ -59,7 +79,7 @@ fn prices_a_latent_layer_as_its_latent_and_rotary_key() -> crate::Result<()> {
         "qk_rope_head_dim": 64,
         "v_head_dim": 128
     }))?;
-    let (growing, _) = decoder_budget(&decoder, &RuntimeConfig::default(), &BackendTarget::Cuda)?;
+    let (growing, _) = decoder_budget(&decoder, &RuntimeConfig::default(), BackendTarget::Cuda)?;
 
     // BF16: 27 layers of one 512-wide latent plus one 64-wide rotary key, not
     // 16 heads of 192-wide keys and 128-wide values.
@@ -98,7 +118,7 @@ fn prices_mamba_state_and_convolution_history_per_sequence() -> crate::Result<()
     // Three rollback snapshots for three drafts.
     assert_eq!(session::state_bytes(&decoder, 3), 8 * (state + history));
     let config = RuntimeConfig::default();
-    let (per_token, _) = decoder_budget(&decoder, &config, &BackendTarget::Cuda)?;
+    let (per_token, _) = decoder_budget(&decoder, &config, BackendTarget::Cuda)?;
     let attention_only = KvStorageSpec::new(config.kv_cache, 2, 128).memory_budget();
     assert_eq!(
         per_token,
@@ -128,111 +148,57 @@ fn prediction_cache_and_rollback_residency_follow_backend_drafts() -> crate::Res
     let mut config = RuntimeConfig::default();
     config.scheduler.speculation =
         Some(crate::Speculation { draft_tokens: crate::DraftTokens::MAX });
-    let target = BackendTarget::CpuReference;
-    assert_eq!(prediction::kv_budget(Some(&execution), &config, &target), (0, 0));
-    assert_eq!(prediction::rollback_snapshots(Some(&execution), &config, &target), 0);
     let metal = BackendTarget::Metal;
-    assert!(prediction::kv_budget(Some(&execution), &config, &metal).0 > 0);
-    assert_eq!(prediction::rollback_snapshots(Some(&execution), &config, &metal), 8);
-    let (per_token, total) = prediction::kv_budget(Some(&execution), &config, &BackendTarget::Cuda);
+    let metal_layout = CacheLayout::for_metal(&execution.semantic.decoder);
+    let cuda_layout = CacheLayout::for_cuda(&execution.semantic.decoder, CudaDecoderRuntime::Dense);
+    assert!(prediction::kv_budget(&metal_layout.prediction_layers, &config, metal).0 > 0);
+    assert_eq!(prediction::rollback_snapshots(Some(&execution), &config, metal), 8);
+    let (per_token, total) =
+        prediction::kv_budget(&cuda_layout.prediction_layers, &config, BackendTarget::Cuda);
     assert!(per_token > 0 && total > per_token);
     assert_eq!(
-        prediction::rollback_snapshots(Some(&execution), &config, &BackendTarget::Cuda),
+        prediction::rollback_snapshots(Some(&execution), &config, BackendTarget::Cuda),
         8
     );
     config.scheduler.speculation = None;
-    assert_eq!(prediction::kv_budget(Some(&execution), &config, &BackendTarget::Cuda), (0, 0));
+    assert_eq!(
+        prediction::kv_budget(&cuda_layout.prediction_layers, &config, BackendTarget::Cuda),
+        (0, 0)
+    );
     Ok(())
-}
-
-#[test]
-fn a_vision_load_still_leaves_prediction_modules_on_disk() -> crate::Result<()> {
-    use std::path::PathBuf;
-
-    use models::{
-        layout::VisionConfig,
-        weights::{
-            PredictionTensorRole, TensorBinding, TensorCatalog, TensorInfo, WeightBindingPlan,
-        },
-    };
-    let binding = |source: &str, role| TensorBinding {
-        role,
-        source: source.into(),
-        shape: vec![8],
-        logical_shape: None,
-        transforms: Vec::new(),
-        storage: TensorStorage::Dense { dtype: "BF16".into(), bias: None },
-    };
-    let prediction = LogicalTensorRole::Prediction {
-        depth: 0,
-        tensor: PredictionTensorRole::EmbeddingNorm,
-    };
-    let auxiliary = LogicalTensorRole::Auxiliary { path: "vision".into() };
-    let bindings = WeightBindingPlan {
-        tensors: vec![binding("mtp.enorm.weight", prediction), binding("vision.weight", auxiliary)],
-    };
-    let tensor = |name: &str, bytes: u64| TensorInfo {
-        name: name.into(),
-        file: PathBuf::from("model.safetensors"),
-        dtype: "BF16".into(),
-        shape: vec![8],
-        data_start: 0,
-        data_offsets: [0, bytes],
-    };
-    let catalog = TensorCatalog {
-        tensors: vec![tensor("mtp.enorm.weight", 16), tensor("vision.weight", 64)],
-    };
-    let vision = VisionConfig::from_value(&pixel_shuffle_config())?
-        .ok_or_else(|| models::ModelsError::InvalidConfig("vision not discovered".into()))?;
-    let counts = |unloaded: Option<UnloadedTensors>| {
-        unloaded.map(|unloaded| (unloaded.tensors, unloaded.bytes, unloaded.prediction_bytes))
-    };
-    assert_eq!(counts(unloaded(&catalog, Some(&bindings), None)), Some((2, 80, 16)));
-    // The tower loads alongside the decoder; the prediction module does not.
-    assert_eq!(counts(unloaded(&catalog, Some(&bindings), Some(&vision))), Some((1, 16, 16)));
-    Ok(())
-}
-
-fn pixel_shuffle_config() -> serde_json::Value {
-    json!({
-        "downsample_ratio": 0.5,
-        "ps_version": "v2",
-        "vit_hidden_size": 64,
-        "projector_hidden_size": 256,
-        "img_context_token_id": 18,
-        "image_tag_type": "internvl",
-        "llm_config": {"hidden_size": 128, "num_nextn_predict_layers": 1},
-        "vision_config": {
-            "hidden_size": 64,
-            "num_hidden_layers": 1,
-            "num_attention_heads": 2,
-            "patch_size": 16,
-            "mlp_ratio": 4.0,
-            "num_cls_tokens": 1,
-            "num_registers": 0,
-            "max_img_size": 256,
-            "layer_norm_eps": 1e-06,
-            "hidden_act": "gelu"
-        }
-    })
 }
 
 /// The decoder's K/V budget through its semantic specification.
 fn decoder_budget(
     decoder: &DecoderConfig,
     config: &RuntimeConfig,
-    target: &BackendTarget,
+    target: BackendTarget,
+) -> crate::Result<(u64, u64)> {
+    decoder_budget_with_tensors(decoder, &["model.layers.0.input_layernorm.weight"], config, target)
+}
+
+fn decoder_budget_with_tensors(
+    decoder: &DecoderConfig,
+    tensor_names: &[&str],
+    config: &RuntimeConfig,
+    target: BackendTarget,
 ) -> crate::Result<(u64, u64)> {
     let catalog = models::weights::TensorCatalog {
-        tensors: vec![models::weights::TensorInfo {
-            name: "model.layers.0.input_layernorm.weight".into(),
-            file: std::path::PathBuf::new(),
-            dtype: "BF16".into(),
-            shape: vec![decoder.hidden_size],
-            data_start: 0,
-            data_offsets: [0, 0],
-        }],
+        tensors: tensor_names
+            .iter()
+            .map(|name| models::weights::TensorInfo {
+                name: (*name).into(),
+                file: std::path::PathBuf::new(),
+                container: models::layout::WeightContainer::SafeTensors,
+                dtype: models::weights::DenseDType::Bf16.into(),
+                shape: vec![decoder.hidden_size],
+                data_start: 0,
+                data_offsets: [0, 0],
+            })
+            .collect(),
     };
-    let spec = models::semantic::SemanticModelSpec::discover(decoder, &catalog)?;
-    Ok(kv_budget(decoder, &spec.decoder, config, target))
+    let spec = SemanticModelSpec::discover(decoder, &catalog)?;
+    let task = TaskExecutionPlan::Generation { decoder: decoder.clone() };
+    let layout = cache_layout(&task, &spec, target);
+    Ok(kv_budget(&layout.layers, config))
 }

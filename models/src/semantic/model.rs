@@ -157,14 +157,6 @@ impl DecoderLayerSpec {
             MixerSpec::LinearAttention(_) | MixerSpec::StateSpace(_) => None,
         }
     }
-
-    /// The most recent tokens the layer attends to: its sliding window or
-    /// its chunk (a query never sees more than `chunk` tokens back); `None`
-    /// for the full history.
-    #[must_use]
-    pub fn attention_span(&self) -> Option<usize> {
-        self.mixer.softmax_attention()?.window.map(super::AttentionWindow::span)
-    }
 }
 
 /// One layer's cached keys and values per token: `heads` heads of

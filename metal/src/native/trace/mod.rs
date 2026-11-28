@@ -21,7 +21,7 @@ pub(super) fn build(model: &LoadedModel, backend: BackendInfo) -> ModelTrace {
         paged_attention.then(|| paged_attention_min_context(model.stream()));
     ModelTrace {
         model: TraceModel {
-            id: info.manifest.id.clone(),
+            id: info.manifest.id.to_string(),
             root: info.layout.root.display().to_string(),
             model_type: info.metadata.model_type.clone(),
             dtype: info.metadata.dtype.clone(),

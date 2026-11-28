@@ -51,6 +51,9 @@ fn catalog(projection: &str, bias: &str, file: &str) -> TensorCatalog {
     }
     for tensor in &mut tensors {
         tensor.file = file.into();
+        if let Some(container) = WeightContainer::of(&tensor.file) {
+            tensor.container = container;
+        }
     }
     TensorCatalog::new(tensors)
 }

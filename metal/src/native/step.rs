@@ -110,6 +110,13 @@ pub(super) fn output(
     if !supports_device_token(sampling) || state.speculation.is_some() {
         return Ok(NativeOutput::Logits(logits));
     }
+    if !state.cache.can_write_token(state.position) {
+        let sampled = device_token(&logits, sampling, stream)?.ok_or_else(|| {
+            Error::InvalidDecodeBatch("row does not use device token sampling".into())
+        })?;
+        let token_id = sampled.item_u32(stream)?;
+        return Ok(NativeOutput::Greedy(token_id));
+    }
     let deferred = deferred_token(model, stream, state, &logits, sampling)?;
     Ok(deferred.complete(state))
 }

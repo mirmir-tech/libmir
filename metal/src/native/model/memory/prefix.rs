@@ -1,3 +1,5 @@
+use foundation::model::ModelId;
+
 use super::LoadedModel;
 use crate::{
     engine::Array,
@@ -11,7 +13,7 @@ use crate::{
 
 pub(in crate::native) fn cache_prefix_snapshot(
     prefixes: &mut PrefixCache,
-    model: &str,
+    model: &ModelId,
     tokens: &[u32],
     state: &SessionState,
     logits: &Array,
@@ -30,7 +32,7 @@ pub(in crate::native) fn cache_prefix_snapshot(
 
 pub(in crate::native) fn cache_prefix_checkpoint(
     prefixes: &mut PrefixCache,
-    model: &str,
+    model: &ModelId,
     tokens: &[u32],
     state: &SessionState,
     block_size: usize,

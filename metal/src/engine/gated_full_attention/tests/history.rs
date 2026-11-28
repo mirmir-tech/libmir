@@ -22,7 +22,7 @@ fn persistent_decode_matches_joined_through_cohort_churn_and_ragged_fallback() -
                 9 => caches[1] = caches[1].snapshot_at(caches[1].offset()?)?,
                 10 => {
                     for cache in caches {
-                        cache.release_reservation_after(cache.offset()?)?;
+                        cache.release_history();
                     }
                 },
                 11 => {

@@ -130,6 +130,7 @@ fn prefill(
             token,
             sampling,
             speculation: None,
+            blocks: Vec::new(),
         },
         output.prefix_cache_tokens,
     ))

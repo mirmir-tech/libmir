@@ -32,8 +32,9 @@ fn execute_model(fused_experts: bool) -> Result<()> {
     let catalog = TensorCatalog::from_layout(&layout)?;
     let contract = DecoderExecutionContract::discover(&layout, &decoder, &catalog)?;
     let lowering = lowering::plan(&decoder, &contract.semantic)?;
-    let stream = Stream::new_cpu()?;
-    let tensors = ModelTensors::load(&root, &stream)?;
+    let load_stream = Stream::new_cpu()?;
+    let tensors = ModelTensors::load(&root, &load_stream)?;
+    let stream = Stream::new_gpu()?;
     let model = HybridMoeModel::load_bindings(
         &tensors,
         &decoder,

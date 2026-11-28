@@ -11,10 +11,11 @@ use models::{
         AwqScaleDType, AwqStorageDType, BlockQuantization, CompressedIntegerActivationOrder,
         CompressedIntegerBits, CompressedIntegerPacking, CompressedIntegerQuantization,
         CompressedIntegerScaleDType, CompressedIntegerScaleStrategy, CompressedIntegerSignedness,
-        CompressedIntegerStorageDType, CompressedIntegerZeroPointMode, Float8ActivationScale,
-        Float8Format, Float8ParameterDType, Float8Quantization, Float8ScaleGranularity,
-        Float8ScaleMode, GgmlBlockQuantization, GptqBits, GptqCheckpointFormat, GptqPacking,
-        GptqQuantization, GptqScaleDType, GptqStorageDType, GroupedAffineQuantization,
+        CompressedIntegerStorageDType, CompressedIntegerZeroPointMode, DenseDType,
+        Float8ActivationScale, Float8Format, Float8ParameterDType, Float8Quantization,
+        Float8ScaleGranularity, Float8ScaleMode, GgmlBlockQuantization, GptqBits,
+        GptqCheckpointFormat, GptqPacking, GptqQuantization, GptqScaleDType, GptqStorageDType,
+        GroupedAffineQuantization,
     },
 };
 use serde::Deserialize;
@@ -92,7 +93,7 @@ fn gptq_activation_order_is_admitted_on_both_accelerators() {
 
 fn encoding(id: &str) -> Option<WeightEncoding> {
     Some(match id {
-        "dense_bf16" => WeightEncoding::Dense { dtype: "BF16".into() },
+        "dense_bf16" => WeightEncoding::Dense { dtype: DenseDType::Bf16 },
         "ggml_q8_0" => ggml(GgmlType::Q8_0),
         "ggml_q4_k" => ggml(GgmlType::Q4_K),
         "ggml_q6_k" => ggml(GgmlType::Q6_K),
@@ -113,8 +114,8 @@ fn encoding(id: &str) -> Option<WeightEncoding> {
         "ggml_iq1_s" => ggml(GgmlType::IQ1_S),
         "ggml_iq1_m" => ggml(GgmlType::IQ1_M),
         "ggml_mxfp4" => ggml(GgmlType::MXFP4),
-        "dense_f16" => WeightEncoding::Dense { dtype: "F16".into() },
-        "dense_f32" => WeightEncoding::Dense { dtype: "F32".into() },
+        "dense_f16" => WeightEncoding::Dense { dtype: DenseDType::F16 },
+        "dense_f32" => WeightEncoding::Dense { dtype: DenseDType::F32 },
         "packed_int8" => WeightEncoding::PackedInteger { format: packed_int8() },
         "packed_int4" => WeightEncoding::PackedInteger { format: packed_int4() },
         "awq" => WeightEncoding::Awq { format: awq() },

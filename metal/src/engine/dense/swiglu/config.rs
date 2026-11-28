@@ -46,12 +46,6 @@ pub(super) struct DenseSwiGluLayerConfig {
 }
 
 impl DenseSwiGluLayerConfig {
-    /// The recent tokens the layer's cache keeps: every key its queries may
-    /// see, a sliding window or a chunk.
-    pub(super) fn span(&self) -> Option<usize> {
-        self.window.map(AttentionWindow::span)
-    }
-
     /// The chunk of a chunked layer (Llama 4's rotary layers).
     pub(super) const fn chunk(&self) -> Option<usize> {
         match self.window {

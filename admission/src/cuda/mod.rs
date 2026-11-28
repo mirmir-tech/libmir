@@ -8,12 +8,14 @@ pub use lowering::{
 };
 use models::{
     execution::TaskExecutionPlan,
-    layout::{EncoderConfig, EncoderPositionEmbedding, EncoderRopeScaling, NormKind},
+    layout::{
+        EncoderConfig, EncoderPositionEmbedding, EncoderRopeScaling, HiddenActivation, NormKind,
+    },
     semantic::SemanticModelSpec,
 };
 pub use runtime::CudaDecoderRuntime;
 
-use crate::{ArchitectureError, Result, TaskRefusal};
+use crate::{ArchitectureError, CacheLayout, Result, TaskRefusal};
 
 /// A generation plan and the runtime admitted to execute it, which the
 /// loaders build from.
@@ -21,6 +23,7 @@ use crate::{ArchitectureError, Result, TaskRefusal};
 pub struct CudaAdmitted {
     pub runtime: CudaDecoderRuntime,
     pub plan: CudaDecoderPlan,
+    pub cache_layout: CacheLayout,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -39,6 +42,15 @@ impl CudaArchitecture {
             Self::Embedding | Self::SequenceScoring => None,
         }
     }
+
+    /// Whether this admitted runtime can reallocate its K/V pages after load.
+    #[must_use]
+    pub const fn resizable_kv_cache(&self) -> bool {
+        match self {
+            Self::Generation(admitted) => admitted.runtime.resizable_kv_cache(),
+            Self::Embedding | Self::SequenceScoring => false,
+        }
+    }
 }
 
 pub fn admit(
@@ -51,7 +63,8 @@ pub fn admit(
             let semantic = semantic.ok_or(ArchitectureError::MissingSemanticContract)?;
             let plan = CudaDecoderPlan::lower(semantic, decoder.attention_scale)?;
             let runtime = CudaDecoderRuntime::select(&plan)?;
-            Ok(CudaArchitecture::Generation(CudaAdmitted { runtime, plan }))
+            let cache_layout = CacheLayout::for_cuda(&semantic.decoder, runtime);
+            Ok(CudaArchitecture::Generation(CudaAdmitted { runtime, plan, cache_layout }))
         },
         TaskExecutionPlan::Embedding { .. } => Ok(CudaArchitecture::Embedding),
         TaskExecutionPlan::SequenceScoring { encoder, .. } => sequence_scoring(encoder),
@@ -63,7 +76,7 @@ fn sequence_scoring(config: &EncoderConfig) -> Result<CudaArchitecture> {
         matches!(config.rope_scaling, Some(EncoderRopeScaling::Ntk { mixed_b: None, .. }));
     if config.packed_qkv
         && config.norm == NormKind::LayerNorm
-        && config.hidden_activation == "gelu"
+        && config.hidden_activation == HiddenActivation::Gelu
         && config.position_embedding == EncoderPositionEmbedding::Rope
         && config.type_vocab_size > 0
         && config.num_labels == 1

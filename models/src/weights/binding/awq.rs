@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     error::{ModelsError, Result},
-    weights::TensorInfo,
+    weights::{DenseDType, TensorInfo},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -39,7 +39,7 @@ pub enum AwqScaleDType {
 
 impl AwqScaleDType {
     pub(super) fn parse(tensor: &TensorInfo) -> Result<Self> {
-        if tensor.dtype == "F16" {
+        if tensor.dtype == DenseDType::F16 {
             Ok(Self::F16)
         } else {
             Err(ModelsError::InvalidConfig(format!("AWQ scales must use F16: {}", tensor.name)))

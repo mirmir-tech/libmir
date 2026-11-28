@@ -87,6 +87,11 @@ fn an_uncatalogued_gguf_file_is_refused_unread() -> Result<()> {
     let refused = |result: Result<TensorFile>| matches!(result, Err(Error::UncataloguedGguf(path)) if path == missing);
     assert!(refused(TensorFile::load(&missing, &stream)));
     let mut shards = GgufShards::of(&[])?;
-    assert!(refused(shards.load(&missing, &BTreeSet::new(), &stream)));
+    let weight = models::layout::WeightFile {
+        path: missing.clone(),
+        bytes: 0,
+        container: models::layout::WeightContainer::Gguf,
+    };
+    assert!(refused(shards.load_weight(&weight, &BTreeSet::new(), &stream)));
     Ok(())
 }

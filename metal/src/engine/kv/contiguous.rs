@@ -1,59 +1,17 @@
-use super::{KvCache, KvContext, PagedContextMode};
+use super::{ContiguousStore, KvCache, KvContext, KvStorage, PagedContextMode};
 use crate::engine::{Array, Error, Result, Stream};
 
-impl KvCache {
-    pub(super) fn update_inner(
+impl ContiguousStore {
+    pub(super) fn update(
         &mut self,
         keys: &Array,
         values: &Array,
+        offset: usize,
+        needed: usize,
         stream: &Stream,
-        page_min_context: usize,
-        mode: PagedContextMode,
     ) -> Result<KvContext> {
-        let token_count = self.validate_update(keys, values)?;
-        self.history = None;
-        let needed = self.offset.checked_add(token_count).ok_or(Error::ShapeOverflow)?;
-        if self.max_context.is_some_and(|limit| needed > limit) {
-            return self.update_sliding(keys, values, stream, token_count, needed);
-        }
-        if let Some(pages) = self.pages.as_mut().filter(|pages| pages.active()) {
-            pages.update(keys, values, self.offset, stream)?;
-            self.offset = needed;
-            return page_context(pages, keys, values, needed, stream, mode);
-        }
-        if self.keys.is_none() && self.max_context.is_some() && token_count > 1 {
-            self.keys = Some(clone_required(keys)?);
-            self.values = Some(clone_required(values)?);
-            self.offset = needed;
-            self.capacity = needed;
-            self.write_index = needed;
-            return Ok(KvContext {
-                keys: clone_required(keys)?,
-                values: clone_required(values)?,
-                paged: None,
-                mask: None,
-            });
-        }
-        let activate_pages =
-            (page_min_context == 0 || needed >= page_min_context) && self.pages.is_some();
-        if activate_pages {
-            let context_keys = promotion_input(self.keys.as_ref(), keys, self.offset, stream)?;
-            let context_values =
-                promotion_input(self.values.as_ref(), values, self.offset, stream)?;
-            let pages = self.pages.as_mut().ok_or(Error::NullHandle("paged storage"))?;
-            pages.update(&context_keys, &context_values, 0, stream)?;
-            self.offset = needed;
-            self.keys = None;
-            self.values = None;
-            self.capacity = 0;
-            return page_context(pages, keys, values, needed, stream, mode);
-        }
-        self.grow(keys, values, needed, stream)?;
-        self.write(keys, values, self.offset, stream)?;
-        self.offset = needed;
-        if self.max_context.is_some() {
-            self.write_index = needed;
-        }
+        self.grow(keys, values, needed, None, stream)?;
+        self.write(keys, values, offset, stream)?;
         let context_keys = context(self.keys.as_ref(), needed, stream)?;
         let context_values = context(self.values.as_ref(), needed, stream)?;
         Ok(KvContext {
@@ -64,12 +22,19 @@ impl KvCache {
         })
     }
 
-    fn grow(&mut self, keys: &Array, values: &Array, needed: usize, stream: &Stream) -> Result<()> {
+    pub(super) fn grow(
+        &mut self,
+        keys: &Array,
+        values: &Array,
+        needed: usize,
+        limit: Option<usize>,
+        stream: &Stream,
+    ) -> Result<()> {
         if needed <= self.capacity {
             return Ok(());
         }
         let rounded = needed.div_ceil(self.step) * self.step;
-        let target = self.max_context.map_or(rounded, |limit| rounded.min(limit));
+        let target = limit.map_or(rounded, |limit| rounded.min(limit));
         self.keys = Some(grow_array(self.keys.take(), keys, target, self.capacity, stream)?);
         self.values = Some(grow_array(self.values.take(), values, target, self.capacity, stream)?);
         self.capacity = target;
@@ -86,6 +51,45 @@ impl KvCache {
         self.keys = Some(write_array(self.keys.as_ref(), keys, offset, stream)?);
         self.values = Some(write_array(self.values.as_ref(), values, offset, stream)?);
         Ok(())
+    }
+
+    pub(super) fn clear(&mut self) {
+        self.keys = None;
+        self.values = None;
+        self.capacity = 0;
+    }
+}
+
+impl KvCache {
+    pub(super) fn update_inner(
+        &mut self,
+        keys: &Array,
+        values: &Array,
+        stream: &Stream,
+        _page_min_context: usize,
+        mode: PagedContextMode,
+    ) -> Result<KvContext> {
+        let token_count = self.validate_update(keys, values)?;
+        self.history = None;
+        let needed = self.offset.checked_add(token_count).ok_or(Error::ShapeOverflow)?;
+        match &mut self.storage {
+            KvStorage::Contiguous(store) => {
+                let output = store.update(keys, values, self.offset, needed, stream)?;
+                self.offset = needed;
+                Ok(output)
+            },
+            KvStorage::Sliding(store) => {
+                let output =
+                    store.update(keys, values, self.offset, token_count, needed, stream)?;
+                self.offset = needed;
+                Ok(output)
+            },
+            KvStorage::Paged(pages) => {
+                pages.update(keys, values, self.offset, stream)?;
+                self.offset = needed;
+                page_context(pages, keys, values, needed, stream, mode)
+            },
+        }
     }
 }
 
@@ -118,20 +122,7 @@ fn page_context(
     })
 }
 
-fn promotion_input(
-    current: Option<&Array>,
-    update: &Array,
-    offset: usize,
-    stream: &Stream,
-) -> Result<Array> {
-    if offset == 0 {
-        return clone_required(update);
-    }
-    let prefix = context(current, offset, stream)?;
-    Array::from_native(stream.native().graph().concatenate(&[prefix.native(), update.native()], 2)?)
-}
-
-fn grow_array(
+pub(super) fn grow_array(
     current: Option<Array>,
     update: &Array,
     target: usize,
@@ -152,7 +143,7 @@ fn grow_array(
     })
 }
 
-fn write_array(
+pub(super) fn write_array(
     current: Option<&Array>,
     update: &Array,
     offset: usize,
@@ -171,7 +162,7 @@ fn write_array(
     )?)
 }
 
-fn context(current: Option<&Array>, tokens: usize, stream: &Stream) -> Result<Array> {
+pub(super) fn context(current: Option<&Array>, tokens: usize, stream: &Stream) -> Result<Array> {
     let current = current.ok_or(Error::NullHandle("KV cache context"))?;
     let shape = current.native().shape()?;
     let mut stop = shape.dimensions().to_vec();
@@ -179,6 +170,6 @@ fn context(current: Option<&Array>, tokens: usize, stream: &Stream) -> Result<Ar
     Array::from_native(stream.native().graph().slice(current.native(), &[0, 0, 0, 0], &stop)?)
 }
 
-fn clone_required(input: &Array) -> Result<Array> {
+pub(super) fn clone_required(input: &Array) -> Result<Array> {
     Array::from_native(input.native().clone())
 }

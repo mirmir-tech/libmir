@@ -30,11 +30,7 @@ pub(super) fn execute(
             context
                 .paged
                 .as_ref()
-                .filter(|pages| {
-                    context.mask.is_none()
-                        && pages.key_scales.is_none()
-                        && pages.value_scales.is_none()
-                })
+                .filter(|pages| context.mask.is_none() && !pages.is_quantized())
                 .ok_or_else(|| {
                     Error::InvalidModel("page gather requires native unmasked K/V".into())
                 })

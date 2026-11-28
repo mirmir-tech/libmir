@@ -51,7 +51,7 @@ fn rejects_unknown_width_and_mixed_parameter_dtypes() -> Result<()> {
 #[test]
 fn rejects_non_integral_packing_and_group_geometry() -> Result<()> {
     let mut packing = affine_catalog(&[(AttentionProjectionRole::Query, 4, "F16", "F16")]);
-    packing.tensors[0].dtype = "U8".into();
+    packing.tensors[0].dtype = crate::weights::DenseDType::U8.into();
     packing.tensors[0].shape[1] = 5;
     let spec = SemanticModelSpec::discover(&test_decoder()?, &packing)?;
     assert!(WeightBindingPlan::discover(&spec, &packing).is_err());

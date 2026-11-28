@@ -3,7 +3,7 @@ use super::super::{Worker, budget::admission_replay_tokens};
 impl Worker {
     pub(in crate::scheduler::generation::worker) fn short_cached_refill_ready(&self) -> bool {
         if self.config.cached_prefill_policy != crate::CachedPrefillPolicy::InterleaveOneBlock
-            || self.prefill_profile.interleave_prefill_decode
+            || self.prefill_profile.interleaving.allows_interleaving()
             || self.active_decode.is_empty()
             || self.active_prefill.is_some()
             || self.prefill_cohort.is_some()
@@ -20,13 +20,13 @@ impl Worker {
         if pending.cancellation.is_cancelled() || cached == 0 || cached > prompt {
             return false;
         }
-        let Some(fallback) = self.prefill_profile.cached_prefix_replay_tokens else {
+        let Some(fallback) = self.prefill_profile.prefix_replay.fallback_tokens() else {
             return false;
         };
         let (replay, _) = admission_replay_tokens(
             cached,
             fallback,
-            self.prefill_profile.cached_prefix_checkpoint_replay_tokens,
+            self.prefill_profile.prefix_replay.checkpoint_tokens(),
         );
         // Do not discount completion slack: this is the whole per-step budget.
         let work = super::pending_prefill_tokens(

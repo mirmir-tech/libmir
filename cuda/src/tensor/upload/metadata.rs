@@ -1,34 +1,37 @@
 //! Device dtype and element count of a checkpoint tensor's payload.
 
-use models::{gguf::GgmlType, weights::TensorInfo};
+use models::weights::{GgmlType, TensorDType, TensorInfo};
 
 use crate::{CudaTensorDType, Error, Result};
 
 /// The block type of a tensor stored as quantized GGML blocks.
-pub(super) fn ggml_blocks(info: &TensorInfo) -> Option<GgmlType> {
-    GgmlType::from_name(&info.dtype).filter(|ggml_type| !ggml_type.is_dense())
+pub(super) const fn ggml_blocks(info: &TensorInfo) -> Option<GgmlType> {
+    info.dtype.as_ggml()
 }
 
 pub(super) fn metadata(info: &TensorInfo) -> Result<(CudaTensorDType, usize)> {
-    if let Some(ggml_type) = ggml_blocks(info) {
-        return ggml_metadata(info, ggml_type);
+    match &info.dtype {
+        TensorDType::Ggml(ggml_type) => ggml_metadata(info, *ggml_type),
+        TensorDType::Dense(dense) => {
+            let dtype = CudaTensorDType::from_dense(dense)?;
+            let elements = element_count(&info.shape, &info.name)?;
+            let actual = info.payload_bytes()?;
+            let expected =
+                elements.checked_mul(dtype.bytes()).ok_or_else(|| Error::InvalidTensorSize {
+                    name: info.name.clone(),
+                    expected: usize::MAX,
+                    actual,
+                })?;
+            if expected != actual {
+                return Err(Error::InvalidTensorSize {
+                    name: info.name.clone(),
+                    expected,
+                    actual,
+                });
+            }
+            Ok((dtype, elements))
+        },
     }
-    let dtype = CudaTensorDType::parse(&info.dtype)?;
-    let elements = element_count(&info.shape, &info.name)?;
-    let actual = info.payload_bytes()?;
-    let expected = elements.checked_mul(dtype.bytes()).ok_or_else(|| Error::InvalidTensorSize {
-        name: info.name.clone(),
-        expected: usize::MAX,
-        actual,
-    })?;
-    if expected != actual {
-        return Err(Error::InvalidTensorSize {
-            name: info.name.clone(),
-            expected,
-            actual,
-        });
-    }
-    Ok((dtype, elements))
 }
 
 /// GGML blocks upload as raw bytes; the binding keeps their type and the

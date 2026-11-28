@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     error::{ModelsError, Result},
-    weights::TensorInfo,
+    weights::{DenseDType, TensorDType, TensorInfo},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -65,13 +65,21 @@ pub enum GptqScaleDType {
 
 impl GptqScaleDType {
     pub(super) fn parse(tensor: &TensorInfo) -> Result<Self> {
-        match tensor.dtype.as_str() {
-            "F16" => Ok(Self::F16),
-            "BF16" => Ok(Self::BF16),
+        match &tensor.dtype {
+            TensorDType::Dense(DenseDType::F16) => Ok(Self::F16),
+            TensorDType::Dense(DenseDType::Bf16) => Ok(Self::BF16),
             _ => Err(ModelsError::InvalidConfig(format!(
                 "GPTQ scales must use F16 or BF16: {}",
                 tensor.name
             ))),
+        }
+    }
+
+    #[must_use]
+    pub const fn as_dense(self) -> DenseDType {
+        match self {
+            Self::F16 => DenseDType::F16,
+            Self::BF16 => DenseDType::Bf16,
         }
     }
 

@@ -2,7 +2,7 @@ mod causal;
 
 use std::cmp::Ordering;
 
-use models::execution::{ModelTask, TaskExecutionPlan};
+use models::execution::TaskExecutionPlan;
 
 use crate::{Error, Model, Result};
 
@@ -77,8 +77,8 @@ impl Model {
             },
             _ => {
                 return Err(Error::TaskMismatch {
-                    requested: "reranking",
-                    actual: task_name(&descriptor.task()),
+                    requested: models::execution::TaskKind::CausalScoring,
+                    actual: descriptor.task().kind(),
                 });
             },
         };
@@ -116,15 +116,6 @@ fn sigmoid(value: f32) -> f32 {
     } else {
         let exp = value.exp();
         exp / (1.0 + exp)
-    }
-}
-
-fn task_name(task: &ModelTask) -> &'static str {
-    match task {
-        ModelTask::Generation => "generation",
-        ModelTask::CausalScoring(_) => "causal scoring",
-        ModelTask::Embedding(_) => "embedding",
-        ModelTask::SequenceScoring(_) => "sequence scoring",
     }
 }
 

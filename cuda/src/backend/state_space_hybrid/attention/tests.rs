@@ -161,7 +161,8 @@ impl Weights {
             infos.push(TensorInfo {
                 name: (*name).into(),
                 file: path.clone(),
-                dtype: "BF16".into(),
+                container: models::layout::WeightContainer::SafeTensors,
+                dtype: models::weights::DenseDType::Bf16.into(),
                 shape,
                 data_start: 0,
                 data_offsets: [start, u64::try_from(bytes.len())?],

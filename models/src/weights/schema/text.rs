@@ -47,7 +47,8 @@ mod tests {
             .map(|name| TensorInfo {
                 name: name.into(),
                 file: PathBuf::new(),
-                dtype: "BF16".into(),
+                container: crate::layout::WeightContainer::SafeTensors,
+                dtype: crate::weights::DenseDType::Bf16.into(),
                 shape: Vec::new(),
                 data_start: 0,
                 data_offsets: [0, 0],

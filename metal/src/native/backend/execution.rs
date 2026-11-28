@@ -104,8 +104,8 @@ fn execute_prefill(
         &request.prompt_tokens,
         &request.cache_checkpoints,
         execution_sampling,
-        request.block_table.block_size(),
-        request.generation_tokens,
+        &request.block_table,
+        request.cached_tokens,
         progress,
     )?;
     timing.record(executing.elapsed());
@@ -125,7 +125,7 @@ fn execute_prefill(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn execute_decode(
     loaded: &mut LoadedModel,
-    model_id: &str,
+    model_id: &foundation::model::ModelId,
     session_id: Uuid,
     token_id: u32,
     block_table: &BlockTable,
@@ -135,7 +135,12 @@ pub(super) fn execute_decode(
     started: Instant,
 ) -> Result<DecodeOutput> {
     let executing = Instant::now();
-    let native = loaded.decode(session_id, token_id, execution_sampling.clone())?;
+    let native = loaded.decode_with_blocks(
+        session_id,
+        token_id,
+        block_table.blocks(),
+        execution_sampling.clone(),
+    )?;
     let output = output::materialize(loaded, native, sampling_logits);
     let output = loaded.finish_decode(
         &[crate::native::model::DecodeInput::single(session_id, token_id, execution_sampling)],
@@ -147,7 +152,7 @@ pub(super) fn execute_decode(
     let elapsed = finished.duration_since(started);
     let trace = decode_trace(profile, block_table, cached_tokens, elapsed);
     tracing::trace!(
-        model_id,
+        model_id = %model_id,
         session_id = %session_id,
         token_id,
         cached_tokens,

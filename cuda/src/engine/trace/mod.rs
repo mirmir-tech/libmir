@@ -28,7 +28,7 @@ pub(super) fn build(
     let sessions = model.sessions()?.len();
     Ok(ModelTrace {
         model: TraceModel {
-            id: model.manifest.id.clone(),
+            id: model.manifest.id.to_string(),
             root: model.layout.root.display().to_string(),
             model_type: model.metadata.model_type.clone(),
             dtype: model.metadata.dtype.clone(),
@@ -80,7 +80,7 @@ fn tokenizer_trace(model: &LoadedModel) -> TraceTokenizer {
 fn tensor_trace(model: &LoadedModel) -> TraceTensors {
     let mut dtypes = BTreeMap::<String, (usize, usize)>::new();
     for tensor in &model.catalog.tensors {
-        let entry = dtypes.entry(tensor.dtype.clone()).or_default();
+        let entry = dtypes.entry(tensor.dtype.as_str().to_owned()).or_default();
         entry.0 += 1;
         entry.1 += tensor.shape.iter().product::<usize>();
     }

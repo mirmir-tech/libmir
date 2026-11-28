@@ -16,7 +16,6 @@ const PACKED_PREFILL_MINIMUM_RESERVE: usize = 2 * 1024 * 1024 * 1024;
 const PACKED_PREFILL_WORKSPACE_COPIES: usize = 8;
 
 mod history;
-mod pages;
 mod prefix;
 mod pressure;
 pub(in crate::native) use prefix::{cache_prefix_checkpoint, cache_prefix_snapshot};
@@ -53,19 +52,22 @@ impl LoadedModel {
         if usable == 0 {
             return Ok(false);
         }
-        let Some(decoder) = self.info.decoder.as_ref() else {
+        let Some(layout) = self.info.cache_layout.as_ref() else {
             return Ok(false);
         };
         let context = position.checked_add(sequence).ok_or(crate::engine::Error::ShapeOverflow)?;
         let mut largest_context = 0_usize;
         // Every layer attending over the whole context, a latent one by the
         // row it caches; one sharing another's keys still attends.
-        for paged in pages::attention_layers(decoder) {
+        for (_, shape) in layout.paged_attention_layers() {
+            let width = shape
+                .key_width
+                .checked_add(shape.value_width)
+                .ok_or(crate::engine::Error::ShapeOverflow)?;
             let elements = batch
                 .checked_mul(context)
-                .and_then(|value| value.checked_mul(paged.kv_heads))
-                .and_then(|value| value.checked_mul(paged.head_dim))
-                .and_then(|value| value.checked_mul(2))
+                .and_then(|value| value.checked_mul(shape.heads))
+                .and_then(|value| value.checked_mul(width))
                 .ok_or(crate::engine::Error::ShapeOverflow)?;
             let bytes = elements
                 .checked_mul(size_of::<f32>())
@@ -115,13 +117,18 @@ impl LoadedModel {
         let Some(contract) = self.info.contract.as_ref() else {
             return Ok(0);
         };
+        let layout = architecture::CacheLayout::for_metal(&contract.semantic.decoder);
         let cache = self.stream.config().kv_cache;
         let mut total = 0_usize;
-        for layer in &contract.semantic.decoder.layers {
-            let Some(shape) = layer.cache_shape() else {
-                continue;
+        for entry in &layout.layers {
+            let (shape, length) = match entry.kind {
+                architecture::LayerCacheKind::Paged { shape } => (shape, tokens),
+                architecture::LayerCacheKind::Ring { shape, window, .. } => {
+                    (shape, tokens.min(window.get()))
+                },
+                architecture::LayerCacheKind::SharedFrom { .. }
+                | architecture::LayerCacheKind::Recurrent(_) => continue,
             };
-            let length = tokens.min(layer.attention_span().unwrap_or(tokens));
             let budget = runtime::kv::KvStorageSpec {
                 key_head_dim: shape.key_width,
                 value_head_dim: shape.value_width,

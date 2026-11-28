@@ -96,7 +96,7 @@ fn reads_nested_text_config() -> Result<()> {
     assert_eq!(config.num_experts, Some(128));
     assert_eq!(config.top_k_experts, Some(8));
     assert_eq!(config.moe_intermediate_size, Some(704));
-    assert_eq!(config.hidden_activation.as_deref(), Some("gelu_pytorch_tanh"));
+    assert_eq!(config.hidden_activation, Some(crate::layout::HiddenActivation::GeluTanh));
     assert_eq!(config.final_logit_softcapping, Some(30.0));
     Ok(())
 }

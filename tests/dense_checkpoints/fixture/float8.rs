@@ -58,7 +58,7 @@ impl Reference {
         self.validate_dtypes()?;
         self.validate_tokens()?;
         Self::validate_logits(&self.first_logits)?;
-        self.gate(&active_target())
+        self.gate(active_target())
             .ok_or_else(|| validation_error("FP8 reference has no active-backend gate"))?
             .validate()
     }

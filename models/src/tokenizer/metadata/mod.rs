@@ -29,6 +29,19 @@ pub(super) fn configure(
     })
 }
 
+pub(super) fn configure_value(
+    tokenizer: &mut Tokenizer,
+    tokenizer_config: &Value,
+) -> Result<TokenMetadata> {
+    let declared = configured_tokens_value(tokenizer_config)?;
+    apply_declared(tokenizer, declared)?;
+    let special = special::read_value(tokenizer_config)?;
+    apply_special_tokens(tokenizer, &special)?;
+    Ok(TokenMetadata {
+        eos_token_ids: eos_ids(tokenizer, special)?,
+    })
+}
+
 pub(super) fn inventory(tokenizer: &Tokenizer) -> BTreeMap<String, u32> {
     tokenizer
         .get_added_tokens_decoder()
@@ -42,6 +55,10 @@ fn configured_tokens(path: Option<&Path>) -> Result<BTreeMap<u32, TokenConfig>> 
         return Ok(BTreeMap::new());
     };
     let config: Value = serde_json::from_str(&fs::read_to_string(path)?)?;
+    configured_tokens_value(&config)
+}
+
+fn configured_tokens_value(config: &Value) -> Result<BTreeMap<u32, TokenConfig>> {
     let Some(tokens) = config.get("added_tokens_decoder").and_then(Value::as_object) else {
         return Ok(BTreeMap::new());
     };

@@ -1,11 +1,10 @@
 use std::sync::Arc;
 
-use architecture::metal::MetalArchitecture;
+use architecture::{InspectedModel, metal::MetalArchitecture};
 use foundation::model::ModelManifest;
 use models::{
     execution::TaskExecutionPlan,
-    layout::{ModelLayout, ModelMetadata, VisionConfig},
-    weights::{TensorBinding, TensorCatalog, TensorReadiness, VisionTensorSchema},
+    weights::{TensorBinding, TensorReadiness},
 };
 
 use super::{
@@ -14,11 +13,9 @@ use super::{
 };
 
 mod backend;
-mod execution;
 mod tokenizer;
 
 use backend::{load_decoder_model, load_vision_model, validate_kv_storage};
-use execution::execution_metadata;
 use tokenizer::tokenizer_info;
 
 use crate::{
@@ -40,7 +37,6 @@ impl LoadedModel {
     }
 
     #[cfg(test)]
-    #[allow(clippy::too_many_lines)]
     pub fn load_with_config(
         manifest: &ModelManifest,
         config: Arc<MetalConfig>,
@@ -49,28 +45,46 @@ impl LoadedModel {
         Self::load_with_config_and_pool(manifest, config, Arc::default(), progress)
     }
 
-    #[allow(clippy::too_many_lines)]
     pub(crate) fn load_with_config_and_pool(
         manifest: &ModelManifest,
         config: Arc<MetalConfig>,
         paged_arenas: Arc<crate::engine::PagedArenaPool>,
         progress: &mut dyn FnMut(MetalProgressEvent),
     ) -> Result<Self> {
-        let layout = ModelLayout::inspect(&manifest.path)?;
-        let metadata = ModelMetadata::from_layout(&layout)?;
-        let catalog = TensorCatalog::from_layout(&layout)?;
-        let task_plan = TaskExecutionPlan::discover(&layout, &catalog)?;
-        let (decoder, encoder, contract) = execution_metadata(&task_plan, &layout, &catalog)?;
-        let architecture = architecture::metal::admit(
-            &task_plan,
-            contract.as_ref().map(|contract| &contract.semantic),
-        )
-        .map_err(|error| Error::UnsupportedModel(error.to_string()))?;
-        let decoder_lowering = match architecture {
+        let inspected = InspectedModel::inspect_directory(&manifest.path)?;
+        let admitted = inspected
+            .admit_metal()
+            .map_err(|error| Error::UnsupportedModel(error.to_string()))?;
+        Self::load_admitted(manifest, inspected, admitted, config, paged_arenas, progress)
+    }
+
+    /// Loads an already-inspected, already-admitted checkpoint onto Metal
+    /// without re-reading layout files or re-running admission.
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn load_admitted(
+        manifest: &ModelManifest,
+        inspected: InspectedModel,
+        admitted: MetalArchitecture,
+        config: Arc<MetalConfig>,
+        paged_arenas: Arc<crate::engine::PagedArenaPool>,
+        progress: &mut dyn FnMut(MetalProgressEvent),
+    ) -> Result<Self> {
+        let InspectedModel {
+            layout,
+            metadata,
+            catalog,
+            task_plan,
+            decoder,
+            encoder,
+            contract,
+            vision,
+            vision_readiness,
+            ..
+        } = inspected;
+        let decoder_lowering = match admitted {
             MetalArchitecture::Generation(plan) => Some(plan),
             MetalArchitecture::Embedding | MetalArchitecture::SequenceScoring => None,
         };
-        let vision = VisionConfig::from_layout(&layout)?;
         if let Some(decoder) = decoder.as_ref()
             && matches!(
                 task_plan,
@@ -82,9 +96,6 @@ impl LoadedModel {
                 .ok_or_else(|| Error::UnsupportedModel("generation lowering is missing".into()))?;
             validate_kv_storage(decoder, lowering, vision.as_ref(), config.kv_cache.dtype)?;
         }
-        let vision_readiness = vision
-            .as_ref()
-            .map(|config| VisionTensorSchema::discover(config).readiness(&catalog));
         let load_stream = Stream::new_cpu()?;
         let full_precision = contract
             .iter()
@@ -92,8 +103,9 @@ impl LoadedModel {
             .flat_map(TensorBinding::full_precision_sources)
             .map(str::to_owned)
             .collect();
-        let tensors = ModelTensors::load_layout_materialized_keeping(
+        let tensors = ModelTensors::load_catalog_materialized_keeping(
             &layout,
+            &catalog,
             &full_precision,
             &load_stream,
             |loaded, total, detail| {
@@ -151,9 +163,20 @@ impl LoadedModel {
         let metal_memory = memory_stats()?;
         let (tokenizer, tokenizer_error) = tokenizer_info(&layout);
         let weight_bytes = layout.weights.iter().map(|weight| weight.bytes).sum();
-        let prefix_cache_entries = stream.config().cache.prefix_cache_entries;
-        let prefix_cache_bytes =
-            prefix_cache_budget(metal_memory, stream.config().cache.prefix_cache_bytes);
+        let cache_layout = decoder_lowering.as_ref().map(|plan| plan.cache_layout().clone());
+        let non_paged_prefix = cache_layout
+            .as_ref()
+            .is_some_and(architecture::CacheLayout::has_non_paged_state);
+        let prefix_cache_entries = if non_paged_prefix {
+            stream.config().cache.prefix_cache_entries
+        } else {
+            0
+        };
+        let prefix_cache_bytes = if non_paged_prefix {
+            prefix_cache_budget(metal_memory, stream.config().cache.prefix_cache_bytes)
+        } else {
+            0
+        };
         let model_prefill_step = contract.as_ref().map_or(0, |contract| {
             prefill_step(&contract.semantic, &contract.bindings, stream.config().cache.prefill_step)
         });
@@ -167,6 +190,7 @@ impl LoadedModel {
                 vision,
                 vision_readiness,
                 contract,
+                cache_layout,
                 task_plan,
                 tensor_count,
                 weight_bytes,
@@ -182,7 +206,7 @@ impl LoadedModel {
             prefixes: PrefixCache::new(prefix_cache_entries, prefix_cache_bytes),
             sessions: std::collections::HashMap::new(),
             recovery: super::recovery::ExecutionRecovery::Ready,
-            prefill_reservations: crate::native::prefill::Reservations::default(),
+            active_prefills: crate::native::prefill::ActivePrefills::default(),
             history_prefill_reserved: false,
         })
     }

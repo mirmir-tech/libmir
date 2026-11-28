@@ -1,5 +1,7 @@
 use models::{
-    layout::{EncoderConfig, EncoderPositionEmbedding, EncoderRopeScaling, NormKind},
+    layout::{
+        EncoderConfig, EncoderPositionEmbedding, EncoderRopeScaling, HiddenActivation, NormKind,
+    },
     weights::{EncoderBindingPlan, TensorCatalog, TensorInfo},
 };
 
@@ -33,7 +35,7 @@ impl CudaSequenceScoringModel {
 fn validate(config: &EncoderConfig) -> Result<()> {
     if !config.packed_qkv
         || config.norm != NormKind::LayerNorm
-        || config.hidden_activation != "gelu"
+        || config.hidden_activation != HiddenActivation::Gelu
         || config.position_embedding != EncoderPositionEmbedding::Rope
         || config.num_labels != 1
         || config.type_vocab_size == 0

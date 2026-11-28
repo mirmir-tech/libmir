@@ -6,7 +6,6 @@ use std::{
 
 use crate::engine::{Array, Error, KvCache, KvContext, PagedContextMode, Result, Stream};
 
-mod copy;
 mod memory;
 mod shared;
 mod snapshot;
@@ -26,10 +25,13 @@ fn writes_strided_prefill_kv_pages() -> Result<()> {
     };
     paged.page_dependency.async_eval(&stream)?;
     stream.synchronize()?;
+    let page_stride = usize::try_from(paged.key_pages.shape()?[1])? * 4;
     let stored = paged.key_pages.to_vec_f32(&stream)?;
-    assert_eq!(&stored[..8], &[1.0, 0.0, 0.0, 1.0, 10.0, 0.0, 20.0, 0.0]);
+    assert_eq!(&stored[..4], &[1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(&stored[page_stride..page_stride + 4], &[10.0, 0.0, 20.0, 0.0]);
     let stored = paged.value_pages.to_vec_f32(&stream)?;
-    assert_eq!(&stored[..8], &[100.0, 0.0, 0.0, 100.0, 300.0, 0.0, 0.0, 200.0]);
+    assert_eq!(&stored[..4], &[100.0, 0.0, 0.0, 100.0]);
+    assert_eq!(&stored[page_stride..page_stride + 4], &[300.0, 0.0, 0.0, 200.0]);
 
     let queries = Array::from_f32(&[1.0, 0.0, 1.0, 0.0], &[1, 2, 1, 2])?;
     let expected = queries.scaled_dot_product_attention(&keys, &values, 1.0, false, &stream)?;
@@ -52,18 +54,18 @@ fn writes_strided_prefill_kv_pages() -> Result<()> {
 }
 
 #[test]
-fn backfills_pages_when_the_context_reaches_its_threshold() -> Result<()> {
+fn writes_pages_immediately_without_staging_backfill() -> Result<()> {
     let stream = Stream::new_gpu()?;
     let mut cache = KvCache::new_paged(2, 2)?;
     let first = Array::from_f32(&[1.0, 0.0], &[1, 1, 1, 2])?;
     let first_context = cache.update_with_page_min_context(&first, &first, &stream, 3)?;
-    assert!(first_context.paged.is_none());
+    assert!(first_context.paged.is_some());
 
     let second = Array::from_f32(&[0.0, 1.0, 2.0, 0.0], &[1, 1, 2, 2])?;
     let context = cache.update_with_page_min_context(&second, &second, &stream, 3)?;
     let _paged = context
         .paged
-        .ok_or_else(|| Error::InvalidModel("paged K/V backfill was not created".into()))?;
+        .ok_or_else(|| Error::InvalidModel("paged K/V context was not created".into()))?;
     let queries = Array::from_f32(&[1.0, 0.0], &[1, 1, 1, 2])?;
     let expected_kv = Array::from_f32(&[1.0, 0.0, 0.0, 1.0, 2.0, 0.0], &[1, 1, 3, 2])?;
     let expected =
@@ -73,38 +75,6 @@ fn backfills_pages_when_the_context_reaches_its_threshold() -> Result<()> {
     actual.async_eval(&stream)?;
     stream.synchronize()?;
     assert_eq!(expected.to_vec_f32(&stream)?, actual.to_vec_f32(&stream)?);
-    Ok(())
-}
-
-#[test]
-fn snapshots_paged_kv_pages_without_mutation() -> Result<()> {
-    let stream = Stream::new_gpu()?;
-    let mut cache = KvCache::new_paged(2, 2)?;
-    let first = Array::from_f32(&[1.0, 2.0], &[1, 1, 1, 2])?;
-    drop(cache.update(&first, &first, &stream)?);
-    let mut snapshot = cache.snapshot_at(1)?;
-
-    let second = Array::from_f32(&[3.0, 4.0], &[1, 1, 1, 2])?;
-    let current = cache.update(&second, &second, &stream)?;
-    let alternate = Array::from_f32(&[5.0, 6.0], &[1, 1, 1, 2])?;
-    let branch = snapshot.update(&alternate, &alternate, &stream)?;
-    let current_scratch = current
-        .paged
-        .as_ref()
-        .ok_or_else(|| Error::InvalidModel("current paged context is missing".into()))?
-        .scratch();
-    let branch_scratch = branch
-        .paged
-        .as_ref()
-        .ok_or_else(|| Error::InvalidModel("snapshot paged context is missing".into()))?
-        .scratch();
-    assert!(!std::ptr::eq(current_scratch, branch_scratch));
-    current.keys.async_eval(&stream)?;
-    branch.keys.async_eval(&stream)?;
-    stream.synchronize()?;
-
-    assert_eq!(current.keys.to_vec_f32(&stream)?, vec![1.0, 2.0, 3.0, 4.0]);
-    assert_eq!(branch.keys.to_vec_f32(&stream)?, vec![1.0, 2.0, 5.0, 6.0]);
     Ok(())
 }
 
@@ -134,7 +104,7 @@ fn selects_explicit_native_or_gathered_paged_attention() -> Result<()> {
         .as_ref()
         .ok_or_else(|| Error::InvalidModel("fragmented paged context is missing".into()))?;
     // Copy-on-write moved the one page, which is still a single run.
-    assert!(!paged.fragmented);
+    assert!(!paged.is_fragmented());
     let actual = query.paged_scaled_dot_product_attention(paged.attention(), 1.0, &stream)?;
     actual.async_eval(&stream)?;
     stream.synchronize()?;

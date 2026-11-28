@@ -164,7 +164,7 @@ fn parses_metadata_tensors_and_catalog() -> TestResult {
     assert_eq!(header.data_start % ALIGNMENT, 0);
     let catalog = header.catalog(Path::new("model.gguf"))?;
     let embedding = catalog.get("token_embd.weight").ok_or("embedding missing")?;
-    assert_eq!(embedding.dtype, "Q4_K");
+    assert_eq!(embedding.dtype, crate::weights::TensorDType::Ggml(GgmlType::Q4_K));
     assert_eq!(embedding.shape, [8, 256]);
     assert_eq!(embedding.payload_bytes()?, 8 * 144);
     assert_eq!(header.type_bytes().first().map(|entry| entry.0), Some(GgmlType::Q8_0));

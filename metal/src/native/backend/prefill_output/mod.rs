@@ -1,5 +1,6 @@
 use std::time::Instant;
 
+use foundation::model::ModelId;
 use runtime::backend::{PrefillOutput, PrefillRequest, SamplingLogits};
 use uuid::Uuid;
 
@@ -47,7 +48,7 @@ fn materialize_prefill(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn materialize_prefill_parts(
     loaded: &LoadedModel,
-    model_id: &str,
+    model_id: &ModelId,
     session_id: Uuid,
     prompt_tokens: &[u32],
     blocks: usize,
@@ -75,7 +76,7 @@ pub(super) fn materialize_prefill_parts(
         elapsed.as_secs_f64() * 1000.0
     );
     tracing::debug!(
-        model_id,
+        model_id = %model_id,
         session_id = %session_id,
         prompt_tokens = prompt_tokens.len(),
         cached_tokens,

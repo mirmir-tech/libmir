@@ -12,8 +12,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use super::{TensorBinding, TensorStorage};
 use crate::{
     error::{ModelsError, Result},
-    gguf::GgmlType,
-    weights::{TensorCatalog, TensorInfo},
+    weights::{DenseDType, GgmlType, TensorCatalog, TensorInfo},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -62,7 +61,7 @@ pub(super) fn storage(
     catalog: &TensorCatalog,
     consumed: &mut BTreeSet<String>,
 ) -> Result<Option<TensorStorage>> {
-    let Some(ggml_type) = GgmlType::from_name(&tensor.dtype).filter(|kind| !kind.is_dense()) else {
+    let Some(ggml_type) = tensor.dtype.as_ggml() else {
         return Ok(None);
     };
     let stem = tensor.name.trim_end_matches(".weight");
@@ -134,7 +133,7 @@ pub(super) fn validate(
             1
         };
         let tensor = catalog.get(scale).ok_or_else(|| invalid(format!("{scale} is missing")))?;
-        if tensor.dtype != "F32" || tensor.shape.iter().product::<usize>() != expected {
+        if tensor.dtype != DenseDType::F32 || tensor.shape.iter().product::<usize>() != expected {
             return Err(invalid(format!(
                 "scale {scale} is {} {:?}; {expected} F32 values expected",
                 tensor.dtype, tensor.shape
@@ -169,7 +168,8 @@ mod tests {
         let info = |name: &str, dtype: &str| TensorInfo {
             name: name.into(),
             file: "model.gguf".into(),
-            dtype: dtype.into(),
+            container: crate::layout::WeightContainer::Gguf,
+            dtype: crate::weights::TensorDType::parse(dtype),
             shape: vec![8, 256],
             data_start: 0,
             data_offsets: [0, 8 * 144],

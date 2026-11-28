@@ -1,5 +1,6 @@
 mod binding;
 mod catalog;
+mod dtype;
 mod encoder_binding;
 mod names;
 mod schema;
@@ -40,6 +41,7 @@ pub(crate) use catalog::read_weight_header;
 pub use catalog::{
     MAX_SAFETENSORS_HEADER_BYTES, TensorCatalog, TensorInfo, safetensors_header_len,
 };
+pub use dtype::{Affine32, DenseDType, FloatDType, GgmlType, TensorDType};
 pub use encoder_binding::{
     EncoderBindingPlan, EncoderLayerTensorRole, EncoderTensorBinding, EncoderTensorRole,
 };

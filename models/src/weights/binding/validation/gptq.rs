@@ -1,7 +1,7 @@
 use super::{companion, companion_dtype, divided, invalid, shape};
 use crate::{
     error::Result,
-    weights::{GptqQuantization, TensorBinding, TensorCatalog},
+    weights::{DenseDType, GptqQuantization, TensorBinding, TensorCatalog},
 };
 
 pub(super) fn validate(
@@ -37,9 +37,9 @@ pub(super) fn validate(
     let groups = divided(*input, format.group_size, &binding.source)?;
     shape(&binding.source, &binding.shape, &[packed_input, *output])?;
     companion(catalog, scales, &[groups, *output])?;
-    companion_dtype(catalog, scales, format.scale_dtype.as_str())?;
+    companion_dtype(catalog, scales, &format.scale_dtype.as_dense())?;
     companion(catalog, zero_points, &[groups, packed_output])?;
-    companion_dtype(catalog, zero_points, "I32")?;
+    companion_dtype(catalog, zero_points, &DenseDType::I32)?;
     companion(catalog, group_indices, &[*input])?;
-    companion_dtype(catalog, group_indices, "I32")
+    companion_dtype(catalog, group_indices, &DenseDType::I32)
 }

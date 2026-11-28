@@ -99,7 +99,7 @@ fn payload(header: &GgufHeader, file: &Path, name: &str) -> Result<(Vec<usize>, 
     let mut handle = std::fs::File::open(file)?;
     let _ = handle.seek(SeekFrom::Start(tensor.payload_start()?))?;
     handle.read_exact(&mut bytes)?;
-    Ok((tensor.shape.clone(), tensor.dtype.clone(), bytes))
+    Ok((tensor.shape.clone(), tensor.dtype.as_str().to_owned(), bytes))
 }
 
 /// The id of a special token in the text model's vocabulary.

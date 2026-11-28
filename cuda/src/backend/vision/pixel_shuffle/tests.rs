@@ -122,7 +122,7 @@ fn config() -> PixelShuffleVisionConfig {
         prefix_tokens: 2,
         position_grid: 4,
         layer_norm_eps: 1e-6,
-        hidden_activation: "gelu".into(),
+        hidden_activation: models::layout::HiddenActivation::Gelu,
         shuffle_factor: 2,
         projector_hidden_size: 16,
         projector_norm_eps: 1e-5,
@@ -164,7 +164,8 @@ fn write_weights(path: &Path) -> Result<TensorCatalog> {
         infos.push(TensorInfo {
             name,
             file: path.to_owned(),
-            dtype: "BF16".into(),
+            container: models::layout::WeightContainer::SafeTensors,
+            dtype: models::weights::DenseDType::Bf16.into(),
             shape,
             data_start: 0,
             data_offsets: [start, u64::try_from(payload.len())?],

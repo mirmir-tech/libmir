@@ -27,7 +27,10 @@ pub(super) fn execution(
             num_experts: decoder.num_experts,
             top_k_experts: decoder.top_k_experts,
             moe_intermediate_size: decoder.moe_intermediate_size,
-            hidden_activation: decoder.hidden_activation.clone(),
+            hidden_activation: decoder
+                .hidden_activation
+                .as_ref()
+                .map(|activation| activation.as_str().to_owned()),
             final_logit_softcapping: decoder.final_logit_softcapping,
         };
     }
@@ -81,7 +84,7 @@ fn encoder_shape(encoder: &EncoderConfig) -> TraceDecoder {
         num_experts: None,
         top_k_experts: None,
         moe_intermediate_size: None,
-        hidden_activation: Some(encoder.hidden_activation.clone()),
+        hidden_activation: Some(encoder.hidden_activation.as_str().to_owned()),
         final_logit_softcapping: None,
     }
 }

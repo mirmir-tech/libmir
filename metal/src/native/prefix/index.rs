@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use foundation::model::ModelId;
+
 use super::PrefixEntry;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -9,7 +11,7 @@ pub(super) struct PrefixKey(pub(super) [u8; 32]);
 /// snapshot can rewind to (`floor`,
 /// [`crate::engine::DecoderCache::prefix_floor`]).
 pub(super) fn indexed_prefixes(
-    model: &str,
+    model: &ModelId,
     tokens: &[u32],
     block_size: Option<usize>,
     floor: usize,
@@ -59,7 +61,7 @@ impl PrefixEntry {
 }
 
 pub(super) fn longest_indexed_prefix(
-    model: &str,
+    model: &ModelId,
     tokens: &[u32],
     entries: &HashMap<PrefixKey, PrefixEntry>,
 ) -> Option<(PrefixKey, PrefixEntry)> {
@@ -67,7 +69,7 @@ pub(super) fn longest_indexed_prefix(
 }
 
 pub(super) fn longest_usable_prefix(
-    model: &str,
+    model: &ModelId,
     tokens: &[u32],
     entries: &HashMap<PrefixKey, PrefixEntry>,
     usable: impl Fn(&PrefixEntry) -> bool,
@@ -84,9 +86,9 @@ pub(super) fn longest_usable_prefix(
     longest
 }
 
-fn prefix_hasher(model: &str) -> blake3::Hasher {
+fn prefix_hasher(model: &ModelId) -> blake3::Hasher {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(model.as_bytes());
+    hasher.update(model.as_str().as_bytes());
     hasher.update(&[0]);
     hasher
 }

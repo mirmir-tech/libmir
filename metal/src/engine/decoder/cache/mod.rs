@@ -1,21 +1,19 @@
 use std::sync::Arc;
 
+use runtime::kv::BlockId;
+
 use self::hybrid::HybridLinearLayerCache;
 use crate::engine::{
     Error, GatedDeltaState, KvCache, KvPageFormat, PagedArenaPool, Result, Stream,
     lowering::MixerLowering,
 };
 
-mod capacity;
 mod hybrid;
+mod layout;
 mod lifecycle;
 mod rows;
-#[cfg(test)]
-mod tests;
 
-const TOKEN_ROUNDING_PAGES_PER_SESSION: usize = 1;
-const CONTIGUOUS_TAIL_PAGES_PER_SESSION: usize = 1;
-const COPY_ON_WRITE_PAGES_PER_SESSION: usize = 1;
+const DEFAULT_TEST_ARENA_PAGES: usize = 4096;
 
 #[derive(Debug)]
 pub struct DecoderCache {
@@ -29,16 +27,6 @@ enum CacheStorage {
 }
 
 impl DecoderCache {
-    pub(crate) fn physical_page_capacity(stream: &Stream, allocation_step_tokens: usize) -> usize {
-        let page_size = stream.config().kv_cache.block_size.max(1);
-        let allocation_step_pages = allocation_step_tokens.div_ceil(page_size).max(1);
-        physical_page_capacity(
-            stream.config().kv_cache.block_count as usize,
-            stream.config().max_batch_requests(),
-            allocation_step_pages,
-        )
-    }
-
     pub fn new(cache_windows: &[Option<usize>], step: usize) -> Result<Self> {
         Self::new_with_format(cache_windows, step, KvPageFormat::Native, 16)
     }
@@ -65,7 +53,14 @@ impl DecoderCache {
         page_size: usize,
         pool: &Arc<PagedArenaPool>,
     ) -> Result<Self> {
-        Self::new_with_pool_capacity(cache_windows, step, format, page_size, usize::MAX, pool)
+        Self::new_with_pool_capacity(
+            cache_windows,
+            step,
+            format,
+            page_size,
+            DEFAULT_TEST_ARENA_PAGES,
+            pool,
+        )
     }
 
     pub(crate) fn new_with_pool_capacity(
@@ -128,7 +123,7 @@ impl DecoderCache {
             step,
             format,
             page_size,
-            usize::MAX,
+            DEFAULT_TEST_ARENA_PAGES,
             pool,
         )
     }
@@ -145,6 +140,31 @@ impl DecoderCache {
         Ok(Self {
             storage: CacheStorage::HybridLinear(layers),
         })
+    }
+
+    pub(crate) fn bind_blocks(
+        &mut self,
+        blocks: &[BlockId],
+        token_len: Option<usize>,
+        stream: &Stream,
+    ) -> Result<()> {
+        match &mut self.storage {
+            CacheStorage::Attention(caches) => caches
+                .iter_mut()
+                .try_for_each(|cache| cache.bind_blocks(blocks, token_len, stream)),
+            CacheStorage::HybridLinear(layers) => {
+                hybrid::bind_blocks(layers, blocks, token_len, stream)
+            },
+        }
+    }
+
+    pub(crate) fn can_write_token(&self, token_pos: usize) -> bool {
+        match &self.storage {
+            CacheStorage::Attention(caches) => {
+                caches.iter().all(|cache| cache.can_write_token(token_pos))
+            },
+            CacheStorage::HybridLinear(layers) => hybrid::can_write_token(layers, token_pos),
+        }
     }
 
     pub(crate) fn attention_caches_mut(&mut self) -> Result<&mut [KvCache]> {
@@ -168,9 +188,9 @@ impl DecoderCache {
     pub(crate) fn full_attention_cache(&mut self, index: usize) -> Result<&mut KvCache> {
         match &mut self.storage {
             CacheStorage::HybridLinear(layers) => hybrid::full_attention_cache(layers, index),
-            CacheStorage::Attention(_) => {
-                Err(Error::InvalidModel("expected hybrid linear cache".into()))
-            },
+            CacheStorage::Attention(caches) => caches
+                .get_mut(index)
+                .ok_or_else(|| Error::InvalidModel(format!("missing cache layer {index}"))),
         }
     }
 
@@ -187,17 +207,6 @@ impl DecoderCache {
                 caches.iter_mut().try_for_each(|cache| cache.reserve(tokens))
             },
             CacheStorage::HybridLinear(layers) => hybrid::reserve(layers, tokens),
-        }
-    }
-
-    pub(crate) fn plan_contiguous(&mut self, tokens: usize) {
-        match &mut self.storage {
-            CacheStorage::Attention(caches) => {
-                for cache in caches {
-                    cache.plan_contiguous(tokens);
-                }
-            },
-            CacheStorage::HybridLinear(layers) => hybrid::plan_contiguous(layers, tokens),
         }
     }
 
@@ -227,14 +236,4 @@ impl DecoderCache {
             },
         }
     }
-}
-
-fn physical_page_capacity(logical: usize, sessions: usize, allocation_step: usize) -> usize {
-    let per_session = TOKEN_ROUNDING_PAGES_PER_SESSION
-        + CONTIGUOUS_TAIL_PAGES_PER_SESSION
-        + COPY_ON_WRITE_PAGES_PER_SESSION;
-    logical
-        .saturating_add(sessions.max(1).saturating_mul(per_session))
-        .div_ceil(allocation_step.max(1))
-        .saturating_mul(allocation_step.max(1))
 }

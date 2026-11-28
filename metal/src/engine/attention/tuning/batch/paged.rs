@@ -11,7 +11,7 @@ pub(super) fn batchable(contexts: &[&KvContext]) -> bool {
     let Some(first) = contexts.first().and_then(|context| context.paged.as_ref()) else {
         return false;
     };
-    if first.key_scales.is_some() || first.value_scales.is_some() {
+    if first.is_quantized() {
         return false;
     }
     let Ok(key_dtype) = first.key_pages.native().dtype() else {
@@ -19,8 +19,7 @@ pub(super) fn batchable(contexts: &[&KvContext]) -> bool {
     };
     contexts.iter().skip(1).all(|context| {
         context.paged.as_ref().is_some_and(|paged| {
-            paged.key_scales.is_none()
-                && paged.value_scales.is_none()
+            !paged.is_quantized()
                 && paged.page_size == first.page_size
                 && paged.key_pages.native().dtype().is_ok_and(|dtype| dtype == key_dtype)
                 && paged.value_pages.native().dtype().is_ok_and(|dtype| dtype == key_dtype)

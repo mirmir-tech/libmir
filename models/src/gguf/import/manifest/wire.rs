@@ -1,6 +1,5 @@
 //! The manifest as it is stored: with its format, so a manifest serialized
-//! by this version reads back as one, and an earlier version's, which named
-//! none, is told apart.
+//! by this version reads back as one, and a later format is rejected.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 
@@ -25,31 +24,6 @@ struct Stored {
     text: Vec<SourceFile>,
     vision: Vec<SourceFile>,
     files: Vec<ImportedFile>,
-}
-
-/// The format a manifest names.
-#[derive(Deserialize)]
-struct Format {
-    format: Option<u32>,
-}
-
-/// Which version wrote a manifest, by the format it names.
-pub(super) enum Version {
-    /// This one.
-    Current,
-    /// An earlier one, which named no format.
-    Earlier,
-    /// A later one, or no manifest at all.
-    Unknown,
-}
-
-/// The version that wrote the manifest in `bytes`.
-pub(super) fn version(bytes: &[u8]) -> Version {
-    match serde_json::from_slice::<Format>(bytes) {
-        Ok(Format { format: Some(FORMAT) }) => Version::Current,
-        Ok(Format { format: None }) => Version::Earlier,
-        Ok(Format { format: Some(_) }) | Err(_) => Version::Unknown,
-    }
 }
 
 impl Serialize for ImportManifest {

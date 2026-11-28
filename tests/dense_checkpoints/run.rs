@@ -16,7 +16,7 @@ pub fn validate(
     loaded: &MemorySnapshot,
 ) -> TestResult<()> {
     let gate = reference
-        .gate(&active_target())
+        .gate(active_target())
         .ok_or_else(|| validation_error("reference has no resource gate for active backend"))?;
     require(
         active_delta(baseline, loaded) <= gate.max_load_active_bytes,
@@ -30,7 +30,7 @@ pub fn validate(
     let prefill =
         session.prefill(&reference.prompt_tokens, SamplingLogits::Full, &mut |_event| {})?;
     let first = validate_logits(&prefill, reference)?;
-    let expected_tokens = reference.tokens(&active_target());
+    let expected_tokens = reference.tokens(active_target());
 
     let mut generated = vec![first];
     let mut token = first;
@@ -116,7 +116,7 @@ fn validate_packed_prefill(model: &Model, reference: &Reference) -> TestResult<(
     let Ok(second) = second.join() else {
         return Err(validation_error("second packed-prefill worker panicked"));
     };
-    let expected = Some(reference.tokens(&active_target())[0]);
+    let expected = Some(reference.tokens(active_target())[0]);
     require(first?.next_token == expected, "first packed prefill selected the wrong token")?;
     require(second?.next_token == expected, "second packed prefill selected the wrong token")
 }
@@ -153,7 +153,7 @@ fn validate_device_batch(model: &Model, reference: &Reference) -> TestResult<()>
         return Err(validation_error("second batch worker panicked"));
     };
     let second = second?;
-    let expected_token = reference.tokens(&active_target())[1];
+    let expected_token = reference.tokens(active_target())[1];
     require(
         first.event.token_id == Some(expected_token),
         format!(

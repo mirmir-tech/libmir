@@ -4,7 +4,7 @@ use super::{
 };
 
 pub fn validate_logits(output: &libmir::PrefillOutput, reference: &Reference) -> TestResult<u32> {
-    let expected = reference.logits(&active_target());
+    let expected = reference.logits(active_target());
     let actual = output
         .logits
         .as_ref()

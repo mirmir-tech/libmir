@@ -22,7 +22,7 @@ fn conversation() -> Conversation {
 fn normalizes_xml_to_openai_calls_without_losing_argument_types() -> Result<()> {
     let input = "<tool_call>\n<function=emit>\n<parameter=name>\n2023\n</parameter>\n<parameter=year>2023</parameter>\n<parameter=items>[{\"value\":4.5,\"known\":true,\"missing\":null}]</parameter>\n</function>\n</tool_call>";
     let normalized = normalize(input, &conversation())?;
-    let calls = ToolCall::parse_mistral(&normalized).map_err(Error::InvalidToolCall)?;
+    let calls = ToolCall::parse_mistral(&normalized).map_err(ToolCallError::Malformed)?;
     assert_eq!(
         calls[0].function.arguments,
         json!({"name":"2023","year":2023,"items":[{"value":4.5,"known":true,"missing":null}]})
@@ -38,7 +38,7 @@ fn supports_json_tools_and_rejects_missing_or_wrong_required_calls() -> Result<(
     for payload in [body.to_owned(), format!("<tool_call>{}</tool_call>", &body[1..body.len() - 1])]
     {
         let calls = ToolCall::parse_mistral(&normalize(&payload, &request)?)
-            .map_err(Error::InvalidToolCall)?;
+            .map_err(ToolCallError::Malformed)?;
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].function.name, "emit");
         assert_eq!(calls[0].function.arguments, expected);
@@ -68,9 +68,10 @@ fn malformed_nested_argument_reports_local_context_without_repairing_output() ->
     let error = normalize(input, &conversation())
         .err()
         .ok_or_else(|| invalid("malformed JSON was accepted"))?;
-    let Error::InvalidToolCall(message) = error else {
+    let Error::InvalidToolCall(detail) = error else {
         return Err(error);
     };
+    let message = detail.to_string();
     assert!(message.contains("expected `,` or `}`"));
     assert!(message.contains("untrusted"));
     assert!(message.contains("other"));
@@ -89,7 +90,7 @@ fn json_string_tags_do_not_terminate_tool_envelopes() -> Result<()> {
         format!("<tool_call>{}</tool_call>", json!({"name":"emit","arguments":expected}));
     for text in [xml, json_call] {
         let parsed = normalize(&text, &conversation())?;
-        let calls = ToolCall::parse_mistral(&parsed).map_err(Error::InvalidToolCall)?;
+        let calls = ToolCall::parse_mistral(&parsed).map_err(ToolCallError::Malformed)?;
         assert_eq!(calls[0].function.arguments, expected);
     }
     Ok(())
@@ -104,7 +105,7 @@ fn declared_booleans_accept_python_spelling_only() -> Result<()> {
     };
     for (spelling, value) in [("False", false), ("TRUE", true), ("false", false)] {
         let normalized = normalize(&call(spelling, "2023"), &conversation())?;
-        let calls = ToolCall::parse_mistral(&normalized).map_err(Error::InvalidToolCall)?;
+        let calls = ToolCall::parse_mistral(&normalized).map_err(ToolCallError::Malformed)?;
         assert_eq!(calls[0].function.arguments["exhaustive"], json!(value));
     }
     assert!(normalize(&call("False", "True"), &conversation()).is_err());

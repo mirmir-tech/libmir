@@ -1,3 +1,4 @@
+mod activation;
 mod container;
 mod decoder;
 mod encoder;
@@ -7,6 +8,7 @@ mod metadata;
 mod modernbert;
 mod vision;
 
+pub use activation::HiddenActivation;
 pub use container::WeightContainer;
 pub use decoder::{
     AttentionLayerType, AttentionOutput, DecoderConfig, HybridBlockKind, HybridBlockPattern,
@@ -19,7 +21,7 @@ pub use decoder::{
     TimeStepBound, TimeStepLimit,
 };
 pub use encoder::{EncoderConfig, EncoderPositionEmbedding, EncoderRopeScaling, NormKind};
-pub use files::{ModelLayout, WeightFile};
+pub use files::{DerivedAssets, ModelLayout, WeightFile};
 pub use metadata::ModelMetadata;
 pub use modernbert::{ModernBertAttention, ModernBertConfig};
 pub use vision::{

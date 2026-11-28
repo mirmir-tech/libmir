@@ -23,7 +23,13 @@ fn binding(source: &str, storage: TensorStorage) -> TensorBinding {
 }
 
 fn dense(source: &str) -> TensorBinding {
-    binding(source, TensorStorage::Dense { dtype: "BF16".into(), bias: None })
+    binding(
+        source,
+        TensorStorage::Dense {
+            dtype: models::weights::DenseDType::Bf16,
+            bias: None,
+        },
+    )
 }
 
 /// A shared-routed layer ends its branches in the attention output, the

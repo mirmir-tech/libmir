@@ -48,7 +48,7 @@ impl Library {
         let initial = descriptor.memory_estimate_for(&config, &target);
         config.kv_cache =
             self.caches
-                .preview(&target, config.kv_cache, initial, options.kv_blocks.is_some());
+                .preview(target, config.kv_cache, initial, options.kv_blocks.is_some());
         let estimate = descriptor.memory_estimate_for(&config, &target);
         let reclaimable_bytes = self.reclaimable_kv_bytes_besides(resident)?;
         Ok(LoadPreview {

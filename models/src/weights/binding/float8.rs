@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     error::{ModelsError, Result},
-    weights::TensorInfo,
+    weights::{DenseDType, TensorDType, TensorInfo},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -17,13 +17,21 @@ pub enum Float8Format {
 
 impl Float8Format {
     pub(super) fn parse(tensor: &TensorInfo) -> Result<Option<Self>> {
-        match tensor.dtype.as_str() {
-            "F8_E4M3" => Ok(Some(Self::E4M3)),
-            "F8_E5M2" => Ok(Some(Self::E5M2)),
-            dtype if dtype.starts_with("F8_") => {
+        match &tensor.dtype {
+            TensorDType::Dense(DenseDType::F8E4M3) => Ok(Some(Self::E4M3)),
+            TensorDType::Dense(DenseDType::F8E5M2) => Ok(Some(Self::E5M2)),
+            TensorDType::Dense(DenseDType::Other(dtype)) if dtype.starts_with("F8_") => {
                 Err(invalid(&tensor.name, &format!("unsupported float8 storage dtype {dtype}")))
             },
             _ => Ok(None),
+        }
+    }
+
+    #[must_use]
+    pub const fn as_dense(self) -> DenseDType {
+        match self {
+            Self::E4M3 => DenseDType::F8E4M3,
+            Self::E5M2 => DenseDType::F8E5M2,
         }
     }
 
@@ -107,12 +115,20 @@ pub enum Float8ParameterDType {
 
 impl Float8ParameterDType {
     pub(super) fn parse(tensor: &TensorInfo) -> Result<Self> {
-        match tensor.dtype.as_str() {
-            "BF16" => Ok(Self::BF16),
-            "F32" => Ok(Self::F32),
+        match &tensor.dtype {
+            TensorDType::Dense(DenseDType::Bf16) => Ok(Self::BF16),
+            TensorDType::Dense(DenseDType::F32) => Ok(Self::F32),
             dtype => {
                 Err(invalid(&tensor.name, &format!("unsupported float8 parameter dtype {dtype}")))
             },
+        }
+    }
+
+    #[must_use]
+    pub const fn as_dense(self) -> DenseDType {
+        match self {
+            Self::BF16 => DenseDType::Bf16,
+            Self::F32 => DenseDType::F32,
         }
     }
 

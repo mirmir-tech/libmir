@@ -44,7 +44,9 @@ fn inspect(context: usize, layers: usize) -> Result<()> {
                 let mut first = plain(model, inputs)?;
                 let before = inventory(model)?;
                 let active_before = crate::engine::memory_stats()?.active;
-                model.reclaim_decode_reservations()?;
+                for state in model.sessions.values_mut() {
+                    state.cache.release_history();
+                }
                 let active_after = crate::engine::memory_stats()?.active;
                 let after = inventory(model)?;
                 let second = plain(model, inputs)?;

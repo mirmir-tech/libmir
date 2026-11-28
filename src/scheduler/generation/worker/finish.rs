@@ -24,7 +24,7 @@ impl Worker {
     }
 
     fn finish_ready_prefill(&mut self) {
-        if !self.prefill_profile.interleave_prefill_decode {
+        if !self.prefill_profile.interleaving.allows_interleaving() {
             return;
         }
         let Some(active) = self.active_prefill.as_mut() else {
@@ -69,7 +69,7 @@ impl Worker {
             Ok(outputs) if outputs.len() == active.requests.len() => {
                 self.completed_prefill.extend(active.requests.into_iter().zip(outputs));
                 if hold_prefill_completion(
-                    self.prefill_profile.interleave_prefill_decode,
+                    self.prefill_profile.interleaving.allows_interleaving(),
                     self.prefill_cohort.is_some(),
                 ) {
                     return;
@@ -91,7 +91,7 @@ impl Worker {
     pub(super) fn publish_completed_prefill(&mut self) {
         if self.completed_prefill.is_empty()
             || hold_prefill_completion(
-                self.prefill_profile.interleave_prefill_decode,
+                self.prefill_profile.interleaving.allows_interleaving(),
                 self.prefill_cohort.is_some(),
             )
         {

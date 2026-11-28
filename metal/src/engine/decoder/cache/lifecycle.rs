@@ -53,20 +53,6 @@ impl DecoderCache {
         Ok(allocations)
     }
 
-    pub(crate) fn release_reservation_after(&mut self, tokens: usize) -> Result<()> {
-        match &mut self.storage {
-            CacheStorage::Attention(caches) => {
-                caches.iter_mut().try_for_each(|cache| cache.release_reservation_after(tokens))
-            },
-            CacheStorage::HybridLinear(layers) => layers.iter_mut().try_for_each(|layer| {
-                if let hybrid::HybridLinearLayerCache::Full(cache) = layer {
-                    cache.release_reservation_after(tokens)?;
-                }
-                Ok(())
-            }),
-        }
-    }
-
     #[cfg(test)]
     pub(crate) fn prepare_prefix_retention(&mut self, stream: &Stream) -> Result<()> {
         if stream.config().diagnostics.prefix_retention == crate::config::PrefixRetention::View {

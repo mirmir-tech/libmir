@@ -18,7 +18,7 @@ pub struct ModelMetadata {
 
 impl ModelMetadata {
     pub fn from_layout(layout: &ModelLayout) -> Result<Self> {
-        let mut metadata = Self::from_config_path(&layout.config_path)?;
+        let mut metadata = Self::from_value(&layout.read_config()?)?;
         if let Some(path) = layout.configuration_path.as_deref() {
             let json = fs::read_to_string(path)?;
             let value: Value = serde_json::from_str(&json)?;

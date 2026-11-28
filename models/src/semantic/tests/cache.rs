@@ -49,7 +49,10 @@ fn chunked_layers_attend_one_chunk_back() -> Result<()> {
         "attention_chunk_size": 32, "attn_temperature_tuning": true, "floor_scale": 32,
         "attn_scale": 0.1, "use_qk_norm": true
     }))?;
-    assert_eq!(spec.decoder.layer(0)?.attention_span(), Some(32));
-    assert_eq!(spec.decoder.layer(3)?.attention_span(), None);
+    assert_eq!(
+        spec.decoder.layer(0)?.mixer.softmax_attention().and_then(|a| a.window),
+        std::num::NonZeroUsize::new(32).map(|chunk| AttentionWindow::Chunked { chunk })
+    );
+    assert_eq!(spec.decoder.layer(3)?.mixer.softmax_attention().and_then(|a| a.window), None);
     Ok(())
 }

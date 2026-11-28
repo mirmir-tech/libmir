@@ -67,12 +67,12 @@ pub(crate) use fused::{
 };
 pub use gated_delta::{GatedDeltaInputs, GatedDeltaLayer, GatedDeltaLayerConfig, GatedDeltaState};
 pub use gated_full_attention::{GatedFullAttention, GatedFullAttentionConfig};
+pub use kv::{KvCache, KvContext, PageLayout, PagedKvContext, PagedScales};
 pub(crate) use kv::{
-    DecodeCapacity, KvPageFormat, NATIVE_PAGED_ATTENTION_MIN_CONTEXT, PagedArenaPool,
-    PagedContextMode, history as persistent_history, native_paged_attention_mode,
-    paged_attention_enabled, paged_attention_min_context,
+    KvPageFormat, NATIVE_PAGED_ATTENTION_MIN_CONTEXT, PagedArenaPool, PagedContextMode,
+    history as persistent_history, native_paged_attention_mode, paged_attention_enabled,
+    paged_attention_min_context,
 };
-pub use kv::{KvCache, KvContext, PagedKvContext};
 pub use layer_norm::LayerNorm;
 pub use linear::QuantizedLinear;
 pub(crate) use memory::{MemoryStats, configure_recommended_wired_limit, memory_stats};

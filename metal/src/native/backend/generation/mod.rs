@@ -79,7 +79,7 @@ impl MetalBackend {
     ) -> RuntimeResult<MetalPrefillBatch> {
         let submitted = Instant::now();
         let first = validate_prefill_requests(requests)?;
-        if cohort.is_some_and(|cohort| cohort.model_id() != first.model.id) {
+        if cohort.is_some_and(|cohort| cohort.model_id() != &first.model.id) {
             return Err(Error::InvalidPrefillBatch(
                 "prefill batch targets another logical cohort".into(),
             )
@@ -133,7 +133,7 @@ impl MetalBackend {
         progress: &mut dyn FnMut(usize, MetalProgressEvent),
         mut should_yield: impl FnMut() -> bool + Send + 'static,
     ) -> RuntimeResult<MetalGenerationStepOutput> {
-        let model_id = step_model_id(decode, prefill)?.to_owned();
+        let model_id = step_model_id(decode, prefill)?.clone();
         let sequences = decode.map_or_else(Vec::new, |request| request.sequences().to_vec());
         let batch = prefill.cloned();
         let device_pipeline = self.config.fusion.device_token_pipeline.enabled();
@@ -166,7 +166,7 @@ impl MetalBackend {
         &self,
         batch: MetalPrefillBatch,
     ) -> RuntimeResult<Vec<PrefillOutput>> {
-        let model_id = batch.model_id().to_owned();
+        let model_id = batch.model_id().clone();
         Ok(self.with_model(&model_id, move |loaded| finish_prefill(loaded, &batch))?)
     }
 }
@@ -212,8 +212,8 @@ const fn prefill_schedule(
 fn step_model_id<'a>(
     decode: Option<&'a DecodeBatchRequest>,
     prefill: Option<&'a MetalPrefillBatch>,
-) -> Result<&'a str> {
-    let decode_id = decode.map(|request| request.model().id.as_str());
+) -> Result<&'a foundation::model::ModelId> {
+    let decode_id = decode.map(|request| &request.model().id);
     let prefill_id = prefill.map(MetalPrefillBatch::model_id);
     match (decode_id, prefill_id) {
         (Some(decode), Some(prefill)) if decode != prefill => {

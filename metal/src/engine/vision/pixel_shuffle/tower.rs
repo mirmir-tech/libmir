@@ -1,4 +1,7 @@
-use models::{layout::PixelShuffleVisionConfig, vision::PixelShufflePreprocessedImage};
+use models::{
+    layout::{HiddenActivation, PixelShuffleVisionConfig},
+    vision::PixelShufflePreprocessedImage,
+};
 
 use super::{block::EncoderBlock, dimension, embedding::PatchEmbedding, projector::Projector};
 use crate::engine::{Array, Error, ModelTensors, Result, Stream};
@@ -83,7 +86,7 @@ fn validate_config(config: &PixelShuffleVisionConfig) -> Result<()> {
         || config.num_channels != 3
         || config.shuffle_factor == 0
         || config.position_grid == 0
-        || config.hidden_activation != "gelu"
+        || config.hidden_activation != HiddenActivation::Gelu
     {
         return Err(Error::InvalidModel(format!(
             "unsupported pixel-shuffle vision geometry or activation: hidden={}, heads={heads}, factor={}, activation={}",

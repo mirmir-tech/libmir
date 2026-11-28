@@ -74,7 +74,10 @@ fn projection_binding() -> TensorBinding {
         shape: vec![4, 4],
         logical_shape: Some(vec![4, 4]),
         transforms: Vec::new(),
-        storage: TensorStorage::Dense { dtype: "F32".into(), bias: None },
+        storage: TensorStorage::Dense {
+            dtype: models::weights::DenseDType::F32,
+            bias: None,
+        },
     }
 }
 
@@ -194,7 +197,7 @@ fn test_config() -> PooledVisionConfig {
         position_embedding_size: 2,
         rms_norm_eps: 1.0e-6,
         rope_theta: 100.0,
-        hidden_activation: "gelu_pytorch_tanh".into(),
+        hidden_activation: models::layout::HiddenActivation::GeluTanh,
         use_clipped_linears: true,
         standardize: true,
         image_token_id: 1,

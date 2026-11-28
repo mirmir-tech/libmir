@@ -7,7 +7,7 @@ use super::super::parse::{
     bool_field, has_fields, object, scalar_usize_field, string_field, u32_field, usize_array_field,
     usize_field,
 };
-use crate::error::Result;
+use crate::{error::Result, layout::HiddenActivation};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpatialMergeVisionConfig {
@@ -21,7 +21,7 @@ pub struct SpatialMergeVisionConfig {
     pub temporal_patch_size: usize,
     pub spatial_merge_size: usize,
     pub num_position_embeddings: usize,
-    pub hidden_activation: String,
+    pub hidden_activation: HiddenActivation,
     pub image_token_id: u32,
     pub vision_start_token_id: u32,
     pub vision_end_token_id: u32,
@@ -68,7 +68,7 @@ pub(super) fn parse_spatial_merge(
         temporal_patch_size: scalar_usize_field(vision, "temporal_patch_size")?,
         spatial_merge_size: usize_field(vision, "spatial_merge_size")?,
         num_position_embeddings: usize_field(vision, "num_position_embeddings")?,
-        hidden_activation: string_field(vision, "hidden_act")?,
+        hidden_activation: HiddenActivation::parse(&string_field(vision, "hidden_act")?),
         image_token_id: u32_field(root, "image_token_id")?,
         vision_start_token_id: u32_field(root, "vision_start_token_id")?,
         vision_end_token_id: u32_field(root, "vision_end_token_id")?,

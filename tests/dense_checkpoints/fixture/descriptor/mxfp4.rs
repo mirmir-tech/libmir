@@ -53,7 +53,7 @@ fn validate_storage(descriptor: &ModelDescriptor, reference: &Reference) -> Test
     for encoding in descriptor.checkpoint_encoding().weights {
         match encoding {
             WeightEncoding::Dense { dtype } => {
-                dense.insert(dtype);
+                dense.insert(dtype.as_str().to_owned());
             },
             WeightEncoding::MxFp4 { format } => {
                 require(format.is_mxfp4(), "checkpoint MXFP4 format differs")?;

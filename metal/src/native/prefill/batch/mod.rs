@@ -1,9 +1,8 @@
 mod cancellation;
 mod execution;
 mod packed;
-mod reservation;
 mod retention;
-pub(in crate::native) use retention::Reservations;
+pub(in crate::native) use retention::ActivePrefills;
 mod sequence;
 #[cfg(test)]
 mod tests;
@@ -33,7 +32,7 @@ use crate::{
 /// GPU work.
 #[derive(Clone)]
 pub struct MetalPrefillBatch {
-    model_id: String,
+    model_id: foundation::model::ModelId,
     inner: Arc<Mutex<Option<Batch>>>,
     _cleanup: Arc<cancellation::Cleanup>,
 }
@@ -110,8 +109,10 @@ impl MetalPrefillBatch {
             })
             .collect::<Result<Vec<_>>>()?;
         let reserving = Instant::now();
-        reservation::fit(&mut sequences, loaded)?;
-        if cohort.is_none() && loaded.prefixes.reserve_batch_slots(sequences.len()) {
+        if cohort.is_none()
+            && loaded.has_non_paged_state()
+            && loaded.prefixes.reserve_batch_slots(sequences.len())
+        {
             crate::engine::clear_memory_cache()?;
         }
         let reserved = reserving.elapsed();
@@ -125,11 +126,7 @@ impl MetalPrefillBatch {
             #[cfg(test)]
             remainder_policy: packed::RemainderPolicy::Consume,
         })));
-        if loaded.stream.config().cache.decode_reservation
-            == crate::config::DecodeReservation::GenerationBudget
-        {
-            loaded.prefill_reservations.register(&inner);
-        }
+        loaded.active_prefills.register(&inner);
         let cleanup = Arc::new(cancellation::Cleanup { inner: Arc::clone(&inner), retire });
         Ok((Self { model_id, inner, _cleanup: cleanup }, events))
     }
@@ -185,7 +182,7 @@ impl MetalPrefillBatch {
     }
 
     #[must_use]
-    pub fn model_id(&self) -> &str {
+    pub const fn model_id(&self) -> &foundation::model::ModelId {
         &self.model_id
     }
 

@@ -1,5 +1,6 @@
 use std::time::Instant;
 
+use architecture::CacheLayout;
 use models::{layout::DecoderConfig, semantic::DecoderSpec, weights::WeightBindingPlan};
 
 use super::{HybridMoeLayer, HybridMoeLayerConfig, layer::profile_components};
@@ -19,7 +20,7 @@ mod tests;
 #[derive(Debug)]
 pub struct HybridMoeModel {
     pub(super) layers: Vec<HybridMoeLayer>,
-    cache_windows: Vec<Option<usize>>,
+    cache_layout: CacheLayout,
     cache_step: usize,
     pub(super) embedding: BoundEmbedding,
     pub(super) final_norm: Array,
@@ -54,8 +55,9 @@ impl HybridMoeModel {
                 "hybrid MoE loader requires dense GELU or dense-and-routed softmax layers".into(),
             ));
         }
-        // Before any weight loads: which layers cache, in what windows.
-        let cache_windows = sharing::cache_windows(spec, lowering)?;
+        // Before any weight loads: validate the admitted cache layout.
+        let cache_layout = CacheLayout::for_metal(spec);
+        DecoderCache::validate_attention_entries(&cache_layout.layers)?;
         let sharing = sharing::ModelSharing::load(tensors, spec, bindings, stream)?;
         let mut layers = Vec::with_capacity(decoder.num_hidden_layers);
         for (index, lowered) in lowering.iter().enumerate() {
@@ -83,7 +85,7 @@ impl HybridMoeModel {
         let boundary = bindings.decoder_boundary_with_tied_output(true)?;
         let mut model = Self::finish_load(
             layers,
-            cache_windows,
+            cache_layout,
             cache_step,
             BoundEmbedding::load(tensors, boundary.embedding, stream)?,
             tensors.get(&boundary.final_norm.source)?,
@@ -96,7 +98,7 @@ impl HybridMoeModel {
 
     pub(super) fn finish_load(
         mut layers: Vec<HybridMoeLayer>,
-        cache_windows: Vec<Option<usize>>,
+        cache_layout: CacheLayout,
         cache_step: usize,
         embedding: BoundEmbedding,
         final_norm: Array,
@@ -121,7 +123,7 @@ impl HybridMoeModel {
         let embed_scale = decoder.hidden_size.to_string().parse::<f32>()?.sqrt();
         Ok(Self {
             layers,
-            cache_windows,
+            cache_layout,
             cache_step,
             embedding,
             final_norm,
@@ -137,12 +139,12 @@ impl HybridMoeModel {
     }
 
     pub fn new_cache(&self, stream: &Stream) -> Result<DecoderCache> {
-        DecoderCache::new_with_pool_capacity(
-            &self.cache_windows,
+        DecoderCache::from_layout(
+            &self.cache_layout,
             self.cache_step,
             crate::engine::KvPageFormat::resolve(stream.config().kv_cache.dtype)?,
             stream.config().kv_cache.block_size,
-            DecoderCache::physical_page_capacity(stream, self.cache_step),
+            stream.config().kv_cache.block_count as usize,
             stream.paged_arenas(),
         )
     }

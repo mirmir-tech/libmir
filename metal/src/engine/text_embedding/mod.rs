@@ -4,7 +4,7 @@ mod model;
 mod weights;
 
 pub use model::TextEmbeddingModel;
-use models::layout::DecoderConfig;
+use models::layout::{DecoderConfig, HiddenActivation};
 
 use crate::engine::{Error, Result};
 
@@ -24,7 +24,7 @@ impl LayerConfig {
     fn from_decoder(index: usize, decoder: &DecoderConfig) -> Result<Self> {
         if decoder.num_experts.is_some()
             || decoder.sliding_window.is_some()
-            || decoder.hidden_activation.as_deref() != Some("silu")
+            || decoder.hidden_activation != Some(HiddenActivation::Silu)
         {
             return Err(Error::InvalidModel(
                 "text embedding decoder requires dense full-attention SwiGLU".into(),

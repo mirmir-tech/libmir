@@ -182,7 +182,7 @@ fn validate_config(config: &PixelShuffleVisionConfig) -> Result<()> {
         || config.num_channels != 3
         || config.shuffle_factor == 0
         || config.position_grid == 0
-        || config.hidden_activation != "gelu"
+        || config.hidden_activation != models::layout::HiddenActivation::Gelu
     {
         return Err(Error::UnsupportedVisionContract(format!(
             "unsupported pixel-shuffle vision geometry or activation: hidden={}, heads={heads}, factor={}, activation={}",

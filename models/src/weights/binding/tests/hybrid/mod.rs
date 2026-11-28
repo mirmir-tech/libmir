@@ -188,7 +188,8 @@ fn tensor(name: &str, dtype: &str, shape: &[usize]) -> TensorInfo {
     TensorInfo {
         name: name.into(),
         file: PathBuf::new(),
-        dtype: dtype.into(),
+        container: crate::layout::WeightContainer::SafeTensors,
+        dtype: crate::weights::TensorDType::parse(dtype),
         shape: shape.to_vec(),
         data_start: 0,
         data_offsets: [0, 0],

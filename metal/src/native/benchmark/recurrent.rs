@@ -54,6 +54,7 @@ fn compares_complete_decode_with_reused_and_concatenated_gdn_state() -> Result<(
                 token: greedy_token(&output.output)?,
                 sampling: SamplingLogits::None,
                 speculation: None,
+                blocks: Vec::new(),
             });
         }
     }

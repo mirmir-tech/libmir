@@ -32,22 +32,12 @@ impl CudaSharedRoutedModelTemplate {
 
     /// One cache per decoder layer, then the prediction module's.
     pub(crate) fn allocate_shared_kv(&self) -> Result<Vec<Option<PagedKvCache>>> {
-        let prediction = self.prediction.as_ref().map(|prediction| {
-            Ok(Some(self.backend.prepare_paged_kv(
-                prediction.index(),
-                prediction.layer().storage(self.cache),
-            )?))
-        });
-        self.layers
-            .iter()
-            .enumerate()
-            .map(|(index, layer)| {
-                self.layer_storage(index, layer)
-                    .map(|storage| self.backend.prepare_paged_kv(index, storage))
-                    .transpose()
-            })
-            .chain(prediction)
-            .collect()
+        self.backend.allocate_cache_layout(
+            &self.cache_layout,
+            self.cache,
+            1,
+            self.prediction.is_some(),
+        )
     }
 
     /// The prediction module's attention over its pages, when loaded.

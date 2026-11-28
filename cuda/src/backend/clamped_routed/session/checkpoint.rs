@@ -1,3 +1,4 @@
+use foundation::model::ModelId;
 use runtime::kv::BlockHash;
 use uuid::Uuid;
 
@@ -35,7 +36,7 @@ impl PrefixCheckpoints {
 
     pub(super) fn lookup(
         &mut self,
-        model: &str,
+        model: &ModelId,
         prompt: &[u32],
         minimum: usize,
         maximum: usize,
@@ -61,7 +62,7 @@ impl PrefixCheckpoints {
 
     pub(super) fn slot_for_write(
         &mut self,
-        model: &str,
+        model: &ModelId,
         prompt: &[u32],
         tokens: usize,
     ) -> (BlockHash, usize) {
@@ -107,7 +108,7 @@ impl CudaClampedRoutedModelSession {
     pub(crate) fn checkpoint_prefix(
         &mut self,
         session: Uuid,
-        model: &str,
+        model: &ModelId,
         prompt: &[u32],
         end: usize,
     ) -> Result<()> {
@@ -137,7 +138,7 @@ impl CudaClampedRoutedModelSession {
     pub(crate) fn restore_prefix(
         &mut self,
         session: Uuid,
-        model: &str,
+        model: &ModelId,
         prompt: &[u32],
         minimum: usize,
         maximum: usize,
@@ -171,7 +172,7 @@ fn checkpoint_tokens(end: usize, block_size: usize) -> usize {
     end
 }
 
-fn key(model: &str, prompt: &[u32], tokens: usize) -> CheckpointKey {
+fn key(model: &ModelId, prompt: &[u32], tokens: usize) -> CheckpointKey {
     CheckpointKey {
         hash: BlockHash::from_tokens(model, None, &prompt[..tokens]),
         tokens,
@@ -193,28 +194,30 @@ mod tests {
 
     #[test]
     fn returns_the_longest_matching_checkpoint_above_replay() {
+        let model = ModelId::new("model");
         let prompt = (0..64).collect::<Vec<_>>();
         let mut cache = PrefixCheckpoints::new(4, 3);
-        cache.slot_for_write("model", &prompt, 16);
-        cache.slot_for_write("model", &prompt, 32);
-        cache.slot_for_write("model", &prompt, 48);
+        cache.slot_for_write(&model, &prompt, 16);
+        cache.slot_for_write(&model, &prompt, 32);
+        cache.slot_for_write(&model, &prompt, 48);
 
-        assert_eq!(cache.lookup("model", &prompt, 20, 48), Some((48, 6)));
+        assert_eq!(cache.lookup(&model, &prompt, 20, 48), Some((48, 6)));
         let mut changed = prompt.clone();
         changed[40] = 7;
-        assert_eq!(cache.lookup("model", &changed, 20, 48), Some((32, 5)));
+        assert_eq!(cache.lookup(&model, &changed, 20, 48), Some((32, 5)));
     }
 
     #[test]
     fn evicts_the_least_recent_checkpoint() {
+        let model = ModelId::new("model");
         let prompt = (0..64).collect::<Vec<_>>();
         let mut cache = PrefixCheckpoints::new(8, 2);
-        cache.slot_for_write("model", &prompt, 16);
-        cache.slot_for_write("model", &prompt, 32);
-        assert_eq!(cache.lookup("model", &prompt, 0, 16), Some((16, 8)));
-        cache.slot_for_write("model", &prompt, 48);
+        cache.slot_for_write(&model, &prompt, 16);
+        cache.slot_for_write(&model, &prompt, 32);
+        assert_eq!(cache.lookup(&model, &prompt, 0, 16), Some((16, 8)));
+        cache.slot_for_write(&model, &prompt, 48);
 
-        assert_eq!(cache.lookup("model", &prompt, 16, 32), None);
-        assert_eq!(cache.lookup("model", &prompt, 32, 48), Some((48, 9)));
+        assert_eq!(cache.lookup(&model, &prompt, 16, 32), None);
+        assert_eq!(cache.lookup(&model, &prompt, 32, 48), Some((48, 9)));
     }
 }

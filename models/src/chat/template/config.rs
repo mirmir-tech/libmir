@@ -61,9 +61,9 @@ pub(super) struct ModelTemplateConfig {
 impl ModelTemplateConfig {
     pub(super) fn from_layout(layout: &ModelLayout) -> Result<Self> {
         let config = layout
-            .tokenizer_config_path
-            .as_deref()
-            .map(read_tokenizer_config)
+            .read_tokenizer_config()?
+            .as_ref()
+            .map(parse_tokenizer_config)
             .transpose()?
             .unwrap_or_default();
         let file_template =
@@ -78,18 +78,18 @@ impl ModelTemplateConfig {
             },
             |template| (TemplateSource::ChatTemplateFile, Some(template)),
         );
+        let model_type = layout
+            .read_config()?
+            .get("model_type")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
         Ok(Self {
             source,
             template,
             tokens: config.tokens,
-            model_type: read_model_type(&layout.config_path)?,
+            model_type,
         })
     }
-}
-
-fn read_model_type(path: &std::path::Path) -> Result<Option<String>> {
-    let value = crate::layout::json::read(path)?;
-    Ok(value.get("model_type").and_then(Value::as_str).map(str::to_owned))
 }
 
 #[derive(Debug, Default)]
@@ -98,12 +98,11 @@ struct TokenizerConfig {
     tokens: TemplateTokens,
 }
 
-fn read_tokenizer_config(path: &std::path::Path) -> Result<TokenizerConfig> {
-    let value: Value = serde_json::from_str(&fs::read_to_string(path)?)?;
+fn parse_tokenizer_config(value: &Value) -> Result<TokenizerConfig> {
     Ok(TokenizerConfig {
-        template: template(&value)?,
-        tokens: TemplateTokens::new(token(&value, "bos_token")?, token(&value, "eos_token")?)
-            .with_turns(token(&value, "sot_token")?, token(&value, "eot_token")?),
+        template: template(value)?,
+        tokens: TemplateTokens::new(token(value, "bos_token")?, token(value, "eos_token")?)
+            .with_turns(token(value, "sot_token")?, token(value, "eot_token")?),
     })
 }
 

@@ -39,10 +39,7 @@ impl Engine {
                     .into_outputs())
             },
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => Err(runtime::RuntimeError::BackendUnavailable(
-                "libmir was built without an accelerator feature".into(),
-            )
-            .into()),
+            EngineInner::Unavailable(never) => match *never {},
         }
     }
 }

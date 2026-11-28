@@ -17,7 +17,8 @@ fn tensors(entries: &[(&str, usize)]) -> TensorCatalog {
             .map(|(name, width)| TensorInfo {
                 name: format!("model.layers.0.{name}"),
                 file: PathBuf::new(),
-                dtype: "F32".into(),
+                container: crate::layout::WeightContainer::SafeTensors,
+                dtype: crate::weights::DenseDType::F32.into(),
                 shape: vec![*width],
                 data_start: 0,
                 data_offsets: [0, 0],

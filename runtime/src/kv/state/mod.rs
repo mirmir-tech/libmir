@@ -1,3 +1,4 @@
+use foundation::model::ModelId;
 use uuid::Uuid;
 
 use super::{BlockHash, BlockId, BlockTable, KvCache, KvWritePlan};
@@ -9,7 +10,7 @@ mod uncached;
 #[derive(Debug, Clone)]
 pub struct KvSessionState {
     session_id: Uuid,
-    model: String,
+    model: ModelId,
     table: BlockTable,
     tokens: Vec<u32>,
     committed_blocks: usize,
@@ -67,7 +68,7 @@ pub struct KvDecodeStep {
 
 impl KvSessionState {
     #[must_use]
-    pub fn new(session_id: Uuid, model: impl Into<String>, block_size: usize) -> Self {
+    pub fn new(session_id: Uuid, model: impl Into<ModelId>, block_size: usize) -> Self {
         Self {
             session_id,
             model: model.into(),

@@ -24,6 +24,7 @@ impl LoadedModel {
         session: Uuid,
         prompt: &PooledPromptTokens,
         image: &PooledPreprocessedImage,
+        blocks: &[runtime::kv::BlockId],
         sampling: &SamplingLogits,
         progress: &mut dyn FnMut(MetalProgressEvent),
     ) -> Result<NativePrefill> {
@@ -39,15 +40,9 @@ impl LoadedModel {
             let model = self.execution.decoder()?;
             SessionState::new(model.new_cache(&self.stream)?)
         };
-        let reserve = prompt.token_ids.len().max(self.stream.config().cache.kv_reserve_tokens);
-        state.cache.reserve(reserve)?;
-        let page_size = self.stream.config().kv_cache.block_size.max(1);
-        state.cache.plan_contiguous(prompt.token_ids.len().saturating_add(page_size));
-        self.reserve_prefill_pages(super::required_prefill_pages(
-            prompt.token_ids.len(),
-            0,
-            page_size,
-        ))?;
+        if !blocks.is_empty() {
+            state.cache.bind_blocks(blocks, None, &self.stream)?;
+        }
         let model = self.execution.decoder()?;
         let Some(LoadedVisionModel::Pooled(tower)) = self.vision_model.as_ref() else {
             return Err(Error::UnsupportedModel(
@@ -93,6 +88,7 @@ impl LoadedModel {
         session: Uuid,
         prompt: &SpatialMergePromptTokens,
         image: &SpatialMergePreprocessedImage,
+        blocks: &[runtime::kv::BlockId],
         sampling: &SamplingLogits,
         progress: &mut dyn FnMut(MetalProgressEvent),
     ) -> Result<NativePrefill> {
@@ -109,16 +105,9 @@ impl LoadedModel {
             SessionState::new(model.new_cache(&self.stream)?)
         };
         state.rope_position_delta = prompt.position_delta;
-        state
-            .cache
-            .reserve(prompt.token_ids.len().max(self.stream.config().cache.kv_reserve_tokens))?;
-        let page_size = self.stream.config().kv_cache.block_size.max(1);
-        state.cache.plan_contiguous(prompt.token_ids.len().saturating_add(page_size));
-        self.reserve_prefill_pages(super::required_prefill_pages(
-            prompt.token_ids.len(),
-            0,
-            page_size,
-        ))?;
+        if !blocks.is_empty() {
+            state.cache.bind_blocks(blocks, None, &self.stream)?;
+        }
         let model = self.execution.decoder()?;
         let Some(LoadedVisionModel::SpatialMerge(tower)) = self.vision_model.as_ref() else {
             return Err(Error::UnsupportedModel(

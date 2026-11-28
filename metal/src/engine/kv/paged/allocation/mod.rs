@@ -1,10 +1,7 @@
-use std::sync::Arc;
-
-use super::{Arena, PagedStore, Storage, lock};
+use super::{PagedStore, Storage, lock, single_run};
 use crate::engine::{Array, Error, Result, Stream};
 
-mod copy;
-use copy::copy_page;
+const PAGE_TABLE_STEP: usize = 64;
 
 pub(super) fn ensure(
     store: &mut PagedStore,
@@ -14,167 +11,147 @@ pub(super) fn ensure(
     stream: &Stream,
 ) -> Result<()> {
     store.validate_update(keys, values)?;
-    let shape = keys.native().shape()?;
-    let dimensions = shape.dimensions();
-    let sequence = dimensions[2];
+    let sequence = keys.native().shape()?.dimensions()[2];
     let end = offset.checked_add(sequence).ok_or(Error::ShapeOverflow)?;
     let needed = end.div_ceil(store.page_size);
-    let candidate = store
-        .storage
-        .is_none()
-        .then(|| create(store, keys, needed, stream))
-        .transpose()?;
-    let storage = store
-        .storage
-        .as_ref()
-        .or(candidate.as_ref())
-        .ok_or(Error::NullHandle("paged storage"))?;
-    let arena_handle = Arc::clone(&storage.arena);
-    let mut arena = lock(&arena_handle)?;
-    let first = offset / store.page_size;
-    let last = (end - 1) / store.page_size;
-    let existing = storage.page_ids.len();
-    let shared = (first..=last.min(existing.saturating_sub(1)))
-        .filter(|logical| {
-            storage
-                .page_ids
-                .get(*logical)
-                .and_then(|page| usize::try_from(*page).ok())
-                .is_some_and(|page| !arena.appendable(page, storage.id))
-        })
-        .count();
-    let free = arena.references.iter().filter(|count| **count == 0).count();
-    let planned = store.reserve_pages.max(needed);
-    let reservation = storage.reservation_needed(planned);
-    let additional = storage.additional_owned_pages(planned, needed, shared);
-    let mut required = arena.capacity.saturating_add(additional.saturating_sub(free));
-    if reservation > 0
-        && !arena.has_contiguous_free(reservation)
-        && arena.capacity.saturating_add(reservation) <= store.max_pages
-    {
-        required = required.max(arena.capacity + reservation);
-    }
-    let target = growth_target(
-        arena.capacity,
-        required.max(store.reserve_pages),
-        store.allocation_step,
-        store.max_pages,
-    )?;
-    if target > arena.capacity {
-        tracing::debug!(
-            target: "libmir::metal::kv",
-            layer = store.layer,
-            capacity_pages = arena.capacity,
-            target_pages = target,
-            used_pages = arena.references.iter().filter(|count| **count > 0).count(),
-            free_pages = free,
-            "growing Metal paged K/V arena"
-        );
-    }
-    ensure_capacity(&mut arena, target, stream)?;
-    if let Some(candidate) = candidate {
-        store.storage = Some(candidate);
-    }
-    let storage = store.storage.as_mut().ok_or(Error::NullHandle("paged storage"))?;
-    storage.reserve_contiguous(&mut arena, planned)?;
-    let table_resized = needed > storage.table_capacity;
-    if table_resized {
-        storage.table_capacity = round(needed + store.allocation_step, store.allocation_step);
-    }
-    let appended = needed.saturating_sub(storage.page_ids.len());
-    if appended > 0 {
-        storage.append_pages(&mut arena, appended)?;
-    }
-    let mut remapped = false;
-    for page_id in &mut storage.page_ids[first..=last] {
-        let source = usize::try_from(*page_id)?;
-        if arena.appendable(source, storage.id) {
-            arena.writers[source] = storage.id;
-            continue;
-        }
-        let target = arena.allocate()?;
-        copy_page(&mut arena, source, usize::try_from(target)?, stream)?;
-        arena.references[source] -= 1;
-        arena.writers[usize::try_from(target)?] = storage.id;
-        *page_id = target;
-        remapped = true;
-    }
-    if table_resized || remapped {
-        storage.table = page_table(&storage.page_ids, storage.table_capacity)?;
-    } else if appended > 0 {
-        append_page_table(storage, needed - appended, stream)?;
-    }
-    if table_resized || remapped || appended > 0 {
-        storage.contiguous = super::single_run(&storage.page_ids);
-    }
-    drop(arena);
-    Ok(())
-}
-
-fn append_page_table(storage: &mut Storage, start: usize, stream: &Stream) -> Result<()> {
-    let ids = &storage.page_ids[start..];
-    let update = Array::from_u32(ids, &[i32::try_from(ids.len())?])?;
-    storage.table = Array::from_native(stream.native().graph().slice_update(
-        storage.table.native(),
-        update.native(),
-        &[start],
-        &[start + ids.len()],
-    )?)?;
-    Ok(())
-}
-
-fn create(store: &PagedStore, keys: &Array, needed: usize, stream: &Stream) -> Result<Storage> {
-    let capacity =
-        growth_target(0, needed.max(store.reserve_pages), store.allocation_step, store.max_pages)?;
-    let arena = store
-        .pool
-        .acquire(store.layer, store.page_size, store.format, keys, capacity, stream)?;
-    Ok(Storage {
-        input_dtype: keys.native().dtype()?,
-        arena,
-        table: page_table(&[], capacity)?,
-        page_ids: Vec::new(),
-        reserved_page_ids: Vec::new(),
-        table_capacity: capacity,
-        contiguous: true,
-        id: super::next_storage_id(),
-    })
-}
-
-fn ensure_capacity(arena: &mut Arena, required: usize, stream: &Stream) -> Result<()> {
-    if required <= arena.capacity {
+    if store.storage.is_none() {
+        let arena = store
+            .pool
+            .acquire(store.layer, store.page_size, store.format, keys, store.capacity, stream)?;
+        let (arena_capacity, initial_ids) = {
+            let mut guard = lock(&arena)?;
+            let cap = guard.capacity;
+            let ids = desired_page_ids(store, &[], needed, &mut guard)?;
+            drop(guard);
+            (cap, ids)
+        };
+        let table_capacity = table_capacity(initial_ids.len(), arena_capacity);
+        let table = page_table(&initial_ids, table_capacity)?;
+        let contiguous = single_run(&initial_ids);
+        store.storage = Some(Storage {
+            input_dtype: keys.native().dtype()?,
+            arena,
+            table,
+            page_ids: initial_ids,
+            table_capacity,
+            contiguous,
+        });
         return Ok(());
     }
-    let capacity = required;
-    let shape = mirtal::Shape::new([
-        arena.kv_heads,
-        capacity - arena.capacity,
-        arena.page_size,
-        arena.keys.native().shape()?.dimensions()[3],
-    ])?;
-    let graph = stream.native().graph();
-    let dtype = arena.keys.native().dtype()?;
-    let extra_keys = graph.full(&shape, 0.0, dtype)?;
-    let extra_values = graph.full(&shape, 0.0, dtype)?;
-    arena.keys = Array::from_native(graph.concatenate(&[arena.keys.native(), &extra_keys], 1)?)?;
-    arena.values =
-        Array::from_native(graph.concatenate(&[arena.values.native(), &extra_values], 1)?)?;
-    grow_scales(arena, capacity, graph)?;
-    arena.references.resize(capacity, 0);
-    arena.writers.resize(capacity, 0);
-    arena.capacity = capacity;
+    let (arena_capacity, desired) = {
+        let storage = store.storage.as_ref().ok_or(Error::NullHandle("paged storage"))?;
+        let mut guard = lock(&storage.arena)?;
+        let cap = guard.capacity;
+        let ids = desired_page_ids(store, &storage.page_ids, needed, &mut guard)?;
+        drop(guard);
+        (cap, ids)
+    };
+    let storage = store.storage.as_mut().ok_or(Error::NullHandle("paged storage"))?;
+    sync_page_table(storage, &desired, arena_capacity, stream)
+}
+
+pub(super) fn sync_page_table(
+    storage: &mut Storage,
+    desired: &[u32],
+    arena_capacity: usize,
+    stream: &Stream,
+) -> Result<()> {
+    if storage.page_ids == desired {
+        return Ok(());
+    }
+    let is_prefix_append =
+        desired.len() > storage.page_ids.len() && desired.starts_with(&storage.page_ids);
+    if is_prefix_append && desired.len() <= storage.table_capacity {
+        let start = storage.page_ids.len();
+        let added = &desired[start..];
+        let update = Array::from_u32(added, &[i32::try_from(added.len())?])?;
+        storage.table = Array::from_native(stream.native().graph().slice_update(
+            storage.table.native(),
+            update.native(),
+            &[start],
+            &[start + added.len()],
+        )?)?;
+    } else {
+        let next_capacity = table_capacity(desired.len(), arena_capacity);
+        storage.table = page_table(desired, next_capacity)?;
+        storage.table_capacity = next_capacity;
+    }
+    storage.page_ids.clear();
+    storage.page_ids.extend_from_slice(desired);
+    storage.contiguous = single_run(&storage.page_ids);
     Ok(())
 }
 
-fn grow_scales(arena: &mut Arena, capacity: usize, graph: mirtal::Graph<'_>) -> Result<()> {
-    let shape = mirtal::Shape::new([arena.kv_heads, capacity - arena.capacity, arena.page_size])?;
-    for scales in [&mut arena.key_scales, &mut arena.value_scales] {
-        if let Some(current) = scales.take() {
-            let extra = graph.full(&shape, 1.0, mirtal::DType::Float32)?;
-            *scales = Some(Array::from_native(graph.concatenate(&[current.native(), &extra], 1)?)?);
+#[cfg_attr(not(test), allow(clippy::needless_pass_by_ref_mut))]
+fn desired_page_ids(
+    store: &PagedStore,
+    existing: &[u32],
+    needed: usize,
+    arena: &mut super::Arena,
+) -> Result<Vec<u32>> {
+    if let Some(bound) = &store.bound_blocks {
+        if needed > bound.len() {
+            return Err(Error::KvPageCapacity {
+                layer: store.layer,
+                required: needed,
+                maximum: bound.len(),
+            });
         }
+        for &block in bound {
+            if usize::try_from(block)? >= arena.capacity {
+                return Err(Error::KvBlockOutOfRange {
+                    layer: store.layer,
+                    block,
+                    capacity: arena.capacity,
+                });
+            }
+        }
+        return Ok(bound.clone());
     }
-    Ok(())
+    #[cfg(not(test))]
+    {
+        let _ = existing;
+        if needed > arena.capacity {
+            return Err(Error::KvPageCapacity {
+                layer: store.layer,
+                required: needed,
+                maximum: arena.capacity,
+            });
+        }
+        (0..needed).map(|index| Ok(u32::try_from(index)?)).collect()
+    }
+    #[cfg(test)]
+    {
+        let mut ids = existing.to_vec();
+        let extra = needed.saturating_sub(ids.len());
+        if extra > 0 {
+            let free = arena.unbound_refs.iter().filter(|&&refs| refs == 0).count();
+            if extra > free {
+                return Err(Error::KvPageCapacity {
+                    layer: store.layer,
+                    required: arena.capacity - free + extra,
+                    maximum: arena.capacity,
+                });
+            }
+            for _ in 0..extra {
+                let slot = arena.unbound_refs.iter().position(|&refs| refs == 0).ok_or(
+                    Error::KvPageCapacity {
+                        layer: store.layer,
+                        required: needed,
+                        maximum: arena.capacity,
+                    },
+                )?;
+                arena.unbound_refs[slot] = 1;
+                ids.push(u32::try_from(slot)?);
+            }
+        }
+        Ok(ids)
+    }
+}
+
+fn table_capacity(count: usize, arena_capacity: usize) -> usize {
+    let min_cap = count.max(1).div_ceil(PAGE_TABLE_STEP) * PAGE_TABLE_STEP;
+    min_cap.min(arena_capacity.max(count.max(1)))
 }
 
 fn page_table(ids: &[u32], capacity: usize) -> Result<Array> {
@@ -183,23 +160,3 @@ fn page_table(ids: &[u32], capacity: usize) -> Result<Array> {
     values[..ids.len()].copy_from_slice(ids);
     Array::from_u32(&values, &[i32::try_from(capacity)?])
 }
-
-fn round(value: usize, step: usize) -> usize {
-    value.div_ceil(step) * step
-}
-
-fn growth_target(current: usize, required: usize, step: usize, maximum: usize) -> Result<usize> {
-    if required > maximum {
-        return Err(Error::InvalidModel(format!(
-            "paged arena requires {required} pages but the configured K/V capacity is {maximum}"
-        )));
-    }
-    if required <= current {
-        return Ok(current);
-    }
-    let geometric = current.saturating_mul(2).max(required);
-    Ok(round(geometric, step).min(maximum))
-}
-
-#[cfg(test)]
-mod tests;

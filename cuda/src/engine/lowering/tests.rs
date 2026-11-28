@@ -54,7 +54,8 @@ fn tensor(name: &str) -> TensorInfo {
     TensorInfo {
         name: name.into(),
         file: PathBuf::new(),
-        dtype: "BF16".into(),
+        container: models::layout::WeightContainer::SafeTensors,
+        dtype: models::weights::DenseDType::Bf16.into(),
         // Per-head Q/K norms span one head; a query norm across the whole
         // projection would declare OLMo 2's norms across heads.
         shape: if name.ends_with("q_norm.weight") || name.ends_with("k_norm.weight") {

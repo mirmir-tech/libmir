@@ -3,6 +3,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use foundation::model::ModelId;
 use runtime::backend::PrefillRequest;
 use uuid::Uuid;
 
@@ -14,7 +15,7 @@ use super::super::{
 
 #[derive(Clone)]
 pub struct MetalPrefillCohort {
-    model_id: String,
+    model_id: ModelId,
     prefixes: Arc<Mutex<HashMap<Uuid, CohortPrefix>>>,
 }
 
@@ -32,6 +33,16 @@ impl MetalPrefillCohort {
         let prompt_tokens = requests.iter().map(|request| request.prompt_tokens.len()).sum();
         loaded.apply_history_pressure(crate::engine::memory_stats()?, prompt_tokens)?;
         let model_id = loaded.info.manifest.id.clone();
+        if !loaded.has_non_paged_state() {
+            let prefixes = requests
+                .iter()
+                .map(|request| (request.session_id, CohortPrefix::Miss))
+                .collect();
+            return Ok(Self {
+                model_id,
+                prefixes: Arc::new(Mutex::new(prefixes)),
+            });
+        }
         let mut prefixes = HashMap::with_capacity(requests.len());
         let mut leased_groups = HashSet::new();
         let cached_groups_before = loaded.prefixes.group_count();
@@ -60,7 +71,7 @@ impl MetalPrefillCohort {
         let pressure_evicted = hits > 0 && loaded.reclaim_unleased_prefixes_for_prefill(pending)?;
         let evicted = initially_evicted || pressure_evicted;
         tracing::debug!(
-            model = model_id,
+            model = %model_id,
             rows = requests.len(),
             prefix_hits = hits,
             prefix_misses = misses,
@@ -99,7 +110,7 @@ impl MetalPrefillCohort {
         Ok(())
     }
 
-    pub(in crate::native) fn model_id(&self) -> &str {
+    pub(in crate::native) const fn model_id(&self) -> &ModelId {
         &self.model_id
     }
 }
@@ -118,11 +129,16 @@ pub(in crate::native) fn restore_prefix(
     request: &PrefillRequest,
     leased: Option<CohortPrefix>,
 ) -> Result<Option<RestoredPrefix>> {
-    match leased {
-        Some(leased) => Ok(leased.into_restored()),
-        None => Ok(loaded
+    if !loaded.has_non_paged_state() {
+        return Ok(None);
+    }
+    let blocks = request.block_table.blocks();
+    let restored = match leased {
+        Some(leased) => leased.into_restored(),
+        None => loaded
             .prefixes
             .lease_longest(&loaded.info.manifest.id, &request.prompt_tokens)?
-            .map(|lease| lease.restored)),
-    }
+            .map(|lease| lease.restored),
+    };
+    Ok(restored.filter(|(state, _)| blocks.is_empty() || state.position <= request.cached_tokens))
 }

@@ -21,7 +21,7 @@ impl Engine {
             #[cfg(feature = "metal")]
             EngineInner::Metal(_) => Ok(Vec::new()),
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => Ok(Vec::new()),
+            EngineInner::Unavailable(never) => match *never {},
         }
     }
 
@@ -38,7 +38,7 @@ impl Engine {
                 Ok(())
             },
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => Ok(()),
+            EngineInner::Unavailable(never) => match *never {},
         }
     }
 
@@ -51,7 +51,7 @@ impl Engine {
             #[cfg(feature = "metal")]
             EngineInner::Metal(_) => Ok(()),
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => Ok(()),
+            EngineInner::Unavailable(never) => match *never {},
         }
     }
 
@@ -63,7 +63,7 @@ impl Engine {
             #[cfg(feature = "metal")]
             EngineInner::Metal(_) => Ok(()),
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => Ok(()),
+            EngineInner::Unavailable(never) => match *never {},
         }
     }
 }

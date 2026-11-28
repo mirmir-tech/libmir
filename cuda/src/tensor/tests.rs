@@ -24,7 +24,8 @@ fn persistently_casts_dense_f16_and_f32_to_bf16_on_device() -> Result<()> {
         let info = TensorInfo {
             name: format!("dense.{dtype}"),
             file: path.clone(),
-            dtype: dtype.into(),
+            container: models::layout::WeightContainer::SafeTensors,
+            dtype: models::weights::TensorDType::parse(dtype),
             shape: vec![3],
             data_start: 0,
             data_offsets: [0, u64::try_from(bytes.len())?],
@@ -55,7 +56,8 @@ fn flushes_bounded_staging_without_losing_device_tensors() -> Result<()> {
         infos.push(TensorInfo {
             name: format!("bounded.{index}"),
             file: path.clone(),
-            dtype: "BF16".into(),
+            container: models::layout::WeightContainer::SafeTensors,
+            dtype: models::weights::DenseDType::Bf16.into(),
             shape: vec![1],
             data_start: 0,
             data_offsets: [0, 2],

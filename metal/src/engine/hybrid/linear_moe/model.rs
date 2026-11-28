@@ -1,3 +1,4 @@
+use architecture::CacheLayout;
 use models::{
     layout::DecoderConfig,
     semantic::DecoderSpec,
@@ -17,7 +18,7 @@ use crate::engine::{
 #[derive(Debug)]
 pub struct HybridLinearMoeModel {
     pub(super) layers: Vec<HybridLinearMoeLayer>,
-    mixers: Vec<MixerLowering>,
+    cache_layout: CacheLayout,
     pub(super) cache_step: usize,
     pub(super) embedding: BoundEmbedding,
     /// `None`: logits project through the tied embedding (Qwen3.5-4B).
@@ -107,13 +108,14 @@ impl HybridLinearMoeModel {
             ),
         )?;
         super::decode_plan::prepare(&mut layers, stream)?;
+        let cache_layout = CacheLayout::for_metal(spec);
         let prediction = super::prediction::PredictionModule::load(
-            tensors, decoder, spec, bindings, lowering, norm_shift, stream,
+            tensors, decoder, spec, &cache_layout, bindings, norm_shift, stream,
         )?;
         Ok(Self {
             prediction,
             layers,
-            mixers: lowering.iter().map(|layer| layer.mixer).collect(),
+            cache_layout,
             cache_step,
             embedding: BoundEmbedding::load(tensors, boundary.embedding, stream)?,
             output: (!decoder.tie_word_embeddings)
@@ -127,12 +129,12 @@ impl HybridLinearMoeModel {
     }
 
     pub fn new_cache(&self, stream: &Stream) -> Result<DecoderCache> {
-        DecoderCache::new_hybrid_linear_with_pool_capacity(
-            &self.mixers,
+        DecoderCache::from_layout(
+            &self.cache_layout,
             self.cache_step,
             crate::engine::KvPageFormat::resolve(stream.config().kv_cache.dtype)?,
             stream.config().kv_cache.block_size,
-            DecoderCache::physical_page_capacity(stream, self.cache_step),
+            stream.config().kv_cache.block_count as usize,
             stream.paged_arenas(),
         )
     }

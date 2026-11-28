@@ -47,6 +47,7 @@ pub(super) fn execute_loaded_decode(
             token: sequence.token_id,
             sampling: execution_sampling(sequence.sampling_logits.clone(), device_pipeline),
             speculation: sequence.speculation.clone(),
+            blocks: sequence.block_table.blocks().to_vec(),
         })
         .collect::<Vec<_>>();
     let native = loaded.decode_grouped(&inputs)?;

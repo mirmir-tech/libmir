@@ -17,7 +17,7 @@ impl Engine {
             #[cfg(feature = "cuda")]
             EngineInner::Cuda(cuda) => Ok(cuda.embed_tokens(model, inputs, dimensions)?),
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => super::unavailable(),
+            EngineInner::Unavailable(never) => match *never {},
         }
     }
 
@@ -34,7 +34,7 @@ impl Engine {
             #[cfg(feature = "cuda")]
             EngineInner::Cuda(cuda) => Ok(cuda.score_tokens(model, inputs)?),
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => super::unavailable(),
+            EngineInner::Unavailable(never) => match *never {},
         }
     }
 }
@@ -49,7 +49,7 @@ impl Engine {
             #[cfg(feature = "metal")]
             EngineInner::Metal(_) => false,
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => false,
+            EngineInner::Unavailable(never) => match *never {},
         }
     }
 }

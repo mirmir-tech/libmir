@@ -40,99 +40,75 @@ impl ModelDescriptor {
     /// Describes the physical checkpoint encodings discovered from tensor
     /// bindings.
     pub fn checkpoint_encoding(&self) -> super::CheckpointEncoding {
-        let mut encoding = self.execution.as_ref().map_or_else(
-            || match &self.task_plan {
-                TaskExecutionPlan::SequenceScoring { bindings, .. } => {
-                    super::CheckpointEncoding::from_encoder_bindings(bindings)
-                },
-                TaskExecutionPlan::Generation { .. }
-                | TaskExecutionPlan::CausalScoring { .. }
-                | TaskExecutionPlan::Embedding { .. } => super::CheckpointEncoding::default(),
-            },
-            |execution| super::CheckpointEncoding::from_bindings(&execution.bindings),
-        );
-        if let Some(readiness) = &self.vision_readiness {
-            encoding.include_dense_dtypes(&readiness.dtypes);
-        }
-        encoding
+        self.inspected.checkpoint_encoding()
     }
 
     #[must_use]
     /// Reports conservative static compatibility with one accelerator backend.
     pub fn admission(&self, backend: BackendTarget) -> super::BackendAdmissionReport {
-        super::admission::inspect(
-            self.execution.as_ref(),
-            &self.task_plan,
-            self.vision.as_ref(),
-            self.vision_readiness.as_ref(),
-            self.image_processor.as_ref(),
-            backend,
-        )
+        self.inspected.admission_report(backend)
     }
 
     #[must_use]
     /// Returns normalized task and decoder capabilities required by this
     /// model.
     pub fn architecture_requirements(&self) -> models::execution::ArchitectureRequirements {
-        models::execution::ArchitectureRequirements::discover(
-            &self.task_plan,
-            self.execution.as_ref().map(|execution| &execution.semantic),
-        )
+        self.inspected.architecture_requirements()
     }
 
     #[must_use]
     /// Returns the container the model's weight files use.
     pub fn weight_container(&self) -> Option<models::layout::WeightContainer> {
-        self.layout.container()
+        self.inspected.layout.container()
     }
 
     #[must_use]
     /// Returns the discovered paths and files that make up the model.
     pub const fn layout(&self) -> &ModelLayout {
-        &self.layout
+        &self.inspected.layout
     }
 
     #[must_use]
     /// Returns normalized checkpoint and context metadata.
     pub const fn metadata(&self) -> &ModelMetadata {
-        &self.metadata
+        &self.inspected.metadata
     }
 
     #[must_use]
     /// Returns decoder dimensions and attention-layer configuration.
     pub const fn decoder(&self) -> Option<&DecoderConfig> {
-        self.decoder.as_ref()
+        self.inspected.decoder.as_ref()
     }
 
     #[must_use]
     /// Returns the semantic decoder and its physical weight bindings.
     pub const fn execution(&self) -> Option<&DecoderExecutionContract> {
-        self.execution.as_ref()
+        self.inspected.contract.as_ref()
     }
 
     #[must_use]
     /// Returns the task and backbone contract discovered from checkpoint files.
     pub const fn task_plan(&self) -> &TaskExecutionPlan {
-        &self.task_plan
+        &self.inspected.task_plan
     }
 
     #[must_use]
     /// Returns the primary task exposed by this checkpoint.
     pub fn task(&self) -> ModelTask {
-        self.task_plan.task()
+        self.inspected.task_plan.task()
     }
 
     #[must_use]
     /// Returns the discovered vision execution contract, when present.
     pub const fn vision(&self) -> Option<&VisionConfig> {
-        self.vision.as_ref()
+        self.inspected.vision.as_ref()
     }
 
     #[must_use]
     /// Returns whether all tensors required by the discovered vision contract
     /// are present in the checkpoint catalog.
     pub const fn vision_readiness(&self) -> Option<&TensorReadiness> {
-        self.vision_readiness.as_ref()
+        self.inspected.vision_readiness.as_ref()
     }
 
     #[must_use]
@@ -145,7 +121,7 @@ impl ModelDescriptor {
     #[must_use]
     /// Returns the image processor configuration shipped with the checkpoint.
     pub const fn image_processor(&self) -> Option<&ImageProcessorConfig> {
-        self.image_processor.as_ref()
+        self.inspected.image_processor.as_ref()
     }
 
     #[must_use]

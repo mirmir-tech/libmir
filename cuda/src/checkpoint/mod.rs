@@ -10,4 +10,4 @@ mod vision;
 pub use config::{
     DenseSwiGluLayerLoadConfig, NvFp4MoeLayerLoadConfig, SharedRoutedModelLoadConfig,
 };
-pub use vision::load_vision_tensors;
+pub use vision::load_vision_tensors_with_inline;

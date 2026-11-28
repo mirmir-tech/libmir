@@ -12,7 +12,7 @@ impl LoadedModel {
     /// batch is in flight: rows that decode after their whole cohort has
     /// prefilled compete with no prompt still to come.
     pub(in crate::native) fn release_settled_prefill_reserve(&mut self) -> Result<()> {
-        if !self.history_prefill_reserved || self.prefill_reservations.in_flight() {
+        if !self.history_prefill_reserved || self.active_prefills.in_flight() {
             return Ok(());
         }
         self.history_prefill_reserved = false;
@@ -39,13 +39,14 @@ impl LoadedModel {
         memory: MemoryStats,
         prefill_tokens: usize,
     ) -> Result<()> {
-        // Arenas keep their high-water capacity: only prompt tokens beyond the
-        // pages they already hold allocate memory.
-        let page_size = self.stream.config().kv_cache.block_size.max(1);
-        let covered = self.allocated_page_headroom()?.saturating_mul(page_size);
-        let pending = prefill_tokens
-            .saturating_sub(covered)
-            .saturating_mul(self.kv_rate_bytes_per_token()?);
+        // Fixed-capacity arenas allocate once; subsequent prefills reuse their
+        // resident physical pages.
+        let pending_tokens = if self.stream.paged_arenas().is_populated()? {
+            0
+        } else {
+            prefill_tokens
+        };
+        let pending = pending_tokens.saturating_mul(self.kv_rate_bytes_per_token()?);
         let retained = self.stream.history_budget().snapshot().retained_bytes;
         let limit = history_limit_bytes(memory, retained, pending);
         tracing::debug!(
@@ -53,7 +54,6 @@ impl LoadedModel {
             cached_bytes = memory.cached,
             retained_history_bytes = retained,
             prefill_tokens,
-            covered_tokens = covered,
             pending_bytes = pending,
             history_limit_bytes = limit,
             pressure = history_pressure(memory, pending),

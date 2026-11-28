@@ -106,12 +106,13 @@ impl Worker {
 
     pub(super) fn take_decode_batch(&mut self) -> Vec<crate::scheduler::generation::PendingDecode> {
         let limit = self.decode_limit();
-        let mut selected =
-            if self.active_prefill.is_none() || !self.prefill_profile.defer_new_decode {
-                self.decode.drain(..self.decode.len().min(limit)).collect()
-            } else {
-                take_ready(&mut self.decode, limit, |pending| !pending.newly_active)
-            };
+        let mut selected = if self.active_prefill.is_none()
+            || !self.prefill_profile.new_decode.defers_during_prefill()
+        {
+            self.decode.drain(..self.decode.len().min(limit)).collect()
+        } else {
+            take_ready(&mut self.decode, limit, |pending| !pending.newly_active)
+        };
         for pending in &mut selected {
             pending.scheduler_queue = pending.enqueued.elapsed();
         }
@@ -163,13 +164,13 @@ pub(super) fn prefill_wave_limit(
     resident_wave_rows: usize,
 ) -> usize {
     let budget = max_batch_tokens.max(1);
-    let row_tokens = if profile.limit_deep_prefill_waves {
+    let row_tokens = if profile.wave_depth.is_bounded() {
         max_prefill_tokens.clamp(1, profile.completion_round_tokens.max(1))
     } else {
         max_prefill_tokens.clamp(1, profile.chunk_tokens.max(1))
     };
     let full_wave = (budget / row_tokens).clamp(1, max_batch_requests.max(1));
-    if !profile.limit_deep_prefill_waves {
+    if !profile.wave_depth.is_bounded() {
         return full_wave.min(resident_wave_rows);
     }
     let resident_budget_rows = profile

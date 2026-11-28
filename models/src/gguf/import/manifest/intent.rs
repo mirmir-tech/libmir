@@ -20,7 +20,7 @@ impl ImportManifest {
     /// removed yet.
     pub(in crate::gguf::import) fn load_interrupted(directory: &Path) -> Result<Vec<Self>> {
         let path = interrupted(directory)?;
-        let Some(manifest) = Self::load_at(&path, directory)? else {
+        let Some(manifest) = Self::load_at(&path)? else {
             return Ok(Vec::new());
         };
         let carried = fs::read(&path)

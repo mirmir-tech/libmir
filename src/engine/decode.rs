@@ -7,8 +7,6 @@ use runtime::{
 };
 use uuid::Uuid;
 
-#[cfg(not(any(feature = "cuda", feature = "metal")))]
-use super::unavailable;
 use super::{Engine, EngineInner};
 
 impl Engine {
@@ -40,7 +38,7 @@ impl Engine {
                 metal.decode_token(model, session_id, token_id, block_table, sampling)
             },
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => unavailable(),
+            EngineInner::Unavailable(never) => match *never {},
         }
     }
 }

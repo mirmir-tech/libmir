@@ -1,3 +1,4 @@
+mod allocate;
 mod attention;
 mod batch;
 mod prefill_batch;

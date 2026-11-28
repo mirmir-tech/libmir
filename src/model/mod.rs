@@ -25,6 +25,7 @@ pub use admission::{
     BackendAdmissionReport, CheckSubject, CheckpointEncoding, EncodingKind,
     MODEL_FORMAT_REGISTRY_SCHEMA_VERSION, WeightEncoding,
 };
+use architecture::InspectedModel;
 pub use cache::CacheStatsReader;
 use foundation::{
     conversation::Conversation,
@@ -33,11 +34,10 @@ use foundation::{
 pub use memory::UnloadedTensors;
 use models::{
     chat::ChatTemplate,
-    execution::{DecoderExecutionContract, ModelTask, TaskExecutionPlan},
+    execution::{TaskExecutionPlan, TaskKind},
     generation::{GenerationConfig, GenerationOverrides, GenerationSettings},
-    layout::{DecoderConfig, ImageProcessorConfig, ModelLayout, ModelMetadata, VisionConfig},
+    layout::WeightContainer,
     tokenizer::{TextTokenizer, TokenizerValidation},
-    weights::{TensorCatalog, TensorReadiness, VisionTensorSchema},
 };
 pub use remote::{RemoteModelContract, RemoteTaskMetadata, RemoteVisionContract};
 use runtime::backend::ModelHandle;
@@ -51,19 +51,28 @@ pub use self::{
 };
 use crate::{Engine, Error, Result, RuntimeConfig, Session, scheduler::ModelCoordinator};
 
+/// Local checkpoint source accepted by [`ModelDescriptor::inspect_source`] and
+/// [`Library::load_source`].
+#[derive(Debug, Clone, Copy)]
+pub enum ModelSource<'a> {
+    /// Local Hugging Face-style checkpoint directory.
+    Directory(&'a Path),
+    /// Direct local GGUF text model (sibling shards are discovered
+    /// automatically) with an optional `mmproj` vision projector.
+    Gguf {
+        /// Primary GGUF text shard path.
+        text: &'a Path,
+        /// Optional `mmproj` vision projector path.
+        vision: Option<&'a Path>,
+    },
+}
+
 /// Parsed model metadata and assets, ready for prompt preparation or backend
 /// loading.
 pub struct ModelDescriptor {
-    layout: ModelLayout,
-    metadata: ModelMetadata,
-    decoder: Option<DecoderConfig>,
-    execution: Option<DecoderExecutionContract>,
-    task_plan: TaskExecutionPlan,
+    inspected: InspectedModel,
     generation: GenerationSettings,
-    vision: Option<VisionConfig>,
-    vision_readiness: Option<TensorReadiness>,
     unloaded: Option<UnloadedTensors>,
-    image_processor: Option<ImageProcessorConfig>,
     template: ChatTemplate,
     tokenizer: TextTokenizer,
     tool_parser_factory:
@@ -101,56 +110,46 @@ struct ModelInner {
 }
 
 impl ModelDescriptor {
-    /// Inspects a Hugging Face-style model directory without loading weights
-    /// onto a device.
+    /// Inspects a local checkpoint directory or GGUF file without loading
+    /// weights onto a device.
     pub fn inspect(path: impl AsRef<Path>, overrides: GenerationOverrides) -> Result<Self> {
-        let layout = ModelLayout::inspect(path)?;
-        let metadata = ModelMetadata::from_layout(&layout)?;
-        let generation_config = GenerationConfig::from_layout(&layout)?;
-        let catalog = TensorCatalog::from_layout(&layout)?;
-        let task_plan = TaskExecutionPlan::discover(&layout, &catalog)?;
-        let decoder = match &task_plan {
-            TaskExecutionPlan::Generation { decoder }
-            | TaskExecutionPlan::CausalScoring { decoder, .. }
-            | TaskExecutionPlan::Embedding { decoder, .. } => Some(decoder.clone()),
-            TaskExecutionPlan::SequenceScoring { .. } => None,
+        let path = path.as_ref();
+        let source = if path.is_file() && WeightContainer::of(path) == Some(WeightContainer::Gguf) {
+            ModelSource::Gguf { text: path, vision: None }
+        } else {
+            ModelSource::Directory(path)
         };
-        let execution = decoder
-            .as_ref()
-            .map(|decoder| DecoderExecutionContract::discover(&layout, decoder, &catalog))
-            .transpose()?;
-        let vision = VisionConfig::from_layout(&layout)?;
-        let vision_readiness = vision
-            .as_ref()
-            .map(|config| VisionTensorSchema::discover(config).readiness(&catalog));
+        Self::inspect_source(source, overrides)
+    }
+
+    /// Inspects a [`ModelSource`] (local checkpoint directory or direct GGUF
+    /// text + optional `mmproj` files) without loading weights onto a device.
+    pub fn inspect_source(source: ModelSource<'_>, overrides: GenerationOverrides) -> Result<Self> {
+        let inspected = match source {
+            ModelSource::Directory(path) => InspectedModel::inspect_directory(path)?,
+            ModelSource::Gguf { text, vision } => InspectedModel::inspect_gguf(text, vision)?,
+        };
+        let generation_config = GenerationConfig::from_layout(&inspected.layout)?;
         let unloaded = memory::unloaded(
-            &catalog,
-            execution.as_ref().map(|execution| &execution.bindings),
-            vision.as_ref(),
+            &inspected.catalog,
+            inspected.contract.as_ref().map(|execution| &execution.bindings),
+            inspected.vision.as_ref(),
         );
-        let image_processor = vision
-            .as_ref()
-            .map(|vision| ImageProcessorConfig::from_layout(&layout, vision.pipeline()))
-            .transpose()?
-            .flatten();
-        let tokenizer = TextTokenizer::from_layout(&layout)?;
-        let tokenizer_validation =
-            descriptor::validate_tokenizer(&task_plan, vision.as_ref(), &tokenizer)?;
+        let tokenizer = TextTokenizer::from_layout(&inspected.layout)?;
+        let tokenizer_validation = descriptor::validate_tokenizer(
+            &inspected.task_plan,
+            inspected.vision.as_ref(),
+            &tokenizer,
+        )?;
+        let template = ChatTemplate::from_layout(&inspected.layout)?;
         Ok(Self {
-            decoder,
-            execution,
-            task_plan,
             generation: generation_config.resolve(overrides)?,
-            vision,
-            vision_readiness,
             unloaded,
-            image_processor,
-            template: ChatTemplate::from_layout(&layout)?,
+            template,
             tokenizer,
             tokenizer_validation,
             tool_parser_factory: std::sync::OnceLock::new(),
-            layout,
-            metadata,
+            inspected,
         })
     }
 
@@ -169,28 +168,22 @@ impl ModelDescriptor {
         preferred_backends: Vec<BackendTarget>,
     ) -> Result<ModelManifest> {
         Ok(ModelManifest {
-            id: model_id(&self.layout.root)?,
-            path: self.layout.root.display().to_string(),
+            id: foundation::model::ModelId::new(model_id(&self.inspected.layout.root)?),
+            path: self.inspected.layout.root.display().to_string(),
             tokenizer_path: self
+                .inspected
                 .layout
-                .tokenizer_path
-                .as_ref()
+                .primary_tokenizer_path()
                 .map(|path| path.display().to_string()),
-            context_len: self.metadata.context_len,
-            quantization: self.metadata.quantization.clone(),
+            context_len: self.inspected.metadata.context_len,
+            quantization: self.inspected.metadata.quantization.clone(),
             preferred_backends,
         })
     }
 }
 
-fn task_mismatch(requested: &'static str, task: &TaskExecutionPlan) -> Error {
-    let actual = match task.task() {
-        ModelTask::Generation => "generation",
-        ModelTask::CausalScoring(_) => "rerank",
-        ModelTask::Embedding(_) => "embedding",
-        ModelTask::SequenceScoring(_) => "sequence scoring",
-    };
-    Error::TaskMismatch { requested, actual }
+fn task_mismatch(requested: TaskKind, task: &TaskExecutionPlan) -> Error {
+    Error::TaskMismatch { requested, actual: task.task().kind() }
 }
 
 impl Model {
@@ -225,13 +218,13 @@ impl Model {
             .scheduler
             .speculation
             .filter(|_| {
-                self.inner.descriptor.execution.as_ref().is_some_and(|execution| {
+                self.inner.descriptor.inspected.contract.as_ref().is_some_and(|execution| {
                     !execution.semantic.decoder.prediction_layers.is_empty()
                 })
             })
-            .and_then(|speculation| {
+            .map(|speculation| {
                 memory::prediction::backend_drafts(
-                    &self.engine().target(),
+                    self.engine().target(),
                     speculation.draft_tokens.get(),
                 )
             })

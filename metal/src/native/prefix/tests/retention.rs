@@ -7,9 +7,10 @@ fn leased_prefixes_survive_eviction_between_physical_waves() -> Result<()> {
     insert_prompt(&mut cache, 2)?;
     insert_prompt(&mut cache, 3)?;
 
+    let id = model("model");
     let leased = [1, 2, 3]
         .into_iter()
-        .map(|token| cache.lease_longest("model", &[token]))
+        .map(|token| cache.lease_longest(&id, &[token]))
         .collect::<Result<Vec<_>>>()?;
     assert!(cache.reserve_batch_slots(2));
     assert_eq!(cache.groups.len(), 1);
@@ -26,9 +27,10 @@ fn logical_cohort_releases_only_leased_source_groups() -> Result<()> {
     insert_prompt(&mut cache, 2)?;
     insert_prompt(&mut cache, 3)?;
 
+    let id = model("model");
     let leased = [1, 2]
         .into_iter()
-        .map(|token| cache.lease_longest("model", &[token]))
+        .map(|token| cache.lease_longest(&id, &[token]))
         .collect::<Result<Vec<_>>>()?;
     let groups = leased
         .iter()
@@ -37,7 +39,7 @@ fn logical_cohort_releases_only_leased_source_groups() -> Result<()> {
     assert!(cache.evict_groups(&groups));
 
     assert_eq!(cache.groups.len(), 1);
-    assert!(cache.lease_longest("model", &[3])?.is_some());
+    assert!(cache.lease_longest(&id, &[3])?.is_some());
     assert!(leased.into_iter().all(|prefix| prefix.is_some()));
     Ok(())
 }

@@ -72,7 +72,7 @@ impl KvCache {
 
     pub fn commit_prefix_block(
         &mut self,
-        model: &str,
+        model: &foundation::model::ModelId,
         parent: Option<BlockHash>,
         block: BlockId,
         tokens: &[u32],

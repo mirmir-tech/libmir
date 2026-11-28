@@ -24,11 +24,9 @@ impl Records {
         Ok(Self { manifests })
     }
 
-    /// Whether `path`, named `name`, is a file an import made and still is,
-    /// a derived one whose contents were not recorded if it holds
-    /// `writing`.
-    fn made(&self, name: &OsStr, path: &Path, writing: Option<&[u8]>) -> bool {
-        self.manifests.iter().any(|manifest| manifest.made_at(name, path, writing))
+    /// Whether `path`, named `name`, is a file an import made and still is.
+    fn made(&self, name: &OsStr, path: &Path) -> bool {
+        self.manifests.iter().any(|manifest| manifest.made_at(name, path))
     }
 
     /// The records of what earlier writes made that is still in
@@ -40,16 +38,16 @@ impl Records {
             .filter(|manifest| {
                 manifest.made().any(|file| {
                     let name = OsStr::new(&file.name);
-                    manifest.made_at(name, &directory.join(name), None)
+                    manifest.made_at(name, &directory.join(name))
                 })
             })
             .collect()
     }
 
-    /// Refuses to write `contents` as the derived file `name` over a file
-    /// at `path` that no import wrote as it is now.
-    pub(super) fn writable(&self, name: &OsStr, path: &Path, contents: &[u8]) -> Result<()> {
-        if !exists(path)? || self.made(name, path, Some(contents)) {
+    /// Refuses to write the derived file `name` over a file at `path` that no
+    /// import wrote as it is now.
+    pub(super) fn writable(&self, name: &OsStr, path: &Path) -> Result<()> {
+        if !exists(path)? || self.made(name, path) {
             return Ok(());
         }
         Err(ModelsError::ImportConflict {
@@ -63,7 +61,7 @@ impl Records {
     /// any other file is the user's: kept, found in place where it resolves
     /// to `target`, the source itself or a user's link to it, else refused.
     pub(super) fn present(&self, name: &OsStr, path: &Path, target: &Path) -> Result<bool> {
-        if !exists(path)? || self.made(name, path, None) {
+        if !exists(path)? || self.made(name, path) {
             return Ok(false);
         }
         if fs::canonicalize(path).is_ok_and(|resolved| resolved == target) {
@@ -90,7 +88,7 @@ impl Records {
     /// Removes `path`, named `name`, while it is still a file an import
     /// made; else it is the user's and stays.
     pub(super) fn remove_made(&self, name: &OsStr, path: &Path) -> Result<()> {
-        if self.made(name, path, None) {
+        if self.made(name, path) {
             match fs::remove_file(path) {
                 Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error.into()),
                 _ => {},

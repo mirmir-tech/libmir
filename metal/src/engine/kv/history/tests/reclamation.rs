@@ -23,9 +23,9 @@ fn reservation_reclamation_releases_all_cohort_owners_but_preserves_pending_read
     let query = data(2, 2, 1, 64, &stream, mirtal::DType::Float32)?;
     let output = query.scaled_dot_product_attention(&keys, &values, 0.125, false, &stream)?;
     let expected = values.to_vec_f32(&stream)?;
-    caches[0].release_reservation_after(0)?;
+    caches[0].release_history();
     assert!(weak.upgrade().is_some());
-    caches[1].release_reservation_after(0)?;
+    caches[1].release_history();
     assert!(weak.upgrade().is_none());
     assert!(take(&mut caches.iter_mut().collect::<Vec<_>>()).is_none());
     assert_eq!(output.to_vec_f32(&stream)?, expected);
@@ -70,7 +70,7 @@ fn prepared_plan_does_not_retain_reclaimed_buffers() -> Result<()> {
     drop(previous);
     let before = crate::engine::memory_stats()?.active;
     for cache in &mut caches {
-        cache.release_reservation_after(0)?;
+        cache.release_history();
     }
     let after = crate::engine::memory_stats()?.active;
     assert!(

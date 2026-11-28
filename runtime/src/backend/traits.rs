@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use foundation::model::ModelManifest;
+use foundation::model::{ModelId, ModelManifest};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -10,7 +10,7 @@ use crate::{error::Result, kv::BlockTable, trace::ModelTrace};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelHandle {
-    pub id: String,
+    pub id: ModelId,
     pub backend: String,
 }
 

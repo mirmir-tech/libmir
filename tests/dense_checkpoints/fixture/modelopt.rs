@@ -1,13 +1,13 @@
 use super::{Family, Reference, TestResult, active_target, require, validation_error};
 
 pub fn validate_modelopt_mixed_for(reference: &Reference, family: Family) -> TestResult<()> {
-    validate_for_target(reference, family, &active_target())
+    validate_for_target(reference, family, active_target())
 }
 
 fn validate_for_target(
     reference: &Reference,
     family: Family,
-    target: &libmir::BackendTarget,
+    target: libmir::BackendTarget,
 ) -> TestResult<()> {
     require(reference.schema == 2, "mixed ModelOpt reference schema must be 2")?;
     require(reference.family == family, "reference semantic family differs")?;
@@ -67,9 +67,9 @@ mod tests {
         let reference = Reference::parse(include_str!(
             "../../../validation/references/modelopt-mixed-qwen36-35b-a3b.toml"
         ))?;
-        validate_for_target(&reference, Family::SharedRouted, &libmir::BackendTarget::Cuda)?;
+        validate_for_target(&reference, Family::SharedRouted, libmir::BackendTarget::Cuda)?;
         assert!(
-            validate_for_target(&reference, Family::SharedRouted, &libmir::BackendTarget::Metal)
+            validate_for_target(&reference, Family::SharedRouted, libmir::BackendTarget::Metal)
                 .is_err()
         );
         let mut tied = reference.generated_tokens.clone();

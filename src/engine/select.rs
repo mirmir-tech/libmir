@@ -1,4 +1,6 @@
-use super::{Engine, EngineInner};
+use super::Engine;
+#[cfg(any(feature = "cuda", feature = "metal"))]
+use super::EngineInner;
 use crate::{Result, RuntimeConfig};
 
 #[cfg(all(feature = "cuda", not(feature = "metal")))]
@@ -54,10 +56,9 @@ pub(super) fn engine(config: &RuntimeConfig) -> Result<Engine> {
 }
 
 #[cfg(not(any(feature = "cuda", feature = "metal")))]
-#[allow(
-    clippy::unnecessary_wraps,
-    reason = "all feature combinations expose one fallible engine constructor"
-)]
 pub(super) fn engine(_config: &RuntimeConfig) -> Result<Engine> {
-    Ok(Engine { inner: EngineInner::Unavailable })
+    Err(runtime::RuntimeError::BackendUnavailable(
+        "libmir was built without an accelerator feature".into(),
+    )
+    .into())
 }

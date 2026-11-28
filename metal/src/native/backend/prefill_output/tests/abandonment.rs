@@ -36,7 +36,6 @@ pub(super) fn exercise(manifest: &ModelManifest) -> Result<()> {
             !loaded.sessions.contains_key(&first),
             "abandoned prefill left its completed row active"
         );
-        assert_eq!(loaded.stream().paged_arenas().resident_arenas()?, 0);
         Ok(())
     })?;
     let fresh = request(&model, 0);
@@ -52,7 +51,6 @@ pub(super) fn exercise(manifest: &ModelManifest) -> Result<()> {
     );
     assert!(backend.unload_model(&model)?);
     drop(batch);
-    assert_eq!(backend.paged_arenas.resident_arenas()?, 0);
     Ok(())
 }
 

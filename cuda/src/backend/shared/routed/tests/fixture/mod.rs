@@ -193,7 +193,8 @@ impl HybridFixture {
         self.infos.push(TensorInfo {
             name: name.into(),
             file: self.path.clone(),
-            dtype: dtype.into(),
+            container: models::layout::WeightContainer::SafeTensors,
+            dtype: models::weights::TensorDType::parse(dtype),
             shape,
             data_start: 0,
             data_offsets: [start, u64::try_from(self.bytes.len())?],

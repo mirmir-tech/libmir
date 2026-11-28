@@ -91,8 +91,8 @@ impl CudaEngine {
 fn step_model_id<'a>(
     decode: Option<&'a DecodeBatchRequest>,
     prefill: Option<&'a CudaPrefillBatch>,
-) -> Result<&'a str> {
-    let decode_id = decode.map(|request| request.model().id.as_str());
+) -> Result<&'a foundation::model::ModelId> {
+    let decode_id = decode.map(|request| &request.model().id);
     let prefill_id = prefill.map(CudaEngine::prefill_batch_model_id);
     match (decode_id, prefill_id) {
         (Some(decode), Some(prefill)) if decode != prefill => {

@@ -1,9 +1,31 @@
+use architecture::InspectedModel;
 use foundation::model::ModelManifest;
 use runtime::{
     Result as RuntimeResult, backend::ModelHandle, kv::CacheConfig, progress::ProgressEvent,
 };
 
 use super::{Engine, EngineInner};
+
+/// Backend-specific architecture admitted once before loading weights.
+pub enum AdmittedArchitecture {
+    #[cfg(feature = "cuda")]
+    Cuda(architecture::cuda::CudaArchitecture),
+    #[cfg(feature = "metal")]
+    Metal(architecture::metal::MetalArchitecture),
+}
+
+impl AdmittedArchitecture {
+    pub(crate) const fn resizable_kv_cache(&self) -> bool {
+        match self {
+            #[cfg(feature = "cuda")]
+            Self::Cuda(admitted) => admitted.resizable_kv_cache(),
+            #[cfg(feature = "metal")]
+            Self::Metal(_) => false,
+            #[cfg(not(any(feature = "cuda", feature = "metal")))]
+            _ => unreachable!(),
+        }
+    }
+}
 
 impl Engine {
     /// Loads model weights and reports backend progress events.
@@ -12,57 +34,70 @@ impl Engine {
         manifest: &ModelManifest,
         progress: &mut dyn FnMut(ProgressEvent),
     ) -> RuntimeResult<ModelHandle> {
-        self.load_model_with_progress_and_reservation(manifest, None, None, None, progress)
+        let inspected = InspectedModel::inspect_directory(&manifest.path)
+            .map_err(|error| runtime::RuntimeError::Backend(error.to_string()))?;
+        let admitted = self
+            .admit(&inspected)
+            .map_err(|error| runtime::RuntimeError::Backend(error.to_string()))?;
+        self.load_admitted(manifest, &inspected, admitted, None, None, None, progress)
     }
 
-    /// Whether `manifest` loads into a runtime that can reallocate its K/V
-    /// pages afterwards, so the cache may start provisional and be measured.
-    #[cfg_attr(not(feature = "cuda"), allow(clippy::unnecessary_wraps))]
-    pub(crate) fn kv_cache_resizable(&self, manifest: &ModelManifest) -> RuntimeResult<bool> {
-        #[cfg(not(feature = "cuda"))]
-        let _ = manifest;
+    pub(crate) fn admit(
+        &self,
+        inspected: &InspectedModel,
+    ) -> architecture::Result<AdmittedArchitecture> {
+        #[cfg(not(any(feature = "cuda", feature = "metal")))]
+        let _ = inspected;
         match &self.inner {
             #[cfg(feature = "cuda")]
-            EngineInner::Cuda(_) => Ok(cuda::CudaEngine::kv_cache_resizable(manifest)?),
+            EngineInner::Cuda(_) => inspected.admit_cuda().map(AdmittedArchitecture::Cuda),
             #[cfg(feature = "metal")]
-            EngineInner::Metal(_) => Ok(false),
+            EngineInner::Metal(_) => inspected.admit_metal().map(AdmittedArchitecture::Metal),
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => super::unavailable(),
+            EngineInner::Unavailable(never) => match *never {},
         }
     }
 
-    /// `sequence_capacity_blocks` bounds one sequence's block table where the
-    /// cache loaded now is provisional and grows after warm-up.
-    pub(crate) fn load_model_with_progress_and_reservation(
+    /// Loads an already-inspected, already-admitted checkpoint onto the active
+    /// accelerator without re-reading layout files or re-running admission.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn load_admitted(
         &self,
         manifest: &ModelManifest,
+        inspected: &InspectedModel,
+        admitted: AdmittedArchitecture,
         reserved_bytes: Option<usize>,
         cache: Option<CacheConfig>,
         sequence_capacity_blocks: Option<u32>,
         progress: &mut dyn FnMut(ProgressEvent),
     ) -> RuntimeResult<ModelHandle> {
         #[cfg(not(any(feature = "cuda", feature = "metal")))]
-        let _ = (&manifest, &mut *progress);
+        let _ = (manifest, inspected, &mut *progress);
         #[cfg(not(feature = "metal"))]
         let _ = (&reserved_bytes, &cache);
         #[cfg(not(feature = "cuda"))]
         let _ = sequence_capacity_blocks;
-        match &self.inner {
+        match (&self.inner, admitted) {
             #[cfg(feature = "cuda")]
-            EngineInner::Cuda(cuda) => Ok(cuda.load_model_with_sequence_capacity(
-                manifest,
-                sequence_capacity_blocks,
-                progress,
-            )?),
+            (EngineInner::Cuda(cuda), AdmittedArchitecture::Cuda(admitted)) => Ok(cuda
+                .load_admitted(
+                    manifest,
+                    inspected,
+                    &admitted,
+                    sequence_capacity_blocks,
+                    progress,
+                )?),
             #[cfg(feature = "metal")]
-            EngineInner::Metal(metal) => match (reserved_bytes, cache) {
-                (Some(bytes), Some(cache)) => {
-                    metal.load_model_with_progress_and_reservation(manifest, bytes, cache, progress)
-                },
-                _ => metal.load_model_with_progress(manifest, progress),
+            (EngineInner::Metal(metal), AdmittedArchitecture::Metal(admitted)) => {
+                let reservation = reserved_bytes.zip(cache);
+                metal.load_admitted(manifest, inspected.clone(), admitted, reservation, progress)
             },
+            #[cfg(all(feature = "cuda", feature = "metal"))]
+            _ => Err(runtime::RuntimeError::Backend(
+                "admitted architecture does not match the active accelerator engine".into(),
+            )),
             #[cfg(not(any(feature = "cuda", feature = "metal")))]
-            EngineInner::Unavailable => super::unavailable(),
+            (EngineInner::Unavailable(never), _) => match *never {},
         }
     }
 }

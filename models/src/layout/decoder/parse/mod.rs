@@ -32,7 +32,7 @@ const EXPERTS_PER_TOKEN: &[&str] = &["top_k_experts", "num_experts_per_tok", "ex
 
 impl DecoderConfig {
     pub fn from_layout(layout: &ModelLayout) -> Result<Self> {
-        let mut config = Self::from_config_path(&layout.config_path)?;
+        let mut config = Self::from_value(&layout.read_config()?)?;
         if let Some(path) = layout.configuration_path.as_deref() {
             let value = crate::layout::json::read(path)?;
             if let Some(context) = optional_usize(
@@ -122,7 +122,8 @@ impl DecoderConfig {
             moe_intermediate_size: optional_usize(decoder, &["moe_intermediate_size"])?,
             shared_expert_intermediate_size: shared_expert_intermediate_size(decoder, &defaults)?,
             hidden_activation: optional_string(decoder, "hidden_activation")?
-                .or(optional_string(decoder, "hidden_act")?),
+                .or(optional_string(decoder, "hidden_act")?)
+                .map(|name| crate::layout::HiddenActivation::parse(&name)),
             final_logit_softcapping: optional_f64(decoder, &["final_logit_softcapping"])?,
             attn_logit_softcapping: optional_f64(decoder, &["attn_logit_softcapping"])?,
             embedding_multiplier: optional_f64(decoder, &["embedding_multiplier"])?

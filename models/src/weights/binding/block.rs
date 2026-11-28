@@ -31,6 +31,17 @@ pub enum BlockStorageDType {
 
 impl BlockStorageDType {
     #[must_use]
+    pub const fn as_dense(self) -> crate::weights::DenseDType {
+        match self {
+            Self::U8 => crate::weights::DenseDType::U8,
+            Self::U32 => crate::weights::DenseDType::U32,
+            Self::F8E4M3 => crate::weights::DenseDType::F8E4M3,
+            Self::F32 => crate::weights::DenseDType::F32,
+            Self::BF16 => crate::weights::DenseDType::Bf16,
+        }
+    }
+
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::U8 => "U8",

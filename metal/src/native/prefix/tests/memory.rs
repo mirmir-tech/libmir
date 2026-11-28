@@ -27,16 +27,17 @@ fn checkpoints_count_distinct_recurrent_generations_and_replacement() -> Result<
     let stream = Stream::new_gpu()?;
     let mut cache = PrefixCache::new(4, usize::MAX);
     let mut state = linear_state()?;
+    let id = model("model");
     let first = advance(&mut state, &stream)?;
-    cache.insert_checkpoint("model", &[1], &state, 1, 100)?;
+    cache.insert_checkpoint(&id, &[1], &state, 1, 100)?;
     assert_eq!(cache.resident_bytes(), 100 + first);
     let second = advance(&mut state, &stream)?;
-    cache.insert_checkpoint("model", &[1, 2], &state, 1, 200)?;
+    cache.insert_checkpoint(&id, &[1, 2], &state, 1, 200)?;
     assert_eq!(cache.resident_bytes(), 200 + first + second);
     // Replacing a checkpoint and sharing it with a terminal does not add storage.
-    cache.insert_checkpoint("model", &[1, 2], &state, 1, 200)?;
+    cache.insert_checkpoint(&id, &[1, 2], &state, 1, 200)?;
     let logits = Array::from_u32(&[1], &[1])?;
-    cache.insert("model", &[1, 2], &state, &logits, None, 204)?;
+    cache.insert(&id, &[1, 2], &state, &logits, None, 204)?;
     assert_eq!(cache.resident_bytes(), 204 + first + second);
     cache.clear();
     assert_eq!(cache.resident_bytes(), 0);
@@ -52,15 +53,17 @@ fn byte_limit_evicts_recurrent_state_even_when_kv_estimate_fits() -> Result<()> 
     let next_bytes = advance(&mut next, &stream)?;
     // Allocator reuse can give equal-shaped arrays different backing capacities.
     // Either entry must fit independently, while both together exceed the limit.
+    let first_id = model("first");
+    let second_id = model("second");
     let mut cache = PrefixCache::new(4, 100 + bytes.max(next_bytes));
-    cache.insert_checkpoint("first", &[1], &state, 1, 100)?;
+    cache.insert_checkpoint(&first_id, &[1], &state, 1, 100)?;
     assert_eq!(cache.resident_bytes(), 100 + bytes);
-    assert!(cache.lease_longest("first", &[1, 3])?.is_some());
-    cache.insert_checkpoint("second", &[2], &next, 1, 100)?;
+    assert!(cache.lease_longest(&first_id, &[1, 3])?.is_some());
+    cache.insert_checkpoint(&second_id, &[2], &next, 1, 100)?;
     assert_eq!(cache.group_count(), 1);
     assert_eq!(cache.resident_bytes(), 100 + next_bytes);
-    assert!(cache.lease_longest("first", &[1, 3])?.is_none());
-    assert!(cache.lease_longest("second", &[2, 3])?.is_some());
+    assert!(cache.lease_longest(&first_id, &[1, 3])?.is_none());
+    assert!(cache.lease_longest(&second_id, &[2, 3])?.is_some());
     Ok(())
 }
 
@@ -91,17 +94,12 @@ fn counts_shared_parent_across_groups_until_last_row_is_evicted() -> Result<()> 
                 .sum();
             assert!(bytes >= (128 + 24) * size_of::<f32>());
         }
-        cache.insert_checkpoint(
-            if row == 0 {
-                "first"
-            } else {
-                "second"
-            },
-            &[1],
-            &state,
-            1,
-            100,
-        )?;
+        let row_id = model(if row == 0 {
+            "first"
+        } else {
+            "second"
+        });
+        cache.insert_checkpoint(&row_id, &[1], &state, 1, 100)?;
     }
     assert_eq!(cache.resident_bytes(), 200 + bytes);
     assert!(cache.evict_oldest());
@@ -116,13 +114,14 @@ fn exact_recurrent_checkpoint_replays_from_an_earlier_usable_state() -> Result<(
     let stream = Stream::new_gpu()?;
     let mut state = linear_state()?;
     let mut cache = PrefixCache::new(4, usize::MAX);
+    let id = model("model");
     advance(&mut state, &stream)?;
-    cache.insert_checkpoint("model", &[1], &state, 1, 100)?;
-    assert!(cache.lease_longest("model", &[1])?.is_none());
+    cache.insert_checkpoint(&id, &[1], &state, 1, 100)?;
+    assert!(cache.lease_longest(&id, &[1])?.is_none());
     advance(&mut state, &stream)?;
-    cache.insert_checkpoint("model", &[1, 2], &state, 1, 200)?;
+    cache.insert_checkpoint(&id, &[1, 2], &state, 1, 200)?;
     let restored = cache
-        .lease_longest("model", &[1, 2])?
+        .lease_longest(&id, &[1, 2])?
         .ok_or(crate::native::error::Error::NoPrefixLogits)?;
     assert_eq!(restored.restored.0.position, 1);
     assert!(restored.restored.1.is_none());

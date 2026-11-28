@@ -45,6 +45,7 @@ pub(super) struct ModelInfo {
     pub vision: Option<VisionConfig>,
     pub vision_readiness: Option<TensorReadiness>,
     pub contract: Option<DecoderExecutionContract>,
+    pub cache_layout: Option<architecture::CacheLayout>,
     pub task_plan: TaskExecutionPlan,
     pub tensor_count: usize,
     pub weight_bytes: u64,
@@ -64,7 +65,7 @@ pub(super) struct LoadedModel {
     pub(super) prefixes: PrefixCache,
     pub(super) sessions: HashMap<Uuid, SessionState>,
     recovery: recovery::ExecutionRecovery,
-    pub(super) prefill_reservations: super::prefill::Reservations,
+    pub(super) active_prefills: super::prefill::ActivePrefills,
     /// Whether the history limit holds room for a prefill still in flight.
     pub(super) history_prefill_reserved: bool,
 }
@@ -125,7 +126,7 @@ impl LoadedModel {
         if state.pending.is_some() {
             if *sampling == SamplingLogits::None && model.has_decode_plan_candidates() {
                 let key = crate::engine::DecodePlanKey {
-                    model: self.info.manifest.id.clone(),
+                    model: self.info.manifest.id.to_string(),
                     weight_bytes: self.info.weight_bytes,
                     context_bucket: crate::engine::decode_context_bucket(state.position),
                     batch: 1,
@@ -172,6 +173,13 @@ impl LoadedModel {
         let _removed = self.sessions.remove(&session);
         let _reclaimed = Self::reclaim_prefill_allocator_cache()?;
         Ok(())
+    }
+
+    pub(super) fn has_non_paged_state(&self) -> bool {
+        self.info
+            .cache_layout
+            .as_ref()
+            .is_some_and(architecture::CacheLayout::has_non_paged_state)
     }
 
     pub(super) const fn prefix_cache_enabled(&self) -> bool {

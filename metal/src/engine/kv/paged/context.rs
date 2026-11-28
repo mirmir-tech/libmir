@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use super::{Arena, PagedStore, Storage, lock};
-use crate::engine::{Array, Error, PagedKvContext, Result, Stream};
+use crate::engine::{Array, Error, PageLayout, PagedKvContext, PagedScales, Result, Stream};
 
 impl PagedStore {
     pub(in crate::engine::kv) fn context(
@@ -33,7 +33,7 @@ impl PagedStore {
         crate::engine::probe::history::pages::record(
             self.layer,
             &storage.page_ids[..pages],
-            [arena.keys.native(), arena.values.native()],
+            [arena.pages.keys().native(), arena.pages.values().native()],
             [&keys, &values],
         )?;
         drop(arena);
@@ -48,26 +48,32 @@ impl PagedStore {
         let storage = self.storage.as_ref().ok_or(Error::NullHandle("paged storage"))?;
         let arena = lock(&storage.arena)?;
         let offset = mirtal::Array::from_slice(&[u32::try_from(tokens)?], [1])?;
-        let mut dependencies = vec![arena.keys.native(), arena.values.native()];
-        dependencies.extend(arena.key_scales.as_ref().map(Array::native));
-        dependencies.extend(arena.value_scales.as_ref().map(Array::native));
+        let dependencies = arena.pages.arrays().map(Array::native).collect::<Vec<_>>();
         let dependency = stream.native().graph().depends(&offset, &dependencies)?;
-        let key_pages = arena.keys.native().clone();
-        let value_pages = arena.values.native().clone();
-        let key_scales = clone_optional(arena.key_scales.as_ref())?;
-        let value_scales = clone_optional(arena.value_scales.as_ref())?;
+        let key_pages = arena.pages.keys().native().clone();
+        let value_pages = arena.pages.values().native().clone();
+        let scales = match arena.pages.scales() {
+            None => PagedScales::None,
+            Some((keys, values)) => PagedScales::PerTokenHead {
+                keys: Array::from_native(keys.native().clone())?,
+                values: Array::from_native(values.native().clone())?,
+            },
+        };
         drop(arena);
         Ok(PagedKvContext {
             key_pages: Array::from_native(key_pages)?,
             value_pages: Array::from_native(value_pages)?,
-            key_scales,
-            value_scales,
+            scales,
             page_table: Array::from_native(storage.table.native().clone())?,
             page_dependency: Array::from_native(dependency)?,
             scratch: Arc::clone(&self.attention_scratch),
             page_size: self.page_size,
             context_tokens: tokens,
-            fragmented: !storage.contiguous,
+            layout: if storage.contiguous {
+                PageLayout::Contiguous
+            } else {
+                PageLayout::Fragmented
+            },
         })
     }
 }
@@ -82,8 +88,8 @@ fn gather_runs(
     if let [(0, stop)] = runs.as_slice() {
         let end = [arena.kv_heads, *stop, arena.page_size, arena.head_dim];
         return Ok((
-            graph.slice(arena.keys.native(), &[0, 0, 0, 0], &end)?,
-            graph.slice(arena.values.native(), &[0, 0, 0, 0], &end)?,
+            graph.slice(arena.pages.keys().native(), &[0, 0, 0, 0], &end)?,
+            graph.slice(arena.pages.values().native(), &[0, 0, 0, 0], &end)?,
         ));
     }
     if runs.len() == 1 {
@@ -91,14 +97,14 @@ fn gather_runs(
         let begin = [0, start, 0, 0];
         let end = [arena.kv_heads, stop, arena.page_size, arena.head_dim];
         return Ok((
-            graph.slice(arena.keys.native(), &begin, &end)?,
-            graph.slice(arena.values.native(), &begin, &end)?,
+            graph.slice(arena.pages.keys().native(), &begin, &end)?,
+            graph.slice(arena.pages.values().native(), &begin, &end)?,
         ));
     }
     let ids = graph.slice(storage.table.native(), &[0], &[pages])?;
     Ok((
-        graph.take(arena.keys.native(), &ids, 1)?,
-        graph.take(arena.values.native(), &ids, 1)?,
+        graph.take(arena.pages.keys().native(), &ids, 1)?,
+        graph.take(arena.pages.values().native(), &ids, 1)?,
     ))
 }
 
@@ -112,10 +118,6 @@ fn physical_runs(page_ids: &[u32]) -> Result<Vec<(usize, usize)>> {
         }
     }
     Ok(runs)
-}
-
-fn clone_optional(array: Option<&Array>) -> Result<Option<Array>> {
-    array.map(|array| Array::from_native(array.native().clone())).transpose()
 }
 
 #[cfg(test)]

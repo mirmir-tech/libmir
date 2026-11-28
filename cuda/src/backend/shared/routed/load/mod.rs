@@ -198,20 +198,29 @@ pub(super) fn required_norm(
     Ok(tensor)
 }
 
-/// Whether the runtime admission chose runs the hybrid or the latent layers
-/// of the template, which builds every shared-routed runtime.
+/// Which layer-stack loader the shared-routed template executes for an admitted
+/// runtime.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SharedRoutedComposition {
+    StateSpaceHybrid,
+    LatentAttention,
+    LinearFull,
+}
+
 pub(super) fn composition(
     runtime: crate::CudaDecoderRuntime,
     max_sequence_blocks: usize,
-) -> Result<(bool, bool)> {
+) -> Result<SharedRoutedComposition> {
     use crate::CudaDecoderRuntime;
     if max_sequence_blocks == 0 {
         return Err(Error::InvalidPagedKv("shared-routed sequence capacity is empty"));
     }
     match runtime {
-        CudaDecoderRuntime::StateSpaceHybrid => Ok((true, false)),
-        CudaDecoderRuntime::LatentAttention => Ok((false, true)),
-        CudaDecoderRuntime::SharedRouted | CudaDecoderRuntime::DenseMixed => Ok((false, false)),
+        CudaDecoderRuntime::StateSpaceHybrid => Ok(SharedRoutedComposition::StateSpaceHybrid),
+        CudaDecoderRuntime::LatentAttention => Ok(SharedRoutedComposition::LatentAttention),
+        CudaDecoderRuntime::SharedRouted | CudaDecoderRuntime::DenseMixed => {
+            Ok(SharedRoutedComposition::LinearFull)
+        },
         CudaDecoderRuntime::Dense
         | CudaDecoderRuntime::DenseAndRouted
         | CudaDecoderRuntime::ClampedRouted => {

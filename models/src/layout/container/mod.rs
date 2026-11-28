@@ -65,24 +65,44 @@ impl WeightContainer {
         })
     }
 
-    /// The model container of a directory libmir could not inspect:
-    /// `SafeTensors` when a non-import directory holds base (non-projector)
-    /// `SafeTensors` weights, else GGUF when it holds GGUF files (whose
-    /// import may add a vision `SafeTensors` file beside them).
-    pub fn detect(root: &Path) -> Result<Option<Self>> {
+    /// The unindexed weight files of `root` that a loader reads: a GGUF import
+    /// keeps its manifest's files (GGUF shards plus any assembled vision
+    /// `SafeTensors`); an ordinary directory keeps one format, preferring
+    /// non-projector `SafeTensors` over any `.gguf` files beside them.
+    pub(crate) fn discover_unindexed(
+        root: &Path,
+        listing: &crate::gguf::Listing,
+    ) -> Result<Vec<PathBuf>> {
         let safetensors = Self::SafeTensors.discover(root)?;
         let has_base_safetensors = safetensors.iter().any(|path| {
             path.file_name()
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| !crate::gguf::is_projector_name(name))
         });
-        if has_base_safetensors && !crate::gguf::Listing::of(root)?.is_import() {
-            return Ok(Some(Self::SafeTensors));
-        }
-        if !Self::Gguf.discover(root)?.is_empty() {
-            return Ok(Some(Self::Gguf));
-        }
-        Ok((!safetensors.is_empty()).then_some(Self::SafeTensors))
+        let gguf = if listing.is_import() || !has_base_safetensors {
+            crate::gguf::files_in(root)?
+        } else {
+            Vec::new()
+        };
+        Ok(safetensors
+            .into_iter()
+            .chain(gguf)
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| listing.reads(name))
+            })
+            .collect())
+    }
+
+    /// The model container of a directory libmir could not inspect:
+    /// `SafeTensors` when a non-import directory holds base (non-projector)
+    /// `SafeTensors` weights, else GGUF when it holds GGUF files (whose
+    /// import may add a vision `SafeTensors` file beside them).
+    pub fn detect(root: &Path) -> Result<Option<Self>> {
+        let listing = crate::gguf::Listing::of(root)?;
+        let files = Self::discover_unindexed(root, &listing)?;
+        Ok(Self::of_model(files.iter().filter_map(|path| Self::of(path))))
     }
 
     /// The tensors of `files`, each of this container. A split GGUF model

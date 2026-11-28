@@ -11,8 +11,9 @@ mod session;
 mod validation;
 mod weights;
 
+use architecture::CacheLayout;
 use models::layout::DecoderConfig;
-use runtime::kv::CacheConfig;
+use runtime::kv::{CacheConfig, ring_blocks};
 
 pub use self::session::CudaClampedRoutedModelSession;
 use self::{
@@ -31,6 +32,7 @@ const WINDOWED_FMHA_MIN_QUERY_TOKENS: usize = 128;
 pub struct CudaClampedRoutedModelTemplate {
     backend: CudaBackend,
     decoder: DecoderConfig,
+    cache_layout: CacheLayout,
     embedding: ClampedRoutedBoundaryProjection,
     final_norm: CudaTensor,
     output: ClampedRoutedOutputProjection,
@@ -53,47 +55,31 @@ impl CudaClampedRoutedModelTemplate {
     }
 
     pub(crate) fn allocate_shared_kv(&self) -> Result<Vec<PagedKvCache>> {
-        let storage = self.config.storage(self.cache);
-        let ring_window = self.max_sliding_window();
-        let ring_slots = self.ring_slots()?;
-        self.layers
-            .iter()
-            .enumerate()
-            .map(|(layer, template)| match template.window() {
-                Some(_) => self.backend.prepare_windowed_paged_kv(
-                    layer,
-                    storage,
-                    ring_window.unwrap_or(self.cache.block_size),
-                    ring_slots,
-                ),
-                None => self.backend.prepare_paged_kv(layer, storage),
+        self.backend
+            .allocate_cache_layout(&self.cache_layout, self.cache, self.ring_sessions, false)?
+            .into_iter()
+            .map(|cache| {
+                cache.ok_or(crate::Error::InvalidPagedKv(
+                    "clamped-routed layer requires a paged K/V cache",
+                ))
             })
             .collect()
     }
 
     #[must_use]
     pub(crate) fn max_sliding_window(&self) -> Option<usize> {
-        self.layers.iter().filter_map(ClampedRoutedLayerTemplate::window).max()
+        self.cache_layout.max_ring_window()
     }
 
     pub(super) fn ring_blocks(&self) -> Option<usize> {
-        self.max_sliding_window().map(|window| {
-            window
-                .saturating_add(self.cache.block_size.saturating_sub(1))
-                .div_ceil(self.cache.block_size)
-        })
+        self.max_sliding_window()
+            .map(|window| ring_blocks(window, self.cache.block_size))
     }
 
     pub(super) fn checkpoint_slots(&self) -> Result<usize> {
         self.ring_sessions
             .checked_mul(PREFIX_CHECKPOINTS_PER_SESSION)
             .ok_or(crate::Error::InvalidPagedKv("windowed KV checkpoint capacity overflow"))
-    }
-
-    fn ring_slots(&self) -> Result<usize> {
-        self.ring_sessions
-            .checked_add(self.checkpoint_slots()?)
-            .ok_or(crate::Error::InvalidPagedKv("windowed KV slot capacity overflow"))
     }
 
     pub(crate) fn prefix_replay_tokens(&self) -> Option<usize> {

@@ -1,5 +1,29 @@
 use super::{CacheConfig, KvCacheDType, KvElementBits, KvScaleGranularity, KvWritePlan};
 
+/// Physical KV blocks needed to retain a sliding window of `window` tokens
+/// across blocks of `block_size` tokens, including the extra block needed when
+/// the active window straddles a block boundary.
+#[must_use]
+pub const fn ring_blocks(window: usize, block_size: usize) -> usize {
+    if window == 0 || block_size == 0 {
+        return 0;
+    }
+    window.saturating_add(block_size.saturating_sub(1)).div_ceil(block_size)
+}
+
+/// Total physical KV blocks across `slots` concurrent sliding-ring slots.
+/// Returns `None` if any dimension is zero or if the calculation overflows.
+#[must_use]
+pub const fn ring_physical_blocks(window: usize, block_size: usize, slots: usize) -> Option<usize> {
+    if window == 0 || block_size == 0 || slots == 0 {
+        return None;
+    }
+    let Some(padded) = window.checked_add(block_size - 1) else {
+        return None;
+    };
+    padded.div_ceil(block_size).checked_mul(slots)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KvCacheLayout {
     Nhd,
@@ -149,5 +173,16 @@ mod tests {
 
         assert_eq!(budget.data_bytes_per_token, 1024);
         assert_eq!(budget.scale_bytes_per_token, 128);
+    }
+
+    #[test]
+    fn sizes_sliding_ring_blocks_for_unaligned_windows() {
+        assert_eq!(ring_blocks(128, 16), 9);
+        assert_eq!(ring_blocks(1, 16), 1);
+        assert_eq!(ring_blocks(0, 16), 0);
+        assert_eq!(ring_blocks(128, 0), 0);
+        assert_eq!(ring_physical_blocks(128, 16, 16), Some(144));
+        assert_eq!(ring_physical_blocks(128, 16, 0), None);
+        assert_eq!(ring_physical_blocks(usize::MAX, 16, 1), None);
     }
 }

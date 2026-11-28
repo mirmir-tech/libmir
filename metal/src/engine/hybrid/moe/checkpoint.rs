@@ -22,7 +22,8 @@ impl CheckpointLayer {
             tensors: vec![TensorInfo {
                 name: "model.layers.0.input_layernorm.weight".into(),
                 file: std::path::PathBuf::new(),
-                dtype: "BF16".into(),
+                container: models::layout::WeightContainer::SafeTensors,
+                dtype: models::weights::DenseDType::Bf16.into(),
                 shape: vec![decoder.hidden_size],
                 data_start: 0,
                 data_offsets: [0, 0],
@@ -54,16 +55,34 @@ impl HybridMoeModel {
             "language_model.model.embed_tokens",
             i32::try_from(group_size)?,
         )?);
+        let catalog = TensorCatalog {
+            tensors: vec![TensorInfo {
+                name: "model.layers.0.input_layernorm.weight".into(),
+                file: std::path::PathBuf::new(),
+                container: models::layout::WeightContainer::SafeTensors,
+                dtype: models::weights::DenseDType::Bf16.into(),
+                shape: vec![decoder.hidden_size],
+                data_start: 0,
+                data_offsets: [0, 0],
+            }],
+        };
+        let model = SemanticModelSpec::discover(decoder, &catalog)?;
+        let cache_layout = architecture::CacheLayout::for_metal(&model.decoder);
         let mut layers = Vec::with_capacity(decoder.num_hidden_layers);
-        let mut cache_windows = Vec::with_capacity(decoder.num_hidden_layers);
         for index in 0..decoder.num_hidden_layers {
-            let layer = CheckpointLayer::discover(decoder, index, group_size)?;
+            let spec = model.decoder.layer(index)?.clone();
+            let config = HybridMoeLayerConfig::from_spec(
+                &model.decoder,
+                &spec,
+                decoder.query_key_rows_interleaved,
+                group_size,
+            )?;
+            let layer = CheckpointLayer { config, spec };
             layers.push(HybridMoeLayer::load(tensors, &layer, stream)?);
-            cache_windows.push(layer.config.max_context());
         }
         Self::finish_load(
             layers,
-            cache_windows,
+            cache_layout,
             cache_step,
             embedding,
             tensors.get("language_model.model.norm.weight")?,

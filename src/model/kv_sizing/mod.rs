@@ -36,11 +36,11 @@ impl KvSizing {
         library: &RuntimeConfig,
         resolved: &mut RuntimeConfig,
         estimate: ModelMemoryEstimate,
-        target: &BackendTarget,
+        target: BackendTarget,
         resizable: bool,
     ) -> Self {
         if !library.automatic_kv_cache
-            || *target != BackendTarget::Cuda
+            || target != BackendTarget::Cuda
             || estimate.kv_bytes_per_token == 0
             || !resizable
         {

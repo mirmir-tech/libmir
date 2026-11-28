@@ -32,6 +32,12 @@ pub enum Error {
         required: usize,
         maximum: usize,
     },
+    #[error("Metal K/V block {block} in layer {layer} exceeds arena capacity {capacity}")]
+    KvBlockOutOfRange {
+        layer: usize,
+        block: u32,
+        capacity: usize,
+    },
     #[error("invalid sampling configuration: {0}")]
     InvalidSampling(String),
     #[error("float conversion failed: {0}")]

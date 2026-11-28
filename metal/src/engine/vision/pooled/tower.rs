@@ -1,4 +1,8 @@
-use models::{layout::PooledVisionConfig, vision::PooledPreprocessedImage, weights::TensorBinding};
+use models::{
+    layout::{HiddenActivation, PooledVisionConfig},
+    vision::PooledPreprocessedImage,
+    weights::TensorBinding,
+};
 
 use super::{embedding::PatchEmbedding, layer::EncoderLayer, pooler::VisionPooler};
 use crate::engine::{Array, Error, ModelTensors, Result, Stream};
@@ -117,7 +121,7 @@ fn validate_config(config: &PooledVisionConfig) -> Result<()> {
         || config.num_key_value_heads == 0
         || !config.num_attention_heads.is_multiple_of(config.num_key_value_heads)
         || config.pooling_kernel_size == 0
-        || config.hidden_activation != "gelu_pytorch_tanh"
+        || config.hidden_activation != HiddenActivation::GeluTanh
     {
         return Err(Error::InvalidModel(format!(
             "unsupported pooled vision dimensions or activation: hidden={}, heads={}, kv_heads={}, head_dim={}, pool={}, activation={}",

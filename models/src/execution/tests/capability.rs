@@ -94,7 +94,8 @@ fn tensor(name: &str) -> TensorInfo {
     TensorInfo {
         name: name.into(),
         file: std::path::PathBuf::new(),
-        dtype: "BF16".into(),
+        container: crate::layout::WeightContainer::SafeTensors,
+        dtype: crate::weights::DenseDType::Bf16.into(),
         shape: vec![8],
         data_start: 0,
         data_offsets: [0, 0],

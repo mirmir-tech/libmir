@@ -1,16 +1,12 @@
-use std::{collections::HashSet, path::Path, sync::Mutex};
+use std::{collections::HashSet, sync::Mutex};
 
+use architecture::{InspectedModel, cuda::CudaArchitecture};
 use foundation::model::ModelManifest;
-use models::{
-    execution::{DecoderExecutionContract, TaskExecutionPlan},
-    layout::{ModelLayout, ModelMetadata, VisionConfig},
-    weights::{TensorCatalog, VisionTensorSchema},
-};
 use runtime::{backend::ModelHandle, progress::ProgressEvent};
 
 use super::{LoadedModel, capacity::max_sequence_blocks};
 use crate::{
-    CudaDecoderRuntime, Result,
+    Result,
     engine::{CudaEngine, runner::RunnerQueue, vision::model::load_vision_model},
 };
 
@@ -25,22 +21,6 @@ impl CudaEngine {
         self.load_model_with_sequence_capacity(manifest, None, progress)
     }
 
-    /// Whether the runtime this checkpoint lowers to can reallocate its K/V
-    /// pages after loading (`resize_kv_cache`), so a provisional cache and a
-    /// measured resize are possible. Inspects the layout only.
-    pub(crate) fn kv_cache_resizable_from_layout(manifest: &ModelManifest) -> Result<bool> {
-        let layout = ModelLayout::inspect(Path::new(&manifest.path))?;
-        let catalog = TensorCatalog::from_layout(&layout)?;
-        let task_plan = TaskExecutionPlan::discover(&layout, &catalog)?;
-        let TaskExecutionPlan::Generation { decoder } = &task_plan else {
-            return Ok(false);
-        };
-        let contract = DecoderExecutionContract::discover(&layout, decoder, &catalog)?;
-        Ok(crate::admit_architecture(&task_plan, Some(&contract.semantic))?
-            .runtime()
-            .is_some_and(CudaDecoderRuntime::resizable_kv_cache))
-    }
-
     /// Loads with one sequence's block table sized for `capacity_blocks`
     /// rather than the cache configured now, which may be provisional.
     pub fn load_model_with_sequence_capacity(
@@ -49,26 +29,23 @@ impl CudaEngine {
         capacity_blocks: Option<u32>,
         progress: &mut dyn FnMut(ProgressEvent),
     ) -> Result<ModelHandle> {
-        let layout = ModelLayout::inspect(Path::new(&manifest.path))?;
-        let total = layout.weights.iter().map(|weight| weight.bytes).sum();
-        progress(ProgressEvent::load_weights(0, total, "inspecting checkpoint"));
-        let metadata = ModelMetadata::from_layout(&layout)?;
-        let catalog = TensorCatalog::from_layout(&layout)?;
-        let task_plan = TaskExecutionPlan::discover(&layout, &catalog)?;
-        let (decoder, encoder) = match &task_plan {
-            TaskExecutionPlan::Generation { decoder }
-            | TaskExecutionPlan::CausalScoring { decoder, .. }
-            | TaskExecutionPlan::Embedding { decoder, .. } => (Some(decoder.clone()), None),
-            TaskExecutionPlan::SequenceScoring { encoder, .. } => (None, Some(encoder.clone())),
-        };
-        let contract = decoder
-            .as_ref()
-            .map(|decoder| DecoderExecutionContract::discover(&layout, decoder, &catalog))
-            .transpose()?;
-        let vision = VisionConfig::from_layout(&layout)?;
-        let vision_readiness = vision
-            .as_ref()
-            .map(|config| VisionTensorSchema::discover(config).readiness(&catalog));
+        let inspected = InspectedModel::inspect_directory(&manifest.path)?;
+        let admitted = inspected.admit_cuda()?;
+        self.load_admitted(manifest, &inspected, &admitted, capacity_blocks, progress)
+    }
+
+    /// Loads an already-inspected, already-admitted checkpoint onto CUDA
+    /// without re-reading layout files or re-running admission.
+    pub fn load_admitted(
+        &self,
+        manifest: &ModelManifest,
+        inspected: &InspectedModel,
+        admitted: &CudaArchitecture,
+        capacity_blocks: Option<u32>,
+        progress: &mut dyn FnMut(ProgressEvent),
+    ) -> Result<ModelHandle> {
+        let total = inspected.layout.weights.iter().map(|weight| weight.bytes).sum();
+        progress(ProgressEvent::load_weights(0, total, "loading admitted checkpoint"));
         let capacity = ::runtime::kv::CacheConfig {
             block_count: capacity_blocks.unwrap_or(self.cache.block_count),
             ..self.cache
@@ -78,31 +55,42 @@ impl CudaEngine {
             progress(ProgressEvent::load_weights(current.min(total), total, detail));
         };
         let _execution = self.execution.acquire_prefill()?;
-        let (runner, admitted) = self.load_task_runner(
+        let (runner, generation_admitted) = self.load_task_runner(
             manifest,
-            &task_plan,
-            decoder.as_ref(),
-            encoder.as_ref(),
-            contract.as_ref(),
-            &catalog,
+            &inspected.task_plan,
+            admitted,
+            inspected.decoder.as_ref(),
+            inspected.encoder.as_ref(),
+            inspected.contract.as_ref(),
+            &inspected.catalog,
             blocks,
             &mut report,
         )?;
-        let vision_model =
-            load_vision_model(&self.backend, vision.as_ref(), vision_readiness.as_ref(), &catalog)?;
+        let inline = inspected
+            .layout
+            .derived
+            .as_ref()
+            .and_then(|derived| derived.assembled_safetensors.as_ref());
+        let vision_model = load_vision_model(
+            &self.backend,
+            inspected.vision.as_ref(),
+            inspected.vision_readiness.as_ref(),
+            &inspected.catalog,
+            inline,
+        )?;
         self.backend.synchronize()?;
         let loaded = LoadedModel {
             manifest: manifest.clone(),
-            layout,
-            metadata,
-            decoder,
-            encoder,
-            catalog,
-            contract,
-            task_plan,
-            admitted,
-            vision,
-            vision_readiness,
+            layout: inspected.layout.clone(),
+            metadata: inspected.metadata.clone(),
+            decoder: inspected.decoder.clone(),
+            encoder: inspected.encoder.clone(),
+            catalog: inspected.catalog.clone(),
+            contract: inspected.contract.clone(),
+            task_plan: inspected.task_plan.clone(),
+            admitted: generation_admitted,
+            vision: inspected.vision.clone(),
+            vision_readiness: inspected.vision_readiness.clone(),
             vision_model,
             sessions: Mutex::new(HashSet::new()),
             runner: RunnerQueue::shared(runner, &self.execution),

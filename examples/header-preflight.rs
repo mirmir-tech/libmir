@@ -26,7 +26,7 @@ fn main() -> Result<()> {
     println!("encoding: {:?}", contract.checkpoint_encoding());
     println!("requirements: {:?}", contract.architecture_requirements().capabilities);
     for backend in [BackendTarget::Cuda, BackendTarget::Metal] {
-        let report = contract.admission(backend.clone());
+        let report = contract.admission(backend);
         println!("{backend:?}: {:?}", report.status);
         for check in &report.checks {
             println!("  {check:?}");

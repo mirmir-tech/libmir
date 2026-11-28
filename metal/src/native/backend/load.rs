@@ -32,6 +32,53 @@ impl MetalBackend {
         Ok(self.load_model_inner(manifest, Some((reserved_bytes, cache)), Some(progress))?)
     }
 
+    /// Loads an already-inspected, already-admitted checkpoint onto Metal
+    /// without re-reading layout files or re-running admission.
+    pub fn load_admitted(
+        &self,
+        manifest: &ModelManifest,
+        inspected: architecture::InspectedModel,
+        admitted: architecture::metal::MetalArchitecture,
+        reservation: Option<(usize, CacheConfig)>,
+        progress: &mut dyn FnMut(MetalProgressEvent),
+    ) -> RuntimeResult<ModelHandle> {
+        Ok(self.load_admitted_inner(manifest, inspected, admitted, reservation, progress)?)
+    }
+
+    fn load_admitted_inner(
+        &self,
+        manifest: &ModelManifest,
+        inspected: architecture::InspectedModel,
+        admitted: architecture::metal::MetalArchitecture,
+        reservation: Option<(usize, CacheConfig)>,
+        progress: &mut dyn FnMut(MetalProgressEvent),
+    ) -> Result<ModelHandle> {
+        let span = tracing::debug_span!(
+            "mlx.native.load_model",
+            model_id = %manifest.id,
+            model_path = %manifest.path
+        );
+        let _guard = span.enter();
+        let mut config = (*self.config).clone();
+        apply_reservation(&mut config, reservation);
+        let client = ModelClient::spawn_admitted(
+            manifest.clone(),
+            inspected,
+            admitted,
+            Arc::new(config),
+            Arc::new(crate::engine::PagedArenaPool::default()),
+            progress,
+        )?;
+        let backend = self.info();
+        let model_trace = client.run(move |loaded| Ok(trace::build(loaded, backend)))?;
+        trace::emit(&model_trace);
+        self.models.lock()?.models.insert(manifest.id.clone(), client);
+        Ok(ModelHandle {
+            id: manifest.id.clone(),
+            backend: "mlx-native".into(),
+        })
+    }
+
     pub(super) fn load_model_inner(
         &self,
         manifest: &ModelManifest,
@@ -64,7 +111,7 @@ impl MetalBackend {
         let client = ModelClient::spawn(
             manifest.clone(),
             Arc::new(config),
-            Arc::clone(&self.paged_arenas),
+            Arc::new(crate::engine::PagedArenaPool::default()),
             progress,
         )?;
         let backend = self.info();

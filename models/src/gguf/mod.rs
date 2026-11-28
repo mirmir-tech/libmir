@@ -16,7 +16,6 @@ mod tensor;
 mod tests;
 mod tiled;
 mod tokenizer;
-mod types;
 mod value;
 mod vectors;
 mod vision;
@@ -38,11 +37,11 @@ pub use reader::ParseError;
 pub use split::{GgufModel, ShardName, shard_paths};
 pub use tensor::GgufTensor;
 pub use tiled::TiledValueHeads;
-pub use types::{Affine32, GgmlType};
 pub use value::MetadataValue;
 pub use vectors::ConfigurationVector;
 pub use vision::{Projector, VisionImport};
 
+pub use crate::weights::{Affine32, GgmlType};
 use crate::{error::Result, layout::WeightContainer};
 
 pub const MAGIC: [u8; 4] = *b"GGUF";

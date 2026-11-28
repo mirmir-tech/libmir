@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     error::{ModelsError, Result},
-    weights::TensorInfo,
+    weights::{DenseDType, TensorDType, TensorInfo},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -111,9 +111,9 @@ pub enum AffineStorageDType {
 
 impl AffineStorageDType {
     pub(super) fn parse(source: &TensorInfo) -> Result<Self> {
-        match source.dtype.as_str() {
-            "U8" => Ok(Self::U8),
-            "U32" => Ok(Self::U32),
+        match &source.dtype {
+            TensorDType::Dense(DenseDType::U8) => Ok(Self::U8),
+            TensorDType::Dense(DenseDType::U32) => Ok(Self::U32),
             dtype => Err(invalid(&source.name, &format!("unsupported packed dtype {dtype}"))),
         }
     }
@@ -124,6 +124,14 @@ impl AffineStorageDType {
         match self {
             Self::U8 => 8,
             Self::U32 => 32,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_dense(self) -> DenseDType {
+        match self {
+            Self::U8 => DenseDType::U8,
+            Self::U32 => DenseDType::U32,
         }
     }
 
@@ -150,11 +158,20 @@ pub enum AffineParameterDType {
 
 impl AffineParameterDType {
     pub(super) fn parse(tensor: &TensorInfo) -> Result<Self> {
-        match tensor.dtype.as_str() {
-            "F16" => Ok(Self::F16),
-            "BF16" => Ok(Self::BF16),
-            "F32" => Ok(Self::F32),
+        match &tensor.dtype {
+            TensorDType::Dense(DenseDType::F16) => Ok(Self::F16),
+            TensorDType::Dense(DenseDType::Bf16) => Ok(Self::BF16),
+            TensorDType::Dense(DenseDType::F32) => Ok(Self::F32),
             dtype => Err(invalid(&tensor.name, &format!("unsupported parameter dtype {dtype}"))),
+        }
+    }
+
+    #[must_use]
+    pub const fn as_dense(self) -> DenseDType {
+        match self {
+            Self::F16 => DenseDType::F16,
+            Self::BF16 => DenseDType::Bf16,
+            Self::F32 => DenseDType::F32,
         }
     }
 

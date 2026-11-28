@@ -91,10 +91,7 @@ pub(super) fn attend_rows(
                 return Ok(output);
             }
             let view = *mode == PagedContextMode::Both
-                && context
-                    .paged
-                    .as_ref()
-                    .is_none_or(|paged| paged.key_scales.is_none() && paged.value_scales.is_none());
+                && context.paged.as_ref().is_none_or(|paged| !paged.is_quantized());
             match &context.paged {
                 Some(paged) if !view => query.paged_scaled_dot_product_attention_with_scratch(
                     paged.attention(),

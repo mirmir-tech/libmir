@@ -5,7 +5,7 @@ use super::super::{
 };
 use crate::{
     error::{ModelsError, Result},
-    weights::{TensorCatalog, TensorInfo},
+    weights::{DenseDType, TensorCatalog, TensorInfo},
 };
 
 pub(super) fn storage(
@@ -27,7 +27,7 @@ pub(super) fn storage(
     let zeros = catalog
         .get(&zero_points)
         .ok_or_else(|| invalid(&tensor.name, "qzeros are missing"))?;
-    if tensor.dtype != "I32" || zeros.dtype != "I32" {
+    if tensor.dtype != DenseDType::I32 || zeros.dtype != DenseDType::I32 {
         return Err(invalid(&tensor.name, "qweight and qzeros must use I32"));
     }
     let packed_output = divided(*output, 8, &tensor.name)?;

@@ -14,23 +14,25 @@ impl Sequence {
             .ok_or_else(|| Error::InvalidPrefillBatch("prefill sequence has no state".into()))?;
         evaluation::materialize(loaded, state, &logits)?;
         state.position = tokens.len();
-        let prefix_bytes = loaded
-            .estimated_prefix_bytes(tokens.len())?
-            .checked_add(logits.byte_len()?)
-            .ok_or(crate::engine::Error::ShapeOverflow)?;
-        let _cached = crate::native::model::cache_prefix_snapshot(
-            &mut loaded.prefixes,
-            &loaded.info.manifest.id,
-            tokens,
-            state,
-            &logits,
-            self.request.block_table.block_size(),
-            prefix_bytes,
-        )?;
+        if loaded.has_non_paged_state() {
+            let prefix_bytes = loaded
+                .estimated_prefix_bytes(tokens.len())?
+                .checked_add(logits.byte_len()?)
+                .ok_or(crate::engine::Error::ShapeOverflow)?;
+            let _cached = crate::native::model::cache_prefix_snapshot(
+                &mut loaded.prefixes,
+                &loaded.info.manifest.id,
+                tokens,
+                state,
+                &logits,
+                self.request.block_table.block_size(),
+                prefix_bytes,
+            )?;
+        }
         let _reclaimed = LoadedModel::reclaim_prefill_allocator_cache()?;
         let model = loaded.execution.decoder()?;
         let output = diagnostics::measure(diagnostics::Stage::FirstToken, || {
-            crate::native::prefill::reservation::output(
+            crate::native::step::output(
                 model,
                 &loaded.stream,
                 state,
@@ -44,7 +46,6 @@ impl Sequence {
             .ok_or_else(|| Error::InvalidPrefillBatch("prefill sequence has no state".into()))?;
         loaded.sessions.insert(self.request.session_id, state);
         self.position = tokens.len();
-        self.page_reservation_pending = false;
         self.output = Some(NativePrefill {
             output,
             prefix_cache_tokens: self.prefix_cache_tokens,

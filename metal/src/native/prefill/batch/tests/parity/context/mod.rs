@@ -26,7 +26,7 @@ fn compares_router_precision_context() -> Result<()> {
             for precision in [RouterPrecision::Model, RouterPrecision::Float32] {
                 model.stream.synchronize()?;
                 model.stream.set_router_precision_for_test(precision);
-                wrong += compare(&mut model, &prompts, &tokenizer, chunk, precision)?;
+                wrong += compare(&model, &prompts, &tokenizer, chunk, precision)?;
             }
         }
     }
@@ -34,19 +34,17 @@ fn compares_router_precision_context() -> Result<()> {
     Ok(())
 }
 
-fn states(model: &LoadedModel, context: usize) -> Result<Vec<SessionState>> {
+fn states(model: &LoadedModel) -> Result<Vec<SessionState>> {
     (0..5)
         .map(|_| {
-            let mut cache = model.execution.decoder()?.new_cache(model.stream())?;
-            cache.reserve(context + 32)?;
-            cache.plan_contiguous(context + 32);
+            let cache = model.execution.decoder()?.new_cache(model.stream())?;
             Ok(SessionState::new(cache))
         })
         .collect()
 }
 
 fn compare(
-    model: &mut LoadedModel,
+    model: &LoadedModel,
     prompts: &[Vec<u32>],
     tokenizer: &TextTokenizer,
     chunk: usize,
@@ -54,9 +52,8 @@ fn compare(
 ) -> Result<usize> {
     let context = prompts[0].len();
     assert!(prompts.iter().all(|p| p.len() == context));
-    let mut scalar = states(model, context)?;
-    let mut packed = states(model, context)?;
-    model.reserve_prefill_pages(10 * (context + 32).div_ceil(16))?;
+    let mut scalar = states(model)?;
+    let mut packed = states(model)?;
     let mut position = 0;
     while position < context - 1 {
         let count = chunk.min(context - 1 - position);
@@ -136,7 +133,6 @@ fn compare(
         )?;
     }
     drop((scalar, packed));
-    assert_eq!(model.stream().paged_arenas().resident_arenas()?, 0);
     Ok(wrong)
 }
 

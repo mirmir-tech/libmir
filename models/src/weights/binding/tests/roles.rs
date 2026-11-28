@@ -33,7 +33,7 @@ fn admits_an_f32_gguf_bias_beside_half_precision_weights() -> Result<()> {
     // loaders convert both to the activation dtype.
     let decoder = dense_decoder()?;
     for weight in ["BF16", "F16"] {
-        let catalog = biased_catalog(weight, "model.gguf");
+        let catalog = biased_catalog(weight, crate::layout::WeightContainer::Gguf, "model.gguf");
         let spec = SemanticModelSpec::discover(&decoder, &catalog)?;
         let plan = WeightBindingPlan::discover(&spec, &catalog)?;
         assert_eq!(plan.tensors[0].dense_bias(), Some("model.layers.0.self_attn.q_proj.bias"));
@@ -46,7 +46,8 @@ fn rejects_an_f32_safetensors_bias_beside_half_precision_weights() -> Result<()>
     // SafeTensors biases load as stored, so an F32 bias would widen the
     // projection's output.
     let decoder = dense_decoder()?;
-    let catalog = biased_catalog("BF16", "model.safetensors");
+    let catalog =
+        biased_catalog("BF16", crate::layout::WeightContainer::SafeTensors, "model.safetensors");
     let spec = SemanticModelSpec::discover(&decoder, &catalog)?;
     let error = WeightBindingPlan::discover(&spec, &catalog)
         .err()
@@ -60,12 +61,17 @@ fn rejects_an_f32_safetensors_bias_beside_half_precision_weights() -> Result<()>
     Ok(())
 }
 
-fn biased_catalog(weight: &str, file: &str) -> TensorCatalog {
+fn biased_catalog(
+    weight: &str,
+    container: crate::layout::WeightContainer,
+    file: &str,
+) -> TensorCatalog {
     let mut tensors = vec![
         tensor("model.layers.0.self_attn.q_proj.bias", "F32", vec![32]),
         tensor("model.layers.0.self_attn.q_proj.weight", weight, vec![32, 32]),
     ];
     for tensor in &mut tensors {
+        tensor.container = container;
         tensor.file = file.into();
     }
     TensorCatalog { tensors }

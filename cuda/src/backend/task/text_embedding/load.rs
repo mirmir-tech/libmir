@@ -1,5 +1,5 @@
 use models::{
-    layout::DecoderConfig,
+    layout::{DecoderConfig, HiddenActivation},
     weights::{TensorCatalog, TensorInfo, TextTensorLayout},
 };
 
@@ -36,7 +36,7 @@ fn validate(config: &DecoderConfig) -> Result<()> {
         || config.num_attention_heads == 0
         || config.num_key_value_heads == 0
         || config.head_dim == 0
-        || config.hidden_activation.as_deref() != Some("silu")
+        || config.hidden_activation != Some(HiddenActivation::Silu)
         || config
             .layer_types
             .iter()

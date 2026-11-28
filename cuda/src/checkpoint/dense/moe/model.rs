@@ -59,6 +59,10 @@ impl CudaBackend {
         CudaMoeModelTemplate::new(
             self,
             decoder.clone(),
+            architecture::CacheLayout::for_cuda(
+                &semantic.decoder,
+                architecture::cuda::CudaDecoderRuntime::DenseAndRouted,
+            ),
             super::super::super::model::embedding_multiplier(semantic)?,
             embedding,
             final_norm,

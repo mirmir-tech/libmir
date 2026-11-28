@@ -64,3 +64,58 @@ fn reads_each_container_of_a_gguf_import_once() -> TestResult {
     assert!(catalog.get("backbone.layers.1.mixer.A_log").is_some());
     Ok(())
 }
+
+#[test]
+fn layout_from_gguf_derives_assets_in_memory_without_writing_to_disk() -> TestResult {
+    let root = std::env::temp_dir().join(format!("libmir-gguf-inmem-{}", std::process::id()));
+    drop(fs::remove_dir_all(&root));
+    fs::create_dir_all(&root)?;
+    let bytes = Writer::new()
+        .text("general.architecture", "qwen3")?
+        .kv("qwen3.block_count", 4, 1_u32.to_le_bytes().to_vec())
+        .kv("qwen3.embedding_length", 4, 64_u32.to_le_bytes().to_vec())
+        .kv("qwen3.feed_forward_length", 4, 128_u32.to_le_bytes().to_vec())
+        .kv("qwen3.attention.head_count", 4, 2_u32.to_le_bytes().to_vec())
+        .kv("qwen3.attention.head_count_kv", 4, 1_u32.to_le_bytes().to_vec())
+        .kv("qwen3.attention.key_length", 4, 32_u32.to_le_bytes().to_vec())
+        .kv("qwen3.attention.layer_norm_rms_epsilon", 6, 1e-6_f32.to_le_bytes().to_vec())
+        .kv("qwen3.context_length", 4, 256_u32.to_le_bytes().to_vec())
+        .text("tokenizer.ggml.model", "gpt2")?
+        .text("tokenizer.ggml.pre", "qwen2")?
+        .kv("tokenizer.ggml.tokens", 9, {
+            let mut payload = 8_u32.to_le_bytes().to_vec();
+            payload.extend(2_u64.to_le_bytes());
+            for tok in ["a", "b"] {
+                payload.extend((tok.len() as u64).to_le_bytes());
+                payload.extend(tok.as_bytes());
+            }
+            payload
+        })
+        .kv("tokenizer.ggml.merges", 9, {
+            let mut payload = 8_u32.to_le_bytes().to_vec();
+            payload.extend(0_u64.to_le_bytes());
+            payload
+        })
+        .kv("tokenizer.ggml.token_type", 9, {
+            let mut payload = 5_u32.to_le_bytes().to_vec();
+            payload.extend(2_u64.to_le_bytes());
+            payload.extend(1_i32.to_le_bytes());
+            payload.extend(1_i32.to_le_bytes());
+            payload
+        })
+        .tensor("token_embd.weight", &[64, 2], GgmlType::Q8_0)?
+        .tensor("output_norm.weight", &[64], GgmlType::F32)?
+        .bytes()?;
+    let path = root.join("tiny.gguf");
+    fs::write(&path, bytes)?;
+    let layout = crate::layout::ModelLayout::from_gguf(&path, None)?;
+    let entries = fs::read_dir(&root)?.collect::<std::io::Result<Vec<_>>>()?;
+    let catalog = TensorCatalog::from_layout(&layout)?;
+    let config = layout.read_config()?;
+    fs::remove_dir_all(&root)?;
+    assert_eq!(entries.len(), 1, "in-memory GGUF layout must not write sidecar files");
+    assert_eq!(config["hidden_size"], 64);
+    assert!(catalog.get("model.embed_tokens.weight").is_some());
+    assert!(catalog.get("model.norm.weight").is_some());
+    Ok(())
+}

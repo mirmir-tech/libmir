@@ -56,6 +56,28 @@ impl BitsAndBytesStorageDType {
         }
     }
 
+    pub(crate) const fn from_tensor_dtype(dtype: &crate::weights::TensorDType) -> Option<Self> {
+        match dtype {
+            crate::weights::TensorDType::Dense(crate::weights::DenseDType::U8) => Some(Self::U8),
+            crate::weights::TensorDType::Dense(crate::weights::DenseDType::F16) => Some(Self::F16),
+            crate::weights::TensorDType::Dense(crate::weights::DenseDType::Bf16) => {
+                Some(Self::Bf16)
+            },
+            crate::weights::TensorDType::Dense(crate::weights::DenseDType::F32) => Some(Self::F32),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_dense(self) -> crate::weights::DenseDType {
+        match self {
+            Self::U8 => crate::weights::DenseDType::U8,
+            Self::F16 => crate::weights::DenseDType::F16,
+            Self::Bf16 => crate::weights::DenseDType::Bf16,
+            Self::F32 => crate::weights::DenseDType::F32,
+        }
+    }
+
     #[must_use]
     pub const fn safetensors_name(self) -> &'static str {
         match self {

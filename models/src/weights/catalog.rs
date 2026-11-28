@@ -7,6 +7,7 @@ use std::{
 
 use serde::Deserialize;
 
+use super::TensorDType;
 use crate::{
     error::Result,
     layout::{ModelLayout, WeightContainer, WeightFile},
@@ -18,7 +19,8 @@ pub const MAX_SAFETENSORS_HEADER_BYTES: usize = 100 * 1024 * 1024;
 pub struct TensorInfo {
     pub name: String,
     pub file: PathBuf,
-    pub dtype: String,
+    pub container: WeightContainer,
+    pub dtype: TensorDType,
     pub shape: Vec<usize>,
     pub data_start: u64,
     pub data_offsets: [u64; 2],
@@ -59,7 +61,17 @@ impl TensorCatalog {
     }
 
     pub fn from_layout(layout: &ModelLayout) -> Result<Self> {
-        Self::from_weight_files(&layout.weights)
+        let mut catalog = Self::from_weight_files(&layout.weights)?;
+        if let Some((name, bytes)) = layout
+            .derived
+            .as_ref()
+            .and_then(|derived| derived.assembled_safetensors.as_ref())
+        {
+            let assembled = Self::from_safetensors_header(name, bytes)?;
+            catalog.tensors.extend(assembled.tensors);
+            catalog.tensors.sort_by(|left, right| left.name.cmp(&right.name));
+        }
+        Ok(catalog)
     }
 
     pub fn from_weight_files(weights: &[WeightFile]) -> Result<Self> {
@@ -142,7 +154,8 @@ fn parse_weight_header(file: &Path, header_len: u64, header: &[u8]) -> Result<Ve
             Ok(TensorInfo {
                 name,
                 file: file.to_path_buf(),
-                dtype: tensor.dtype,
+                container: WeightContainer::SafeTensors,
+                dtype: TensorDType::parse(&tensor.dtype),
                 shape: tensor.shape,
                 data_start,
                 data_offsets: tensor.data_offsets,
@@ -218,7 +231,7 @@ mod tests {
         let catalog = TensorCatalog::from_safetensors_header("remote.safetensors", &bytes)?;
 
         assert_eq!(catalog.len(), 1);
-        assert_eq!(catalog.tensors[0].dtype, "BF16");
+        assert_eq!(catalog.tensors[0].dtype, crate::weights::DenseDType::Bf16);
         assert_eq!(catalog.tensors[0].payload_bytes()?, 8);
         Ok(())
     }

@@ -24,8 +24,7 @@ fn int8_paged_prefill_matches_native_causal_attention() -> Result<()> {
         cache.update_for_attention_mode(&keys, &values, &stream, 0, PagedContextMode::Native)?;
     let paged = context.paged.ok_or(Error::NullHandle("INT8 paged context"))?;
     assert_eq!(paged.key_pages.native().dtype()?, mirtal::DType::Uint32);
-    assert!(paged.key_scales.is_some());
-    assert!(paged.value_scales.is_some());
+    assert!(paged.is_quantized());
     let actual = queries.paged_scaled_dot_product_attention(paged.attention(), 0.5, &stream)?;
     actual.async_eval(&stream)?;
     stream.synchronize()?;

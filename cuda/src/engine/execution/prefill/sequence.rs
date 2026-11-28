@@ -8,12 +8,13 @@ use crate::{Error, Result};
 impl Sequence {
     pub(super) fn new(request: PrefillRequest, prefix: PrefixReuse, runner_wait: Duration) -> Self {
         let step_table = request.block_table.clone();
+        let tokens = prefix.tokens();
         Self {
             request,
-            consumed: prefix.tokens,
+            consumed: tokens,
             chunks: 0,
-            prefix_tokens: prefix.tokens,
-            checkpoint_restored: prefix.checkpoint_restored,
+            prefix_tokens: tokens,
+            checkpoint_restored: prefix.is_checkpoint_restored(),
             runner_wait,
             execution: Duration::ZERO,
             completed_at: None,

@@ -16,7 +16,7 @@ pub(super) fn validate(
         return Err(invalid(&binding.source, "storage is not float8"));
     };
     shape(&binding.source, &binding.shape, &dense_shape(binding, logical))?;
-    companion_dtype(catalog, &binding.source, format.format.as_str())?;
+    companion_dtype(catalog, &binding.source, &format.format.as_dense())?;
     let scale_required = format.scale_mode != Float8ScaleMode::None;
     if scale_required != scale.is_some()
         || (format.scale_granularity == Float8ScaleGranularity::None) != scale.is_none()
@@ -53,10 +53,10 @@ pub(super) fn validate(
         companion_dtype(
             catalog,
             scale,
-            format
+            &format
                 .scale_dtype
                 .ok_or_else(|| invalid(scale, "scale dtype is missing"))?
-                .as_str(),
+                .as_dense(),
         )?;
     }
     if let Some(input_scale) = input_scale {
@@ -70,10 +70,10 @@ pub(super) fn validate(
         companion_dtype(
             catalog,
             input_scale,
-            format
+            &format
                 .input_scale_dtype
                 .ok_or_else(|| invalid(input_scale, "input scale dtype is missing"))?
-                .as_str(),
+                .as_dense(),
         )?;
     }
     if let Some(bias) = bias
@@ -161,7 +161,8 @@ mod tests {
             tensors: vec![TensorInfo {
                 name: binding.source.clone(),
                 file: PathBuf::new(),
-                dtype: "F8_E4M3".into(),
+                container: crate::layout::WeightContainer::SafeTensors,
+                dtype: crate::weights::DenseDType::F8E4M3.into(),
                 shape: binding.shape.clone(),
                 data_start: 0,
                 data_offsets: [0, 0],

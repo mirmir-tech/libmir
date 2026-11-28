@@ -19,10 +19,10 @@ fn refuses_a_gpt_oss_gguf_layer_with_a_dense_down_bank() -> Result<()> {
         .iter_mut()
         .find(|tensor| tensor.name == down)
         .ok_or_else(|| Error::from(models::ModelsError::InvalidConfig(format!("no {down}"))))?;
-    tensor.dtype = "F32".into();
+    tensor.dtype = models::weights::DenseDType::F32.into();
     let mixed = RemoteModelContract::inspect_generation(&config, &catalog)?;
     for backend in [BackendTarget::Metal, BackendTarget::Cuda] {
-        let report = published.admission(backend.clone());
+        let report = published.admission(backend);
         assert_ne!(report.status, AdmissionStatus::Unsupported, "{report:#?}");
         let report = mixed.admission(backend);
         assert_eq!(report.status, AdmissionStatus::Unsupported, "{report:#?}");

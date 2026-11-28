@@ -42,8 +42,9 @@ fn execute_model(
         }
     }
     let lowering = lowering::plan(&decoder, &contract.semantic)?;
-    let stream = Stream::new_cpu()?;
-    let tensors = ModelTensors::load(&root, &stream)?;
+    let load_stream = Stream::new_cpu()?;
+    let tensors = ModelTensors::load(&root, &load_stream)?;
+    let stream = Stream::new_gpu()?;
     let model = DenseSwiGluModel::load(
         &tensors,
         &decoder,
@@ -168,7 +169,8 @@ pub(super) fn layer_config(
         tensors: vec![models::weights::TensorInfo {
             name: "model.layers.0.input_layernorm.weight".into(),
             file: std::path::PathBuf::new(),
-            dtype: "BF16".into(),
+            container: models::layout::WeightContainer::SafeTensors,
+            dtype: models::weights::DenseDType::Bf16.into(),
             shape: vec![decoder.hidden_size],
             data_start: 0,
             data_offsets: [0, 0],

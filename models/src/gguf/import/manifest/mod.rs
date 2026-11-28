@@ -5,7 +5,6 @@
 //! short still tells which files it made.
 
 mod intent;
-mod legacy;
 mod listing;
 mod source;
 mod wire;
@@ -54,10 +53,8 @@ pub struct ImportedFile {
 #[serde(rename_all = "snake_case")]
 pub enum FileOrigin {
     /// Written from the GGUF metadata, as `written`: replaced or removed
-    /// only while it still holds those contents. `None` where an earlier
-    /// manifest did not tell them: the import is then stale, and the file
-    /// the import's only where it holds what a new import writes there.
-    Derived { written: Option<Written> },
+    /// only while it still holds those contents.
+    Derived { written: Written },
     /// A link the import made itself, where nothing or its own earlier link
     /// was, to the source at `source`, one the manifest records, whatever
     /// name either has: the file `named`, the path the import was given,
@@ -67,10 +64,8 @@ pub enum FileOrigin {
     /// A file the import found under its name and left as it was: a source
     /// at its own path, or a user's link to one, never the import's to
     /// replace or remove. It resolved to the recorded `source`, and must
-    /// still resolve to it for the import to be current; `None` where an
-    /// earlier manifest did not tell which, which leaves the import stale
-    /// until it is written again.
-    InPlace { source: Option<PathBuf> },
+    /// still resolve to it for the import to be current.
+    InPlace { source: PathBuf },
 }
 
 impl ImportManifest {
@@ -82,25 +77,18 @@ impl ImportManifest {
     }
 
     /// The manifest of the import in `directory`, `None` when there is none
-    /// or it cannot be parsed, as for a later format. One an earlier version
-    /// wrote is read with only what it shows the import made as the
-    /// import's: anything else is the user's (see `legacy`). A manifest
-    /// naming anything but a file directly in `directory` is refused, before
-    /// any of its names is used.
+    /// or it cannot be parsed, as for a later format. A manifest naming
+    /// anything but a file directly in `directory` is refused, before any of
+    /// its names is used.
     pub fn load(directory: &Path) -> Result<Option<Self>> {
-        Self::load_at(&directory.join(MANIFEST), directory)
+        Self::load_at(&directory.join(MANIFEST))
     }
 
-    pub(super) fn load_at(path: &Path, directory: &Path) -> Result<Option<Self>> {
+    pub(super) fn load_at(path: &Path) -> Result<Option<Self>> {
         let Ok(bytes) = fs::read(path) else {
             return Ok(None);
         };
-        let read = match wire::version(&bytes) {
-            wire::Version::Current => serde_json::from_slice::<Self>(&bytes).ok(),
-            wire::Version::Earlier => legacy::read(&bytes, directory),
-            wire::Version::Unknown => None,
-        };
-        let Some(manifest) = read else {
+        let Ok(manifest) = serde_json::from_slice::<Self>(&bytes) else {
             return Ok(None);
         };
         Self::check(&manifest, path)?;
@@ -114,9 +102,10 @@ impl ImportManifest {
         let invalid = self.files.iter().find(|file| {
             !is_file_name(&file.name)
                 || match &file.origin {
-                    FileOrigin::Derived { .. } | FileOrigin::InPlace { source: None } => false,
-                    FileOrigin::Linked { source, .. }
-                    | FileOrigin::InPlace { source: Some(source) } => !recorded(source),
+                    FileOrigin::Derived { .. } => false,
+                    FileOrigin::Linked { source, .. } | FileOrigin::InPlace { source } => {
+                        !recorded(source)
+                    },
                 }
         });
         invalid.map_or(Ok(()), |file| {
@@ -141,17 +130,15 @@ impl ImportManifest {
     fn holds(&self, directory: &Path, file: &ImportedFile) -> bool {
         let path = directory.join(&file.name);
         match &file.origin {
-            FileOrigin::Derived { written } => {
-                written.as_ref().is_some_and(|written| written.holds(&path))
-            },
+            FileOrigin::Derived { written } => written.holds(&path),
             FileOrigin::Linked { source, named } => {
                 self.linked(OsStr::new(&file.name))
                     .is_some_and(|source| source.is_linked_at(&path))
                     && fs::canonicalize(named).is_ok_and(|named| named == *source)
             },
-            FileOrigin::InPlace { source } => source
-                .as_ref()
-                .is_some_and(|source| fs::canonicalize(&path).is_ok_and(|path| path == *source)),
+            FileOrigin::InPlace { source } => {
+                fs::canonicalize(&path).is_ok_and(|path| path == *source)
+            },
         }
     }
 
@@ -173,19 +160,14 @@ impl ImportManifest {
     }
 
     /// Whether `path`, named `name`, is a file the import made and still
-    /// is: its link to the source it records, or the derived file it wrote,
-    /// one whose contents it did not record if it holds `writing`, what a
-    /// new import writes there.
+    /// is: its link to the source it records, or the derived file it wrote.
     /// Names are compared in any case, as an import claims them: on a
     /// case-insensitive file system both spellings are one file.
-    pub(super) fn made_at(&self, name: &OsStr, path: &Path, writing: Option<&[u8]>) -> bool {
+    pub(super) fn made_at(&self, name: &OsStr, path: &Path) -> bool {
         let name = name.to_string_lossy().to_lowercase();
         let named = |file: &&ImportedFile| file.name.to_lowercase() == name;
         self.files.iter().filter(named).any(|file| match &file.origin {
-            FileOrigin::Derived { written: Some(written) } => written.is_at(path),
-            FileOrigin::Derived { written: None } => {
-                writing.is_some_and(|contents| source::holds_contents(path, contents))
-            },
+            FileOrigin::Derived { written } => written.is_at(path),
             FileOrigin::Linked { source, .. } => self
                 .sources()
                 .find(|recorded| recorded.path == *source)

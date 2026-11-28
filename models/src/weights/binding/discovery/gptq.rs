@@ -8,7 +8,7 @@ use super::super::{
 };
 use crate::{
     error::{ModelsError, Result},
-    weights::{TensorCatalog, TensorInfo},
+    weights::{DenseDType, TensorCatalog, TensorDType, TensorInfo},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -89,14 +89,22 @@ pub(super) fn storage(
         32,
         &tensor.name,
     )?;
-    require(tensor, "I32", &[packed_input, *output])?;
+    require(tensor, &TensorDType::Dense(DenseDType::I32), &[packed_input, *output])?;
     let scales = companion(prefix, "scales");
     let zero_points = companion(prefix, "qzeros");
     let group_indices = companion(prefix, "g_idx");
     let scale = required(catalog, &scales)?;
-    require(scale, scale.dtype.as_str(), &[groups, *output])?;
-    require(required(catalog, &zero_points)?, "I32", &[groups, packed_output])?;
-    require(required(catalog, &group_indices)?, "I32", &[*input])?;
+    require(scale, &scale.dtype, &[groups, *output])?;
+    require(
+        required(catalog, &zero_points)?,
+        &TensorDType::Dense(DenseDType::I32),
+        &[groups, packed_output],
+    )?;
+    require(
+        required(catalog, &group_indices)?,
+        &TensorDType::Dense(DenseDType::I32),
+        &[*input],
+    )?;
     consumed.extend([scales.clone(), zero_points.clone(), group_indices.clone()]);
     Ok(TensorStorage::Gptq {
         format: GptqQuantization {
@@ -120,8 +128,8 @@ fn required<'a>(catalog: &'a TensorCatalog, name: &str) -> Result<&'a TensorInfo
     catalog.get(name).ok_or_else(|| invalid(&format!("missing companion {name}")))
 }
 
-fn require(tensor: &TensorInfo, dtype: &str, shape: &[usize]) -> Result<()> {
-    if tensor.dtype == dtype && tensor.shape == shape {
+fn require(tensor: &TensorInfo, dtype: &TensorDType, shape: &[usize]) -> Result<()> {
+    if tensor.dtype == *dtype && tensor.shape == shape {
         Ok(())
     } else {
         Err(invalid(&format!("{} has incompatible dtype or shape", tensor.name)))

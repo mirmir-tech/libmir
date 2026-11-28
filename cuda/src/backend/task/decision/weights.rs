@@ -8,7 +8,7 @@ use mircuda::{
 };
 use models::{
     decision::{DecisionTensor, DecisionTensorPlan},
-    weights::TensorInfo,
+    weights::{FloatDType, TensorInfo},
 };
 
 use super::{
@@ -82,15 +82,15 @@ pub struct Uploader<'a> {
 
 impl Uploader<'_> {
     pub fn float(&self, role: DecisionTensor) -> Result<DeviceBuffer<f32>> {
-        let info = self.plan.get(role)?;
-        let values = decode(info, &payload(info)?)?;
+        let (info, dtype) = self.plan.tensor(role)?;
+        let values = decode(dtype, &payload(info)?);
         self.copy(&values)
     }
 
     /// The token table stays in its f16 checkpoint encoding.
     pub fn half(&self, role: DecisionTensor) -> Result<DeviceBuffer<f16>> {
-        let info = self.plan.get(role)?;
-        if info.dtype != "F16" {
+        let (info, dtype) = self.plan.tensor(role)?;
+        if dtype != FloatDType::F16 {
             return Err(Error::DTypeMismatch { name: info.name.clone(), expected: "F16" });
         }
         let values: Vec<f16> = payload(info)?
@@ -107,11 +107,11 @@ impl Uploader<'_> {
         weight: DecisionTensor,
         bias: Option<DecisionTensor>,
     ) -> Result<DeviceLinear<I>> {
-        let info = self.plan.get(weight)?;
+        let (info, dtype) = self.plan.tensor(weight)?;
         let &[outputs, inputs] = info.shape.as_slice() else {
             return Err(Error::InvalidDecoderKernel("decision linear weight is not a matrix"));
         };
-        let values: Vec<I> = decode(info, &payload(info)?)?.into_iter().map(I::from_f32).collect();
+        let values: Vec<I> = decode(dtype, &payload(info)?).into_iter().map(I::from_f32).collect();
         Ok(DeviceLinear {
             weight: self.copy(&values)?,
             bias: bias.map(|bias| self.float(bias)).transpose()?,
@@ -162,31 +162,25 @@ fn payload(info: &TensorInfo) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn decode(info: &TensorInfo, bytes: &[u8]) -> Result<Vec<f32>> {
-    Ok(match info.dtype.as_str() {
-        "F32" => bytes
+fn decode(dtype: FloatDType, bytes: &[u8]) -> Vec<f32> {
+    match dtype {
+        FloatDType::F32 => bytes
             .as_chunks::<4>()
             .0
             .iter()
             .map(|chunk| f32::from_le_bytes(*chunk))
             .collect(),
-        "F16" => bytes
+        FloatDType::F16 => bytes
             .as_chunks::<2>()
             .0
             .iter()
             .map(|chunk| f16::from_le_bytes(*chunk).to_f32())
             .collect(),
-        "BF16" => bytes
+        FloatDType::Bf16 => bytes
             .as_chunks::<2>()
             .0
             .iter()
             .map(|chunk| bf16::from_le_bytes(*chunk).to_f32())
             .collect(),
-        _ => {
-            return Err(Error::DTypeMismatch {
-                name: info.name.clone(),
-                expected: "F32, F16 or BF16",
-            });
-        },
-    })
+    }
 }

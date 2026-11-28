@@ -6,7 +6,7 @@ use std::{
 use super::{companion, companion_dtype, invalid, shape};
 use crate::{
     error::Result,
-    weights::{BitsAndBytes4BitType, TensorBinding, TensorCatalog, TensorStorage},
+    weights::{BitsAndBytes4BitType, DenseDType, TensorBinding, TensorCatalog, TensorStorage},
 };
 
 #[cfg(test)]
@@ -53,13 +53,13 @@ pub(super) fn validate(
     if weight.payload_bytes()? != elements.div_ceil(2) {
         return Err(invalid(&binding.source, "packed 4-bit payload size differs"));
     }
-    companion_dtype(catalog, &binding.source, format.storage_dtype.safetensors_name())?;
+    companion_dtype(catalog, &binding.source, &format.storage_dtype.as_dense())?;
     let blocks = elements.div_ceil(format.block_size);
     companion(catalog, absmax, &[blocks])?;
     companion(catalog, quant_map, &[16])?;
-    companion_dtype(catalog, quant_map, "F32")?;
+    companion_dtype(catalog, quant_map, &DenseDType::F32)?;
     validate_codebook(catalog, quant_map, format.quant_type)?;
-    companion_dtype(catalog, quant_state, "U8")?;
+    companion_dtype(catalog, quant_state, &DenseDType::U8)?;
     if let Some(nested_block) = format.nested_block_size {
         let nested_absmax = nested_absmax
             .as_deref()
@@ -70,16 +70,16 @@ pub(super) fn validate(
         if nested_offset_bits.is_none() {
             return Err(invalid(&binding.source, "nested offset is missing"));
         }
-        companion_dtype(catalog, absmax, "U8")?;
+        companion_dtype(catalog, absmax, &DenseDType::U8)?;
         companion(catalog, nested_absmax, &[blocks.div_ceil(nested_block)])?;
-        companion_dtype(catalog, nested_absmax, "F32")?;
+        companion_dtype(catalog, nested_absmax, &DenseDType::F32)?;
         companion(catalog, nested_quant_map, &[256])?;
-        companion_dtype(catalog, nested_quant_map, "F32")?;
+        companion_dtype(catalog, nested_quant_map, &DenseDType::F32)?;
     } else if nested_absmax.is_some() || nested_quant_map.is_some() || nested_offset_bits.is_some()
     {
         return Err(invalid(&binding.source, "unexpected nested quantization state"));
     } else {
-        companion_dtype(catalog, absmax, "F32")?;
+        companion_dtype(catalog, absmax, &DenseDType::F32)?;
     }
     let state = catalog
         .get(quant_state)

@@ -6,7 +6,7 @@ use std::{fs, path::Path};
 
 use serde_json::json;
 
-use super::{ImportManifest, as_earlier, import, root};
+use super::{ImportManifest, import, root};
 use crate::{
     error::{ModelsError, Result},
     gguf::{
@@ -50,28 +50,6 @@ fn a_manifest_left_aside_makes_the_import_stale() -> TestResult {
     assert!(matches!(files_in(&output), Err(ModelsError::InterruptedImport(_))));
     assert!(matches!(ModelLayout::inspect(&output), Err(ModelsError::InterruptedImport(_))));
     import(vec![first], 1).write(&output)?;
-    assert!(current(&output) && !output.join(".import.json.partial").exists());
-    fs::remove_dir_all(root)?;
-    Ok(())
-}
-
-/// The same with the manifest an earlier version left aside, which had no
-/// format: the import reads stale, and a switch completes and removes it.
-#[test]
-fn an_earlier_versions_manifest_left_aside_is_read() -> TestResult {
-    let root = root("earlier-aside")?;
-    let (first, second) =
-        (shard(&root, "first.gguf", b"first")?, shard(&root, "second.gguf", b"2")?);
-    let output = root.join("output");
-    import(vec![first], 1).write(&output)?;
-    let complete = fs::read(output.join(MANIFEST))?;
-    as_earlier(&output, |_| Ok(()))?;
-    fs::rename(output.join(MANIFEST), output.join(".import.json.partial"))?;
-    fs::write(output.join(MANIFEST), complete)?;
-    assert!(!current(&output));
-    import(vec![second], 1).write(&output)?;
-    assert_eq!(files_in(&output)?, [output.join("second.gguf")]);
-    assert!(output.join("first.gguf").symlink_metadata().is_err(), "its link stayed");
     assert!(current(&output) && !output.join(".import.json.partial").exists());
     fs::remove_dir_all(root)?;
     Ok(())

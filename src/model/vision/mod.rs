@@ -79,7 +79,7 @@ impl ModelDescriptor {
         generation: GenerationSettings,
         limits: Option<VisionLimits>,
     ) -> Result<PreparedVisionPrompt> {
-        let readiness = self.vision_readiness.as_ref().ok_or_else(|| {
+        let readiness = self.inspected.vision_readiness.as_ref().ok_or_else(|| {
             models::ModelsError::InvalidConfig(
                 "loaded model has no supported image execution contract".into(),
             )
@@ -91,7 +91,7 @@ impl ModelDescriptor {
             ))
             .into());
         }
-        match (self.vision.as_ref(), self.image_processor.as_ref()) {
+        match (self.inspected.vision.as_ref(), self.inspected.image_processor.as_ref()) {
             (
                 Some(VisionConfig::PooledEncoder(vision)),
                 Some(ImageProcessorConfig::Pooled(processor)),
@@ -116,7 +116,7 @@ impl ModelDescriptor {
                 validate_context(
                     tokens.token_ids.len(),
                     generation.max_tokens,
-                    self.metadata.context_len,
+                    self.inspected.metadata.context_len,
                 )?;
                 Ok(PreparedVisionPrompt::Pooled { prompt: prepared.prompt, tokens, image })
             },
@@ -147,7 +147,7 @@ impl ModelDescriptor {
                 validate_context(
                     tokens.token_ids.len(),
                     generation.max_tokens,
-                    self.metadata.context_len,
+                    self.inspected.metadata.context_len,
                 )?;
                 Ok(PreparedVisionPrompt::SpatialMerge { prompt: prepared.prompt, tokens, image })
             },

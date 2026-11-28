@@ -75,7 +75,8 @@ impl AttentionFixture {
         self.infos.push(TensorInfo {
             name: format!("{PREFIX}.{name}"),
             file: self.path.clone(),
-            dtype: dtype.into(),
+            container: models::layout::WeightContainer::SafeTensors,
+            dtype: models::weights::TensorDType::parse(dtype),
             shape,
             data_start: 0,
             data_offsets: [start, u64::try_from(self.bytes.len())?],

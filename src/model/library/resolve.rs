@@ -6,6 +6,7 @@ use runtime::kv::CacheConfig;
 use super::{Library, ModelLoadOptions};
 use crate::{
     Engine, MemorySnapshot, Result, RuntimeConfig,
+    engine::AdmittedArchitecture,
     model::{ModelDescriptor, automatic_cache, kv_sizing::KvSizing, memory::policy},
 };
 
@@ -14,7 +15,7 @@ impl Library {
         &self,
         descriptor: &ModelDescriptor,
         options: ModelLoadOptions,
-    ) -> Result<(Engine, RuntimeConfig, KvSizing)> {
+    ) -> Result<(Engine, RuntimeConfig, KvSizing, AdmittedArchitecture)> {
         let mut state = self.lock_state()?;
         let engine_config = state.model_config.as_ref().unwrap_or(&self.config).clone();
         let probe = match state.engine.take() {
@@ -26,16 +27,17 @@ impl Library {
         let memory = probe.memory_snapshot()?;
         let committed = self.memory.committed_bytes()?;
         let mut config = self.resolve_cache(descriptor, options, &probe, &memory, committed);
-        let resizable = probe.kv_cache_resizable(&descriptor.manifest_for(target.clone())?)?;
+        let admitted = probe.admit(&descriptor.inspected)?;
+        let resizable = admitted.resizable_kv_cache();
         let kv_sizing = KvSizing::for_load(
             &self.load_config(options),
             &mut config,
             estimate,
-            &target,
+            target,
             resizable,
         );
         let resolved_estimate = descriptor.memory_estimate_for(&config, &target);
-        let engine = if engine_cache_compatible(&target, config.kv_cache, engine_config.kv_cache) {
+        let engine = if engine_cache_compatible(target, config.kv_cache, engine_config.kv_cache) {
             probe
         } else {
             Engine::from_config(&config)?
@@ -58,7 +60,7 @@ impl Library {
         state.model_config = Some(config.clone());
         state.engine = Some(engine.clone());
         drop(state);
-        Ok((engine, config, kv_sizing))
+        Ok((engine, config, kv_sizing, admitted))
     }
 
     /// The K/V cache a load with `options` targets against `memory`, of
@@ -89,12 +91,43 @@ impl Library {
 }
 
 pub(super) fn engine_cache_compatible(
-    target: &BackendTarget,
+    target: BackendTarget,
     resolved: CacheConfig,
     current: CacheConfig,
 ) -> bool {
     resolved == current
-        || (*target == BackendTarget::Metal
+        || (target == BackendTarget::Metal
             && resolved.block_size == current.block_size
             && resolved.dtype == current.dtype)
+}
+
+pub(super) fn resolved_post_load_reserve(
+    target: BackendTarget,
+    config: &RuntimeConfig,
+    memory: &MemorySnapshot,
+    estimate: crate::ModelMemoryEstimate,
+) -> Option<usize> {
+    (target == BackendTarget::Metal).then(|| {
+        let bytes = estimate
+            .kv_cache_bytes
+            .saturating_add(estimate.workspace_bytes)
+            .saturating_add(policy::platform_reserve(config.memory, memory));
+        usize::try_from(bytes).unwrap_or(usize::MAX)
+    })
+}
+
+pub(super) fn resolved_metal_cache(
+    target: BackendTarget,
+    config: &RuntimeConfig,
+) -> Option<CacheConfig> {
+    (target == BackendTarget::Metal).then_some(config.kv_cache)
+}
+
+pub(super) fn cleanup_failed_load(engine: &Engine, handle: &runtime::backend::ModelHandle) {
+    if let Err(error) = engine.unload_model(handle) {
+        tracing::warn!(%error, model = %handle.id, "failed to roll back partial model load");
+    }
+    if let Err(error) = engine.clear_memory_cache() {
+        tracing::warn!(%error, model = %handle.id, "failed to clear memory after load rollback");
+    }
 }

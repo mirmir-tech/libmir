@@ -38,7 +38,10 @@ fn loads_dense_linear_and_tied_embedding_from_binding() -> Result<()> {
         shape: vec![2, 2],
         logical_shape: Some(vec![2, 2]),
         transforms: Vec::new(),
-        storage: TensorStorage::Dense { dtype: "F32".into(), bias: None },
+        storage: TensorStorage::Dense {
+            dtype: models::weights::DenseDType::F32,
+            bias: None,
+        },
     };
 
     let linear = BoundLinear::load(&tensors, &binding, &stream)?;

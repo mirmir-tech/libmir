@@ -1,3 +1,5 @@
+use crate::weights::TensorDType;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TensorRequirement {
     pub label: String,
@@ -20,5 +22,5 @@ pub struct TensorReadiness {
     pub required: usize,
     pub present: usize,
     pub missing: Vec<String>,
-    pub dtypes: Vec<String>,
+    pub dtypes: Vec<TensorDType>,
 }

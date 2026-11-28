@@ -166,7 +166,8 @@ fn write_weights(path: &Path) -> Result<TensorCatalog> {
         infos.push(TensorInfo {
             name: tensor.name,
             file: path.to_owned(),
-            dtype: "BF16".into(),
+            container: models::layout::WeightContainer::SafeTensors,
+            dtype: models::weights::DenseDType::Bf16.into(),
             shape: tensor.shape,
             data_start: 0,
             data_offsets: [start, u64::try_from(payload.len())?],
@@ -202,7 +203,7 @@ fn config() -> SpatialMergeVisionConfig {
         temporal_patch_size: 2,
         spatial_merge_size: 1,
         num_position_embeddings: 4,
-        hidden_activation: "gelu_pytorch_tanh".into(),
+        hidden_activation: models::layout::HiddenActivation::GeluTanh,
         image_token_id: 10,
         vision_start_token_id: 11,
         vision_end_token_id: 12,

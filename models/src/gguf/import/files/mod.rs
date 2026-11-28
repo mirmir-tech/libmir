@@ -53,9 +53,9 @@ impl Plan {
         // may be hard links where symlinks are unavailable. Every name they
         // hold is checked before any is used.
         let records = Records::load(directory)?;
-        for (name, contents) in &derived {
+        for (name, _) in &derived {
             claim(&mut names, OsStr::new(name), directory)?;
-            records.writable(OsStr::new(name), &directory.join(name), contents)?;
+            records.writable(OsStr::new(name), &directory.join(name))?;
         }
         let mut links = Vec::new();
         let mut sources = [Vec::new(), Vec::new()];

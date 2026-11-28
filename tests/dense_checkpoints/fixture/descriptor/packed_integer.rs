@@ -72,7 +72,7 @@ fn validate_packed_integer_storage(
     for encoding in descriptor.checkpoint_encoding().weights {
         match encoding {
             WeightEncoding::Dense { dtype } => {
-                dense.insert(dtype);
+                dense.insert(dtype.as_str().to_owned());
             },
             WeightEncoding::PackedInteger { format } if format.bits.get() == bits => {
                 packed.push(format);

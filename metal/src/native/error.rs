@@ -40,7 +40,10 @@ pub(super) enum Error {
     #[error("native model cannot prefill an empty token sequence")]
     EmptyPrompt,
     #[error("model {model} has no active session {session}")]
-    Session { model: String, session: uuid::Uuid },
+    Session {
+        model: foundation::model::ModelId,
+        session: uuid::Uuid,
+    },
     #[error("native MLX has no scheduled greedy decode")]
     NoPendingDecode,
     #[error("the session has no speculative decoding state")]
@@ -90,6 +93,15 @@ impl From<Error> for runtime::RuntimeError {
             Error::ModelNotLoaded(id) => Self::ModelNotLoaded(id),
             Error::Models(error) => Self::ModelLoad(error.to_string()),
             Error::UnsupportedModel(error) => Self::ModelLoad(error),
+            Error::Engine(engine::Error::KvPageCapacity { required, maximum, .. }) => {
+                Self::KvCapacity { requested: required, capacity: maximum }
+            },
+            Error::Engine(engine::Error::KvBlockOutOfRange { block, capacity, .. }) => {
+                Self::KvCapacity {
+                    requested: (block as usize).saturating_add(1),
+                    capacity,
+                }
+            },
             Error::Engine(error) => Self::Backend(error.to_string()),
             Error::Lock(error) => Self::Backend(error),
             Error::Integer(error) => Self::Integer(error),

@@ -26,7 +26,10 @@ fn binding(source: &str, shape: &[usize]) -> TensorBinding {
         shape: shape.to_vec(),
         logical_shape: None,
         transforms: Vec::new(),
-        storage: TensorStorage::Dense { dtype: "BF16".into(), bias: None },
+        storage: TensorStorage::Dense {
+            dtype: models::weights::DenseDType::Bf16,
+            bias: None,
+        },
     }
 }
 

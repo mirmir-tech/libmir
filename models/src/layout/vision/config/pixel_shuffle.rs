@@ -10,7 +10,7 @@ use super::super::parse::{
     float_field, has_fields, invalid, object, optional_usize_field, string_field, u32_field,
     usize_field,
 };
-use crate::error::Result;
+use crate::{error::Result, layout::HiddenActivation};
 
 /// The projector's RMS norm epsilon, which configurations of this contract
 /// do not declare.
@@ -29,7 +29,7 @@ pub struct PixelShuffleVisionConfig {
     /// Side of the square position table, in patches.
     pub position_grid: usize,
     pub layer_norm_eps: f64,
-    pub hidden_activation: String,
+    pub hidden_activation: HiddenActivation,
     /// Patches folded into one token along each axis.
     pub shuffle_factor: usize,
     pub projector_hidden_size: usize,
@@ -139,7 +139,7 @@ pub(super) fn parse_pixel_shuffle(
             .ok_or_else(|| invalid("vision prefix token count overflows"))?,
         position_grid: max_img_size / patch_size,
         layer_norm_eps: float_field(vision, "layer_norm_eps")?,
-        hidden_activation: string_field(vision, "hidden_act")?,
+        hidden_activation: HiddenActivation::parse(&string_field(vision, "hidden_act")?),
         shuffle_factor: shuffle_factor(float_field(root, "downsample_ratio")?)?,
         projector_hidden_size: usize_field(root, "projector_hidden_size")?,
         projector_norm_eps: PROJECTOR_NORM_EPS,

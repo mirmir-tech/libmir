@@ -3,12 +3,12 @@ mod retention;
 #[cfg(test)]
 mod terminal;
 
-use runtime::backend::{PrefillRequest, SamplingLogits};
-
-use super::{
-    super::{NativePrefill, evaluation, timing::PrefillTiming},
-    reservation,
+use runtime::{
+    backend::{PrefillRequest, SamplingLogits},
+    kv::reusable_prefix_tokens,
 };
+
+use super::super::{NativePrefill, evaluation, timing::PrefillTiming};
 use crate::native::{
     error::{Error, Result},
     model::LoadedModel,
@@ -26,32 +26,11 @@ pub(super) struct Sequence {
     checkpoints: Vec<usize>,
     next_checkpoint: usize,
     cached_logits: Option<crate::engine::Array>,
-    pub(super) page_reservation_pending: bool,
-    pub(super) reservation: reservation::Plan,
     pub output: Option<NativePrefill>,
     pub timing: PrefillTiming,
 }
 
 impl Sequence {
-    pub(super) fn reclaim_reservation(&mut self) -> Result<()> {
-        if let Some(state) = self.state.as_mut() {
-            let target =
-                self.request.prompt_tokens.len().saturating_add(self.reservation.page_size);
-            state.cache.release_reservation_after(target)?;
-            self.reservation.tokens = self.reservation.tokens.min(target);
-        }
-        Ok(())
-    }
-
-    pub(super) fn plan_reservation(&mut self) -> Result<()> {
-        self.state
-            .as_mut()
-            .ok_or_else(|| Error::InvalidPrefillBatch("prefill sequence has no state".into()))?
-            .cache
-            .plan_contiguous(self.reservation.tokens());
-        Ok(())
-    }
-
     pub fn prepare(
         loaded: &LoadedModel,
         request: PrefillRequest,
@@ -63,29 +42,47 @@ impl Sequence {
         if request.prompt_tokens.is_empty() {
             return Err(Error::EmptyPrompt);
         }
-        let (mut state, position, cached_logits) = if let Some((state, logits)) = restored {
-            let position = state.position;
+        let blocks = request.block_table.blocks();
+        let (state, position, cached_logits) = if loaded.has_non_paged_state() {
+            let (mut state, position, logits) = if let Some((state, logits)) = restored {
+                let position = state.position;
+                (state, position, logits)
+            } else {
+                (SessionState::new(model.new_cache(&loaded.stream)?), 0, None)
+            };
+            if !blocks.is_empty() {
+                state.cache.bind_blocks(blocks, None, &loaded.stream)?;
+            }
             (state, position, logits)
         } else {
-            (SessionState::new(model.new_cache(&loaded.stream)?), 0, None)
+            let reusable = if blocks.is_empty() {
+                0
+            } else {
+                reusable_prefix_tokens(
+                    request.cached_tokens,
+                    request.prompt_tokens.len(),
+                    request.block_table.block_size(),
+                    0,
+                )
+            };
+            let mut state = SessionState::from_prefix(model.new_cache(&loaded.stream)?, reusable);
+            if !blocks.is_empty() {
+                state.cache.bind_blocks(blocks, Some(reusable), &loaded.stream)?;
+            }
+            (state, reusable, None)
         };
-        let reserve =
-            request.prompt_tokens.len().max(loaded.stream.config().cache.kv_reserve_tokens);
-        state.cache.reserve(reserve)?;
-        let reservation = reservation::Plan::new(
-            request.prompt_tokens.len(),
-            request.generation_tokens,
-            &loaded.stream,
-        );
-        state.cache.plan_contiguous(reservation.tokens());
-        let checkpoints = request
-            .cache_checkpoints
-            .iter()
-            .copied()
-            .filter(|checkpoint| {
-                *checkpoint > position && *checkpoint < request.prompt_tokens.len()
-            })
-            .collect();
+        let checkpoints = if loaded.has_non_paged_state() {
+            request
+                .cache_checkpoints
+                .iter()
+                .copied()
+                .filter(|checkpoint| {
+                    *checkpoint > position && *checkpoint < request.prompt_tokens.len()
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         Ok(Self {
             request,
             execution_sampling,
@@ -95,8 +92,6 @@ impl Sequence {
             checkpoints,
             next_checkpoint: 0,
             cached_logits,
-            page_reservation_pending: true,
-            reservation,
             output: None,
             timing,
         })
@@ -119,8 +114,6 @@ impl Sequence {
         sequences: &mut [&mut Self],
         count: usize,
     ) -> Result<()> {
-        let required = sequences.iter().map(|sequence| reservation::required(sequence)).sum();
-        loaded.reserve_prefill_pages(required)?;
         let positions = sequences.iter().map(|sequence| sequence.position).collect::<Vec<_>>();
         #[cfg(test)]
         let checkpoint_rows = sequences
@@ -157,7 +150,6 @@ impl Sequence {
         }
         evaluation::intermediate_packed(loaded, &states, state_root)?;
         for sequence in sequences {
-            sequence.page_reservation_pending = false;
             sequence.position += count;
             sequence.cache_checkpoint(loaded)?;
         }
@@ -175,7 +167,6 @@ impl Sequence {
         }
         let prefix_len = prompt_len - 1;
         if self.position < prefix_len {
-            reservation::ensure(self, loaded)?;
             let remaining = prefix_len - self.position;
             let count = loaded
                 .prefill_chunk_len(self.position, remaining)
@@ -199,12 +190,10 @@ impl Sequence {
                 state.cache.prepare_prefix_retention(&loaded.stream)?;
             }
             evaluation::intermediate(loaded, state, state_root)?;
-            self.page_reservation_pending = false;
             self.position += count;
             self.cache_checkpoint(loaded)?;
             return Ok(count);
         }
-        reservation::ensure(self, loaded)?;
         let model = loaded.execution.decoder()?;
         let last = self.request.prompt_tokens[prefix_len];
         let state = self
@@ -219,7 +208,6 @@ impl Sequence {
             self.position,
             self.execution_sampling == SamplingLogits::None,
         )?;
-        self.page_reservation_pending = false;
         self.complete(loaded, logits)?;
         Ok(1)
     }

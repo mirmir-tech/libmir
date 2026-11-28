@@ -88,12 +88,17 @@ fn reads_an_offset_page_run_as_a_view_and_split_runs_natively() -> Result<()> {
     assert_ne!(offset.first_physical_page(), Some(0));
     assert!(view.paged.is_none());
     assert_eq!(view.keys.to_vec_f32(&stream)?, vec![1.0, 2.0, 3.0, 4.0]);
-    assert!(native.paged.as_ref().is_some_and(|paged| paged.fragmented));
+    assert!(
+        native
+            .paged
+            .as_ref()
+            .is_some_and(crate::engine::kv::PagedKvContext::is_fragmented)
+    );
     Ok(())
 }
 
 #[test]
-fn separates_incompatible_layers_and_releases_empty_arenas() -> Result<()> {
+fn separates_incompatible_layers_and_retains_arenas_in_pool() -> Result<()> {
     let pool = Arc::new(PagedArenaPool::default());
     let stream = stream(&pool)?;
     let value = values(&[1.0, 2.0])?;
@@ -105,7 +110,7 @@ fn separates_incompatible_layers_and_releases_empty_arenas() -> Result<()> {
         assert!(!first.shares_paged_arena(&other_layer));
         assert_eq!(pool.resident_arenas()?, 2);
     }
-    assert_eq!(pool.resident_arenas()?, 0);
+    assert_eq!(pool.resident_arenas()?, 2);
     Ok(())
 }
 
@@ -134,6 +139,48 @@ fn surviving_model_keeps_the_arena_after_its_creator_unloads() -> Result<()> {
 
     assert_eq!(context.keys.to_vec_f32(&second_stream)?, vec![3.0, 4.0, 5.0, 6.0]);
     assert_eq!(pool.resident_arenas()?, 1);
+    Ok(())
+}
+
+#[test]
+fn shares_prefix_pages_across_distinct_runtime_block_tables() -> Result<()> {
+    use runtime::kv::BlockId;
+
+    let pool = Arc::new(PagedArenaPool::default());
+    let stream = stream(&pool)?;
+    let mut owner = cache(&pool, 0)?;
+    owner.bind_blocks(&[BlockId(0), BlockId(1)], None, &stream)?;
+    let prefix = Array::from_f32(&[1.0, 2.0, 3.0, 4.0], &[1, 1, 2, 2])?;
+    let written = owner.update(&prefix, &prefix, &stream)?;
+    written.keys.async_eval(&stream)?;
+    stream.synchronize()?;
+
+    let mut branch = cache(&pool, 0)?;
+    branch.bind_blocks(&[BlockId(0), BlockId(2)], Some(2), &stream)?;
+
+    let current = owner.update(&values(&[5.0, 6.0])?, &values(&[5.0, 6.0])?, &stream)?;
+    let diverged = branch.update(&values(&[7.0, 8.0])?, &values(&[7.0, 8.0])?, &stream)?;
+    let current_scratch = current
+        .paged
+        .as_ref()
+        .ok_or_else(|| {
+            crate::engine::Error::InvalidModel("current paged context is missing".into())
+        })?
+        .scratch();
+    let branch_scratch = diverged
+        .paged
+        .as_ref()
+        .ok_or_else(|| {
+            crate::engine::Error::InvalidModel("branch paged context is missing".into())
+        })?
+        .scratch();
+    assert!(!std::ptr::eq(current_scratch, branch_scratch));
+    current.keys.async_eval(&stream)?;
+    diverged.keys.async_eval(&stream)?;
+    stream.synchronize()?;
+
+    assert_eq!(current.keys.to_vec_f32(&stream)?, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+    assert_eq!(diverged.keys.to_vec_f32(&stream)?, vec![1.0, 2.0, 3.0, 4.0, 7.0, 8.0]);
     Ok(())
 }
 

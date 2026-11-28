@@ -49,7 +49,11 @@ impl ModelDescriptor {
             vision.image_token_id,
             tags,
         )?;
-        validate_context(tokens.token_ids.len(), generation.max_tokens, self.metadata.context_len)?;
+        validate_context(
+            tokens.token_ids.len(),
+            generation.max_tokens,
+            self.inspected.metadata.context_len,
+        )?;
         Ok(PreparedVisionPrompt::PixelShuffle { prompt: prepared.prompt, tokens, image })
     }
 

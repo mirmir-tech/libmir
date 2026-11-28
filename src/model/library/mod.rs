@@ -9,15 +9,12 @@ use std::{
 
 use foundation::model::BackendTarget;
 use models::generation::GenerationOverrides;
-use runtime::kv::CacheConfig;
 
+use self::resolve::{cleanup_failed_load, resolved_metal_cache, resolved_post_load_reserve};
 use super::{
-    Library, Model, ModelDescriptor, ModelInner,
+    Library, Model, ModelDescriptor, ModelInner, ModelSource,
     cache::cohort::CacheCohort,
-    memory::{
-        admission::{AdmissionTerms, ModelMemoryManager},
-        policy,
-    },
+    memory::admission::{AdmissionTerms, ModelMemoryManager},
 };
 use crate::{Engine, ProgressEvent, Result, RuntimeConfig, scheduler::ModelCoordinator};
 
@@ -71,13 +68,37 @@ impl Library {
         progress: &mut dyn FnMut(ProgressEvent),
     ) -> Result<Model> {
         let descriptor = ModelDescriptor::inspect(path, overrides)?;
+        self.load_admitted(descriptor, options, progress)
+    }
+
+    /// Inspects and loads a [`ModelSource`] (directory or direct GGUF +
+    /// optional `mmproj` files) with explicit resource-admission options.
+    pub fn load_source(
+        &self,
+        source: ModelSource<'_>,
+        overrides: GenerationOverrides,
+        options: ModelLoadOptions,
+        progress: &mut dyn FnMut(ProgressEvent),
+    ) -> Result<Model> {
+        let descriptor = ModelDescriptor::inspect_source(source, overrides)?;
+        self.load_admitted(descriptor, options, progress)
+    }
+
+    /// Admits and loads an already-inspected [`ModelDescriptor`] without
+    /// re-reading checkpoint layout files.
+    pub fn load_admitted(
+        &self,
+        descriptor: ModelDescriptor,
+        options: ModelLoadOptions,
+        progress: &mut dyn FnMut(ProgressEvent),
+    ) -> Result<Model> {
         let _load = self.memory.serialize_load()?;
-        let (engine, mut config, kv_sizing) = self.model_runtime(&descriptor, options)?;
+        let (engine, mut config, kv_sizing, admitted) = self.model_runtime(&descriptor, options)?;
         let manifest = descriptor.manifest_for(engine.target())?;
         let target = engine.target();
         let initial_estimate = descriptor.memory_estimate_for(&config, &target);
         let cache = self.caches.acquire(
-            &target,
+            target,
             config.kv_cache,
             initial_estimate,
             options.kv_blocks.is_some(),
@@ -96,11 +117,13 @@ impl Library {
                 allow_overcommit: options.allow_memory_overcommit,
             },
         )?;
-        let post_load_reserve = resolved_post_load_reserve(&target, &config, &memory, estimate);
-        let handle = engine.load_model_with_progress_and_reservation(
+        let post_load_reserve = resolved_post_load_reserve(target, &config, &memory, estimate);
+        let handle = engine.load_admitted(
             &manifest,
+            &descriptor.inspected,
+            admitted,
             post_load_reserve,
-            resolved_metal_cache(&target, &config),
+            resolved_metal_cache(target, &config),
             kv_sizing.sequence_capacity_blocks(),
             progress,
         )?;
@@ -128,7 +151,7 @@ impl Library {
                 handle,
                 cache: cache.cache,
                 cache_cohort: CacheCohort::for_backend(
-                    &target,
+                    target,
                     config.scheduler.decode_batch_wait_us,
                     config.scheduler.max_batch_tokens,
                     config.kv_cache.block_size,
@@ -214,34 +237,6 @@ impl Library {
             );
         };
         Ok(state)
-    }
-}
-
-fn resolved_post_load_reserve(
-    target: &BackendTarget,
-    config: &RuntimeConfig,
-    memory: &crate::MemorySnapshot,
-    estimate: crate::ModelMemoryEstimate,
-) -> Option<usize> {
-    (*target == BackendTarget::Metal).then(|| {
-        let bytes = estimate
-            .kv_cache_bytes
-            .saturating_add(estimate.workspace_bytes)
-            .saturating_add(policy::platform_reserve(config.memory, memory));
-        usize::try_from(bytes).unwrap_or(usize::MAX)
-    })
-}
-
-fn resolved_metal_cache(target: &BackendTarget, config: &RuntimeConfig) -> Option<CacheConfig> {
-    (*target == BackendTarget::Metal).then_some(config.kv_cache)
-}
-
-fn cleanup_failed_load(engine: &Engine, handle: &runtime::backend::ModelHandle) {
-    if let Err(error) = engine.unload_model(handle) {
-        tracing::warn!(%error, model = handle.id, "failed to roll back partial model load");
-    }
-    if let Err(error) = engine.clear_memory_cache() {
-        tracing::warn!(%error, model = handle.id, "failed to clear memory after load rollback");
     }
 }
 

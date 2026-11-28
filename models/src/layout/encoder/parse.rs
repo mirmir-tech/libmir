@@ -1,10 +1,10 @@
-use std::{fs, path::Path};
+use std::path::Path;
 
 use serde_json::Value;
 
 use crate::{
     error::{ModelsError, Result},
-    layout::ModelLayout,
+    layout::{HiddenActivation, ModelLayout},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -34,7 +34,7 @@ pub struct EncoderConfig {
     pub vocab_size: usize,
     pub max_position_embeddings: usize,
     pub layer_norm_eps: f64,
-    pub hidden_activation: String,
+    pub hidden_activation: HiddenActivation,
     pub position_embedding: EncoderPositionEmbedding,
     pub rope_theta: Option<f64>,
     pub rope_scaling: Option<EncoderRopeScaling>,
@@ -46,8 +46,7 @@ pub struct EncoderConfig {
 
 impl EncoderConfig {
     pub fn from_layout(layout: &ModelLayout) -> Result<Self> {
-        let json = fs::read_to_string(&layout.config_path)?;
-        Self::from_value(&serde_json::from_str(&json)?)
+        Self::from_value(&layout.read_config()?)
     }
 
     pub fn from_config_path(path: impl AsRef<Path>) -> Result<Self> {
@@ -81,7 +80,7 @@ impl EncoderConfig {
             vocab_size: usize_field(value, "vocab_size")?,
             max_position_embeddings: usize_field(value, "max_position_embeddings")?,
             layer_norm_eps: number_field(value, "layer_norm_eps")?,
-            hidden_activation: string_field(value, "hidden_act")?,
+            hidden_activation: HiddenActivation::parse(&string_field(value, "hidden_act")?),
             position_embedding,
             rope_theta: optional_number(value, "rope_theta"),
             rope_scaling: rope_scaling(value)?,

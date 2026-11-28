@@ -6,7 +6,10 @@ use std::{
 
 use serde::Deserialize;
 
+mod derived;
 mod version;
+
+pub use derived::DerivedAssets;
 
 use super::WeightContainer;
 use crate::{
@@ -59,6 +62,7 @@ pub struct ModelLayout {
     pub video_processor_config_path: Option<PathBuf>,
     pub safetensors_index_path: Option<PathBuf>,
     pub weights: Vec<WeightFile>,
+    pub derived: Option<DerivedAssets>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -133,6 +137,7 @@ impl ModelLayout {
             video_processor_config_path,
             safetensors_index_path,
             weights,
+            derived: None,
         })
     }
 
@@ -145,7 +150,7 @@ impl ModelLayout {
 
     #[must_use]
     pub fn has_tokenizer(&self) -> bool {
-        self.tokenizer_path.is_some()
+        self.tokenizer_path.is_some() || self.derived.is_some()
     }
 }
 
@@ -189,25 +194,8 @@ fn read_indexed_names(path: &Path) -> Result<BTreeSet<String>> {
 
 fn read_safetensor_names(root: &Path, listing: &Listing) -> Result<BTreeSet<String>> {
     let mut names = BTreeSet::new();
-    // A GGUF import directory links its shards beside any assembled vision
-    // `SafeTensors` file, and its manifest names both. An ordinary checkpoint
-    // directory keeps one format: if non-projector `SafeTensors` weights exist
-    // at its root, never merge `.gguf` files beside them.
-    let safetensors = WeightContainer::SafeTensors.discover(root)?;
-    let has_base_safetensors = safetensors.iter().any(|path| {
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| !crate::gguf::is_projector_name(name))
-    });
-    let gguf = if listing.is_import() || !has_base_safetensors {
-        crate::gguf::files_in(root)?
-    } else {
-        Vec::new()
-    };
-    for path in safetensors.into_iter().chain(gguf) {
-        if let Some(name) = path.file_name().and_then(|name| name.to_str())
-            && listing.reads(name)
-        {
+    for path in WeightContainer::discover_unindexed(root, listing)? {
+        if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
             let _inserted = names.insert(name.to_owned());
         }
     }

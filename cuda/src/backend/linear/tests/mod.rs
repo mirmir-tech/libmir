@@ -24,7 +24,8 @@ fn matches_a_dense_checkpoint_projection() -> Result<()> {
     let weight_info = TensorInfo {
         name: "model.layers.0.self_attn.q_proj.weight".into(),
         file: path.clone(),
-        dtype: "BF16".into(),
+        container: models::layout::WeightContainer::SafeTensors,
+        dtype: models::weights::DenseDType::Bf16.into(),
         shape: vec![4, 3],
         data_start: 0,
         data_offsets: [0, 24],
@@ -98,7 +99,8 @@ fn check_affine_expert(bits: usize) -> Result<()> {
         TensorInfo {
             name: format!("{prefix}.weight"),
             file: path.clone(),
-            dtype: "U32".into(),
+            container: models::layout::WeightContainer::SafeTensors,
+            dtype: models::weights::DenseDType::U32.into(),
             shape: vec![MATRICES, OUTPUT, words_per_row],
             data_start: 0,
             data_offsets: [0, weight_end],
@@ -106,7 +108,8 @@ fn check_affine_expert(bits: usize) -> Result<()> {
         TensorInfo {
             name: format!("{prefix}.scales"),
             file: path.clone(),
-            dtype: "BF16".into(),
+            container: models::layout::WeightContainer::SafeTensors,
+            dtype: models::weights::DenseDType::Bf16.into(),
             shape: vec![MATRICES, OUTPUT, 1],
             data_start: 0,
             data_offsets: [weight_end, scale_end],
@@ -114,7 +117,8 @@ fn check_affine_expert(bits: usize) -> Result<()> {
         TensorInfo {
             name: format!("{prefix}.biases"),
             file: path.clone(),
-            dtype: "BF16".into(),
+            container: models::layout::WeightContainer::SafeTensors,
+            dtype: models::weights::DenseDType::Bf16.into(),
             shape: vec![MATRICES, OUTPUT, 1],
             data_start: 0,
             data_offsets: [scale_end, bias_end],

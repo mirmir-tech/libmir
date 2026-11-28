@@ -1,5 +1,6 @@
 use std::time::{Duration, Instant};
 
+use foundation::model::ModelId;
 use runtime::{
     backend::{PrefillOutput, PrefillRequest},
     kv::BlockTable,
@@ -22,7 +23,7 @@ mod sequence;
 mod tests;
 
 pub struct CudaPrefillBatch {
-    model_id: String,
+    model_id: ModelId,
     sequences: Vec<Sequence>,
     cursor: usize,
     rounds: usize,
@@ -172,7 +173,7 @@ impl CudaEngine {
         Ok(!batch.sequences.iter().any(Sequence::pending))
     }
 
-    pub(super) fn prefill_batch_model_id(batch: &CudaPrefillBatch) -> &str {
+    pub(super) fn prefill_batch_model_id(batch: &CudaPrefillBatch) -> &ModelId {
         &batch.model_id
     }
 

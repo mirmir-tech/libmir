@@ -2,7 +2,7 @@ use models::vision::{PixelShufflePreprocessedImage, PixelShufflePromptTokens};
 use runtime::backend::SamplingLogits;
 use uuid::Uuid;
 
-use super::super::{NativePrefill, evaluation, required_prefill_pages};
+use super::super::{NativePrefill, evaluation};
 use crate::{
     MetalProgressEvent,
     native::{
@@ -22,6 +22,7 @@ impl LoadedModel {
         session: Uuid,
         prompt: &PixelShufflePromptTokens,
         image: &PixelShufflePreprocessedImage,
+        blocks: &[runtime::kv::BlockId],
         sampling: &SamplingLogits,
         progress: &mut dyn FnMut(MetalProgressEvent),
     ) -> Result<NativePrefill> {
@@ -35,10 +36,9 @@ impl LoadedModel {
         }
         let length = prompt.token_ids.len();
         let mut state = SessionState::new(self.execution.decoder()?.new_cache(&self.stream)?);
-        state.cache.reserve(length.max(self.stream.config().cache.kv_reserve_tokens))?;
-        let page_size = self.stream.config().kv_cache.block_size.max(1);
-        state.cache.plan_contiguous(length.saturating_add(page_size));
-        self.reserve_prefill_pages(required_prefill_pages(length, 0, page_size))?;
+        if !blocks.is_empty() {
+            state.cache.bind_blocks(blocks, None, &self.stream)?;
+        }
         let model = self.execution.decoder()?;
         let Some(LoadedVisionModel::PixelShuffle(tower)) = self.vision_model.as_ref() else {
             return Err(Error::UnsupportedModel(

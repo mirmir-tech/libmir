@@ -1,7 +1,7 @@
 use foundation::conversation::FunctionCall;
 use serde_json::Value;
 
-use crate::{Error, Result};
+use crate::{ResponseFormatError, Result, ToolCallError};
 
 /// Uniqueness depends on prior values, so enforce it on the complete arguments.
 /// All other decoder constraints remain intact; the original schema is always
@@ -52,14 +52,14 @@ pub(super) fn validate(validator: &jsonschema::Validator, output: &str) -> Resul
     struct Call {
         function: FunctionCall,
     }
-    let calls: Vec<Call> =
-        serde_json::from_str(output).map_err(|error| Error::InvalidToolCall(error.to_string()))?;
+    let calls: Vec<Call> = serde_json::from_str(output)
+        .map_err(|error| ToolCallError::Malformed(error.to_string()))?;
     for call in calls {
         validator.validate(&call.function.arguments).map_err(|error| {
-            Error::InvalidToolCall(format!(
-                "tool arguments violate schema at {} (constraint {})",
-                error.instance_path, error.schema_path
-            ))
+            ToolCallError::SchemaViolation {
+                instance_path: error.instance_path.to_string(),
+                schema_path: error.schema_path.to_string(),
+            }
         })?;
     }
     Ok(())
@@ -67,12 +67,13 @@ pub(super) fn validate(validator: &jsonschema::Validator, output: &str) -> Resul
 
 pub(super) fn validate_content(validator: &jsonschema::Validator, content: &str) -> Result<()> {
     let value: Value = serde_json::from_str(content.trim())
-        .map_err(|error| Error::InvalidResponseFormat(error.to_string()))?;
+        .map_err(|error| ResponseFormatError::Malformed(error.to_string()))?;
     validator.validate(&value).map_err(|error| {
-        Error::InvalidResponseFormat(format!(
-            "content violates schema at {} (constraint {})",
-            error.instance_path, error.schema_path
-        ))
+        ResponseFormatError::SchemaViolation {
+            instance_path: error.instance_path.to_string(),
+            schema_path: error.schema_path.to_string(),
+        }
+        .into()
     })
 }
 
@@ -94,14 +95,14 @@ mod tests {
         assert_eq!(decoding["properties"]["literal"], schema["properties"]["literal"]);
         assert_eq!(decoding["properties"]["uniqueItems"], json!({"type":"boolean"}));
         let validator = jsonschema::validator_for(&schema)
-            .map_err(|error| Error::InvalidToolCall(error.to_string()))?;
+            .map_err(|error| ToolCallError::Malformed(error.to_string()))?;
         let calls = |ids| {
             json!([{"id":"one","type":"function","function":{"name":"report","arguments":{"ids":ids}}}]).to_string()
         };
         assert!(validate(&validator, &calls(json!(["a", "b"]))).is_ok());
         let error = validate(&validator, &calls(json!(["a", "a"])))
             .err()
-            .ok_or_else(|| Error::InvalidToolCall("duplicate accepted".into()))?;
+            .ok_or_else(|| ToolCallError::Malformed("duplicate accepted".into()))?;
         assert!(error.to_string().contains("uniqueItems"));
         assert!(validate(&validator, &calls(json!([1]))).is_err());
         Ok(())

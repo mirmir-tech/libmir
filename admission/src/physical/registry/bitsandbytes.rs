@@ -1,0 +1,18 @@
+use models::weights::BitsAndBytes4BitQuantization;
+
+use super::AdmissionStatus;
+use crate::physical::EncodingKind;
+
+pub(super) fn assess(
+    format: BitsAndBytes4BitQuantization,
+) -> (EncodingKind, AdmissionStatus, String) {
+    (
+        EncodingKind::BitsAndBytes4Bit,
+        if format.is_supported() {
+            AdmissionStatus::Partial
+        } else {
+            AdmissionStatus::Unsupported
+        },
+        "bitsandbytes NF4/FP4 requires B64, BF16 compute, and optional nested B256 scales".into(),
+    )
+}
