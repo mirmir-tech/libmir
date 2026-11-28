@@ -1,8 +1,10 @@
 //! Arenas sized to the blocks in use. A layer arena is indexed directly by
 //! runtime `BlockId`s, but holds pages only up to the highest one bound so
-//! far, growing geometrically up to the configured cache: allocated whole
-//! up front, an arena made every head's rows the whole cache apart and
-//! reserved the cache's memory before any request.
+//! far, doubling up to the configured cache: allocated whole up front, an
+//! arena made every head's rows the whole cache apart and reserved the
+//! cache's memory before any request. Growing copies the arena, so the old
+//! one and the new one are briefly resident together; doubling keeps such
+//! copies rare.
 
 use super::{Arena, ArenaPages};
 use crate::engine::{Array, Error, Result, Stream};
@@ -30,17 +32,21 @@ pub(in crate::engine::kv::paged) fn target(
 }
 
 impl Arena {
-    /// Grows the arena to hold `required` pages, keeping every page written.
+    /// Grows the arena to hold `required` pages, keeping every page written,
+    /// and returns whether it grew.
     pub(in crate::engine::kv::paged) fn grow(
         &mut self,
         required: usize,
         maximum: usize,
         stream: &Stream,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let capacity = target(self.capacity, required, maximum)?;
         if capacity == self.capacity {
-            return Ok(());
+            return Ok(false);
         }
+        // An arena grown out of earlier is free but cached, and too small for
+        // this one to reuse: release it before allocating this one.
+        crate::engine::clear_memory_cache()?;
         let extra = capacity - self.capacity;
         let graph = stream.native().graph();
         let grow = |array: &Array, fill: f32| -> Result<Array> {
@@ -68,7 +74,7 @@ impl Arena {
             self.unbound_refs.resize(capacity, 0);
         }
         self.capacity = capacity;
-        Ok(())
+        Ok(true)
     }
 }
 
@@ -83,6 +89,7 @@ mod tests {
         assert_eq!(target(0, 13, 12_133)?, 64);
         assert_eq!(target(64, 64, 12_133)?, 64);
         assert_eq!(target(64, 65, 12_133)?, 128);
+        assert_eq!(target(128, 129, 12_133)?, 256);
         assert_eq!(target(128, 1000, 12_133)?, 1024);
         assert_eq!(target(8192, 9000, 12_133)?, 12_133);
         assert!(target(0, 12_134, 12_133).is_err());

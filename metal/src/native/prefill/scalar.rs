@@ -81,7 +81,7 @@ impl LoadedModel {
             position += count;
             remaining = &remaining[count..];
             if checkpoints.next_if_eq(&position).is_some() {
-                let checkpoint_bytes = self.estimated_prefix_bytes(position)?;
+                let checkpoint_bytes = self.prefix_snapshot_bytes(position)?;
                 crate::native::model::cache_prefix_checkpoint(
                     &mut self.prefixes,
                     &self.info.manifest.id,

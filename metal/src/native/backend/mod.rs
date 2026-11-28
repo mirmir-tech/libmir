@@ -120,6 +120,9 @@ impl MetalBackend {
     ) -> std::result::Result<(), RuntimeError> {
         Ok(self.with_model(&model.id, move |loaded| {
             loaded.stream().finish_startup_tuning();
+            // Warm-up's prompts and outgrown arenas leave buffers no request
+            // reuses: release them before the K/V cache is measured.
+            crate::engine::clear_memory_cache()?;
             Ok(())
         })?)
     }

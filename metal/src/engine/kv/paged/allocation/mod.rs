@@ -22,7 +22,9 @@ pub(super) fn ensure(
         let (arena_capacity, initial_ids) = {
             let mut guard = lock(&arena)?;
             let ids = desired_page_ids(store, &[], needed, &mut guard)?;
-            guard.grow(required_pages(&ids), store.capacity, stream)?;
+            if guard.grow(required_pages(&ids), store.capacity, stream)? {
+                store.pool.note_outgrown();
+            }
             let cap = guard.capacity;
             drop(guard);
             (cap, ids)
@@ -44,7 +46,9 @@ pub(super) fn ensure(
         let storage = store.storage.as_ref().ok_or(Error::NullHandle("paged storage"))?;
         let mut guard = lock(&storage.arena)?;
         let ids = desired_page_ids(store, &storage.page_ids, needed, &mut guard)?;
-        guard.grow(required_pages(&ids), store.capacity, stream)?;
+        if guard.grow(required_pages(&ids), store.capacity, stream)? {
+            store.pool.note_outgrown();
+        }
         let cap = guard.capacity;
         drop(guard);
         (cap, ids)

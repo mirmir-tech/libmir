@@ -71,3 +71,39 @@ impl KvCache {
         Ok(Self { history: None, storage, offset })
     }
 }
+
+impl KvCache {
+    /// Keeps a prefix snapshot's partial last page (`paged::tail`).
+    pub(crate) fn capture_tail(&mut self, stream: &crate::engine::Stream) -> Result<()> {
+        match &mut self.storage {
+            KvStorage::Paged(pages) => pages.capture_tail(self.offset, stream),
+            KvStorage::Contiguous(_) | KvStorage::Sliding(_) => Ok(()),
+        }
+    }
+
+    pub(crate) fn tail_roots(&self) -> Box<dyn Iterator<Item = &crate::engine::Array> + '_> {
+        match &self.storage {
+            KvStorage::Paged(pages) => Box::new(pages.tail_roots()),
+            KvStorage::Contiguous(_) | KvStorage::Sliding(_) => Box::new(std::iter::empty()),
+        }
+    }
+
+    /// Whether a snapshot of this cache at `tokens` resumes from the
+    /// runtime's first `cached` tokens; only pages live in the runtime's
+    /// blocks.
+    pub(crate) fn restorable_within(&self, tokens: usize, cached: usize) -> bool {
+        match &self.storage {
+            KvStorage::Paged(pages) => pages.restorable_within(tokens, cached),
+            KvStorage::Contiguous(_) | KvStorage::Sliding(_) => true,
+        }
+    }
+
+    /// Writes a restored snapshot's partial last page into the blocks bound
+    /// since.
+    pub(crate) fn restore_tail(&mut self, stream: &crate::engine::Stream) -> Result<()> {
+        match &mut self.storage {
+            KvStorage::Paged(pages) => pages.restore_tail(self.offset, stream),
+            KvStorage::Contiguous(_) | KvStorage::Sliding(_) => Ok(()),
+        }
+    }
+}

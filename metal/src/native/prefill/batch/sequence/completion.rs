@@ -13,22 +13,22 @@ impl Sequence {
             .as_mut()
             .ok_or_else(|| Error::InvalidPrefillBatch("prefill sequence has no state".into()))?;
         evaluation::materialize(loaded, state, &logits)?;
+        loaded.release_outgrown_arenas()?;
         state.position = tokens.len();
-        if loaded.has_non_paged_state() {
-            let prefix_bytes = loaded
-                .estimated_prefix_bytes(tokens.len())?
-                .checked_add(logits.byte_len()?)
-                .ok_or(crate::engine::Error::ShapeOverflow)?;
-            let _cached = crate::native::model::cache_prefix_snapshot(
-                &mut loaded.prefixes,
-                &loaded.info.manifest.id,
-                tokens,
-                state,
-                &logits,
-                self.request.block_table.block_size(),
-                prefix_bytes,
-            )?;
-        }
+        let prefix_bytes = loaded
+            .prefix_snapshot_bytes(tokens.len())?
+            .checked_add(logits.byte_len()?)
+            .ok_or(crate::engine::Error::ShapeOverflow)?;
+        let _cached = crate::native::model::cache_prefix_snapshot(
+            &mut loaded.prefixes,
+            &loaded.info.manifest.id,
+            tokens,
+            state,
+            &logits,
+            self.request.block_table.block_size(),
+            prefix_bytes,
+            &loaded.stream,
+        )?;
         let _reclaimed = LoadedModel::reclaim_prefill_allocator_cache()?;
         let model = loaded.execution.decoder()?;
         let output = diagnostics::measure(diagnostics::Stage::FirstToken, || {

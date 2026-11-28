@@ -51,11 +51,14 @@ fn state_only_prefill_preserves_batched_logits_continuation_and_prefixes() -> Re
                     }
                     assert!(complete);
                     for row in batch.finish()? {
-                        let expected_cached = if model.prefix_cache_enabled() {
-                            [0, 65, 32][reuse]
-                        } else {
-                            0
-                        };
+                        // A paged model's checkpoints are the runtime's blocks,
+                        // which this table without blocks lacks.
+                        let expected_cached =
+                            match (model.prefix_cache_enabled(), model.has_non_paged_state()) {
+                                (true, true) => [0, 65, 32][reuse],
+                                (true, false) => [0, 65, 0][reuse],
+                                (false, _) => 0,
+                            };
                         assert_eq!(row.native.prefix_cache_tokens, expected_cached);
                         let NativeOutput::Logits(logits) = row.native.output else {
                             return Err(Error::InvalidPrefillBatch("expected full logits".into()));

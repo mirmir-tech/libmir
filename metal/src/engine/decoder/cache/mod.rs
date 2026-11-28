@@ -12,6 +12,7 @@ mod hybrid;
 mod layout;
 mod lifecycle;
 mod rows;
+mod tail;
 
 const DEFAULT_TEST_ARENA_PAGES: usize = 4096;
 

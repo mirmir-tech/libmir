@@ -99,22 +99,22 @@ impl LoadedModel {
                 progress,
             )?;
             evaluation::materialize(self, &state, &logits)?;
+            self.release_outgrown_arenas()?;
             state.position = tokens.len();
-            if self.has_non_paged_state() {
-                let prefix_bytes = self
-                    .estimated_prefix_bytes(tokens.len())?
-                    .checked_add(logits.byte_len()?)
-                    .ok_or(crate::engine::Error::ShapeOverflow)?;
-                let _cached = super::model::cache_prefix_snapshot(
-                    &mut self.prefixes,
-                    &self.info.manifest.id,
-                    tokens,
-                    &state,
-                    &logits,
-                    block_table.block_size(),
-                    prefix_bytes,
-                )?;
-            }
+            let prefix_bytes = self
+                .prefix_snapshot_bytes(tokens.len())?
+                .checked_add(logits.byte_len()?)
+                .ok_or(crate::engine::Error::ShapeOverflow)?;
+            let _cached = super::model::cache_prefix_snapshot(
+                &mut self.prefixes,
+                &self.info.manifest.id,
+                tokens,
+                &state,
+                &logits,
+                block_table.block_size(),
+                prefix_bytes,
+                &self.stream,
+            )?;
             let _reclaimed = Self::reclaim_prefill_allocator_cache()?;
             progress(MetalProgressEvent::prefill_tokens(tokens.len(), tokens.len()));
             let model = self.execution.decoder()?;
@@ -139,40 +139,51 @@ impl LoadedModel {
         cached_tokens: usize,
     ) -> Result<super::prefix::RestoredPrefix> {
         self.apply_history_pressure(crate::engine::memory_stats()?, tokens.len())?;
-        let blocks = block_table.blocks();
-        if !self.has_non_paged_state() {
-            let reusable = if blocks.is_empty() {
-                0
-            } else {
-                reusable_prefix_tokens(cached_tokens, tokens.len(), block_table.block_size(), 0)
-            };
-            let model = self.execution.decoder()?;
-            let mut state = SessionState::from_prefix(model.new_cache(&self.stream)?, reusable);
-            if !blocks.is_empty() {
-                state.cache.bind_blocks(blocks, Some(reusable), &self.stream)?;
-            }
-            return Ok((state, None));
-        }
         let restored = self
             .prefixes
             .lease_longest_within(
                 &self.info.manifest.id,
                 tokens,
-                (!blocks.is_empty()).then_some(cached_tokens),
+                (!block_table.blocks().is_empty()).then_some(cached_tokens),
             )?
-            .map(|lease| lease.restored)
-            .filter(|(state, _)| blocks.is_empty() || state.position <= cached_tokens);
-        let (mut state, logits) = if let Some(restored) = restored {
-            restored
-        } else {
-            let model = self.execution.decoder()?;
-            (SessionState::new(model.new_cache(&self.stream)?), None)
-        };
-        // A snapshot of the whole prompt is restored with its logits and
-        // writes nothing before decode, which binds the request's blocks.
-        if !blocks.is_empty() && logits.is_none() {
-            state.cache.bind_blocks(blocks, None, &self.stream)?;
-        }
-        Ok((state, logits))
+            .map(|lease| lease.restored);
+        resume(self, block_table, cached_tokens, tokens.len(), restored)
     }
+}
+
+/// The state a prompt of `prompt_len` tokens resumes from, bound to its
+/// blocks. A restored snapshot writes its partial last pages into them.
+/// Without one, a model with unpaged state starts over, and a paged model
+/// resumes from the runtime's whole cached blocks, recomputing the last
+/// token for its logits; so does a paged model whose snapshot resumes no
+/// further.
+pub(in crate::native) fn resume(
+    loaded: &LoadedModel,
+    block_table: &BlockTable,
+    cached_tokens: usize,
+    prompt_len: usize,
+    restored: Option<super::prefix::RestoredPrefix>,
+) -> Result<super::prefix::RestoredPrefix> {
+    let blocks = block_table.blocks();
+    let reusable = if blocks.is_empty() || loaded.has_non_paged_state() {
+        0
+    } else {
+        reusable_prefix_tokens(cached_tokens, prompt_len, block_table.block_size(), 0)
+    };
+    let restored = restored.filter(|(state, logits)| {
+        loaded.has_non_paged_state() || logits.is_some() || state.position > reusable
+    });
+    let Some((mut state, logits)) = restored else {
+        let model = loaded.execution.decoder()?;
+        let mut state = SessionState::from_prefix(model.new_cache(&loaded.stream)?, reusable);
+        if !blocks.is_empty() {
+            state.cache.bind_blocks(blocks, Some(reusable), &loaded.stream)?;
+        }
+        return Ok((state, None));
+    };
+    if !blocks.is_empty() {
+        state.cache.bind_blocks(blocks, None, &loaded.stream)?;
+        state.cache.restore_tails(&loaded.stream)?;
+    }
+    Ok((state, logits))
 }

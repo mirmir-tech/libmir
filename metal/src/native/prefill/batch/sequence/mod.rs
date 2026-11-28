@@ -3,10 +3,7 @@ mod retention;
 #[cfg(test)]
 mod terminal;
 
-use runtime::{
-    backend::{PrefillRequest, SamplingLogits},
-    kv::reusable_prefix_tokens,
-};
+use runtime::backend::{PrefillRequest, SamplingLogits};
 
 use super::super::{NativePrefill, evaluation, timing::PrefillTiming};
 use crate::native::{
@@ -38,41 +35,17 @@ impl Sequence {
         restored: Option<RestoredPrefix>,
         timing: PrefillTiming,
     ) -> Result<Self> {
-        let model = loaded.execution.decoder()?;
         if request.prompt_tokens.is_empty() {
             return Err(Error::EmptyPrompt);
         }
-        let blocks = request.block_table.blocks();
-        let (state, position, cached_logits) = if loaded.has_non_paged_state() {
-            let (mut state, position, logits) = if let Some((state, logits)) = restored {
-                let position = state.position;
-                (state, position, logits)
-            } else {
-                (SessionState::new(model.new_cache(&loaded.stream)?), 0, None)
-            };
-            // A snapshot of the whole prompt is restored with its logits and
-            // writes nothing before decode, which binds the request's blocks.
-            if !blocks.is_empty() && logits.is_none() {
-                state.cache.bind_blocks(blocks, None, &loaded.stream)?;
-            }
-            (state, position, logits)
-        } else {
-            let reusable = if blocks.is_empty() {
-                0
-            } else {
-                reusable_prefix_tokens(
-                    request.cached_tokens,
-                    request.prompt_tokens.len(),
-                    request.block_table.block_size(),
-                    0,
-                )
-            };
-            let mut state = SessionState::from_prefix(model.new_cache(&loaded.stream)?, reusable);
-            if !blocks.is_empty() {
-                state.cache.bind_blocks(blocks, Some(reusable), &loaded.stream)?;
-            }
-            (state, reusable, None)
-        };
+        let (state, cached_logits) = super::super::resume(
+            loaded,
+            &request.block_table,
+            request.cached_tokens,
+            request.prompt_tokens.len(),
+            restored,
+        )?;
+        let position = state.position;
         let checkpoints = if loaded.has_non_paged_state() {
             request
                 .cache_checkpoints

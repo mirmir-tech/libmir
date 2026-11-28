@@ -7,7 +7,7 @@ use std::{
 };
 
 use foundation::model::BackendTarget;
-use runtime::kv::{CacheConfig, KvCache, KvCacheDType};
+use runtime::kv::{CacheConfig, KvCache, KvCacheDType, KvResidency};
 
 use crate::ModelMemoryEstimate;
 
@@ -56,14 +56,14 @@ impl KvCachePools {
         fixed: bool,
     ) -> CacheAssignment {
         let Some(key) = shared_key(target, config, estimate, fixed) else {
-            return independent(config);
+            return independent(target, config);
         };
         let mut pools = self.pools.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         pools.retain(|_, cache| cache.strong_count() > 0);
         let cache = pools.get(&key).and_then(Weak::upgrade).unwrap_or_else(|| {
             let memory_id = self.next_memory_id.fetch_add(1, Ordering::Relaxed);
             let cache = Arc::new(SharedKvCache {
-                cache: Mutex::new(KvCache::with_config(config)),
+                cache: Mutex::new(KvCache::with_residency(config, residency(target))),
                 ready: Condvar::new(),
                 config,
                 memory_id,
@@ -115,10 +115,18 @@ fn shared_key(
     )
 }
 
-fn independent(config: CacheConfig) -> CacheAssignment {
+/// Metal's arenas grow to the blocks taken; CUDA allocates its whole pool.
+const fn residency(target: BackendTarget) -> KvResidency {
+    match target {
+        BackendTarget::Metal => KvResidency::OnDemand,
+        BackendTarget::Cuda => KvResidency::Preallocated,
+    }
+}
+
+fn independent(target: BackendTarget, config: CacheConfig) -> CacheAssignment {
     CacheAssignment {
         cache: Arc::new(SharedKvCache {
-            cache: Mutex::new(KvCache::with_config(config)),
+            cache: Mutex::new(KvCache::with_residency(config, residency(target))),
             ready: Condvar::new(),
             config,
             memory_id: 0,

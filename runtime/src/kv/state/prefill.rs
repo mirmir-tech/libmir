@@ -104,7 +104,8 @@ impl KvSessionState {
             return Err(RuntimeError::KvCache("prefill plan does not match the session".into()));
         }
         let missing_blocks = plan.capacity_blocks.saturating_sub(self.table.blocks().len());
-        let allocated = cache.allocate_blocks(missing_blocks)?;
+        let allocated =
+            cache.allocate_blocks_after(missing_blocks, self.table.blocks().last().copied())?;
         for block in allocated.blocks().iter().copied() {
             self.table.push(block);
         }

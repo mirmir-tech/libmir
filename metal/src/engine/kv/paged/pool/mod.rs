@@ -1,6 +1,9 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use crate::engine::{Array, Error, KvPageFormat, Result, Stream};
@@ -78,9 +81,21 @@ pub(super) struct Arena {
 #[derive(Debug, Default)]
 pub struct PagedArenaPool {
     arenas: Mutex<HashMap<ArenaKey, Arc<Mutex<Arena>>>>,
+    /// Whether an arena grew since [`Self::take_outgrown`]: the arena it
+    /// replaced is freed once the graph copying it runs, but stays cached.
+    outgrown: AtomicBool,
 }
 
 impl PagedArenaPool {
+    pub(super) fn note_outgrown(&self) {
+        self.outgrown.store(true, Ordering::Relaxed);
+    }
+
+    /// Whether an arena grew since the last call.
+    pub(crate) fn take_outgrown(&self) -> bool {
+        self.outgrown.swap(false, Ordering::Relaxed)
+    }
+
     pub(super) fn acquire(
         &self,
         layer: usize,

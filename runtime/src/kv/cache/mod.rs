@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use super::{BlockHash, BlockId, BlockTable, KvBlock, PrefixCache};
 use crate::error::{Result, RuntimeError};
 
+mod placement;
 mod pressure;
 mod probe;
 #[cfg(test)]
@@ -10,7 +11,8 @@ mod tests;
 mod types;
 
 pub use types::{
-    BlockAllocation, CacheConfig, CacheCounters, CacheStats, PREFIX_CHECKPOINT_PAGE_DIVISOR,
+    BlockAllocation, CacheConfig, CacheCounters, CacheStats, KvResidency,
+    PREFIX_CHECKPOINT_PAGE_DIVISOR,
 };
 
 #[derive(Debug)]
@@ -21,6 +23,9 @@ pub struct KvCache {
     /// paged arenas) then needs storage only up to the blocks in use, not the
     /// whole configured cache, which a first-in-first-out list walks through.
     free: BTreeSet<BlockId>,
+    residency: KvResidency,
+    /// One past the highest block taken so far.
+    resident: u32,
     prefix: PrefixCache,
     counters: CacheCounters,
 }
@@ -33,6 +38,11 @@ impl KvCache {
 
     #[must_use]
     pub fn with_config(config: CacheConfig) -> Self {
+        Self::with_residency(config, KvResidency::Preallocated)
+    }
+
+    #[must_use]
+    pub fn with_residency(config: CacheConfig, residency: KvResidency) -> Self {
         let config = CacheConfig {
             block_size: config.block_size.max(1),
             block_count: config.block_count,
@@ -49,6 +59,8 @@ impl KvCache {
             config,
             blocks: cache_blocks,
             free,
+            residency,
+            resident: 0,
             prefix: PrefixCache::default(),
             counters: CacheCounters::default(),
         }
@@ -63,14 +75,7 @@ impl KvCache {
     }
 
     pub fn allocate(&mut self) -> Result<BlockId> {
-        self.ensure_free_blocks(1)?;
-        let id = self
-            .free
-            .pop_first()
-            .ok_or_else(|| RuntimeError::KvCache("no free KV blocks".into()))?;
-        let block = self.block_mut(id)?;
-        block.allocate();
-        Ok(id)
+        self.allocate_after(None)
     }
 
     pub fn commit_prefix_block(
@@ -190,6 +195,11 @@ impl KvCache {
     }
 
     #[must_use]
+    pub const fn residency(&self) -> KvResidency {
+        self.residency
+    }
+
+    #[must_use]
     pub fn free_blocks(&self) -> usize {
         self.free.len()
     }
@@ -200,12 +210,7 @@ impl KvCache {
     }
 
     pub(crate) fn allocate_blocks(&mut self, count: usize) -> Result<BlockTable> {
-        self.ensure_free_blocks(count)?;
-        let mut table = BlockTable::with_block_size(self.config.block_size);
-        for _ in 0..count {
-            table.push(self.allocate()?);
-        }
-        Ok(table)
+        self.allocate_blocks_after(count, None)
     }
 
     fn block_mut(&mut self, id: BlockId) -> Result<&mut KvBlock> {

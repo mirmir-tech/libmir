@@ -26,7 +26,7 @@ impl Sequence {
             .state
             .as_ref()
             .ok_or_else(|| Error::InvalidPrefillBatch("prefill sequence has no state".into()))?;
-        let bytes = loaded.estimated_prefix_bytes(self.position)?;
+        let bytes = loaded.prefix_snapshot_bytes(self.position)?;
         crate::native::model::cache_prefix_checkpoint(
             &mut loaded.prefixes,
             &loaded.info.manifest.id,

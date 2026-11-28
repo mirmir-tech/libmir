@@ -164,15 +164,15 @@ impl LoadedModel {
         let (tokenizer, tokenizer_error) = tokenizer_info(&layout);
         let weight_bytes = layout.weights.iter().map(|weight| weight.bytes).sum();
         let cache_layout = decoder_lowering.as_ref().map(|plan| plan.cache_layout().clone());
-        let non_paged_prefix = cache_layout
-            .as_ref()
-            .is_some_and(architecture::CacheLayout::has_non_paged_state);
-        let prefix_cache_entries = if non_paged_prefix {
+        // Every decoder snapshots prompts: paged layers resume from the
+        // runtime's blocks plus a copied partial page, recurrent ones from
+        // their own state.
+        let prefix_cache_entries = if cache_layout.is_some() {
             stream.config().cache.prefix_cache_entries
         } else {
             0
         };
-        let prefix_cache_bytes = if non_paged_prefix {
+        let prefix_cache_bytes = if cache_layout.is_some() {
             prefix_cache_budget(metal_memory, stream.config().cache.prefix_cache_bytes)
         } else {
             0

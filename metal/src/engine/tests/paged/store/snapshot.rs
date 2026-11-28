@@ -77,3 +77,30 @@ fn isolates_diverging_branches_via_runtime_block_ids() -> Result<()> {
     assert_eq!(branch_next.keys.to_vec_f32(&stream)?, [1.0, 2.0, 3.0, 4.0, 9.0, 9.0, 5.0, 5.0]);
     Ok(())
 }
+
+/// A prompt snapshot restored onto the next request's blocks: the cached
+/// pages it shares, then a new one for decode. Writing the next token and
+/// evaluating it must not reach an array the snapshot left without data.
+#[test]
+fn a_restored_snapshot_rebound_to_more_blocks_decodes() -> Result<()> {
+    let pool = Arc::new(PagedArenaPool::default());
+    let stream = Stream::new_gpu_with_config_and_pool(Arc::default(), Arc::clone(&pool))?;
+    let prompt = Array::from_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[1, 1, 4, 2])?;
+    let mut owner = KvCache::new_paged_with_pool(2, 2, KvPageFormat::Native, Arc::clone(&pool), 0)?;
+    owner.bind_blocks(&[BlockId(0), BlockId(1)], None, &stream)?;
+    let written = owner.update(&prompt, &prompt, &stream)?;
+    written.keys.async_eval(&stream)?;
+    stream.synchronize()?;
+    owner.detach_evaluated_graphs(&stream)?;
+    let mut restored = owner.snapshot_at(4)?;
+    drop(owner);
+
+    restored.bind_blocks(&[BlockId(0), BlockId(1), BlockId(2)], None, &stream)?;
+    let token = Array::from_f32(&[9.0, 9.0], &[1, 1, 1, 2])?;
+    let step = restored.update(&token, &token, &stream)?;
+    assert_eq!(
+        step.keys.to_vec_f32(&stream)?,
+        [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 9.0]
+    );
+    Ok(())
+}

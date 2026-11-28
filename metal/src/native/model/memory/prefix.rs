@@ -11,6 +11,7 @@ use crate::{
     },
 };
 
+#[allow(clippy::too_many_arguments)]
 pub(in crate::native) fn cache_prefix_snapshot(
     prefixes: &mut PrefixCache,
     model: &ModelId,
@@ -19,13 +20,16 @@ pub(in crate::native) fn cache_prefix_snapshot(
     logits: &Array,
     block_size: Option<usize>,
     bytes: usize,
+    stream: &crate::engine::Stream,
 ) -> Result<bool> {
     if !prefixes.enabled() {
         return Ok(false);
     }
     let _reclaimed = LoadedModel::reclaim_prefill_allocator_cache()?;
     measure(Stage::Snapshot, || {
-        prefixes.insert(model, tokens, state, logits, block_size, bytes)
+        let mut snapshot = state.cache.snapshot_at(state.position)?;
+        snapshot.capture_tails(stream)?;
+        prefixes.insert_snapshot(model, tokens, state, snapshot, logits, block_size, bytes)
     })?;
     Ok(true)
 }

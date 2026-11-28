@@ -114,6 +114,25 @@ impl LoadedModel {
     }
 
     pub(crate) fn estimated_prefix_bytes(&self, tokens: usize) -> Result<usize> {
+        self.cache_bytes(tokens, tokens)
+    }
+
+    /// Bytes a prefix snapshot of `tokens` holds of its own: windows and the
+    /// partial last page it copies, not the runtime blocks its pages live in.
+    pub(crate) fn prefix_snapshot_bytes(&self, tokens: usize) -> Result<usize> {
+        let page = self.stream.config().kv_cache.block_size.max(1);
+        self.cache_bytes(
+            tokens,
+            if tokens.is_multiple_of(page) {
+                0
+            } else {
+                page
+            },
+        )
+    }
+
+    /// K/V bytes of `tokens`, `paged` of them in pages.
+    fn cache_bytes(&self, tokens: usize, paged: usize) -> Result<usize> {
         let Some(contract) = self.info.contract.as_ref() else {
             return Ok(0);
         };
@@ -122,7 +141,7 @@ impl LoadedModel {
         let mut total = 0_usize;
         for entry in &layout.layers {
             let (shape, length) = match entry.kind {
-                architecture::LayerCacheKind::Paged { shape } => (shape, tokens),
+                architecture::LayerCacheKind::Paged { shape } => (shape, paged),
                 architecture::LayerCacheKind::Ring { shape, window, .. } => {
                     (shape, tokens.min(window.get()))
                 },
@@ -141,6 +160,16 @@ impl LoadedModel {
             total = total.checked_add(bytes).ok_or(crate::engine::Error::ShapeOverflow)?;
         }
         Ok(total)
+    }
+
+    /// Releases the arenas grown out of since the last prefill: freed once
+    /// the evaluated graph copied them, they stay cached, and no later arena
+    /// is small enough to reuse them.
+    pub(crate) fn release_outgrown_arenas(&self) -> Result<()> {
+        if self.stream.paged_arenas().take_outgrown() {
+            clear_memory_cache()?;
+        }
+        Ok(())
     }
 
     pub(crate) fn reclaim_prefill_allocator_cache() -> Result<bool> {

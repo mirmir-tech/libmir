@@ -24,6 +24,20 @@ impl CacheConfig {
     }
 }
 
+/// How a backend holds the storage of a cache's blocks.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum KvResidency {
+    /// Every block's storage exists from the start (CUDA's pool), so a cached
+    /// prefix may keep any block.
+    #[default]
+    Preallocated,
+    /// Storage reaches only the highest block taken so far (Metal's arenas),
+    /// so a block past it is taken only once cached prefixes hold no more
+    /// blocks than live requests: storage stays within twice what live
+    /// requests needed.
+    OnDemand,
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CacheCounters {

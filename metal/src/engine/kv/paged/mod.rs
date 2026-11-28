@@ -4,6 +4,7 @@ mod context;
 mod inspection;
 mod pool;
 mod rows;
+mod tail;
 mod validation;
 mod write;
 
@@ -35,6 +36,8 @@ pub(super) struct PagedStore {
     format: KvPageFormat,
     pool: Arc<PagedArenaPool>,
     layer: usize,
+    /// A prefix snapshot's copy of its partial last page (see `tail`).
+    tail: Option<Arc<tail::PagedTail>>,
 }
 
 #[derive(Debug)]
@@ -67,6 +70,7 @@ impl PagedStore {
             format,
             pool,
             layer,
+            tail: None,
         }
     }
 
@@ -107,7 +111,12 @@ impl PagedStore {
     }
 
     pub(super) fn detach_evaluated_graph(&self, stream: &Stream) -> Result<()> {
-        if let Some(storage) = &self.storage {
+        // Binding more blocks appends to the table lazily, and no graph root
+        // reaches the table until attention reads it: detaching it before then
+        // would leave decode an array without a producer.
+        if let Some(storage) = &self.storage
+            && storage.table.native().allocation()?.is_some()
+        {
             storage.table.detach_graph(stream)?;
         }
         Ok(())
@@ -119,6 +128,7 @@ impl PagedStore {
         self.release_unbound()?;
         self.storage = None;
         self.bound_blocks = None;
+        self.tail = None;
         Ok(())
     }
 
@@ -165,6 +175,7 @@ impl PagedStore {
             format: self.format,
             pool: Arc::clone(&self.pool),
             layer: self.layer,
+            tail: self.tail_at(tokens),
         })
     }
 

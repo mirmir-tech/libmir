@@ -65,6 +65,7 @@ impl PrefixCache {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn insert(
         &mut self,
         model: &ModelId,
@@ -74,15 +75,28 @@ impl PrefixCache {
         block_size: Option<usize>,
         bytes: usize,
     ) -> Result<()> {
+        let snapshot = state.cache.snapshot_at(state.position)?;
+        self.insert_snapshot(model, tokens, state, snapshot, logits, block_size, bytes)
+    }
+
+    /// Caches `snapshot`, taken of `state` at its position, as the prompt
+    /// `tokens` with its last token's `logits`.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn insert_snapshot(
+        &mut self,
+        model: &ModelId,
+        tokens: &[u32],
+        state: &SessionState,
+        snapshot: crate::engine::DecoderCache,
+        logits: &Array,
+        block_size: Option<usize>,
+        bytes: usize,
+    ) -> Result<()> {
         if !self.enabled() {
             return Ok(());
         }
         let memory_group = self.pending_group(model, tokens).unwrap_or_else(|| self.new_group());
-        let snapshot = PrefixSnapshot::new(
-            state.cache.snapshot_at(state.position)?,
-            state.position,
-            Some(logits.snapshot()?),
-        )?;
+        let snapshot = PrefixSnapshot::new(snapshot, state.position, Some(logits.snapshot()?))?;
         let floor = state.cache.prefix_floor()?;
         let block_size = block_size.filter(|size| *size > 0);
         for (key, position) in indexed_prefixes(model, tokens, block_size, floor) {

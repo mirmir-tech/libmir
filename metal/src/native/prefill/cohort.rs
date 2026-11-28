@@ -33,16 +33,6 @@ impl MetalPrefillCohort {
         let prompt_tokens = requests.iter().map(|request| request.prompt_tokens.len()).sum();
         loaded.apply_history_pressure(crate::engine::memory_stats()?, prompt_tokens)?;
         let model_id = loaded.info.manifest.id.clone();
-        if !loaded.has_non_paged_state() {
-            let prefixes = requests
-                .iter()
-                .map(|request| (request.session_id, CohortPrefix::Miss))
-                .collect();
-            return Ok(Self {
-                model_id,
-                prefixes: Arc::new(Mutex::new(prefixes)),
-            });
-        }
         let mut prefixes = HashMap::with_capacity(requests.len());
         let mut leased_groups = HashSet::new();
         let cached_groups_before = loaded.prefixes.group_count();
@@ -66,7 +56,9 @@ impl MetalPrefillCohort {
         let evicted_leases = loaded.prefixes.evict_groups(&leased_groups);
         let evicted_misses = loaded.prefixes.reserve_batch_slots(misses);
         let initially_evicted = evicted_leases || evicted_misses;
-        if initially_evicted {
+        // Snapshots of paged layers alone hold a page and logits: too little
+        // to release the allocator's cache for.
+        if initially_evicted && loaded.has_non_paged_state() {
             crate::engine::clear_memory_cache()?;
         }
         let pending = requests.iter().map(|request| request.prompt_tokens.len()).sum();
@@ -131,9 +123,6 @@ pub(in crate::native) fn restore_prefix(
     request: &PrefillRequest,
     leased: Option<CohortPrefix>,
 ) -> Result<Option<RestoredPrefix>> {
-    if !loaded.has_non_paged_state() {
-        return Ok(None);
-    }
     let blocks = request.block_table.blocks();
     let restored = match leased {
         Some(leased) => leased.into_restored(),
@@ -146,5 +135,5 @@ pub(in crate::native) fn restore_prefix(
             )?
             .map(|lease| lease.restored),
     };
-    Ok(restored.filter(|(state, _)| blocks.is_empty() || state.position <= request.cached_tokens))
+    Ok(restored)
 }

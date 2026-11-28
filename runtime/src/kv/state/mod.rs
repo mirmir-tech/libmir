@@ -101,7 +101,7 @@ impl KvSessionState {
     ) -> Result<KvDecodeStep> {
         let token_offset = self.tokens.len();
         let allocated_block = if token_offset == self.table.capacity(cache.block_size()) {
-            let block = cache.allocate()?;
+            let block = cache.allocate_after(self.table.blocks().last().copied())?;
             self.table.push(block);
             Some(block)
         } else {
@@ -120,7 +120,7 @@ impl KvSessionState {
     /// speculative decoding writes drafts past the session's last token.
     pub fn reserve_capacity_in_place(&mut self, cache: &mut KvCache, tokens: usize) -> Result<()> {
         while self.table.capacity(cache.block_size()) < tokens {
-            self.table.push(cache.allocate()?);
+            self.table.push(cache.allocate_after(self.table.blocks().last().copied())?);
         }
         Ok(())
     }

@@ -182,7 +182,7 @@ impl Model {
                 blocks,
                 "replaced host K/V blocks for the resized cache"
             );
-            *host = KvCache::with_config(cache);
+            *host = KvCache::with_residency(cache, host.residency());
             Ok(true)
         })?;
         if !resized {

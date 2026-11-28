@@ -16,6 +16,7 @@ use crate::engine::{Array, DecoderCache, ModelTensors, Result, Stream, lowering}
 mod fixture;
 mod multimodal;
 mod oracle;
+mod restore;
 
 use fixture::{HIDDEN, write_checkpoint};
 

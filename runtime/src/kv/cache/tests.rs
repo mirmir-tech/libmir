@@ -172,3 +172,64 @@ fn allocates_the_lowest_free_block_first() -> Result<()> {
     assert_eq!(cache.allocate()?, BlockId(4));
     Ok(())
 }
+
+/// Storage grown on demand takes a new block only once cached prefixes hold
+/// no more blocks than live requests; preallocated storage keeps every
+/// cached prefix.
+#[test]
+fn on_demand_residency_reuses_cached_blocks_before_new_ones() -> Result<()> {
+    let config = CacheConfig {
+        block_size: 1,
+        block_count: 8,
+        dtype: KvCacheDType::Auto,
+    };
+    let gemma = model("gemma");
+    for (residency, expected) in
+        [(KvResidency::OnDemand, BlockId(0)), (KvResidency::Preallocated, BlockId(2))]
+    {
+        let mut cache = KvCache::with_residency(config, residency);
+        let first = cache.allocate_blocks(2)?;
+        for (token, block) in (0_u32..).zip(first.blocks()) {
+            let _hash = cache.commit_prefix_block(&gemma, None, *block, &[token])?;
+        }
+        let _released = cache.release_table(&first)?;
+        let next = cache.allocate()?;
+        assert_eq!(next, expected, "{residency:?}");
+        assert_eq!(
+            cache.stats().cached_prefixes,
+            if expected == BlockId(0) {
+                1
+            } else {
+                2
+            }
+        );
+        // A live request needing more than the cached prefixes give back
+        // grows the storage.
+        let wide = cache.allocate_blocks(3)?;
+        assert_eq!(wide.blocks().len(), 3);
+    }
+    Ok(())
+}
+
+/// Storage grown on demand keeps a table's blocks consecutive: it grows
+/// right after the table's last block, else takes a long enough free run.
+#[test]
+fn on_demand_tables_stay_consecutive() -> Result<()> {
+    let config = CacheConfig {
+        block_size: 1,
+        block_count: 16,
+        dtype: KvCacheDType::Auto,
+    };
+    let mut cache = KvCache::with_residency(config, KvResidency::OnDemand);
+    let first = cache.allocate_blocks(3)?;
+    let second = cache.allocate_blocks(2)?;
+    assert_eq!(second.blocks(), [BlockId(3), BlockId(4)]);
+    let _released = cache.release_table(&first)?;
+    assert_eq!(cache.allocate_after(Some(BlockId(4)))?, BlockId(5));
+    let _hole = cache.allocate_after(Some(BlockId(9)))?;
+    let run = cache.allocate_blocks_after(2, Some(BlockId(9)))?;
+    assert_eq!(run.blocks(), [BlockId(0), BlockId(1)]);
+    let wide = cache.allocate_blocks(3)?;
+    assert_eq!(wide.blocks(), [BlockId(6), BlockId(7), BlockId(8)]);
+    Ok(())
+}
